@@ -1,0 +1,290 @@
+#include "client/client_app.hpp"
+
+#include "client/controller_backend.hpp"
+#include "client/gstreamer_media_receiver.hpp"
+#include "client/input_sender.hpp"
+#include "client/session_service.hpp"
+#include "common/serialization.hpp"
+#include "common/udp_socket.hpp"
+
+#include <chrono>
+#include <stdexcept>
+#include <string_view>
+#include <thread>
+#include <utility>
+
+namespace archstreamer {
+namespace {
+
+bool is_number(std::string_view value) {
+    if (value.empty()) {
+        return false;
+    }
+    for (const auto character : value) {
+        if (character < '0' || character > '9') {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool handle_control_message(TcpStream& stream, const ClientAppCallbacks& callbacks, ClientRunResult& result) {
+    if (!stream.readable()) {
+        return true;
+    }
+
+    const auto payload = receive_client_control_payload(stream);
+    if (const auto* ended = std::get_if<SessionEnded>(&payload); ended != nullptr) {
+        result.ended_reason = ended->reason;
+        if (callbacks.on_session_ended) {
+            callbacks.on_session_ended(ended->reason);
+        }
+        return false;
+    }
+    if (const auto* error = std::get_if<ErrorPacket>(&payload); error != nullptr) {
+        throw std::runtime_error("host ended session: " + error->message);
+    }
+
+    return true;
+}
+
+std::vector<std::string> selected_device_ids(
+    const std::vector<ControllerDevice>& devices,
+    const ClientAppConfig& config) {
+    std::vector<std::string> ids;
+    ids.reserve(config.filter.requested_players);
+    for (LocalPlayerIndex player = 0; player < config.filter.requested_players; ++player) {
+        const auto device_index = config.controller_indexes[player];
+        if (device_index >= devices.size()) {
+            throw std::runtime_error("controller index is out of range");
+        }
+        ids.push_back(devices[device_index].id);
+    }
+    return ids;
+}
+
+std::vector<ControllerInfo> controller_info_for_selection(
+    const std::vector<ControllerDevice>& devices,
+    const ClientAppConfig& config) {
+    std::vector<ControllerInfo> controllers;
+    controllers.reserve(config.filter.requested_players);
+    for (LocalPlayerIndex player = 0; player < config.filter.requested_players; ++player) {
+        const auto device_index = config.controller_indexes[player];
+        if (device_index >= devices.size()) {
+            throw std::runtime_error("controller index is out of range");
+        }
+
+        controllers.push_back(ControllerInfo{
+            player,
+            devices[device_index].name,
+            devices[device_index].guid,
+            devices[device_index].vendor_id,
+            devices[device_index].product_id,
+        });
+    }
+    return controllers;
+}
+
+} // namespace
+
+std::optional<GameId> select_game_id(const GameList& list, const std::optional<std::string>& selector) {
+    if (!selector.has_value()) {
+        if (list.games.empty()) {
+            return std::nullopt;
+        }
+        return list.games.front().id;
+    }
+    if (selector->empty()) {
+        return std::nullopt;
+    }
+    if (is_number(*selector)) {
+        const auto index = static_cast<std::size_t>(std::stoul(*selector));
+        if (index >= list.games.size()) {
+            throw std::runtime_error("game index is out of range");
+        }
+        return list.games[index].id;
+    }
+
+    for (const auto& game : list.games) {
+        if (game.id == *selector) {
+            return game.id;
+        }
+    }
+    throw std::runtime_error("game id was not found in the host game list");
+}
+
+bool contains_game_id(const GameList& list, const GameId& game_id) {
+    for (const auto& game : list.games) {
+        if (game.id == game_id) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+std::vector<ControllerDevice> ClientApp::list_controllers() const {
+    ControllerBackend backend;
+    return backend.list_devices();
+}
+
+ActiveSessionInfo ClientApp::active_session_info(const std::string& host, std::uint16_t control_port) const {
+    return ClientSessionService(host, control_port).active_session_info();
+}
+
+ClientRunResult ClientApp::run_session(
+    const ClientAppConfig& config,
+    const std::function<bool()>& should_stop,
+    const ClientAppCallbacks& callbacks) const {
+    if (!valid_username(config.username)) {
+        throw std::runtime_error("username must be 1-64 characters and contain only letters, numbers, underscores, or hyphens");
+    }
+    if (!valid_player_count(config.filter.requested_players)) {
+        throw std::runtime_error("requested players must be 0, 1, or 2");
+    }
+    if (config.role == ClientParticipantRole::Viewer && config.filter.requested_players != 0) {
+        throw std::runtime_error("viewer clients cannot request player seats");
+    }
+    if (config.controller_indexes.size() < config.filter.requested_players) {
+        throw std::runtime_error("not enough selected controllers for requested players");
+    }
+    if (config.controller_indexes.size() > MaxPlayersPerClient) {
+        throw std::runtime_error("client can select at most two controllers");
+    }
+
+    ClientRunResult result;
+    ClientSessionService session_service(config.host, config.control_port);
+    auto pending_session = session_service.begin();
+    result.full_catalog = pending_session.game_list;
+    result.filtered_catalog = filter_games(result.full_catalog, config.filter);
+    if (callbacks.on_catalog) {
+        callbacks.on_catalog(result.full_catalog, result.filtered_catalog);
+    }
+
+    result.selected_game_id = select_game_id(result.filtered_catalog, config.game_selector);
+    if (result.selected_game_id.has_value() && !contains_game_id(result.full_catalog, *result.selected_game_id)) {
+        throw std::runtime_error("selected game is not in the host game list");
+    }
+    if (!result.selected_game_id.has_value() && result.filtered_catalog.games.empty()) {
+        throw std::runtime_error("no games match the selected filters");
+    }
+
+    auto controller_device_ids = std::vector<std::string>{};
+    auto controllers = std::vector<ControllerInfo>{};
+    if (config.filter.requested_players > 0) {
+        ControllerBackend backend;
+        const auto devices = backend.list_devices();
+        controller_device_ids = selected_device_ids(devices, config);
+        controllers = controller_info_for_selection(devices, config);
+    }
+
+    const auto hello = pending_session.session.make_hello(
+        config.username,
+        config.display_name.empty() ? config.username : config.display_name,
+        result.selected_game_id,
+        config.session_mode,
+        config.filter.requested_players,
+        std::move(controllers),
+        config.wants_video,
+        config.wants_audio);
+    auto joined_session = session_service.finish_join(std::move(pending_session), hello);
+    auto& session = joined_session.session;
+
+    result.client_id = session.client_id();
+    result.seats = session.seats();
+    result.ready = joined_session.ready;
+    if (callbacks.on_connected && result.client_id.has_value()) {
+        callbacks.on_connected(ClientConnectionInfo{
+            *result.client_id,
+            config.username,
+            config.role,
+            config.session_mode,
+            result.selected_game_id,
+        });
+    }
+    if (callbacks.on_seat_assignment) {
+        callbacks.on_seat_assignment(result.seats);
+    }
+    if (callbacks.on_session_ready) {
+        callbacks.on_session_ready(result.ready);
+    }
+
+    const auto start = session_service.wait_for_starting(joined_session.stream);
+    result.starting = start.starting;
+    result.media_endpoint = start.media_endpoint;
+
+    auto media_receiver = std::optional<GStreamerMediaReceiver>{};
+    if (result.media_endpoint.has_value() &&
+        ((config.wants_video && !result.media_endpoint->video_uri.empty()) ||
+         (config.wants_audio && !result.media_endpoint->audio_uri.empty()))) {
+        if (callbacks.on_media_endpoint) {
+            callbacks.on_media_endpoint(*result.media_endpoint);
+        }
+        media_receiver.emplace();
+        media_receiver->connect(MediaEndpoint{
+            config.wants_video ? result.media_endpoint->video_uri : "",
+            config.wants_audio ? result.media_endpoint->audio_uri : "",
+        });
+    }
+    if (callbacks.on_session_starting) {
+        callbacks.on_session_starting(result.starting);
+    }
+
+    auto controller_backend = std::optional<ControllerBackend>{};
+    auto input_sender = std::optional<InputSender>{};
+    auto input_socket = std::optional<UdpSocket>{};
+    if (config.input_port.has_value() && config.filter.requested_players > 0 && result.client_id.has_value()) {
+        controller_backend.emplace();
+        controller_backend->open_selected(controller_device_ids);
+        input_sender.emplace(*result.client_id);
+        input_socket.emplace();
+        if (callbacks.on_input_streaming_started) {
+            callbacks.on_input_streaming_started(config.host, *config.input_port);
+        }
+    } else if (callbacks.on_waiting_without_input) {
+        callbacks.on_waiting_without_input();
+    }
+
+    std::uint32_t heartbeat_sequence = 0;
+    auto next_heartbeat = std::chrono::steady_clock::now();
+    while (!should_stop()) {
+        if (!handle_control_message(joined_session.stream, callbacks, result)) {
+            break;
+        }
+        if (joined_session.stream.peer_closed()) {
+            result.host_disconnected = true;
+            if (callbacks.on_host_disconnected) {
+                callbacks.on_host_disconnected();
+            }
+            break;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= next_heartbeat && result.client_id.has_value()) {
+            joined_session.stream.send_packet(serialize_packet(ViewerHeartbeat{
+                *result.client_id,
+                heartbeat_sequence++,
+            }));
+            next_heartbeat = now + std::chrono::seconds(1);
+        }
+
+        if (controller_backend.has_value() && input_sender.has_value() && input_socket.has_value()) {
+            for (LocalPlayerIndex player = 0; player < config.filter.requested_players; ++player) {
+                const auto state = controller_backend->poll(player);
+                if (state.has_value()) {
+                    const auto packet = input_sender->make_input(player, *state);
+                    input_socket->send_to(serialize_packet(packet), config.host, *config.input_port);
+                }
+            }
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(8));
+    }
+    if (media_receiver.has_value()) {
+        media_receiver->disconnect();
+    }
+
+    return result;
+}
+
+} // namespace archstreamer

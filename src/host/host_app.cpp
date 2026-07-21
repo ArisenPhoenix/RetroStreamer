@@ -209,7 +209,18 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             }
         }
         if (config.video) {
-            launch_config.environment.emplace_back("DISPLAY", config.virtual_display);
+            // Keep RetroArch on the real display when the host is playing locally.
+            // Streaming still uses a virtual capture display for remote clients only.
+            const bool host_plays_locally =
+                config.host_role == ParticipantRole::Player &&
+                config.bridge_controller_index.has_value();
+            if (!host_plays_locally) {
+                launch_config.environment.emplace_back("DISPLAY", config.virtual_display);
+            } else {
+                std::cout
+                    << "Host player keeps the current DISPLAY; "
+                    << "disable Stream video if remotes do not need a capture feed.\n";
+            }
         }
 
         std::cout

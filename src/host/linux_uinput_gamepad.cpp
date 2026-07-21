@@ -78,6 +78,10 @@ void LinuxUinputGamepadBus::plug(RetroArchPort port) {
     if (fd < 0) {
         throw std::runtime_error(std::string("failed to open /dev/uinput: ") + std::strerror(errno));
     }
+    if (fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) {
+        close(fd);
+        throw std::runtime_error(std::string("failed to mark uinput fd close-on-exec: ") + std::strerror(errno));
+    }
 
     try {
         checked_ioctl(fd, UI_SET_EVBIT, EV_KEY, "failed to enable uinput key events");

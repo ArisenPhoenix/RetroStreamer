@@ -1,7 +1,7 @@
 #pragma once
 
-#include "common/tcp_socket.hpp"
 #include "client/session_client.hpp"
+#include "common/platform/default_platform.hpp"
 
 #include <filesystem>
 #include <string>

@@ -1,20 +1,14 @@
 #pragma once
 
-#include "common/media.hpp"
+#include "client/media_receiver.hpp"
 #include "common/platform/default_platform.hpp"
-
-#include <cstdint>
-#include <string>
 
 namespace archstreamer {
 
-std::uint16_t video_port_from_endpoint(const MediaEndpoint& endpoint);
-std::uint16_t audio_port_from_endpoint(const MediaEndpoint& endpoint);
-
-class GStreamerMediaReceiver {
+class GStreamerMediaReceiver final : public MediaReceiver {
 public:
-    void connect(const MediaEndpoint& endpoint);
-    void disconnect();
+    void connect(const MediaEndpoint& endpoint) override;
+    void disconnect() override;
 
 private:
     ChildProcess video_process_;

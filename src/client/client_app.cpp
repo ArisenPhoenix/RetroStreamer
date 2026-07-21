@@ -2,10 +2,11 @@
 
 #include "client/controller_backend.hpp"
 #include "client/gstreamer_media_receiver.hpp"
+#include "client/media_receiver.hpp"
 #include "client/input_sender.hpp"
 #include "client/session_service.hpp"
+#include "common/platform/default_platform.hpp"
 #include "common/serialization.hpp"
-#include "common/udp_socket.hpp"
 
 #include <chrono>
 #include <stdexcept>
@@ -132,7 +133,40 @@ ActiveSessionInfo ClientApp::active_session_info(const std::string& host, std::u
     return ClientSessionService(host, control_port).active_session_info();
 }
 
-ClientRunResult ClientApp::run_session(
+ClientCatalogView ClientApp::fetch_catalog(
+    const ClientAppConfig& config,
+    const ClientAppCallbacks& callbacks) const {
+    ClientSessionService session_service(config.host, config.control_port);
+    auto pending_session = session_service.begin();
+    auto filtered_catalog = filter_games(pending_session.game_list, config.filter);
+    if (callbacks.on_catalog) {
+        callbacks.on_catalog(pending_session.game_list, filtered_catalog);
+    }
+
+    return ClientCatalogView{
+        std::move(pending_session.game_list),
+        std::move(filtered_catalog),
+    };
+}
+
+ClientSessionDraft ClientApp::begin_session(
+    const ClientAppConfig& config,
+    const ClientAppCallbacks& callbacks) const {
+    ClientSessionService session_service(config.host, config.control_port);
+    auto pending_session = session_service.begin();
+    auto filtered_catalog = filter_games(pending_session.game_list, config.filter);
+    if (callbacks.on_catalog) {
+        callbacks.on_catalog(pending_session.game_list, filtered_catalog);
+    }
+
+    return ClientSessionDraft{
+        std::move(pending_session),
+        std::move(filtered_catalog),
+    };
+}
+
+ClientRunResult ClientApp::join_session(
+    ClientSessionDraft draft,
     const ClientAppConfig& config,
     const std::function<bool()>& should_stop,
     const ClientAppCallbacks& callbacks) const {
@@ -153,13 +187,8 @@ ClientRunResult ClientApp::run_session(
     }
 
     ClientRunResult result;
-    ClientSessionService session_service(config.host, config.control_port);
-    auto pending_session = session_service.begin();
-    result.full_catalog = pending_session.game_list;
-    result.filtered_catalog = filter_games(result.full_catalog, config.filter);
-    if (callbacks.on_catalog) {
-        callbacks.on_catalog(result.full_catalog, result.filtered_catalog);
-    }
+    result.full_catalog = draft.pending_session.game_list;
+    result.filtered_catalog = draft.filtered_catalog;
 
     result.selected_game_id = select_game_id(result.filtered_catalog, config.game_selector);
     if (result.selected_game_id.has_value() && !contains_game_id(result.full_catalog, *result.selected_game_id)) {
@@ -178,7 +207,7 @@ ClientRunResult ClientApp::run_session(
         controllers = controller_info_for_selection(devices, config);
     }
 
-    const auto hello = pending_session.session.make_hello(
+    const auto hello = draft.pending_session.session.make_hello(
         config.username,
         config.display_name.empty() ? config.username : config.display_name,
         result.selected_game_id,
@@ -187,7 +216,8 @@ ClientRunResult ClientApp::run_session(
         std::move(controllers),
         config.wants_video,
         config.wants_audio);
-    auto joined_session = session_service.finish_join(std::move(pending_session), hello);
+    ClientSessionService session_service(config.host, config.control_port);
+    auto joined_session = session_service.finish_join(std::move(draft.pending_session), hello);
     auto& session = joined_session.session;
 
     result.client_id = session.client_id();
@@ -213,18 +243,19 @@ ClientRunResult ClientApp::run_session(
     result.starting = start.starting;
     result.media_endpoint = start.media_endpoint;
 
-    auto media_receiver = std::optional<GStreamerMediaReceiver>{};
+    auto media_receiver = std::unique_ptr<MediaReceiver>{};
     if (result.media_endpoint.has_value() &&
         ((config.wants_video && !result.media_endpoint->video_uri.empty()) ||
          (config.wants_audio && !result.media_endpoint->audio_uri.empty()))) {
         if (callbacks.on_media_endpoint) {
             callbacks.on_media_endpoint(*result.media_endpoint);
         }
-        media_receiver.emplace();
-        media_receiver->connect(MediaEndpoint{
+        auto receiver = std::make_unique<GStreamerMediaReceiver>();
+        receiver->connect(MediaEndpoint{
             config.wants_video ? result.media_endpoint->video_uri : "",
             config.wants_audio ? result.media_endpoint->audio_uri : "",
         });
+        media_receiver = std::move(receiver);
     }
     if (callbacks.on_session_starting) {
         callbacks.on_session_starting(result.starting);
@@ -280,11 +311,19 @@ ClientRunResult ClientApp::run_session(
 
         std::this_thread::sleep_for(std::chrono::milliseconds(8));
     }
-    if (media_receiver.has_value()) {
+    if (media_receiver) {
         media_receiver->disconnect();
     }
 
     return result;
+}
+
+ClientRunResult ClientApp::run_session(
+    const ClientAppConfig& config,
+    const std::function<bool()>& should_stop,
+    const ClientAppCallbacks& callbacks) const {
+    auto draft = begin_session(config, callbacks);
+    return join_session(std::move(draft), config, should_stop, callbacks);
 }
 
 } // namespace archstreamer

@@ -2,6 +2,8 @@
 
 #include "client/controller_manager.hpp"
 #include "client/game_filter.hpp"
+#include "client/session_service.hpp"
+#include "common/participant_role.hpp"
 #include "common/protocol.hpp"
 
 #include <cstddef>
@@ -13,10 +15,7 @@
 
 namespace archstreamer {
 
-enum class ClientParticipantRole {
-    Player,
-    Viewer,
-};
+using ClientParticipantRole = ParticipantRole;
 
 struct ClientAppConfig {
     std::string host = "127.0.0.1";
@@ -67,11 +66,32 @@ struct ClientRunResult {
     std::optional<std::string> ended_reason;
 };
 
+struct ClientSessionDraft {
+    PendingSession pending_session;
+    GameList filtered_catalog;
+};
+
+struct ClientCatalogView {
+    GameList full_catalog;
+    GameList filtered_catalog;
+};
+
 class ClientApp {
 public:
     std::vector<ControllerDevice> list_controllers() const;
     ActiveSessionInfo active_session_info(const std::string& host, std::uint16_t control_port) const;
 
+    ClientCatalogView fetch_catalog(
+        const ClientAppConfig& config,
+        const ClientAppCallbacks& callbacks = {}) const;
+    ClientSessionDraft begin_session(
+        const ClientAppConfig& config,
+        const ClientAppCallbacks& callbacks = {}) const;
+    ClientRunResult join_session(
+        ClientSessionDraft draft,
+        const ClientAppConfig& config,
+        const std::function<bool()>& should_stop,
+        const ClientAppCallbacks& callbacks = {}) const;
     ClientRunResult run_session(
         const ClientAppConfig& config,
         const std::function<bool()>& should_stop,

@@ -6,7 +6,11 @@
 namespace archstreamer {
 
 std::filesystem::path default_assets_root_for(const std::filesystem::path& content_root) {
-    return content_root.parent_path() / "Assets";
+    return content_root.parent_path() / "Art";
+}
+
+std::filesystem::path default_placeholder_art_path(const std::filesystem::path& art_root) {
+    return art_root / "default" / "default_image.png";
 }
 
 std::filesystem::path asset_directory_for(
@@ -112,6 +116,101 @@ GameAssets LocalGameAssetProvider::assets_in_directory(const std::filesystem::pa
         find_asset_file(directory, GameAssetKind::Boxart),
         find_asset_file(directory, GameAssetKind::Screenshot),
     };
+}
+
+std::filesystem::path resolve_game_display_art(
+    const LocalGameAssetProvider& provider,
+    std::string_view asset_key) {
+    return resolve_game_display_art(provider, asset_key, {}, {});
+}
+
+namespace {
+
+std::optional<std::filesystem::path> find_titled_srm_art(
+    const std::filesystem::path& art_root,
+    std::string_view title) {
+    if (title.empty()) {
+        return std::nullopt;
+    }
+
+    static constexpr auto folders = std::array<std::string_view, 5>{
+        "poster",
+        "boxart",
+        "grids",
+        "heroes",
+        "icons",
+    };
+    static constexpr auto extensions = std::array<std::string_view, 4>{
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".webp",
+    };
+
+    for (const auto folder : folders) {
+        for (const auto extension : extensions) {
+            auto path = art_root / std::string(folder) / std::string(title);
+            path += extension;
+            if (std::filesystem::is_regular_file(path)) {
+                return path;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+std::string canonical_to_title(std::string_view canonical_name) {
+    std::string title;
+    title.reserve(canonical_name.size());
+    bool capitalize = true;
+    for (const char character : canonical_name) {
+        if (character == '-' || character == '_') {
+            title.push_back(' ');
+            capitalize = true;
+            continue;
+        }
+        if (capitalize && character >= 'a' && character <= 'z') {
+            title.push_back(static_cast<char>(character - 'a' + 'A'));
+        } else {
+            title.push_back(character);
+        }
+        capitalize = false;
+    }
+    return title;
+}
+
+} // namespace
+
+std::filesystem::path resolve_game_display_art(
+    const LocalGameAssetProvider& provider,
+    std::string_view asset_key,
+    std::string_view display_name,
+    std::string_view canonical_name) {
+    const auto assets = provider.assets_for_asset_key(asset_key);
+    if (assets.boxart.has_value()) {
+        return *assets.boxart;
+    }
+    if (assets.grid.has_value()) {
+        return *assets.grid;
+    }
+    if (assets.icon.has_value()) {
+        return *assets.icon;
+    }
+    if (assets.screenshot.has_value()) {
+        return *assets.screenshot;
+    }
+
+    if (const auto titled = find_titled_srm_art(provider.assets_root(), display_name); titled.has_value()) {
+        return *titled;
+    }
+    if (!canonical_name.empty()) {
+        if (const auto titled = find_titled_srm_art(provider.assets_root(), canonical_to_title(canonical_name));
+            titled.has_value()) {
+            return *titled;
+        }
+    }
+
+    return default_placeholder_art_path(provider.assets_root());
 }
 
 } // namespace archstreamer

@@ -3,6 +3,7 @@
 #include "common/protocol.hpp"
 
 #include <QWidget>
+#include <filesystem>
 #include <optional>
 #include <string>
 
@@ -17,9 +18,11 @@ class GamePickerWidget final : public QWidget {
 public:
     explicit GamePickerWidget(QWidget* parent = nullptr);
 
+    void setArtRoot(std::filesystem::path art_root);
     void setCatalog(const GameList& catalog);
     void setSelectedGameId(const std::string& game_id);
     void clearSelection();
+    void refreshArtDisplay();
     bool hasSelection() const;
     std::optional<std::string> selectedGameId() const;
     std::optional<GameInfo> selectedGame() const;
@@ -33,6 +36,8 @@ private:
 
     GameList catalog_;
     std::optional<std::string> selected_id_;
+    std::filesystem::path art_root_;
+    QLabel* thumbnail_ = nullptr;
     QLabel* summary_ = nullptr;
     QPushButton* choose_ = nullptr;
 };

@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
         std::cout
             << game.display_name
             << "\n  id=" << game.id
-            << "\n  identity=" << game.identity_key
+            << "\n  canonical_name=" << game.canonical_name
             << "\n  asset_key=" << game.asset_key
             << "\n  assets=" << directory;
         print_asset("grid", assets.grid);

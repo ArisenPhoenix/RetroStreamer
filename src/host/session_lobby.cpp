@@ -302,16 +302,14 @@ SessionPlan wait_for_session_clients(
         plan.selected_game_id = *selected_game;
         plan.session_mode = *selected_mode;
 
-        // Keep the lobby open even when the host alone already satisfies player
-        // requirements, so remote clients can still Connect/Join for debugging
-        // (viewers in singleplayer, or additional players in multiplayer).
-        if (launch_requirements_satisfied(plan, *selected_game_info) && client_count > 0) {
+        // Host alone can satisfy singleplayer (and some multiplayer setups later).
+        // Launch immediately instead of holding the lobby open for optional remotes.
+        if (launch_requirements_satisfied(plan, *selected_game_info)) {
             std::cout
                 << "Host player already satisfies "
                 << session_mode_name(*selected_mode)
-                << " requirements; waiting up to " << timeout.count()
-                << "s for optional clients (max "
-                << static_cast<int>(client_count) << ").\n";
+                << " requirements; launching without waiting for remote clients.\n";
+            client_count = 0;
         }
     }
 

@@ -1,55 +1,26 @@
-#include "tools/session_client_cli.hpp"
+#include "tools/cli.hpp"
+
+#include "common/cli_common.hpp"
 
 #include <cstdlib>
-#include <iostream>
 #include <stdexcept>
 #include <string_view>
 
 namespace archstreamer {
 namespace {
 
-std::string default_username() {
-    if (const char* user = std::getenv("USER"); user != nullptr && valid_username(user)) {
-        return user;
-    }
-
-    return "local";
-}
-
-GameSessionMode parse_session_mode(std::string_view mode) {
-    if (mode == "singleplayer" || mode == "single" || mode == "sp") {
-        return GameSessionMode::SinglePlayer;
-    }
-    if (mode == "multiplayer" || mode == "multi" || mode == "mp") {
-        return GameSessionMode::Multiplayer;
-    }
-
-    throw std::runtime_error("mode must be singleplayer or multiplayer");
-}
-
-GameFilterMode parse_filter_mode(std::string_view mode) {
-    if (mode == "any" || mode == "all") {
+GameFilterMode parse_filter_mode(std::string_view value) {
+    if (value == "any" || value == "all") {
         return GameFilterMode::Any;
     }
-    if (mode == "singleplayer" || mode == "single" || mode == "sp") {
+    if (value == "singleplayer" || value == "single" || value == "sp") {
         return GameFilterMode::SinglePlayer;
     }
-    if (mode == "multiplayer" || mode == "multi" || mode == "mp") {
+    if (value == "multiplayer" || value == "multi" || value == "mp") {
         return GameFilterMode::Multiplayer;
     }
 
     throw std::runtime_error("filter mode must be any, single, or multi");
-}
-
-ClientParticipantRole parse_role(std::string_view role) {
-    if (role == "player" || role == "play") {
-        return ClientParticipantRole::Player;
-    }
-    if (role == "viewer" || role == "view" || role == "spectator" || role == "spectate") {
-        return ClientParticipantRole::Viewer;
-    }
-
-    throw std::runtime_error("role must be player or viewer");
 }
 
 void print_games(std::ostream& out, const GameList& list) {
@@ -76,10 +47,6 @@ void print_games(std::ostream& out, const GameList& list) {
 
 std::string mode_name(GameSessionMode mode) {
     return mode == GameSessionMode::SinglePlayer ? "singleplayer" : "multiplayer";
-}
-
-const char* role_name(ClientParticipantRole role) {
-    return role == ClientParticipantRole::Player ? "player" : "viewer";
 }
 
 void print_active_session(std::ostream& out, const ActiveSessionInfo& info) {
@@ -174,7 +141,7 @@ SessionClientCliArgs SessionClientCli::parse(int argc, char** argv) const {
             if (++i >= argc) {
                 throw std::runtime_error("--role requires player or viewer");
             }
-            args.role = parse_role(argv[i]);
+            args.role = parse_participant_role(argv[i]);
         } else if (arg == "--mode") {
             if (++i >= argc) {
                 throw std::runtime_error("--mode requires singleplayer or multiplayer");
@@ -232,7 +199,7 @@ SessionClientCliArgs SessionClientCli::parse(int argc, char** argv) const {
     }
 
     if (args.username.empty()) {
-        args.username = default_username();
+        args.username = default_cli_username();
     }
     if (args.display_name.empty()) {
         args.display_name = args.username;
@@ -240,7 +207,7 @@ SessionClientCliArgs SessionClientCli::parse(int argc, char** argv) const {
     if (!valid_player_count(args.players)) {
         throw std::runtime_error("--players must be 0, 1, or 2");
     }
-    if (args.role == ClientParticipantRole::Viewer) {
+    if (args.role == ParticipantRole::Viewer) {
         args.players = 0;
         args.controller_indexes.clear();
     }
@@ -271,6 +238,26 @@ int SessionClientCli::run(
         return 0;
     }
 
+    if (args.list_games || args.list_systems || args.list_languages) {
+        const auto catalog = app.fetch_catalog(args.app_config());
+        out_ << "Received " << catalog.full_catalog.games.size() << " games from host.\n";
+        if (args.list_systems) {
+            for (const auto& system : systems_for_games(catalog.full_catalog)) {
+                out_ << system << '\n';
+            }
+        }
+        if (args.list_languages) {
+            for (const auto& language : languages_for_games(catalog.full_catalog)) {
+                out_ << language << '\n';
+            }
+        }
+        if (args.list_games) {
+            out_ << "Showing " << catalog.filtered_catalog.games.size() << " game(s) after filters.\n";
+            print_games(out_, catalog.filtered_catalog);
+        }
+        return 0;
+    }
+
     auto connected_client_id = std::optional<ClientId>{};
     ClientAppCallbacks callbacks;
     callbacks.on_catalog = [&](const GameList& game_list, const GameList& filtered_games) {
@@ -295,7 +282,7 @@ int SessionClientCli::run(
         out_
             << "Connected as client " << static_cast<int>(connection.client_id)
             << " username=" << connection.username
-            << " role=" << role_name(connection.role)
+            << " role=" << participant_role_name(connection.role)
             << " mode=" << mode_name(connection.session_mode);
         if (connection.selected_game_id.has_value()) {
             out_ << " game=\"" << *connection.selected_game_id << "\"";

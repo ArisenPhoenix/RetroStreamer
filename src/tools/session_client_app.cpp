@@ -1,4 +1,5 @@
-#include "tools/session_client_cli.hpp"
+#include "tools/cli.hpp"
+#include "tools/session_client_app.hpp"
 
 #include <atomic>
 #include <csignal>
@@ -15,16 +16,16 @@ void handle_signal(int) {
 
 } // namespace
 
-int main(int argc, char** argv) {
+int archstreamer::run_session_client(int argc, char** argv) {
     try {
-        archstreamer::SessionClientCli cli(std::cout, std::cerr);
+        SessionClientCli cli(std::cout, std::cerr);
         const auto args = cli.parse(argc, argv);
 
         std::signal(SIGINT, handle_signal);
         std::signal(SIGTERM, handle_signal);
         std::signal(SIGPIPE, SIG_IGN);
 
-        const archstreamer::ClientApp app;
+        const ClientApp app;
         return cli.run(
             args,
             app,

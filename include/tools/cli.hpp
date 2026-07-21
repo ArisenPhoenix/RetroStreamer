@@ -1,16 +1,16 @@
 #pragma once
 
 #include "client/client_app.hpp"
+#include "host/host_app_config.hpp"
 
-#include <cstddef>
-#include <cstdint>
 #include <functional>
 #include <iosfwd>
 #include <optional>
 #include <string>
-#include <vector>
 
 namespace archstreamer {
+
+using HostRunnerCliArgs = HostAppConfig;
 
 struct SessionClientCliArgs {
     std::string host = "127.0.0.1";
@@ -18,7 +18,7 @@ struct SessionClientCliArgs {
     std::optional<std::uint16_t> input_port;
     std::string username;
     std::string display_name;
-    ClientParticipantRole role = ClientParticipantRole::Player;
+    ParticipantRole role = ParticipantRole::Player;
     GameFilterMode filter_mode = GameFilterMode::Any;
     GameSessionMode session_mode = GameSessionMode::SinglePlayer;
     bool session_mode_explicit = false;
@@ -35,6 +35,18 @@ struct SessionClientCliArgs {
     bool wants_audio = true;
 
     ClientAppConfig app_config() const;
+};
+
+class HostRunnerCli {
+public:
+    explicit HostRunnerCli(std::ostream& out, std::ostream& err);
+
+    HostAppConfig parse(int argc, char** argv) const;
+    void print_usage() const;
+
+private:
+    std::ostream& out_;
+    std::ostream& err_;
 };
 
 class SessionClientCli {

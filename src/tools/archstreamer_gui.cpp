@@ -25,6 +25,7 @@
 #include <QProcess>
 #include <QCoreApplication>
 #include <QPushButton>
+#include <QSettings>
 #include <QSpinBox>
 #include <QTabWidget>
 #include <QThread>
@@ -139,10 +140,13 @@ public:
         auto* tabs = new QTabWidget(this);
         tabs->addTab(build_client_tab(), "Client");
         tabs->addTab(build_host_tab(), "Host");
+        tabs->addTab(build_settings_tab(), "Settings");
         setCentralWidget(tabs);
+        load_persisted_settings();
     }
 
     ~MainWindow() override {
+        save_persisted_settings();
         stop_client();
         stop_client_connect();
         stop_host();
@@ -215,7 +219,6 @@ private:
         client_players_->setValue(1);
         client_system_ = new QLineEdit(form_box);
         client_language_ = new QLineEdit(form_box);
-        client_art_root_ = new QLineEdit(archstreamer::DefaultArtRoot, form_box);
         client_video_ = new QCheckBox("Receive video", form_box);
         client_video_->setChecked(true);
         client_audio_ = new QCheckBox("Receive audio", form_box);
@@ -230,15 +233,8 @@ private:
         form->addRow("Players", client_players_);
         form->addRow("System filter", client_system_);
         form->addRow("Language filter", client_language_);
-        form->addRow("Art root", client_art_root_);
         form->addRow("", client_video_);
         form->addRow("", client_audio_);
-
-        auto* refresh_client_art = new QPushButton("Refresh Art from Steam", form_box);
-        form->addRow("", refresh_client_art);
-        connect(refresh_client_art, &QPushButton::clicked, this, [this] {
-            refresh_art_from_steam(false);
-        });
 
         client_host_picker_ = new archstreamer::gui::HostPickerWidget(page);
         connect(client_host_picker_, &archstreamer::gui::HostPickerWidget::hostSelected, this,
@@ -253,10 +249,7 @@ private:
             });
 
         client_game_picker_ = new archstreamer::gui::GamePickerWidget(page);
-        client_game_picker_->setArtRoot(client_art_root_->text().toStdString());
-        connect(client_art_root_, &QLineEdit::textChanged, this, [this](const QString& path) {
-            client_game_picker_->setArtRoot(path.toStdString());
-        });
+        client_game_picker_->setArtRoot(art_root_path());
         client_catalog_status_ = new QLabel("Not connected", page);
         client_controllers_ = new QListWidget(page);
         client_controllers_->setSelectionMode(QAbstractItemView::MultiSelection);
@@ -333,7 +326,6 @@ private:
 
         host_rom_root_ = new QLineEdit(archstreamer::DefaultRomRoot, form_box);
         host_meta_root_ = new QLineEdit(archstreamer::DefaultMetaRoot, form_box);
-        host_art_root_ = new QLineEdit(archstreamer::DefaultArtRoot, form_box);
         host_username_ = new QLineEdit(qEnvironmentVariable("USER", "host"), form_box);
         host_control_port_ = new QSpinBox(form_box);
         host_control_port_->setRange(1, 65535);
@@ -363,7 +355,6 @@ private:
 
         form->addRow("ROM root", host_rom_root_);
         form->addRow("Meta root", host_meta_root_);
-        form->addRow("Art root", host_art_root_);
         form->addRow("Display name", host_username_);
         form->addRow("Control port", host_control_port_);
         form->addRow("Input port", host_input_port_);
@@ -377,22 +368,13 @@ private:
         form->addRow("", host_audio_);
         form->addRow("", host_advertise_);
 
-        auto* refresh_host_art = new QPushButton("Refresh Art from Steam", form_box);
-        form->addRow("", refresh_host_art);
-        connect(refresh_host_art, &QPushButton::clicked, this, [this] {
-            refresh_art_from_steam(true);
-        });
-
         auto* start = new QPushButton("Start Host", page);
         auto* stop = new QPushButton("Stop Host", page);
         auto* load_games = new QPushButton("Load Games", page);
         auto* refresh_host_controllers_button = new QPushButton("Refresh Controllers", page);
         host_status_ = new QLabel("Host stopped", page);
         host_game_picker_ = new archstreamer::gui::GamePickerWidget(page);
-        host_game_picker_->setArtRoot(host_art_root_->text().toStdString());
-        connect(host_art_root_, &QLineEdit::textChanged, this, [this](const QString& path) {
-            host_game_picker_->setArtRoot(path.toStdString());
-        });
+        host_game_picker_->setArtRoot(art_root_path());
         connect(start, &QPushButton::clicked, this, [this] {
             start_host();
         });
@@ -455,6 +437,61 @@ private:
         refresh_host_controllers();
         load_host_games();
         sync_host_advertise(host_advertise_->isChecked());
+        return page;
+    }
+
+    QWidget* build_settings_tab() {
+        auto* page = new QWidget(this);
+        auto* root = new QHBoxLayout(page);
+
+        auto* form_box = new QGroupBox("Local configuration", page);
+        auto* form = new QFormLayout(form_box);
+
+        settings_art_root_ = new QLineEdit(archstreamer::DefaultArtRoot, form_box);
+        settings_steam_account_ = new QLineEdit(form_box);
+        settings_steam_account_->setPlaceholderText("auto-detect if empty");
+        auto* steam_row = new QWidget(form_box);
+        auto* steam_layout = new QHBoxLayout(steam_row);
+        steam_layout->setContentsMargins(0, 0, 0, 0);
+        auto* detect_steam = new QPushButton("Detect", steam_row);
+        steam_layout->addWidget(settings_steam_account_, 1);
+        steam_layout->addWidget(detect_steam);
+
+        form->addRow("Art root", settings_art_root_);
+        form->addRow("Steam account ID", steam_row);
+
+        auto* refresh_art = new QPushButton("Refresh Art from Steam", form_box);
+        form->addRow("", refresh_art);
+
+        connect(settings_art_root_, &QLineEdit::editingFinished, this, [this] {
+            apply_art_root_to_pickers();
+            save_persisted_settings();
+        });
+        connect(settings_art_root_, &QLineEdit::textChanged, this, [this](const QString&) {
+            apply_art_root_to_pickers();
+        });
+        connect(settings_steam_account_, &QLineEdit::editingFinished, this, [this] {
+            save_persisted_settings();
+        });
+        connect(detect_steam, &QPushButton::clicked, this, [this] {
+            detect_steam_account();
+        });
+        connect(refresh_art, &QPushButton::clicked, this, [this] {
+            refresh_art_from_steam();
+        });
+
+        auto* left = new QVBoxLayout();
+        left->addWidget(form_box);
+        left->addWidget(new QLabel(
+            "Steam account ID is used for art import and SRM-related paths.\n"
+            "Leave blank to auto-detect the best userdata/<id> on this machine.",
+            page));
+        left->addStretch();
+
+        settings_log_ = new QPlainTextEdit(page);
+        settings_log_->setReadOnly(true);
+        root->addLayout(left, 1);
+        root->addWidget(settings_log_, 2);
         return page;
     }
 
@@ -579,29 +616,95 @@ private:
         }
     }
 
-    void refresh_art_from_steam(bool host_tab) {
-        auto* log = host_tab ? host_log_ : client_log_;
-        auto* picker = host_tab ? host_game_picker_ : client_game_picker_;
+    void load_persisted_settings() {
+        QSettings settings("ArchStreamer", "ArchStreamer");
+        const auto art_root = settings.value("paths/artRoot", archstreamer::DefaultArtRoot).toString();
+        const auto account = settings.value("steam/accountId").toString().trimmed();
+        if (settings_art_root_ != nullptr) {
+            settings_art_root_->setText(art_root);
+        }
+        if (settings_steam_account_ != nullptr) {
+            settings_steam_account_->setText(account);
+        }
+        apply_art_root_to_pickers();
+        if (!account.isEmpty() && settings_log_ != nullptr) {
+            append_log(settings_log_, QString("Loaded Steam account ID %1").arg(account));
+        }
+    }
+
+    void save_persisted_settings() {
+        QSettings settings("ArchStreamer", "ArchStreamer");
+        settings.setValue("paths/artRoot", QString::fromStdString(art_root_path().string()));
+        settings.setValue("steam/accountId", QString::fromStdString(steam_account_id_text()));
+    }
+
+    std::filesystem::path art_root_path() const {
+        if (settings_art_root_ != nullptr && !settings_art_root_->text().trimmed().isEmpty()) {
+            return std::filesystem::path{settings_art_root_->text().trimmed().toStdString()};
+        }
+        return std::filesystem::path{archstreamer::DefaultArtRoot};
+    }
+
+    std::string steam_account_id_text() const {
+        if (settings_steam_account_ == nullptr) {
+            return {};
+        }
+        return settings_steam_account_->text().trimmed().toStdString();
+    }
+
+    void apply_art_root_to_pickers() {
+        const auto art_root = art_root_path();
+        if (client_game_picker_ != nullptr) {
+            client_game_picker_->setArtRoot(art_root);
+        }
+        if (host_game_picker_ != nullptr) {
+            host_game_picker_->setArtRoot(art_root);
+        }
+    }
+
+    void detect_steam_account() {
+        const auto account = archstreamer::resolve_steam_account();
+        if (!account.has_value()) {
+            append_log(settings_log_, "No Steam userdata account found under ~/.local/share/Steam (or Flatpak Steam).");
+            return;
+        }
+        const auto text = QString::fromStdString(account->account_id);
+        if (settings_steam_account_ != nullptr) {
+            settings_steam_account_->setText(text);
+        }
+        save_persisted_settings();
+        append_log(
+            settings_log_,
+            QString("Detected Steam account %1 (%2)")
+                .arg(text, QString::fromStdString(account->config_dir.string())));
+    }
+
+    void refresh_art_from_steam() {
         if (art_refresh_thread_.joinable()) {
             if (art_refreshing_.load()) {
-                append_log(log, "Art refresh already running.");
+                append_log(settings_log_, "Art refresh already running.");
                 return;
             }
             art_refresh_thread_.join();
         }
 
-        const auto rom_root = host_tab
+        const auto rom_root = host_rom_root_ != nullptr
             ? std::filesystem::path{host_rom_root_->text().toStdString()}
-            : std::filesystem::path{client_art_root_->text().toStdString()}.parent_path() / "Games";
-        const auto meta_root = host_tab
+            : art_root_path().parent_path() / "Games";
+        const auto meta_root = host_meta_root_ != nullptr
             ? std::filesystem::path{host_meta_root_->text().toStdString()}
-            : std::filesystem::path{client_art_root_->text().toStdString()}.parent_path() / "Meta";
-        const auto art_root = std::filesystem::path{
-            (host_tab ? host_art_root_ : client_art_root_)->text().toStdString()};
+            : art_root_path().parent_path() / "Meta";
+        const auto art_root = art_root_path();
+        const auto steam_account_id = steam_account_id_text();
 
-        append_log(log, "Refreshing art from Steam grid...");
+        append_log(
+            settings_log_,
+            steam_account_id.empty()
+                ? "Refreshing art from Steam grid (auto-detect account)..."
+                : QString("Refreshing art from Steam account %1...")
+                    .arg(QString::fromStdString(steam_account_id)));
         art_refreshing_ = true;
-        art_refresh_thread_ = std::thread([this, rom_root, meta_root, art_root, log, picker] {
+        art_refresh_thread_ = std::thread([this, rom_root, meta_root, art_root, steam_account_id] {
             QString message;
             try {
                 const auto catalog = archstreamer::scan_game_catalog(
@@ -623,10 +726,12 @@ private:
                 }
 
                 archstreamer::SteamArtImportOptions options;
+                options.steam_account_id = steam_account_id;
                 options.replace_when_different = true;
                 const auto result = archstreamer::import_steam_grid_art(targets, art_root, options);
                 message = QString(
-                    "Art refresh done: shortcuts=%1 matched=%2 copied=%3 replaced=%4 skipped=%5 unmatched=%6")
+                    "Art refresh done: account=%1 shortcuts=%2 matched=%3 copied=%4 replaced=%5 skipped=%6 unmatched=%7")
+                    .arg(QString::fromStdString(result.resolved_account_id))
                     .arg(result.shortcuts_read)
                     .arg(result.matched_games)
                     .arg(result.files_copied)
@@ -642,12 +747,16 @@ private:
 
             QMetaObject::invokeMethod(
                 this,
-                [this, message = std::move(message), log, picker] {
+                [this, message = std::move(message)] {
                     art_refreshing_ = false;
-                    append_log(log, message);
+                    append_log(settings_log_, message);
                     QPixmapCache::clear();
-                    if (picker != nullptr) {
-                        picker->refreshArtDisplay();
+                    apply_art_root_to_pickers();
+                    if (host_game_picker_ != nullptr) {
+                        host_game_picker_->refreshArtDisplay();
+                    }
+                    if (client_game_picker_ != nullptr) {
+                        client_game_picker_->refreshArtDisplay();
                     }
                 },
                 Qt::QueuedConnection);
@@ -1061,7 +1170,6 @@ private:
     QSpinBox* client_players_ = nullptr;
     QLineEdit* client_system_ = nullptr;
     QLineEdit* client_language_ = nullptr;
-    QLineEdit* client_art_root_ = nullptr;
     QCheckBox* client_video_ = nullptr;
     QCheckBox* client_audio_ = nullptr;
     QLabel* client_catalog_status_ = nullptr;
@@ -1072,7 +1180,6 @@ private:
 
     QLineEdit* host_rom_root_ = nullptr;
     QLineEdit* host_meta_root_ = nullptr;
-    QLineEdit* host_art_root_ = nullptr;
     QLineEdit* host_username_ = nullptr;
     QSpinBox* host_control_port_ = nullptr;
     QSpinBox* host_input_port_ = nullptr;
@@ -1088,6 +1195,10 @@ private:
     QLabel* host_status_ = nullptr;
     archstreamer::gui::GamePickerWidget* host_game_picker_ = nullptr;
     QPlainTextEdit* host_log_ = nullptr;
+
+    QLineEdit* settings_art_root_ = nullptr;
+    QLineEdit* settings_steam_account_ = nullptr;
+    QPlainTextEdit* settings_log_ = nullptr;
 };
 
 } // namespace

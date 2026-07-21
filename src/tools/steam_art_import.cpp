@@ -30,12 +30,40 @@ int main(int argc, char** argv) {
                 return 2;
             }
             options.steam_config_dir = argv[++i];
+        } else if (arg == "--steam-account-id") {
+            if (i + 1 >= argc) {
+                std::cerr << "missing value for --steam-account-id\n";
+                return 2;
+            }
+            options.steam_account_id = argv[++i];
+        } else if (arg == "--steam-dir") {
+            if (i + 1 >= argc) {
+                std::cerr << "missing value for --steam-dir\n";
+                return 2;
+            }
+            options.steam_dir = argv[++i];
+        } else if (arg == "--list-accounts") {
+            const auto accounts = archstreamer::list_steam_accounts();
+            if (accounts.empty()) {
+                std::cout << "No Steam userdata accounts found.\n";
+                return 1;
+            }
+            for (const auto& account : accounts) {
+                std::cout
+                    << account.account_id
+                    << "\tscore=" << account.score
+                    << "\t" << account.config_dir
+                    << '\n';
+            }
+            return 0;
         } else if (arg == "--help" || arg == "-h") {
             std::cerr
                 << "usage: steam_art_import [content-root] [metadata-root] [assets-root]\n"
-                << "       [--steam-config DIR] [--overwrite] [--dry-run]\n"
+                << "       [--steam-account-id ID] [--steam-dir DIR] [--steam-config DIR]\n"
+                << "       [--overwrite] [--dry-run] [--list-accounts]\n"
                 << "\n"
-                << "Copies Steam grid art into Art/<asset_key>/{boxart,grid,hero,logo,icon}.png\n";
+                << "Copies Steam grid art into Art/<asset_key>/{boxart,grid,hero,logo,icon}.png\n"
+                << "Empty --steam-account-id auto-detects the best userdata/<id> account.\n";
             return 0;
         } else if (!content_set) {
             content_root = arg;
@@ -53,12 +81,13 @@ int main(int argc, char** argv) {
     }
 
     if (options.steam_config_dir.empty()) {
-        const auto discovered = archstreamer::discover_steam_config_dir();
-        if (!discovered.has_value()) {
-            std::cerr << "could not discover Steam config dir (pass --steam-config)\n";
+        const auto account = archstreamer::resolve_steam_account(options.steam_account_id, options.steam_dir);
+        if (!account.has_value()) {
+            std::cerr << "could not resolve Steam account (pass --steam-account-id or --steam-config)\n";
             return 1;
         }
-        options.steam_config_dir = *discovered;
+        options.steam_config_dir = account->config_dir;
+        options.steam_account_id = account->account_id;
     }
 
     const auto catalog = archstreamer::scan_game_catalog(
@@ -81,15 +110,17 @@ int main(int argc, char** argv) {
     }
 
     std::cout
-        << "Steam config: " << options.steam_config_dir
-        << "\nAssets root:  " << assets_root
-        << "\nCatalog games:" << targets.size()
-        << (options.dry_run ? "\nMode:         dry-run" : "")
+        << "Steam account: " << (options.steam_account_id.empty() ? "(from config path)" : options.steam_account_id)
+        << "\nSteam config:  " << options.steam_config_dir
+        << "\nAssets root:   " << assets_root
+        << "\nCatalog games: " << targets.size()
+        << (options.dry_run ? "\nMode:          dry-run" : "")
         << '\n';
 
     const auto result = archstreamer::import_steam_grid_art(targets, assets_root, options);
     std::cout
-        << "shortcuts=" << result.shortcuts_read
+        << "resolved_account=" << result.resolved_account_id
+        << " shortcuts=" << result.shortcuts_read
         << " matched=" << result.matched_games
         << " copied=" << result.files_copied
         << " replaced=" << result.files_replaced
@@ -109,7 +140,7 @@ int main(int argc, char** argv) {
     }
 
     if (result.shortcuts_read == 0) {
-        std::cerr << "no shortcuts found in " << (options.steam_config_dir / "shortcuts.vdf") << '\n';
+        std::cerr << "no shortcuts found in " << result.resolved_config_dir / "shortcuts.vdf" << '\n';
         return 1;
     }
     return 0;

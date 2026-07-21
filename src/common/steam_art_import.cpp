@@ -1,6 +1,7 @@
 #include "common/steam_art_import.hpp"
 #include "common/sha256.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
@@ -361,27 +362,38 @@ std::size_t grid_file_count(const std::filesystem::path& config_dir) {
 
 } // namespace
 
-std::optional<std::filesystem::path> discover_steam_config_dir() {
-    const auto home = home_directory();
-    if (!home.has_value()) {
-        return std::nullopt;
+std::vector<std::filesystem::path> steam_userdata_roots(const std::filesystem::path& steam_dir_override) {
+    std::vector<std::filesystem::path> roots;
+    if (!steam_dir_override.empty()) {
+        roots.push_back(steam_dir_override / "userdata");
+        return roots;
     }
 
-    const std::filesystem::path userdata_roots[] = {
-        *home / ".local/share/Steam/userdata",
-        *home / ".steam/steam/userdata",
-        *home / ".var/app/com.valvesoftware.Steam/data/Steam/userdata",
-    };
+    const auto home = home_directory();
+    if (!home.has_value()) {
+        return roots;
+    }
+    roots.push_back(*home / ".local/share/Steam/userdata");
+    roots.push_back(*home / ".steam/steam/userdata");
+    roots.push_back(*home / ".var/app/com.valvesoftware.Steam/data/Steam/userdata");
+    return roots;
+}
 
-    std::optional<std::filesystem::path> best;
-    std::size_t best_score = 0;
-    for (const auto& userdata_root : userdata_roots) {
+std::vector<SteamAccountInfo> list_steam_accounts(const std::filesystem::path& steam_dir_override) {
+    std::vector<SteamAccountInfo> accounts;
+    for (const auto& userdata_root : steam_userdata_roots(steam_dir_override)) {
         std::error_code error;
         if (!std::filesystem::is_directory(userdata_root, error) || error) {
             continue;
         }
         for (const auto& account : std::filesystem::directory_iterator(userdata_root, error)) {
             if (error || !account.is_directory()) {
+                continue;
+            }
+            const auto account_id = account.path().filename().string();
+            if (account_id.empty() || account_id == "0" || !std::all_of(account_id.begin(), account_id.end(), [](unsigned char c) {
+                    return std::isdigit(c) != 0;
+                })) {
                 continue;
             }
             const auto config_dir = account.path() / "config";
@@ -391,14 +403,63 @@ std::optional<std::filesystem::path> discover_steam_config_dir() {
             }
             const auto score = grid_file_count(config_dir);
             const auto size = static_cast<std::size_t>(std::filesystem::file_size(shortcuts, error));
-            const auto ranked = score * 1000 + (error ? 0 : size);
-            if (!best.has_value() || ranked > best_score) {
-                best = config_dir;
-                best_score = ranked;
-            }
+            SteamAccountInfo info;
+            info.account_id = account_id;
+            info.steam_dir = userdata_root.parent_path();
+            info.config_dir = config_dir;
+            info.score = score * 1000 + (error ? 0 : size);
+            accounts.push_back(std::move(info));
         }
     }
-    return best;
+    std::sort(accounts.begin(), accounts.end(), [](const SteamAccountInfo& left, const SteamAccountInfo& right) {
+        if (left.score != right.score) {
+            return left.score > right.score;
+        }
+        return left.account_id < right.account_id;
+    });
+    return accounts;
+}
+
+std::optional<SteamAccountInfo> resolve_steam_account(
+    std::string_view account_id,
+    const std::filesystem::path& steam_dir_override) {
+    const auto accounts = list_steam_accounts(steam_dir_override);
+    if (accounts.empty()) {
+        return std::nullopt;
+    }
+    if (account_id.empty()) {
+        return accounts.front();
+    }
+    for (const auto& account : accounts) {
+        if (account.account_id == account_id) {
+            return account;
+        }
+    }
+
+    // Explicit id may exist without shortcuts yet; still resolve the path.
+    for (const auto& userdata_root : steam_userdata_roots(steam_dir_override)) {
+        const auto config_dir = userdata_root / std::string(account_id) / "config";
+        std::error_code error;
+        if (std::filesystem::is_directory(config_dir, error) && !error) {
+            SteamAccountInfo info;
+            info.account_id = std::string(account_id);
+            info.steam_dir = userdata_root.parent_path();
+            info.config_dir = config_dir;
+            info.score = grid_file_count(config_dir);
+            return info;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::filesystem::path> discover_steam_config_dir(
+    std::string_view account_id,
+    const std::filesystem::path& steam_dir_override) {
+    const auto account = resolve_steam_account(account_id, steam_dir_override);
+    if (!account.has_value()) {
+        return std::nullopt;
+    }
+    return account->config_dir;
 }
 
 std::vector<SteamShortcutEntry> parse_steam_shortcuts(const std::filesystem::path& shortcuts_vdf) {
@@ -452,11 +513,16 @@ SteamArtImportResult import_steam_grid_art(
     SteamArtImportResult result;
     auto config_dir = options.steam_config_dir;
     if (config_dir.empty()) {
-        const auto discovered = discover_steam_config_dir();
-        if (!discovered.has_value()) {
+        const auto account = resolve_steam_account(options.steam_account_id, options.steam_dir);
+        if (!account.has_value()) {
             return result;
         }
-        config_dir = *discovered;
+        config_dir = account->config_dir;
+        result.resolved_account_id = account->account_id;
+        result.resolved_config_dir = account->config_dir;
+    } else {
+        result.resolved_config_dir = config_dir;
+        result.resolved_account_id = config_dir.parent_path().filename().string();
     }
 
     const auto shortcuts = parse_steam_shortcuts(config_dir / "shortcuts.vdf");

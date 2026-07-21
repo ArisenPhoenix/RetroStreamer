@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Ensure a minimal Steam userdata layout for Steam ROM Manager when a real
 # Steam install/account is missing. Never overwrites a valid shortcuts.vdf.
+#
+# Account selection (first match wins):
+#   1. ARCHSTREAMER_STEAM_ACCOUNT_ID / ARCHSTREAMER_STEAM_DIR
+#   2. SRM userSettings.json environmentVariables
+#   3. Auto-detect best numeric userdata/<id> under Steam (grid + shortcuts score)
+#   4. Create userdata/0 stub only if nothing else exists
 set -euo pipefail
 
 STEAM_DIR="${ARCHSTREAMER_STEAM_DIR:-}"
@@ -31,7 +37,41 @@ PY
 fi
 
 STEAM_DIR="${STEAM_DIR:-${HOME}/.local/share/Steam}"
-ACCOUNT_ID="${ACCOUNT_ID:-YOUR_STEAM_ID}"
+
+if [[ -z "${ACCOUNT_ID}" ]]; then
+  ACCOUNT_ID="$(python3 - "${STEAM_DIR}" <<'PY'
+import sys
+from pathlib import Path
+
+steam = Path(sys.argv[1])
+userdata = steam / "userdata"
+best_id = ""
+best_score = -1
+if userdata.is_dir():
+    for account in userdata.iterdir():
+        if not account.is_dir() or not account.name.isdigit() or account.name == "0":
+            continue
+        config = account / "config"
+        shortcuts = config / "shortcuts.vdf"
+        if not shortcuts.is_file():
+            continue
+        grid = config / "grid"
+        grid_count = 0
+        if grid.is_dir():
+            grid_count = sum(1 for p in grid.iterdir() if p.is_file() or p.is_symlink())
+        score = grid_count * 1000 + shortcuts.stat().st_size
+        if score > best_score:
+            best_score = score
+            best_id = account.name
+print(best_id)
+PY
+)"
+fi
+
+if [[ -z "${ACCOUNT_ID}" ]]; then
+  ACCOUNT_ID="0"
+  echo "No Steam userdata account found; using stub account id 0."
+fi
 
 CONFIG_DIR="${STEAM_DIR}/userdata/${ACCOUNT_ID}/config"
 GRID_DIR="${CONFIG_DIR}/grid"

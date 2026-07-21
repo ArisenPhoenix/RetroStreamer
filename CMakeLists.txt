@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.20)
 project(ArchStreamer LANGUAGES CXX)
 
 include(FetchContent)
+include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -15,6 +16,33 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE BOOL
 
 set(FETCHCONTENT_BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/_dependencies")
 
+option(ARCHSTREAMER_REQUIRE_GUI "Fail configure if Qt6 Widgets is missing" OFF)
+option(ARCHSTREAMER_BUILD_CONTROLLER_PROBE "Build controller probe tool" ON)
+
+function(archstreamer_require_pkgconfig_module RESULT_PREFIX MODULE_NAME)
+    pkg_check_modules(${RESULT_PREFIX} IMPORTED_TARGET ${MODULE_NAME})
+    if(NOT ${RESULT_PREFIX}_FOUND)
+        set(_hint "")
+        foreach(_part IN LISTS ARGN)
+            string(APPEND _hint "${_part}")
+        endforeach()
+        message(FATAL_ERROR
+            "Missing dependency: pkg-config module '${MODULE_NAME}'.\n"
+            "${_hint}\n"
+            "After installing, clear the build dir and re-run cmake.")
+    endif()
+    message(STATUS "Found ${MODULE_NAME}: ${${RESULT_PREFIX}_VERSION}")
+endfunction()
+
+find_package(PkgConfig)
+if(NOT PkgConfig_FOUND)
+    message(FATAL_ERROR
+        "Missing dependency: PkgConfig (pkg-config).\n"
+        "  Fedora/Bazzite (distrobox): sudo dnf install pkgconf-pkg-config\n"
+        "  Debian/Ubuntu:              sudo apt install pkg-config\n"
+        "  Arch:                       sudo pacman -S pkgconf")
+endif()
+
 FetchContent_Declare(
   nlohmann_json
   GIT_REPOSITORY https://github.com/nlohmann/json.git
@@ -24,6 +52,21 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(nlohmann_json)
 
 find_package(Qt6 COMPONENTS Widgets QUIET)
+if(Qt6Widgets_FOUND)
+    message(STATUS "Found Qt6 Widgets: ${Qt6Widgets_VERSION}")
+else()
+    set(_qt_hint
+        "Qt6 Widgets not found; archstreamer_gui will be skipped.\n"
+        "  Fedora/Bazzite (distrobox): sudo dnf install qt6-qtbase-devel\n"
+        "  Debian/Ubuntu:              sudo apt install qt6-base-dev\n"
+        "  Arch:                       sudo pacman -S qt6-base\n"
+        "  Or build the Flatpak under deploy/flatpak/.")
+    if(ARCHSTREAMER_REQUIRE_GUI)
+        message(FATAL_ERROR ${_qt_hint})
+    else()
+        message(WARNING ${_qt_hint})
+    endif()
+endif()
 
 add_library(archstreamer_core
     src/common/addresses.cpp
@@ -77,8 +120,13 @@ set(ARCHSTREAMER_CONTROLLER_BACKEND "sdl2" CACHE STRING "Controller backend impl
 set_property(CACHE ARCHSTREAMER_CONTROLLER_BACKEND PROPERTY STRINGS sdl2)
 
 if(ARCHSTREAMER_CONTROLLER_BACKEND STREQUAL "sdl2")
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2)
+    archstreamer_require_pkgconfig_module(
+        SDL2
+        sdl2
+        "  Fedora/Bazzite (distrobox): sudo dnf install SDL2-devel\n"
+        "  Debian/Ubuntu:              sudo apt install libsdl2-dev\n"
+        "  Arch:                       sudo pacman -S sdl2\n"
+        "  Verify:                     pkg-config --exists sdl2 && pkg-config --modversion sdl2")
 
     add_library(archstreamer_controller
         src/client/sdl2_controller_backend.cpp
@@ -111,7 +159,15 @@ target_link_libraries(archstreamer_client
         archstreamer_controller
 )
 
-option(ARCHSTREAMER_BUILD_CONTROLLER_PROBE "Build controller probe tool" ON)
+set(ARCHSTREAMER_INSTALL_TARGETS
+    game_catalog_probe
+    asset_probe
+    steam_art_import
+    uinput_probe
+    host_runner
+    session_client
+    client_catalog_probe
+)
 
 if(ARCHSTREAMER_BUILD_CONTROLLER_PROBE)
     add_executable(controller_probe
@@ -121,6 +177,7 @@ if(ARCHSTREAMER_BUILD_CONTROLLER_PROBE)
         PRIVATE
             archstreamer_controller
     )
+    list(APPEND ARCHSTREAMER_INSTALL_TARGETS controller_probe)
 endif()
 
 add_executable(game_catalog_probe
@@ -201,4 +258,24 @@ if(Qt6Widgets_FOUND)
             archstreamer_host
             Qt6::Widgets
     )
+    list(APPEND ARCHSTREAMER_INSTALL_TARGETS archstreamer_gui)
 endif()
+
+install(TARGETS ${ARCHSTREAMER_INSTALL_TARGETS}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+message(STATUS "")
+message(STATUS "ArchStreamer dependency summary")
+message(STATUS "  C++ standard:     ${CMAKE_CXX_STANDARD}")
+message(STATUS "  Controller:       ${ARCHSTREAMER_CONTROLLER_BACKEND}")
+message(STATUS "  SDL2:             ${SDL2_VERSION}")
+if(Qt6Widgets_FOUND)
+    message(STATUS "  Qt6 Widgets:      ${Qt6Widgets_VERSION}")
+    message(STATUS "  GUI target:       yes (archstreamer_gui)")
+else()
+    message(STATUS "  Qt6 Widgets:      not found")
+    message(STATUS "  GUI target:       no")
+endif()
+message(STATUS "  Require GUI:      ${ARCHSTREAMER_REQUIRE_GUI}")
+message(STATUS "")

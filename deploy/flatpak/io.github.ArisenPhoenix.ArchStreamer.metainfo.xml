@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.ArisenPhoenix.ArchStreamer</id>
+  <name>ArchStreamer</name>
+  <summary>Local and LAN RetroArch streaming</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <description>
+    <p>
+      ArchStreamer is a host/client tool for playing RetroArch games locally or
+      over a LAN. Artwork stays on each machine; the Settings tab configures
+      Steam account detection and art refresh.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.ArisenPhoenix.ArchStreamer.desktop</launchable>
+  <url type="homepage">https://github.com/ArisenPhoenix/RetroStreamer</url>
+  <provides>
+    <binary>archstreamer_gui</binary>
+  </provides>
+  <releases>
+    <release version="0.1.0" date="2026-07-21"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

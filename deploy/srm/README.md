@@ -63,4 +63,11 @@ Behavior:
 - If missing/empty/corrupt → create a minimal valid empty VDF (does not wipe real Steam data)
 - Always ensures `userdata/<account>/config/grid` exists
 
-Account/path are read from SRM `userSettings.json` when present.
+Account/path resolution order:
+1. `ARCHSTREAMER_STEAM_ACCOUNT_ID` / `ARCHSTREAMER_STEAM_DIR`
+2. SRM `userSettings.json` environment variables
+3. Auto-detect best numeric `userdata/<id>` (grid + shortcuts score)
+4. Stub account `0` only if nothing else exists
+
+In the ArchStreamer GUI **Settings** tab, set **Steam account ID** (or leave blank / click Detect)
+and use **Refresh Art from Steam**. Values persist in Qt settings.

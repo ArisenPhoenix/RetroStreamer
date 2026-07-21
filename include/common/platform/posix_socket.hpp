@@ -57,6 +57,12 @@ private:
 
 class PosixUdpSocket {
 public:
+    struct UdpDatagram {
+        ByteBuffer bytes;
+        std::string host;
+        std::uint16_t port = 0;
+    };
+
     PosixUdpSocket();
     ~PosixUdpSocket();
 
@@ -68,8 +74,10 @@ public:
 
     void bind_any(std::uint16_t port);
     void set_nonblocking(bool enabled);
+    void enable_broadcast(bool enabled);
     void send_to(const ByteBuffer& bytes, const std::string& host, std::uint16_t port);
     std::optional<ByteBuffer> receive();
+    std::optional<UdpDatagram> receive_from();
 
 private:
     int fd_ = -1;

@@ -103,24 +103,30 @@ The CLI client stores this at `$XDG_CACHE_HOME/archstreamer/catalog.json`, or `~
 
 ## Game Assets
 
-Artwork is local data, not session protocol payload. Hosts and clients should use the same local asset provider against a configurable assets root. With the default ROM root `/mnt/Internal_SSD/Gaming/ROMS/Games`, assets default to `/mnt/Internal_SSD/Gaming/ROMS/Assets`.
+Artwork is local data, not session protocol payload. Hosts and clients should use the same local asset provider against a configurable art root. With the default ROM root `/mnt/Internal_SSD/Gaming/ROMS/Games`, art defaults to `/mnt/Internal_SSD/Gaming/ROMS/Art`.
 
-The assets tree is based on `asset_key`, not ROM path. `asset_key` is:
+The art tree is based on `asset_key`, not ROM path. `asset_key` is:
 
 ```text
 <system_key>/<canonical_name>/<language>/<region>/<version>
 ```
 
-Images live in a directory per game:
+Images live in a directory per game under `Art/`:
 
 ```text
-Assets/snes/super-bomberman/en/unknown/unknown/grid.png
-Assets/snes/super-bomberman/en/unknown/unknown/hero.png
-Assets/snes/super-bomberman/en/unknown/unknown/logo.png
-Assets/snes/super-bomberman/en/unknown/unknown/icon.png
-Assets/snes/super-bomberman/en/unknown/unknown/boxart.png
-Assets/snes/super-bomberman/en/unknown/unknown/screenshot.png
+Art/snes/super-bomberman/en/unknown/unknown/grid.png
+Art/snes/super-bomberman/en/unknown/unknown/hero.png
+Art/snes/super-bomberman/en/unknown/unknown/logo.png
+Art/snes/super-bomberman/en/unknown/unknown/icon.png
+Art/snes/super-bomberman/en/unknown/unknown/boxart.png
+Art/snes/super-bomberman/en/unknown/unknown/screenshot.png
 ```
+
+Artwork root defaults to the sibling `Art` directory next to `Games` / `Meta`
+(`/mnt/Internal_SSD/Gaming/ROMS/Art`). Until a game has local art, the GUI uses
+`Art/default/default_image.png` as a placeholder. Artwork is never sent over the
+session protocol; each machine resolves art locally (for example via Steam ROM
+Manager on client PCs).
 
 The local provider also accepts common aliases such as `portrait`, `capsule`, `wide`, `background`, `cover`, and `screen`. Steam ROM Manager can populate or help choose those local images, while ArchStreamer only resolves paths from the local assets root.
 

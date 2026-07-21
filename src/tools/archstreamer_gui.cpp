@@ -3,7 +3,11 @@
 #include "client/client_app.hpp"
 #include "client/game_filter.hpp"
 #include "game_picker_widget.hpp"
+#include "host_picker_widget.hpp"
 #include "host/game_catalog_scanner.hpp"
+#include "common/discovery.hpp"
+#include "common/game_assets.hpp"
+#include "common/steam_art_import.hpp"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -17,6 +21,7 @@
 #include <QMainWindow>
 #include <QMetaObject>
 #include <QPlainTextEdit>
+#include <QPixmapCache>
 #include <QProcess>
 #include <QCoreApplication>
 #include <QPushButton>
@@ -35,6 +40,7 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <thread>
@@ -77,6 +83,9 @@ void append_log(QPlainTextEdit* log, QString message) {
     write_to_log_file(message.toStdString());
     if (mirror_gui_logs_to_stdout.load()) {
         std::cout << message.toStdString() << '\n';
+    }
+    if (log == nullptr) {
+        return;
     }
     if (QThread::currentThread() == log->thread()) {
         log->appendPlainText(message);
@@ -137,6 +146,9 @@ public:
         stop_client();
         stop_client_connect();
         stop_host();
+        if (art_refresh_thread_.joinable()) {
+            art_refresh_thread_.join();
+        }
     }
 
     void apply_debug_profile(const QString& profile) {
@@ -203,6 +215,7 @@ private:
         client_players_->setValue(1);
         client_system_ = new QLineEdit(form_box);
         client_language_ = new QLineEdit(form_box);
+        client_art_root_ = new QLineEdit(archstreamer::DefaultArtRoot, form_box);
         client_video_ = new QCheckBox("Receive video", form_box);
         client_video_->setChecked(true);
         client_audio_ = new QCheckBox("Receive audio", form_box);
@@ -217,10 +230,33 @@ private:
         form->addRow("Players", client_players_);
         form->addRow("System filter", client_system_);
         form->addRow("Language filter", client_language_);
+        form->addRow("Art root", client_art_root_);
         form->addRow("", client_video_);
         form->addRow("", client_audio_);
 
+        auto* refresh_client_art = new QPushButton("Refresh Art from Steam", form_box);
+        form->addRow("", refresh_client_art);
+        connect(refresh_client_art, &QPushButton::clicked, this, [this] {
+            refresh_art_from_steam(false);
+        });
+
+        client_host_picker_ = new archstreamer::gui::HostPickerWidget(page);
+        connect(client_host_picker_, &archstreamer::gui::HostPickerWidget::hostSelected, this,
+            [this](const QString& address, int control_port, int input_port) {
+                client_host_->setText(address);
+                client_port_->setValue(control_port);
+                client_input_port_->setValue(input_port);
+                append_log(client_log_, QString("Selected host %1 (control %2, input %3)")
+                    .arg(address)
+                    .arg(control_port)
+                    .arg(input_port));
+            });
+
         client_game_picker_ = new archstreamer::gui::GamePickerWidget(page);
+        client_game_picker_->setArtRoot(client_art_root_->text().toStdString());
+        connect(client_art_root_, &QLineEdit::textChanged, this, [this](const QString& path) {
+            client_game_picker_->setArtRoot(path.toStdString());
+        });
         client_catalog_status_ = new QLabel("Not connected", page);
         client_controllers_ = new QListWidget(page);
         client_controllers_->setSelectionMode(QAbstractItemView::MultiSelection);
@@ -265,6 +301,7 @@ private:
 
         auto* left = new QVBoxLayout();
         left->addWidget(form_box);
+        left->addWidget(client_host_picker_);
         left->addWidget(new QLabel("Game", page));
         left->addWidget(client_catalog_status_);
         left->addWidget(client_game_picker_);
@@ -296,6 +333,8 @@ private:
 
         host_rom_root_ = new QLineEdit(archstreamer::DefaultRomRoot, form_box);
         host_meta_root_ = new QLineEdit(archstreamer::DefaultMetaRoot, form_box);
+        host_art_root_ = new QLineEdit(archstreamer::DefaultArtRoot, form_box);
+        host_username_ = new QLineEdit(qEnvironmentVariable("USER", "host"), form_box);
         host_control_port_ = new QSpinBox(form_box);
         host_control_port_->setRange(1, 65535);
         host_control_port_->setValue(45555);
@@ -319,9 +358,13 @@ private:
         host_bridge_controller_ = new QComboBox(form_box);
         host_video_ = new QCheckBox("Stream video", form_box);
         host_audio_ = new QCheckBox("Stream audio", form_box);
+        host_advertise_ = new QCheckBox("Advertise on LAN", form_box);
+        host_advertise_->setChecked(true);
 
         form->addRow("ROM root", host_rom_root_);
         form->addRow("Meta root", host_meta_root_);
+        form->addRow("Art root", host_art_root_);
+        form->addRow("Display name", host_username_);
         form->addRow("Control port", host_control_port_);
         form->addRow("Input port", host_input_port_);
         form->addRow("Video port", host_video_port_);
@@ -332,6 +375,13 @@ private:
         form->addRow("Bridge controller", host_bridge_controller_);
         form->addRow("", host_video_);
         form->addRow("", host_audio_);
+        form->addRow("", host_advertise_);
+
+        auto* refresh_host_art = new QPushButton("Refresh Art from Steam", form_box);
+        form->addRow("", refresh_host_art);
+        connect(refresh_host_art, &QPushButton::clicked, this, [this] {
+            refresh_art_from_steam(true);
+        });
 
         auto* start = new QPushButton("Start Host", page);
         auto* stop = new QPushButton("Stop Host", page);
@@ -339,6 +389,10 @@ private:
         auto* refresh_host_controllers_button = new QPushButton("Refresh Controllers", page);
         host_status_ = new QLabel("Host stopped", page);
         host_game_picker_ = new archstreamer::gui::GamePickerWidget(page);
+        host_game_picker_->setArtRoot(host_art_root_->text().toStdString());
+        connect(host_art_root_, &QLineEdit::textChanged, this, [this](const QString& path) {
+            host_game_picker_->setArtRoot(path.toStdString());
+        });
         connect(start, &QPushButton::clicked, this, [this] {
             start_host();
         });
@@ -372,7 +426,15 @@ private:
         connect(host_input_port_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int value) {
             client_input_port_->setValue(value);
         });
+        connect(host_advertise_, &QCheckBox::toggled, this, [this](bool checked) {
+            sync_host_advertise(checked);
+        });
 
+        host_advertise_timer_ = new QTimer(page);
+        host_advertise_timer_->setInterval(2000);
+        connect(host_advertise_timer_, &QTimer::timeout, this, [this] {
+            advertise_host();
+        });
         auto* left = new QVBoxLayout();
         left->addWidget(form_box);
         left->addWidget(host_status_);
@@ -392,6 +454,7 @@ private:
         root->addWidget(host_log_, 2);
         refresh_host_controllers();
         load_host_games();
+        sync_host_advertise(host_advertise_->isChecked());
         return page;
     }
 
@@ -454,6 +517,48 @@ private:
         syncing_host_role_ = false;
     }
 
+    void sync_host_advertise(bool enabled) {
+        if (enabled) {
+            if (!host_announcer_) {
+                try {
+                    host_announcer_ = std::make_unique<archstreamer::HostDiscoveryAnnouncer>(
+                        archstreamer::HostAnnouncement{
+                            host_username_->text().toStdString(),
+                            static_cast<std::uint16_t>(host_control_port_->value()),
+                            static_cast<std::uint16_t>(host_input_port_->value()),
+                        });
+                } catch (const std::exception& error) {
+                    append_log(host_log_, QString("Advertise failed: %1").arg(error.what()));
+                    host_advertise_->setChecked(false);
+                    return;
+                }
+            }
+            host_advertise_timer_->start();
+            advertise_host();
+            append_log(host_log_, "LAN advertise enabled.");
+        } else {
+            host_advertise_timer_->stop();
+            host_announcer_.reset();
+            append_log(host_log_, "LAN advertise disabled.");
+        }
+    }
+
+    void advertise_host() {
+        if (!host_announcer_ || host_username_ == nullptr) {
+            return;
+        }
+        try {
+            host_announcer_->set_announcement(archstreamer::HostAnnouncement{
+                host_username_->text().toStdString(),
+                static_cast<std::uint16_t>(host_control_port_->value()),
+                static_cast<std::uint16_t>(host_input_port_->value()),
+            });
+            host_announcer_->advertise();
+        } catch (const std::exception& error) {
+            append_log(host_log_, QString("Advertise error: %1").arg(error.what()));
+        }
+    }
+
     void load_host_games() {
         try {
             const auto catalog = archstreamer::scan_game_catalog(
@@ -472,6 +577,81 @@ private:
             host_status_->setText("Host stopped; game load failed");
             append_log(host_log_, QString("Load games failed: %1").arg(error.what()));
         }
+    }
+
+    void refresh_art_from_steam(bool host_tab) {
+        auto* log = host_tab ? host_log_ : client_log_;
+        auto* picker = host_tab ? host_game_picker_ : client_game_picker_;
+        if (art_refresh_thread_.joinable()) {
+            if (art_refreshing_.load()) {
+                append_log(log, "Art refresh already running.");
+                return;
+            }
+            art_refresh_thread_.join();
+        }
+
+        const auto rom_root = host_tab
+            ? std::filesystem::path{host_rom_root_->text().toStdString()}
+            : std::filesystem::path{client_art_root_->text().toStdString()}.parent_path() / "Games";
+        const auto meta_root = host_tab
+            ? std::filesystem::path{host_meta_root_->text().toStdString()}
+            : std::filesystem::path{client_art_root_->text().toStdString()}.parent_path() / "Meta";
+        const auto art_root = std::filesystem::path{
+            (host_tab ? host_art_root_ : client_art_root_)->text().toStdString()};
+
+        append_log(log, "Refreshing art from Steam grid...");
+        art_refreshing_ = true;
+        art_refresh_thread_ = std::thread([this, rom_root, meta_root, art_root, log, picker] {
+            QString message;
+            try {
+                const auto catalog = archstreamer::scan_game_catalog(
+                    rom_root,
+                    archstreamer::LibretroCoreRegistry::ubuntu_defaults(),
+                    meta_root);
+                const auto list = catalog.list();
+                std::vector<archstreamer::GameArtImportTarget> targets;
+                targets.reserve(list.games.size());
+                for (const auto& game : list.games) {
+                    archstreamer::GameArtImportTarget target;
+                    target.asset_key = game.asset_key;
+                    target.display_name = game.display_name;
+                    target.canonical_name = game.canonical_name;
+                    if (const auto hosted = catalog.find_hosted(game.id); hosted.has_value()) {
+                        target.content_path = hosted->get().content_path;
+                    }
+                    targets.push_back(std::move(target));
+                }
+
+                archstreamer::SteamArtImportOptions options;
+                options.replace_when_different = true;
+                const auto result = archstreamer::import_steam_grid_art(targets, art_root, options);
+                message = QString(
+                    "Art refresh done: shortcuts=%1 matched=%2 copied=%3 replaced=%4 skipped=%5 unmatched=%6")
+                    .arg(result.shortcuts_read)
+                    .arg(result.matched_games)
+                    .arg(result.files_copied)
+                    .arg(result.files_replaced)
+                    .arg(result.files_skipped)
+                    .arg(result.unmatched_shortcuts.size());
+                if (result.shortcuts_read == 0) {
+                    message += " (no Steam shortcuts found)";
+                }
+            } catch (const std::exception& error) {
+                message = QString("Art refresh failed: %1").arg(error.what());
+            }
+
+            QMetaObject::invokeMethod(
+                this,
+                [this, message = std::move(message), log, picker] {
+                    art_refreshing_ = false;
+                    append_log(log, message);
+                    QPixmapCache::clear();
+                    if (picker != nullptr) {
+                        picker->refreshArtDisplay();
+                    }
+                },
+                Qt::QueuedConnection);
+        });
     }
 
     archstreamer::GameFilter client_filter_from_fields() const {
@@ -790,14 +970,26 @@ private:
             args << "--bridge-controller" << QString::number(bridge_index);
         }
         if (host_video_->isChecked()) {
-            args << "--video" << "--video-port" << QString::number(host_video_port_->value());
+            if (host_role_->currentIndex() == 0) {
+                append_log(
+                    host_log_,
+                    "Stream video left off for Host Player so RetroArch stays on your screen. "
+                    "Use Host Viewer (or uncheck Player) when you only need to stream to remotes.");
+            } else {
+                args << "--video" << "--video-port" << QString::number(host_video_port_->value());
+            }
         }
         if (host_audio_->isChecked()) {
-            args << "--audio" << "--audio-port" << QString::number(host_audio_port_->value());
-            append_log(
-                host_log_,
-                QString("Audio streaming enabled on base UDP port %1 (captures default output monitor).")
-                    .arg(host_audio_port_->value()));
+            if (host_role_->currentIndex() == 0) {
+                // Local host audio plays through RetroArch/Pulse normally; skip capture fanout.
+                append_log(host_log_, "Stream audio left off for Host Player (local audio via RetroArch).");
+            } else {
+                args << "--audio" << "--audio-port" << QString::number(host_audio_port_->value());
+                append_log(
+                    host_log_,
+                    QString("Audio streaming enabled on base UDP port %1 (captures default output monitor).")
+                        .arg(host_audio_port_->value()));
+            }
         }
         args << host_debug_args_;
         if (!host_game_picker_->hasSelection()) {
@@ -816,9 +1008,8 @@ private:
         if (bridge_index >= 0) {
             append_log(
                 host_log_,
-                QString("Host Player reserved as P1; lobby stays open for clients (mode=%1, max clients=%2).")
-                    .arg(mode_name(selected_mode(host_mode_)))
-                    .arg(host_clients_->value()));
+                QString("Host Player as P1; launching when requirements are met (mode=%1).")
+                    .arg(mode_name(selected_mode(host_mode_))));
         } else {
             append_log(
                 host_log_,
@@ -852,10 +1043,14 @@ private:
     bool syncing_host_role_ = false;
     std::atomic_bool client_stop_requested_ = false;
     std::atomic_bool client_connecting_ = false;
+    std::atomic_bool art_refreshing_ = false;
     std::thread client_connect_thread_;
     std::thread client_thread_;
+    std::thread art_refresh_thread_;
     QProcess* host_process_ = nullptr;
     QStringList host_debug_args_;
+    std::unique_ptr<archstreamer::HostDiscoveryAnnouncer> host_announcer_;
+    QTimer* host_advertise_timer_ = nullptr;
 
     QLineEdit* client_host_ = nullptr;
     QSpinBox* client_port_ = nullptr;
@@ -866,15 +1061,19 @@ private:
     QSpinBox* client_players_ = nullptr;
     QLineEdit* client_system_ = nullptr;
     QLineEdit* client_language_ = nullptr;
+    QLineEdit* client_art_root_ = nullptr;
     QCheckBox* client_video_ = nullptr;
     QCheckBox* client_audio_ = nullptr;
     QLabel* client_catalog_status_ = nullptr;
+    archstreamer::gui::HostPickerWidget* client_host_picker_ = nullptr;
     archstreamer::gui::GamePickerWidget* client_game_picker_ = nullptr;
     QListWidget* client_controllers_ = nullptr;
     QPlainTextEdit* client_log_ = nullptr;
 
     QLineEdit* host_rom_root_ = nullptr;
     QLineEdit* host_meta_root_ = nullptr;
+    QLineEdit* host_art_root_ = nullptr;
+    QLineEdit* host_username_ = nullptr;
     QSpinBox* host_control_port_ = nullptr;
     QSpinBox* host_input_port_ = nullptr;
     QSpinBox* host_video_port_ = nullptr;
@@ -885,6 +1084,7 @@ private:
     QComboBox* host_bridge_controller_ = nullptr;
     QCheckBox* host_video_ = nullptr;
     QCheckBox* host_audio_ = nullptr;
+    QCheckBox* host_advertise_ = nullptr;
     QLabel* host_status_ = nullptr;
     archstreamer::gui::GamePickerWidget* host_game_picker_ = nullptr;
     QPlainTextEdit* host_log_ = nullptr;

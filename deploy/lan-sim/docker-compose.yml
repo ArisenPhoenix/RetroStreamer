@@ -1,0 +1,28 @@
+services:
+  client:
+    build: .
+    container_name: archstreamer-client
+    # Isolated L3 namespace = second machine on a private LAN segment.
+    networks:
+      archstreamer_lan:
+        ipv4_address: 172.30.0.20
+    volumes:
+      - ../../build:/opt/archstreamer:ro
+    working_dir: /opt/archstreamer
+    environment:
+      - GST_DEBUG=1
+    # Keep stdin open for interactive smoke runs.
+    stdin_open: true
+    tty: true
+    # Override at runtime, e.g.:
+    # docker compose run --rm client ./session_client --host 172.30.0.1 ...
+    command: ["sleep", "infinity"]
+
+networks:
+  archstreamer_lan:
+    name: archstreamer_lan
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+          gateway: 172.30.0.1

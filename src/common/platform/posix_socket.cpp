@@ -317,6 +317,13 @@ void PosixUdpSocket::set_nonblocking(bool enabled) {
     }
 }
 
+void PosixUdpSocket::enable_broadcast(bool enabled) {
+    const int value = enabled ? 1 : 0;
+    if (setsockopt(fd_, SOL_SOCKET, SO_BROADCAST, &value, sizeof(value)) < 0) {
+        throw std::runtime_error("failed to configure UDP broadcast");
+    }
+}
+
 void PosixUdpSocket::send_to(const ByteBuffer& bytes, const std::string& host, std::uint16_t port) {
     sockaddr_in address{};
     address.sin_family = AF_INET;
@@ -332,8 +339,24 @@ void PosixUdpSocket::send_to(const ByteBuffer& bytes, const std::string& host, s
 }
 
 std::optional<ByteBuffer> PosixUdpSocket::receive() {
+    const auto datagram = receive_from();
+    if (!datagram.has_value()) {
+        return std::nullopt;
+    }
+    return datagram->bytes;
+}
+
+std::optional<PosixUdpSocket::UdpDatagram> PosixUdpSocket::receive_from() {
     std::array<std::uint8_t, 2048> buffer{};
-    const auto received = recv(fd_, buffer.data(), buffer.size(), 0);
+    sockaddr_in source{};
+    socklen_t source_length = sizeof(source);
+    const auto received = recvfrom(
+        fd_,
+        buffer.data(),
+        buffer.size(),
+        0,
+        reinterpret_cast<sockaddr*>(&source),
+        &source_length);
     if (received < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             return std::nullopt;
@@ -342,7 +365,16 @@ std::optional<ByteBuffer> PosixUdpSocket::receive() {
         throw std::runtime_error("failed to receive UDP packet");
     }
 
-    return ByteBuffer(buffer.begin(), buffer.begin() + received);
+    char host[INET_ADDRSTRLEN]{};
+    if (inet_ntop(AF_INET, &source.sin_addr, host, sizeof(host)) == nullptr) {
+        throw std::runtime_error("failed to read UDP source address");
+    }
+
+    return UdpDatagram{
+        ByteBuffer(buffer.begin(), buffer.begin() + received),
+        host,
+        ntohs(source.sin_port),
+    };
 }
 
 } // namespace archstreamer

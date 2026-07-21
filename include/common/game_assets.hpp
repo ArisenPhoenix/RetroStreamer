@@ -27,6 +27,7 @@ struct GameAssets {
 };
 
 std::filesystem::path default_assets_root_for(const std::filesystem::path& content_root);
+std::filesystem::path default_placeholder_art_path(const std::filesystem::path& art_root);
 std::filesystem::path asset_directory_for(
     const std::filesystem::path& content_root,
     const std::filesystem::path& assets_root,
@@ -55,5 +56,17 @@ private:
     std::filesystem::path content_root_;
     std::filesystem::path assets_root_;
 };
+
+// Prefer boxart, then grid/icon-style images.
+// Also checks Steam ROM Manager title folders under Art/{poster,grids,heroes,icons}/.
+// Falls back to Art/default/default_image.png.
+std::filesystem::path resolve_game_display_art(
+    const LocalGameAssetProvider& provider,
+    std::string_view asset_key);
+std::filesystem::path resolve_game_display_art(
+    const LocalGameAssetProvider& provider,
+    std::string_view asset_key,
+    std::string_view display_name,
+    std::string_view canonical_name = {});
 
 } // namespace archstreamer

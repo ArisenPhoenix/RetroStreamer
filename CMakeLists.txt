@@ -30,7 +30,9 @@ add_library(archstreamer_core
     src/common/catalog_presenter.cpp
     src/common/cli_common.cpp
     src/common/controller_normalization.cpp
+    src/common/discovery.cpp
     src/common/game_assets.cpp
+    src/common/steam_art_import.cpp
     src/common/participant_role.cpp
     src/common/platform/posix_process.cpp
     src/common/platform/posix_socket.cpp
@@ -137,6 +139,14 @@ target_link_libraries(asset_probe
         archstreamer_host
 )
 
+add_executable(steam_art_import
+    src/tools/steam_art_import.cpp
+)
+target_link_libraries(steam_art_import
+    PRIVATE
+        archstreamer_host
+)
+
 add_executable(uinput_probe
     src/tools/uinput_probe.cpp
 )
@@ -180,6 +190,8 @@ if(Qt6Widgets_FOUND)
         src/gui/game_picker_widget.hpp
         src/gui/game_selection_dialog.cpp
         src/gui/game_selection_dialog.hpp
+        src/gui/host_picker_widget.cpp
+        src/gui/host_picker_widget.hpp
         src/tools/archstreamer_gui.cpp
     )
     target_include_directories(archstreamer_gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/gui)

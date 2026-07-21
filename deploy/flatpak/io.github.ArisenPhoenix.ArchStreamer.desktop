@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=ArchStreamer
+Comment=Local/LAN RetroArch streaming host and client
+Exec=archstreamer_gui
+Terminal=false
+Categories=Game;Emulator;
+StartupWMClass=ArchStreamer

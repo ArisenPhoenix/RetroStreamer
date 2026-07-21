@@ -1,0 +1,56 @@
+app-id: io.github.ArisenPhoenix.ArchStreamer
+runtime: org.kde.Platform
+runtime-version: '6.8'
+sdk: org.kde.Sdk
+command: archstreamer_gui
+finish-args:
+  # Network: discovery, session control, input, media
+  - --share=network
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --socket=pulseaudio
+  - --device=dri
+  # Controllers / joysticks
+  - --device=all
+  # Local ROM / art / Steam grid import (read-write for art cache)
+  - --filesystem=home
+  - --filesystem=xdg-download
+  - --filesystem=/mnt:ro
+  - --talk-name=org.freedesktop.Notifications
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/man
+  - /share/doc
+  - '*.a'
+  - '*.la'
+modules:
+  - name: sdl2
+    buildsystem: autotools
+    config-opts:
+      - --disable-static
+    cleanup:
+      - /bin/sdl2-config
+      - /include
+      - /lib/cmake
+      - /lib/pkgconfig
+      - /share/aclocal
+    sources:
+      - type: archive
+        url: https://github.com/libsdl-org/SDL/releases/download/release-2.30.11/SDL2-2.30.11.tar.gz
+        sha256: 8b8d4aef2038533da814965220f88f77d60dfa0f32685f80ead65e501337da7f
+
+  - name: archstreamer
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DARCHSTREAMER_REQUIRE_GUI=ON
+      - -DARCHSTREAMER_BUILD_CONTROLLER_PROBE=OFF
+    builddir: true
+    sources:
+      - type: dir
+        path: ../..
+    post-install:
+      - install -Dm644 deploy/flatpak/io.github.ArisenPhoenix.ArchStreamer.desktop /app/share/applications/io.github.ArisenPhoenix.ArchStreamer.desktop
+      - install -Dm644 deploy/flatpak/io.github.ArisenPhoenix.ArchStreamer.metainfo.xml /app/share/metainfo/io.github.ArisenPhoenix.ArchStreamer.metainfo.xml

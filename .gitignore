@@ -2,3 +2,5 @@ build/
 _dependencies/
 .cache
 deploy/lan-sim/*.log
+build-flatpak/
+*.flatpak

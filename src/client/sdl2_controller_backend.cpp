@@ -15,6 +15,9 @@
 namespace archstreamer {
 namespace {
 
+constexpr std::uint16_t ArchStreamerVirtualVendorId = 0x1209;
+constexpr std::uint16_t ArchStreamerVirtualProductIdBase = 0xa517;
+
 int parse_device_index(const std::string& id) {
     int value = 0;
     const auto* begin = id.data();
@@ -35,6 +38,16 @@ void set_button(
     if (SDL_GameControllerGetButton(controller, sdl_button) != 0) {
         buttons |= button;
     }
+}
+
+bool is_archstreamer_virtual_device(const ControllerDevice& device) {
+    if (device.name.rfind("ArchStreamer", 0) == 0) {
+        return true;
+    }
+
+    return device.vendor_id == ArchStreamerVirtualVendorId &&
+        device.product_id >= ArchStreamerVirtualProductIdBase &&
+        device.product_id < ArchStreamerVirtualProductIdBase + MaxRetroArchPorts;
 }
 
 } // namespace
@@ -80,7 +93,7 @@ std::vector<ControllerDevice> Sdl2ControllerBackend::list_devices() const {
         SDL_JoystickGetGUIDString(guid, guid_text, sizeof(guid_text));
 
         char* mapping = SDL_GameControllerMappingForDeviceIndex(i);
-        devices.push_back(ControllerDevice{
+        auto device = ControllerDevice{
             std::to_string(i),
             name != nullptr ? name : "Unknown controller",
             guid_text,
@@ -88,10 +101,15 @@ std::vector<ControllerDevice> Sdl2ControllerBackend::list_devices() const {
             mapping != nullptr ? mapping : "",
             SDL_JoystickGetDeviceVendor(i),
             SDL_JoystickGetDeviceProduct(i),
-        });
+        };
         if (mapping != nullptr) {
             SDL_free(mapping);
         }
+        if (is_archstreamer_virtual_device(device)) {
+            continue;
+        }
+
+        devices.push_back(std::move(device));
     }
 
     return devices;

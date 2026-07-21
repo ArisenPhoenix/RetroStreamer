@@ -126,7 +126,7 @@ The local provider also accepts common aliases such as `portrait`, `capsule`, `w
 
 `asset_probe <content-root> [metadata-root] [assets-root] [--create-dirs]` lists the expected asset directories and can create the empty directory tree.
 
-Multiple clients can select the same `game_id` before RetroArch is launched. The host can use `SessionServer::clients_for_game()` to find which connected clients are waiting for a game and initialize RetroArch only after the intended group is ready.
+Multiple clients can select the same `game_id` before RetroArch is launched. `session_lobby` tracks connected clients in `SessionPlan` and validates that late joins match the active game and session mode.
 
 Client-side catalog filtering is presentation-only. The host still validates the selected game, mode, and player counts authoritatively. The current client filter modes are:
 

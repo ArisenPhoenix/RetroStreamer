@@ -23,10 +23,20 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(nlohmann_json)
 
+find_package(Qt6 COMPONENTS Widgets QUIET)
+
 add_library(archstreamer_core
+    src/common/addresses.cpp
+    src/common/catalog_presenter.cpp
+    src/common/cli_common.cpp
     src/common/controller_normalization.cpp
     src/common/game_assets.cpp
+    src/common/participant_role.cpp
+    src/common/platform/posix_process.cpp
+    src/common/platform/posix_socket.cpp
+    src/common/platform/process_utils.cpp
     src/common/protocol.cpp
+    src/common/serialization.cpp
     src/common/sha256.cpp
     src/common/time.cpp
 )
@@ -34,12 +44,31 @@ target_include_directories(archstreamer_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/
 target_link_libraries(archstreamer_core PUBLIC nlohmann_json::nlohmann_json)
 
 add_library(archstreamer_host
+    src/host/game_catalog.cpp
+    src/host/game_catalog_scanner.cpp
+    src/host/gstreamer_media_server.cpp
+    src/host/host_app.cpp
+    src/host/host_app_config.cpp
+    src/host/host_launch_planner.cpp
+    src/host/host_session_helpers.cpp
+    src/host/input_router.cpp
+    src/host/libretro_core_registry.cpp
     src/host/linux_uinput_gamepad.cpp
+    src/host/local_controller_bridge.cpp
+    src/host/network_input_receiver.cpp
     src/host/posix_retroarch_process.cpp
+    src/host/retroarch_config_writer.cpp
+    src/host/save_profile.cpp
+    src/host/seat_manager.cpp
+    src/host/session_control_monitor.cpp
+    src/host/session_lobby.cpp
+    src/host/session_service.cpp
 )
 target_link_libraries(archstreamer_host
     PUBLIC
         archstreamer_core
+    PRIVATE
+        archstreamer_controller
 )
 
 set(ARCHSTREAMER_CONTROLLER_BACKEND "sdl2" CACHE STRING "Controller backend implementation")
@@ -71,7 +100,6 @@ add_library(archstreamer_client
     src/client/controller_manager.cpp
     src/client/game_filter.cpp
     src/client/gstreamer_media_receiver.cpp
-    src/client/gui.cpp
     src/client/input_sender.cpp
     src/client/session_client.cpp
     src/client/session_service.cpp
@@ -118,19 +146,47 @@ target_link_libraries(uinput_probe
 )
 
 add_executable(host_runner
+    src/tools/cli_host.cpp
     src/tools/host_runner.cpp
+    src/tools/host_runner_main.cpp
 )
 target_link_libraries(host_runner
     PRIVATE
         archstreamer_host
-        archstreamer_controller
 )
 
 add_executable(session_client
-    src/tools/session_client.cpp
-    src/tools/session_client_cli.cpp
+    src/tools/cli_client.cpp
+    src/tools/session_client_app.cpp
+    src/tools/session_client_main.cpp
 )
 target_link_libraries(session_client
     PRIVATE
         archstreamer_client
 )
+
+add_executable(client_catalog_probe
+    src/tools/client_catalog_probe.cpp
+)
+target_link_libraries(client_catalog_probe
+    PRIVATE
+        archstreamer_client
+)
+
+if(Qt6Widgets_FOUND)
+    set(CMAKE_AUTOMOC ON)
+    add_executable(archstreamer_gui
+        src/gui/game_picker_widget.cpp
+        src/gui/game_picker_widget.hpp
+        src/gui/game_selection_dialog.cpp
+        src/gui/game_selection_dialog.hpp
+        src/tools/archstreamer_gui.cpp
+    )
+    target_include_directories(archstreamer_gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/gui)
+    target_link_libraries(archstreamer_gui
+        PRIVATE
+            archstreamer_client
+            archstreamer_host
+            Qt6::Widgets
+    )
+endif()

@@ -30,12 +30,12 @@ struct HostAppConfig {
     std::uint16_t session_timeout_seconds = 30;
     std::uint16_t client_timeout_seconds = 5;
     std::uint16_t player_reconnect_timeout_seconds = 60;
-    ParticipantRole host_role = ParticipantRole::Player;
-    bool video = false;
+    ParticipantRole host_role = ParticipantRole::Viewer;
+    bool video = true;
     std::string video_destination = "127.0.0.1";
     bool video_destination_explicit = false;
     std::uint16_t video_port = 5004;
-    bool audio = false;
+    bool audio = true;
     std::uint16_t audio_port = 6004;
     std::string audio_source;
     AudioCaptureBackend audio_backend = AudioCaptureBackend::Pulse;

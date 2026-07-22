@@ -158,7 +158,9 @@ The host can also reserve one local player slot. When enabled, remote player ass
 
 In session mode, a host local controller is represented as client id `0`. `host_runner --bridge-controller <index> --control-port <port> <game>` makes the host player one and routes the selected SDL2 controller through the same `InputRouter` and `SeatAssignment` path used by remote clients. For multiplayer, the host counts as one player toward the selected game's minimum player requirement. For singleplayer, the host alone can satisfy the session and launch without waiting for a remote client.
 
-The host CLI exposes this as `--host-role player|viewer`. Host viewer mode does not create a local input seat; it only runs the authoritative RetroArch process and will eventually capture/stream media to clients.
+The host CLI exposes this as `--host-role player|viewer` (default `viewer`). Host viewer mode does not create a local input seat. Host player mode requires `--bridge-controller` and reserves RetroArch port 0. Host role does **not** gate streaming.
+
+Video/audio streaming defaults **on** (`--video` / `--audio`; disable with `--no-video` / `--no-audio`). When video is enabled, RetroArch runs on the virtual capture display. Client `wants_video` / `wants_audio` decide which remotes get RTP fanout. The host always reserves loopback destinations at the base `--video-port` / `--audio-port` so the GUI can toggle **Watch stream locally** mid-session without changing seats (host cannot become a player mid-session).
 
 After a session starts, the host reopens the TCP control port for active-session joins. Late clients must select the same game and session mode as the active session. New late viewers can join with `requested_players=0`. Player clients cannot claim new seats after launch because RetroArch port assignment is fixed, but disconnected players can reconnect to their existing reserved seats.
 

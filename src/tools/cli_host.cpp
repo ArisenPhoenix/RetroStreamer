@@ -65,11 +65,14 @@ void HostRunnerCli::print_usage() const {
         << "                      Maximum time without client heartbeat during play. Default: 5\n"
         << "  --player-reconnect-timeout <seconds>\n"
         << "                      Time to reserve disconnected player seats. Default: 60\n"
-        << "  --host-role <role>  player or viewer for the host. Default: player\n"
-        << "  --video             Capture RetroArch video from a virtual display and stream RTP/H.264.\n"
+        << "  --host-role <role>  player or viewer for the host. Default: viewer\n"
+        << "                      player requires --bridge-controller. Does not control streaming.\n"
+        << "  --video             Capture RetroArch from a virtual display and stream RTP/H.264 (default on).\n"
+        << "  --no-video          Disable video streaming.\n"
         << "  --video-dest <ip>   Override video destination IP for all clients.\n"
-        << "  --video-port <port> Base destination UDP video port. Default: 5004\n"
-        << "  --audio             Capture host audio and stream RTP/Opus.\n"
+        << "  --video-port <port> Base destination UDP video port (host loopback uses this). Default: 5004\n"
+        << "  --audio             Capture host audio and stream RTP/Opus (default on).\n"
+        << "  --no-audio          Disable audio streaming.\n"
         << "  --audio-port <port> Base destination UDP audio port. Default: 6004\n"
         << "  --audio-source <source>\n"
         << "                      Pulse/PipeWire source to capture. Default: audio server default source.\n"
@@ -116,8 +119,12 @@ HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
             args.verbose = true;
         } else if (arg == "--video") {
             args.video = true;
+        } else if (arg == "--no-video") {
+            args.video = false;
         } else if (arg == "--audio") {
             args.audio = true;
+        } else if (arg == "--no-audio") {
+            args.audio = false;
         } else if (arg == "--rom-root") {
             if_throw(i, "--rom-root requires a path");
             args.rom_root = argv[i];

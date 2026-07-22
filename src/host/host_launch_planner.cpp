@@ -176,7 +176,18 @@ std::vector<HostMediaDestination> media_destinations_for_session(
     const HostMediaPlanConfig& config,
     const SessionPlan& plan) {
     auto destinations = std::vector<HostMediaDestination>{};
+    // Index 0 is always host loopback so the GUI (or CLI) can toggle local watch
+    // at the base video/audio ports without a separate control channel.
+    if (config.video || config.audio) {
+        destinations.push_back(HostMediaDestination{
+            HostClientId,
+            "127.0.0.1",
+        });
+    }
     for (const auto& client : plan.clients) {
+        if (client.client_id == HostClientId) {
+            continue;
+        }
         if ((config.video && client.hello.wants_video) || (config.audio && client.hello.wants_audio)) {
             destinations.push_back(HostMediaDestination{
                 client.client_id,

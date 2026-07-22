@@ -171,7 +171,9 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         const bool host_plays_locally =
             config.host_role == ParticipantRole::Player &&
             config.bridge_controller_index.has_value();
-        const bool capture_fullscreen = config.video && !host_plays_locally;
+        // When streaming video, RetroArch always runs on the virtual capture display.
+        // Host Player still seats/bridges locally; picture is via "Watch stream locally".
+        const bool capture_fullscreen = config.video;
         if (config.audio || config.video) {
             launch_config.environment.emplace_back("SDL_AUDIODRIVER", "pulse");
         }
@@ -241,14 +243,12 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             }
         }
         if (config.video) {
-            // Keep RetroArch on the real display when the host is playing locally.
-            // Streaming still uses a virtual capture display for remote clients only.
-            if (!host_plays_locally) {
-                launch_config.environment.emplace_back("DISPLAY", config.virtual_display);
-            } else {
+            launch_config.environment.emplace_back("DISPLAY", config.virtual_display);
+            if (host_plays_locally) {
                 std::cout
-                    << "Host player keeps the current DISPLAY; "
-                    << "disable Stream video if remotes do not need a capture feed.\n";
+                    << "Host player is seated locally; video capture uses virtual display "
+                    << config.virtual_display
+                    << ". Use Watch stream locally (or a client) to see the picture.\n";
             }
         }
 
@@ -303,6 +303,9 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         if (config.dry_run) {
             if (session_plan.has_value()) {
                 for (const auto& stream : media_streams) {
+                    if (stream.client_id == HostClientId) {
+                        continue;
+                    }
                     send_media_endpoint_to_client(*session_plan, stream.client_id, stream.endpoint);
                 }
                 send_session_starting_to_clients(*session_plan);
@@ -383,6 +386,9 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         }
         if (session_plan.has_value()) {
             for (const auto& stream : media_streams) {
+                if (stream.client_id == HostClientId) {
+                    continue;
+                }
                 if (!stream.endpoint.video_uri.empty() || !stream.endpoint.audio_uri.empty()) {
                     send_media_endpoint_to_client(*session_plan, stream.client_id, stream.endpoint);
                 }

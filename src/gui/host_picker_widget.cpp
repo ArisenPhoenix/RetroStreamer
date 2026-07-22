@@ -36,8 +36,13 @@ HostPickerWidget::HostPickerWidget(QWidget* parent)
 
     connect(timer_, &QTimer::timeout, this, &HostPickerWidget::pollDiscovery);
     connect(refresh_, &QPushButton::clicked, this, &HostPickerWidget::pollDiscovery);
-    connect(list_, &QListWidget::itemSelectionChanged, this, &HostPickerWidget::applySelection);
-    connect(list_, &QListWidget::itemDoubleClicked, this, &HostPickerWidget::applySelection);
+    // itemClicked fires even when re-selecting the current row; selectionChanged alone does not.
+    connect(list_, &QListWidget::itemClicked, this, [this](QListWidgetItem*) {
+        applySelection(true);
+    });
+    connect(list_, &QListWidget::itemSelectionChanged, this, [this] {
+        applySelection(false);
+    });
 
     setBrowsing(true);
 }
@@ -75,6 +80,9 @@ std::optional<DiscoveredHost> HostPickerWidget::selectedHost() const {
     host.address = list_->currentItem()->data(Qt::UserRole + 1).toString().toStdString();
     host.control_port = static_cast<std::uint16_t>(list_->currentItem()->data(Qt::UserRole + 2).toInt());
     host.input_port = static_cast<std::uint16_t>(list_->currentItem()->data(Qt::UserRole + 3).toInt());
+    if (host.address.empty()) {
+        return std::nullopt;
+    }
     return host;
 }
 
@@ -111,26 +119,31 @@ void HostPickerWidget::refreshUi() {
             item->setData(Qt::UserRole + 3, host.input_port);
             if (previous.has_value() &&
                 previous->username == host.username &&
-                previous->address == host.address) {
+                previous->address == host.address &&
+                previous->control_port == host.control_port) {
                 list_->setCurrentItem(item);
             }
         }
     }
 
     if (hosts.empty()) {
-        status_->setText("No hosts found yet. Start a host with Advertise enabled.");
+        status_->setText("No hosts found yet. On the host PC: Start Host with Advertise enabled.");
+        last_emitted_.reset();
     } else {
-        status_->setText(QString("%1 host(s) found — click a username to use their address.")
+        status_->setText(QString("%1 host(s) found — click one to fill Host / ports above.")
             .arg(hosts.size()));
+        // Keep the Host field in sync after list rebuilds (signals were blocked).
+        applySelection(false);
     }
 }
 
-void HostPickerWidget::applySelection() {
+void HostPickerWidget::applySelection(bool force) {
     const auto host = selectedHost();
     if (!host.has_value()) {
         return;
     }
-    if (last_emitted_.has_value() &&
+    if (!force &&
+        last_emitted_.has_value() &&
         last_emitted_->address == host->address &&
         last_emitted_->control_port == host->control_port &&
         last_emitted_->input_port == host->input_port) {

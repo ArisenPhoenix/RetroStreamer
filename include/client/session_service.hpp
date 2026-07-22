@@ -22,6 +22,7 @@ struct PendingSession {
     SessionClient session;
     TcpStream stream;
     GameList game_list;
+    std::filesystem::path art_cache_root;
 };
 
 struct SessionStart {

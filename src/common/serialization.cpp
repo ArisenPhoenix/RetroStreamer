@@ -1,4 +1,4 @@
-#include "common/protocol.hpp"
+#include "common/serialization.hpp"
 
 #include <climits>
 #include <cstddef>
@@ -13,7 +13,7 @@
 
 namespace archstreamer {
 
-using ByteBuffer = std::vector<std::uint8_t>;
+namespace {
 
 template <typename T, bool IsEnum = std::is_enum_v<T>>
 struct WireRawType {
@@ -60,6 +60,14 @@ public:
         }
     }
 
+    void write_bytes(std::span<const std::uint8_t> value) {
+        if (value.size() > 16 * 1024 * 1024) {
+            throw std::runtime_error("binary payload too large for protocol packet");
+        }
+        write_pod<std::uint32_t>(static_cast<std::uint32_t>(value.size()));
+        bytes_.insert(bytes_.end(), value.begin(), value.end());
+    }
+
     const ByteBuffer& bytes() const { return bytes_; }
     ByteBuffer take() { return std::move(bytes_); }
 
@@ -67,56 +75,43 @@ private:
     ByteBuffer bytes_;
 };
 
-class Reader {
-public:
-    explicit Reader(std::span<const std::uint8_t> bytes) : bytes_(bytes) {}
+} // namespace
 
-    template <typename T>
-    T read_pod() {
-        static_assert(std::is_integral_v<T> || std::is_enum_v<T>);
-        using Raw = WireRaw<T>;
-        using UnsignedRaw = std::make_unsigned_t<Raw>;
-        require(sizeof(Raw));
+Reader::Reader(std::span<const std::uint8_t> bytes) : bytes_(bytes) {}
 
-        UnsignedRaw raw = 0;
-        for (std::size_t i = 0; i < sizeof(Raw); ++i) {
-            raw |= static_cast<UnsignedRaw>(bytes_[offset_++]) << (i * 8);
-        }
-        return static_cast<T>(static_cast<Raw>(raw));
+void Reader::require(std::size_t count) const {
+    if (offset_ + count > bytes_.size()) {
+        throw std::runtime_error("truncated protocol packet");
     }
+}
 
-    bool read_bool() {
-        return read_pod<std::uint8_t>() != 0;
+bool Reader::read_bool() {
+    return read_pod<std::uint8_t>() != 0;
+}
+
+std::string Reader::read_string() {
+    const auto size = read_pod<std::uint16_t>();
+    require(size);
+    std::string value(reinterpret_cast<const char*>(bytes_.data() + offset_), size);
+    offset_ += size;
+    return value;
+}
+
+std::optional<std::string> Reader::read_optional_string() {
+    if (!read_bool()) {
+        return std::nullopt;
     }
+    return read_string();
+}
 
-    std::string read_string() {
-        const auto size = read_pod<std::uint16_t>();
-        require(size);
-        std::string value(reinterpret_cast<const char*>(bytes_.data() + offset_), size);
-        offset_ += size;
-        return value;
-    }
-
-    std::optional<std::string> read_optional_string() {
-        if (!read_bool()) {
-            return std::nullopt;
-        }
-
-        return read_string();
-    }
-
-    bool exhausted() const { return offset_ == bytes_.size(); }
-
-private:
-    void require(std::size_t count) const {
-        if (offset_ + count > bytes_.size()) {
-            throw std::runtime_error("truncated protocol packet");
-        }
-    }
-
-    std::span<const std::uint8_t> bytes_;
-    std::size_t offset_ = 0;
-};
+std::vector<std::uint8_t> Reader::read_bytes() {
+    const auto size = read_pod<std::uint32_t>();
+    require(size);
+    std::vector<std::uint8_t> value(bytes_.begin() + static_cast<std::ptrdiff_t>(offset_),
+                                    bytes_.begin() + static_cast<std::ptrdiff_t>(offset_ + size));
+    offset_ += size;
+    return value;
+}
 
 void write_controller_state(Writer& writer, const ControllerState& state) {
     writer.write_pod<std::uint32_t>(state.sequence);
@@ -347,6 +342,23 @@ ByteBuffer serialize_payload(const MediaEndpoint& payload) {
     return writer.take();
 }
 
+ByteBuffer serialize_payload(const ArtAssetRequest& payload) {
+    Writer writer;
+    writer.write_string(payload.asset_key);
+    writer.write_string(payload.role);
+    return writer.take();
+}
+
+ByteBuffer serialize_payload(const ArtAssetResponse& payload) {
+    Writer writer;
+    writer.write_string(payload.asset_key);
+    writer.write_string(payload.role);
+    writer.write_bool(payload.found);
+    writer.write_string(payload.extension);
+    writer.write_bytes(payload.data);
+    return writer.take();
+}
+
 PacketType packet_type_for(const ClientHello&) { return PacketType::ClientHello; }
 PacketType packet_type_for(const HostWelcome&) { return PacketType::HostWelcome; }
 PacketType packet_type_for(const ClientConfig&) { return PacketType::ClientConfig; }
@@ -362,6 +374,8 @@ PacketType packet_type_for(const SessionReady&) { return PacketType::SessionRead
 PacketType packet_type_for(const SessionStarting&) { return PacketType::SessionStarting; }
 PacketType packet_type_for(const SessionEnded&) { return PacketType::SessionEnded; }
 PacketType packet_type_for(const MediaEndpoint&) { return PacketType::MediaEndpoint; }
+PacketType packet_type_for(const ArtAssetRequest&) { return PacketType::ArtAssetRequest; }
+PacketType packet_type_for(const ArtAssetResponse&) { return PacketType::ArtAssetResponse; }
 
 template <typename Payload>
 ByteBuffer serialize_packet_impl(const Payload& payload) {
@@ -435,6 +449,14 @@ ByteBuffer serialize_packet(const SessionEnded& payload) {
 }
 
 ByteBuffer serialize_packet(const MediaEndpoint& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const ArtAssetRequest& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const ArtAssetResponse& payload) {
     return serialize_packet_impl(payload);
 }
 
@@ -588,6 +610,20 @@ MediaEndpoint read_media_endpoint(Reader& reader) {
     };
 }
 
+ArtAssetRequest read_art_asset_request(Reader& reader) {
+    return ArtAssetRequest{reader.read_string(), reader.read_string()};
+}
+
+ArtAssetResponse read_art_asset_response(Reader& reader) {
+    ArtAssetResponse payload;
+    payload.asset_key = reader.read_string();
+    payload.role = reader.read_string();
+    payload.found = reader.read_bool();
+    payload.extension = reader.read_string();
+    payload.data = reader.read_bytes();
+    return payload;
+}
+
 PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
     Reader header_reader(packet);
     const auto magic = header_reader.read_pod<std::uint32_t>();
@@ -639,6 +675,10 @@ PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
             return read_session_ended(payload_reader);
         case PacketType::MediaEndpoint:
             return read_media_endpoint(payload_reader);
+        case PacketType::ArtAssetRequest:
+            return read_art_asset_request(payload_reader);
+        case PacketType::ArtAssetResponse:
+            return read_art_asset_response(payload_reader);
     }
 
     throw std::runtime_error("unknown packet type");

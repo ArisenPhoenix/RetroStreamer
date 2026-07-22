@@ -1,6 +1,7 @@
 #include "client/session_service.hpp"
 
 #include "client/catalog_cache.hpp"
+#include "common/art_transfer.hpp"
 #include "common/serialization.hpp"
 
 #include <stdexcept>
@@ -16,6 +17,31 @@ PacketPayload receive_client_control_payload(TcpStream& stream) {
 
     return deserialize_packet(*packet);
 }
+
+namespace {
+
+void fetch_missing_art_for_catalog(TcpStream& stream, const GameList& catalog, const std::filesystem::path& art_cache_root) {
+    std::filesystem::create_directories(art_cache_root);
+    for (const auto& game : catalog.games) {
+        if (game.asset_key.empty()) {
+            continue;
+        }
+        for (const auto role : kDisplayArtRoles) {
+            if (art_asset_exists_locally(art_cache_root, game.asset_key, role)) {
+                continue;
+            }
+            stream.send_packet(serialize_packet(ArtAssetRequest{game.asset_key, std::string(role)}));
+            const auto payload = receive_client_control_payload(stream);
+            const auto* response = std::get_if<ArtAssetResponse>(&payload);
+            if (response == nullptr) {
+                throw std::runtime_error("expected ArtAssetResponse from host");
+            }
+            write_art_asset_to_cache(art_cache_root, *response);
+        }
+    }
+}
+
+} // namespace
 
 ClientSessionService::ClientSessionService(std::string host, std::uint16_t control_port)
     : ClientSessionService(std::move(host), control_port, default_catalog_cache_path()) {
@@ -43,10 +69,18 @@ PendingSession ClientSessionService::begin() const {
     save_catalog_cache(catalog_cache_path_, cached_game_list);
     session.apply_game_list(cached_game_list);
 
+    const auto art_cache_root = host_art_cache_root(sanitize_host_cache_id("host", host_));
+    try {
+        fetch_missing_art_for_catalog(stream, cached_game_list, art_cache_root);
+    } catch (const std::exception&) {
+        // Older hosts without art protocol still return a usable catalog.
+    }
+
     return PendingSession{
         std::move(session),
         std::move(stream),
         std::move(cached_game_list),
+        art_cache_root,
     };
 }
 

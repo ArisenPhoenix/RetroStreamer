@@ -20,7 +20,7 @@ if ! command -v flatpak-builder >/dev/null 2>&1; then
 fi
 
 flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-flatpak install -y --user flathub org.kde.Platform//6.8 org.kde.Sdk//6.8
+flatpak install -y --user flathub org.kde.Platform//6.9 org.kde.Sdk//6.9
 
 mkdir -p "${BUILD_DIR}"
 flatpak-builder --force-clean --user --install-deps-from=flathub \

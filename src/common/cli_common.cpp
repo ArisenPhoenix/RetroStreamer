@@ -1,17 +1,17 @@
 #include "common/cli_common.hpp"
 
+#include "common/platform/paths.hpp"
 #include "common/protocol.hpp"
 
-#include <cstdlib>
 #include <stdexcept>
 
 namespace archstreamer {
 
 std::string default_cli_username() {
-    if (const char* user = std::getenv("USER"); user != nullptr && valid_username(user)) {
+    const auto user = current_username();
+    if (valid_username(user)) {
         return user;
     }
-
     return "local";
 }
 

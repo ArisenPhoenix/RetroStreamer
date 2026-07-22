@@ -1,7 +1,8 @@
 #pragma once
 
 #if defined(_WIN32)
-#error "Windows platform implementation has not been added yet"
+#include "common/platform/windows_process.hpp"
+#include "common/platform/windows_socket.hpp"
 #else
 #include "common/platform/posix_process.hpp"
 #include "common/platform/posix_socket.hpp"
@@ -9,7 +10,12 @@
 
 namespace archstreamer {
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+using PlatformChildProcess = WindowsChildProcess;
+using PlatformTcpStream = WindowsTcpStream;
+using PlatformTcpListener = WindowsTcpListener;
+using PlatformUdpSocket = WindowsUdpSocket;
+#else
 using PlatformChildProcess = PosixChildProcess;
 using PlatformTcpStream = PosixTcpStream;
 using PlatformTcpListener = PosixTcpListener;

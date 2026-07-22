@@ -35,12 +35,23 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
         throw std::runtime_error("RetroArch is already running");
     }
 
+    last_exit_code_.reset();
+
     std::vector<std::string> args;
-    args.push_back(path_string(config.retroarch_path, "RetroArch executable"));
+    if (!config.command_prefix.empty()) {
+        args = config.command_prefix;
+    } else {
+        args.push_back(path_string(config.retroarch_path, "RetroArch executable"));
+    }
     args.insert(args.end(), config.extra_args.begin(), config.extra_args.end());
     args.push_back("-L");
     args.push_back(path_string(config.core_path, "RetroArch core"));
     args.push_back(path_string(config.content_path, "RetroArch content"));
+
+    if (config.command_prefix.empty() && access(args.front().c_str(), X_OK) != 0) {
+        throw std::runtime_error(
+            "RetroArch executable is missing or not executable: " + args.front());
+    }
 
     pid_t child = fork();
     if (child < 0) {
@@ -59,7 +70,7 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
         }
         argv.push_back(nullptr);
 
-        execv(argv[0], argv.data());
+        execvp(argv[0], argv.data());
         _exit(127);
     }
 
@@ -77,6 +88,7 @@ void PosixRetroArchProcess::stop() {
         int status = 0;
         const pid_t result = waitpid(pid_, &status, WNOHANG);
         if (result == pid_) {
+            record_status(status);
             pid_ = -1;
             return;
         }
@@ -85,7 +97,9 @@ void PosixRetroArchProcess::stop() {
     }
 
     kill(pid_, SIGKILL);
-    waitpid(pid_, nullptr, 0);
+    int status = 0;
+    waitpid(pid_, &status, 0);
+    record_status(status);
     pid_ = -1;
 }
 
@@ -101,6 +115,7 @@ bool PosixRetroArchProcess::running() const {
     }
 
     if (result == pid_) {
+        record_status(status);
         pid_ = -1;
         return false;
     }
@@ -111,6 +126,20 @@ bool PosixRetroArchProcess::running() const {
     }
 
     return false;
+}
+
+std::optional<int> PosixRetroArchProcess::last_exit_code() const {
+    return last_exit_code_;
+}
+
+void PosixRetroArchProcess::record_status(int status) const {
+    if (WIFEXITED(status)) {
+        last_exit_code_ = WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+        last_exit_code_ = 128 + WTERMSIG(status);
+    } else {
+        last_exit_code_ = -1;
+    }
 }
 
 } // namespace archstreamer

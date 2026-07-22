@@ -3,6 +3,26 @@
 #include <algorithm>
 #include <cstring>
 #include <stdexcept>
+#include <string>
+#include <vector>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include "common/platform/windows_socket.hpp"
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#else
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#endif
 
 namespace archstreamer {
 
@@ -30,6 +50,90 @@ std::optional<std::string> read_string(const ByteBuffer& bytes, std::size_t& off
     std::string value(reinterpret_cast<const char*>(bytes.data() + offset), *length);
     offset += *length;
     return value;
+}
+
+std::vector<std::string> ipv4_broadcast_targets() {
+    std::vector<std::string> targets{"255.255.255.255"};
+
+#ifdef _WIN32
+    ensure_winsock_initialized();
+
+    ULONG buffer_size = 16 * 1024;
+    std::vector<unsigned char> buffer(buffer_size);
+    auto* adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
+    ULONG flags = GAA_FLAG_INCLUDE_PREFIX | GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+    ULONG result = GetAdaptersAddresses(AF_INET, flags, nullptr, adapters, &buffer_size);
+    if (result == ERROR_BUFFER_OVERFLOW) {
+        buffer.resize(buffer_size);
+        adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
+        result = GetAdaptersAddresses(AF_INET, flags, nullptr, adapters, &buffer_size);
+    }
+    if (result != NO_ERROR) {
+        return targets;
+    }
+
+    for (auto* adapter = adapters; adapter != nullptr; adapter = adapter->Next) {
+        if (adapter->OperStatus != IfOperStatusUp || adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK) {
+            continue;
+        }
+        for (auto* unicast = adapter->FirstUnicastAddress; unicast != nullptr; unicast = unicast->Next) {
+            if (unicast->Address.lpSockaddr == nullptr || unicast->Address.lpSockaddr->sa_family != AF_INET) {
+                continue;
+            }
+            const auto* addr = reinterpret_cast<const sockaddr_in*>(unicast->Address.lpSockaddr);
+            const auto prefix = unicast->OnLinkPrefixLength;
+            if (prefix > 32) {
+                continue;
+            }
+            const std::uint32_t host = ntohl(addr->sin_addr.s_addr);
+            const std::uint32_t mask = prefix == 0 ? 0u : (0xffffffffu << (32 - prefix));
+            const std::uint32_t broadcast = (host & mask) | ~mask;
+            in_addr broadcast_addr{};
+            broadcast_addr.s_addr = htonl(broadcast);
+            char text[INET_ADDRSTRLEN]{};
+            if (inet_ntop(AF_INET, &broadcast_addr, text, sizeof(text)) == nullptr) {
+                continue;
+            }
+            const std::string value{text};
+            if (std::find(targets.begin(), targets.end(), value) == targets.end()) {
+                targets.push_back(value);
+            }
+        }
+    }
+#else
+    ifaddrs* interfaces = nullptr;
+    if (getifaddrs(&interfaces) != 0) {
+        return targets;
+    }
+
+    for (auto* entry = interfaces; entry != nullptr; entry = entry->ifa_next) {
+        if (entry->ifa_addr == nullptr || entry->ifa_addr->sa_family != AF_INET) {
+            continue;
+        }
+        if (entry->ifa_flags & IFF_LOOPBACK) {
+            continue;
+        }
+        if ((entry->ifa_flags & IFF_UP) == 0 || (entry->ifa_flags & IFF_BROADCAST) == 0) {
+            continue;
+        }
+        if (entry->ifa_broadaddr == nullptr) {
+            continue;
+        }
+
+        char broadcast[INET_ADDRSTRLEN]{};
+        const auto* addr = reinterpret_cast<const sockaddr_in*>(entry->ifa_broadaddr);
+        if (inet_ntop(AF_INET, &addr->sin_addr, broadcast, sizeof(broadcast)) == nullptr) {
+            continue;
+        }
+        const std::string value{broadcast};
+        if (std::find(targets.begin(), targets.end(), value) == targets.end()) {
+            targets.push_back(value);
+        }
+    }
+
+    freeifaddrs(interfaces);
+#endif
+    return targets;
 }
 
 } // namespace
@@ -82,7 +186,9 @@ void HostDiscoveryAnnouncer::set_announcement(HostAnnouncement announcement) {
 
 void HostDiscoveryAnnouncer::advertise() {
     const auto packet = serialize_host_announcement(announcement_);
-    socket_.send_to(packet, "255.255.255.255", discovery_port_);
+    for (const auto& target : ipv4_broadcast_targets()) {
+        socket_.send_to(packet, target, discovery_port_);
+    }
 }
 
 HostDiscoveryBrowser::HostDiscoveryBrowser(std::uint16_t discovery_port) {

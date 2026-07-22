@@ -295,6 +295,11 @@ PosixUdpSocket& PosixUdpSocket::operator=(PosixUdpSocket&& other) noexcept {
 }
 
 void PosixUdpSocket::bind_any(std::uint16_t port) {
+    const int reuse = 1;
+    if (setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
+        throw std::runtime_error("failed to set SO_REUSEADDR on UDP socket");
+    }
+
     sockaddr_in address{};
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_ANY);

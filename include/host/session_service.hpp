@@ -4,9 +4,9 @@
 
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <optional>
-#include <string_view>
 
 namespace archstreamer {
 
@@ -18,7 +18,8 @@ public:
         GameList game_list,
         std::chrono::seconds timeout,
         std::optional<ClientHello> host_hello = std::nullopt,
-        std::function<bool()> should_stop = {});
+        std::function<bool()> should_stop = {},
+        std::filesystem::path art_root = {});
 
     SessionPlan wait_for_ready_session() const;
 
@@ -29,6 +30,7 @@ private:
     std::chrono::seconds timeout_;
     std::optional<ClientHello> host_hello_;
     std::function<bool()> should_stop_;
+    std::filesystem::path art_root_;
 };
 
 } // namespace archstreamer

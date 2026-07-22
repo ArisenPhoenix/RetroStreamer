@@ -21,6 +21,8 @@ std::filesystem::path write_retroarch_input_override(
     const std::string& joypad_driver,
     RetroArchPort players,
     const SaveProfile& save_profile,
-    bool realtime_pacing);
+    bool realtime_pacing,
+    bool capture_fullscreen = false,
+    std::string_view capture_resolution = {});
 
 } // namespace archstreamer

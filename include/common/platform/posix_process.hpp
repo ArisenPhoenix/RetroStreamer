@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -21,7 +22,9 @@ public:
 
     void start(
         std::vector<std::string> args,
-        const std::vector<std::pair<std::string, std::string>>& environment = {});
+        const std::vector<std::pair<std::string, std::string>>& environment = {},
+        const std::vector<std::string>& unset_environment = {},
+        const std::optional<std::string>& stderr_path = std::nullopt);
     void stop();
     bool running() const;
 

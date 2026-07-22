@@ -1,5 +1,7 @@
 #include "host/retroarch_config_writer.hpp"
 
+#include "common/platform/paths.hpp"
+
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -9,6 +11,13 @@
 namespace archstreamer {
 
 namespace {
+
+std::filesystem::path retroarch_runtime_root() {
+    if (const auto home = user_home_directory(); !home.empty()) {
+        return std::filesystem::path(home) / ".local/share/archstreamer/retroarch";
+    }
+    return std::filesystem::current_path() / "archstreamer-retroarch";
+}
 
 std::string sanitize_device_name(std::string_view value) {
     std::string result;
@@ -23,11 +32,13 @@ std::string sanitize_device_name(std::string_view value) {
     return result;
 }
 
-std::filesystem::path write_virtual_pad_autoconfig(
+void write_virtual_pad_autoconfig(
+    const std::filesystem::path& autoconfig_root,
     const VirtualGamepadIdentity& identity,
     const std::string& joypad_driver,
     RetroArchPort port) {
-    const auto directory = std::filesystem::temp_directory_path() / "archstreamer-retroarch-autoconfig" / joypad_driver;
+    const auto directory = autoconfig_root / joypad_driver;
+    std::filesystem::create_directories(directory);
 
     auto port_identity = identity;
     port_identity.name += " P" + std::to_string(static_cast<int>(port) + 1);
@@ -73,8 +84,6 @@ std::filesystem::path write_virtual_pad_autoconfig(
         << "input_right_axis = \"+6\"\n"
         << "input_up_axis = \"-7\"\n"
         << "input_down_axis = \"+7\"\n";
-
-    return directory.parent_path();
 }
 
 } // namespace
@@ -99,18 +108,24 @@ std::filesystem::path write_retroarch_input_override(
     const std::string& joypad_driver,
     RetroArchPort players,
     const SaveProfile& save_profile,
-    bool realtime_pacing) {
-    const auto directory = std::filesystem::temp_directory_path() / "archstreamer-retroarch-config";
+    bool realtime_pacing,
+    bool capture_fullscreen,
+    std::string_view capture_resolution) {
+    // Home path so Flatpak ArchStreamer + flatpak-spawn --host retroarch share the same files.
+    const auto root = retroarch_runtime_root();
+    const auto directory = root / "config";
     std::filesystem::create_directories(directory);
 
-    const auto autoconfig_directory =
-        std::filesystem::temp_directory_path() / "archstreamer-retroarch-autoconfig";
-    const auto autoconfig_driver_directory = autoconfig_directory / joypad_driver;
+    const auto autoconfig_directory = root / "autoconfig";
     std::filesystem::remove_all(autoconfig_directory);
-    std::filesystem::create_directories(autoconfig_driver_directory);
+    std::filesystem::create_directories(autoconfig_directory / joypad_driver);
 
     for (RetroArchPort port = 0; port < players; ++port) {
-        write_virtual_pad_autoconfig(identity_for_port(identities, port), joypad_driver, port);
+        write_virtual_pad_autoconfig(
+            autoconfig_directory,
+            identity_for_port(identities, port),
+            joypad_driver,
+            port);
     }
     const auto path = directory / "input_override.cfg";
     std::ofstream file(path, std::ios::trunc);
@@ -142,6 +157,30 @@ std::filesystem::path write_retroarch_input_override(
             << "audio_sync = \"true\"\n"
             << "video_vsync = \"false\"\n"
             << "runahead_enabled = \"false\"\n";
+    }
+
+    if (capture_fullscreen) {
+        // Fill the virtual capture display so remotes don't see a tiny windowed corner.
+        int width = 1280;
+        int height = 720;
+        const auto x_pos = capture_resolution.find('x');
+        if (x_pos != std::string_view::npos) {
+            try {
+                width = std::stoi(std::string(capture_resolution.substr(0, x_pos)));
+                height = std::stoi(std::string(capture_resolution.substr(x_pos + 1)));
+            } catch (const std::exception&) {
+            }
+        }
+        file
+            << "video_fullscreen = \"true\"\n"
+            << "video_windowed_fullscreen = \"false\"\n"
+            << "video_force_resolution = \"true\"\n"
+            << "video_fullscreen_x = \"" << width << "\"\n"
+            << "video_fullscreen_y = \"" << height << "\"\n"
+            << "video_window_show_decor = \"false\"\n"
+            << "video_font_enable = \"false\"\n"
+            << "menu_enable = \"false\"\n"
+            << "pause_nonactive = \"false\"\n";
     }
 
     for (RetroArchPort port = 0; port < players; ++port) {

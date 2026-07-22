@@ -172,19 +172,54 @@ Media sender processes are owned per connected client id. Viewer disconnects sto
 
 Clients can query active session state with `ActiveSessionInfoRequest`. The host returns the current game, mode, assigned player count, connected/disconnected player counts, viewer count, and media availability. Before a session starts, the same request returns `active=false`.
 
-## Windows Client Direction
+## Windows Direction
 
-Linux remains the host target because RetroArch launching, virtual gamepads, and display/audio capture currently depend on Linux APIs. Windows clients should stay feasible by keeping client responsibilities limited to TCP/UDP protocol handling, SDL2 controller capture, local catalog cache storage, and GStreamer media receiving.
+Windows is a first-class target for both **client** and **host**. Ship the **Windows client first**: it clears most shared dependencies (sockets, process spawn, paths, packaging, SDL, GStreamer runtime, CMake) that a Windows host also needs. Host-only backends come after that.
 
-Platform-specific APIs are isolated behind compile-time platform objects. Downstream code should include the normal public headers and use `ChildProcess`, `TcpStream`, `TcpListener`, and `UdpSocket`. `common/platform/default_platform.hpp` selects the concrete implementation once. The current implementation maps those aliases to `PosixChildProcess`, `PosixTcpStream`, `PosixTcpListener`, and `PosixUdpSocket`.
+### Shared platform layer (client unlocks host basics)
 
-Controller capture follows the same rule. Downstream code includes `client/controller_backend.hpp` and uses `ControllerBackend`. CMake selects the implementation with `ARCHSTREAMER_CONTROLLER_BACKEND`; the current supported value is `sdl2`, which aliases `ControllerBackend` to `Sdl2ControllerBackend` and links SDL2 through the `archstreamer_controller` target.
+Platform-specific APIs stay behind compile-time platform objects. Downstream code includes the normal public headers and uses `ChildProcess`, `TcpStream`, `TcpListener`, and `UdpSocket`. `common/platform/default_platform.hpp` selects the concrete implementation once. On non-Windows that maps to the Posix types; on Windows it maps to Winsock2/`CreateProcess` implementations in `windows_socket` / `windows_process`. Portable cache/home/username helpers live in `common/platform/paths.hpp`.
 
-Current Windows blockers are:
+Controller capture follows the same rule. Downstream code includes `client/controller_backend.hpp` and uses `ControllerBackend`. CMake selects the implementation with `ARCHSTREAMER_CONTROLLER_BACKEND`; the current supported value is `sdl2`, which aliases `ControllerBackend` to `Sdl2ControllerBackend`. On Windows, ship/copy `SDL2.dll` with the binary.
 
-- Add Windows platform objects for `ChildProcess`, `TcpStream`, `TcpListener`, and `UdpSocket`.
-- Add a Windows-friendly controller backend selection and package/copy the required SDL2 runtime DLL when that backend is built for Windows.
-- Embedded GUI media later will need platform-specific GStreamer window integration.
+Also shared across client and host on Windows:
+
+- CMake `WIN32` source selection and dependency discovery (vcpkg / `find_package`, not Linux-only pkg-config)
+- App data paths under `%LOCALAPPDATA%` (cache, art, saves) instead of XDG/`HOME` layouts
+- LAN discovery without `getifaddrs` (`GetAdaptersAddresses` or equivalent)
+- GStreamer installed and on `PATH` (`gst-launch-1.0` today; in-process pipelines later)
+
+### Windows client (first milestone)
+
+Client responsibilities stay: TCP/UDP session protocol, SDL2 controller capture, catalog/art cache, GStreamer media receive, and (later) an embedded resizable video window.
+
+Client-specific Windows work:
+
+- Platform sockets/process objects wired through `default_platform.hpp`
+- Video sinks suitable for Windows (`d3d11videosink` / `autovideosink`, not X11/Wayland)
+- Audio via WASAPI through `autoaudiosink` when GStreamer plugins are present
+- Optional Qt GUI build that does not require linking the Linux host stack (`ARCHSTREAMER_BUILD_HOST=OFF` or equivalent)
+- Windows Firewall notes for inbound RTP media ports (same class of issue as Linux)
+
+### Windows host (after client)
+
+Host interfaces already exist (`VirtualGamepadBus`, `RetroArchProcess`, `MediaServer` via `default_host_platform.hpp`). Linux fills them with uinput, Xvfb/`ximagesrc`, and Pulse/PipeWire. Windows needs alternate backends behind those same interfaces:
+
+- **Virtual pads:** ViGEmBus (or equivalent) instead of `/dev/uinput`
+- **Display capture:** DXGI Desktop Duplication / Windows Graphics Capture (or GStreamer `d3d11screencapturesrc`) instead of Xvfb + `ximagesrc`
+- **Audio loopback:** WASAPI loopback instead of Pulse/PipeWire monitors
+- **RetroArch:** Windows install paths and win32/`dinput`/`xinput` joypad binding (same “ignore list vs index” class of bugs as Linux SDL, different enumerator)
+
+Until those backends exist, `default_host_platform.hpp` may keep a clear `_WIN32` stub/`#error` so a client-only Windows build stays clean.
+
+### Near-term blockers
+
+- ~~Add Windows platform objects for `ChildProcess`, `TcpStream`, `TcpListener`, and `UdpSocket`~~
+- ~~Add Windows path helpers and CMake client-capable `WIN32` builds (`ARCHSTREAMER_BUILD_HOST=OFF`)~~
+- Package/copy SDL2 (and document GStreamer) for Windows clients
+- Client-only Qt GUI when `ARCHSTREAMER_BUILD_HOST=OFF` (GUI still requires host today)
+- Embedded GUI media later needs platform-specific GStreamer window integration
+- Host backends (ViGEm, capture, WASAPI loopback) after the client milestone
 
 ## Save Profiles
 

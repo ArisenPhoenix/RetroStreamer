@@ -14,7 +14,7 @@
 namespace archstreamer {
 
 constexpr std::uint32_t ProtocolMagic = 0x41525354; // "ARST"
-constexpr std::uint16_t ProtocolVersion = 7;
+constexpr std::uint16_t ProtocolVersion = 8;
 constexpr std::uint8_t MaxRemoteClients = 2;
 constexpr std::uint8_t MaxPlayersPerClient = 2;
 constexpr std::uint8_t MaxRetroArchPorts = 5; // Ports 0-3 plus a host player if desired.
@@ -41,6 +41,8 @@ enum class PacketType : std::uint8_t {
     MediaEndpoint = 13,
     ActiveSessionInfoRequest = 14,
     ActiveSessionInfo = 15,
+    ArtAssetRequest = 16,
+    ArtAssetResponse = 17,
 };
 
 enum class ClientRole : std::uint8_t {
@@ -184,6 +186,19 @@ struct ErrorPacket {
     std::string message;
 };
 
+struct ArtAssetRequest {
+    std::string asset_key;
+    std::string role; // boxart, grid, hero, logo, icon, screenshot
+};
+
+struct ArtAssetResponse {
+    std::string asset_key;
+    std::string role;
+    bool found = false;
+    std::string extension; // e.g. ".png"
+    std::vector<std::uint8_t> data;
+};
+
 using PacketPayload = std::variant<
     ClientHello,
     HostWelcome,
@@ -199,7 +214,9 @@ using PacketPayload = std::variant<
     SessionReady,
     SessionStarting,
     SessionEnded,
-    MediaEndpoint>;
+    MediaEndpoint,
+    ArtAssetRequest,
+    ArtAssetResponse>;
 
 ClientRole role_for_player_count(std::uint8_t requested_players);
 bool valid_player_count(std::uint8_t requested_players);

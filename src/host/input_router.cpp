@@ -1,5 +1,6 @@
 #include "host/input_router.hpp"
 
+#include <iostream>
 #include <utility>
 
 namespace archstreamer {
@@ -27,6 +28,13 @@ bool InputRouter::route(const ControllerInput& input) {
 
     last_input_timestamp_by_player_[key] = input.state.timestamp_us;
     gamepads_.update(*port, input.state);
+    if (!first_input_logged_) {
+        first_input_logged_ = true;
+        std::cout
+            << "First controller input applied: client " << static_cast<int>(input.client_id)
+            << " local P" << static_cast<int>(input.local_player) + 1
+            << " -> RetroArch P" << static_cast<int>(*port) + 1 << '\n';
+    }
     return true;
 }
 

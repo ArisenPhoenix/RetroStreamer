@@ -3,4 +3,8 @@ _dependencies/
 .cache
 deploy/lan-sim/*.log
 build-flatpak/
+build-client-only/
+.flatpak-builder/
+scripts/.flatpak-builder/
 *.flatpak
+logs

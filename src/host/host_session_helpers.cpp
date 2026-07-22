@@ -1,5 +1,7 @@
 #include "host/host_session_helpers.hpp"
 
+#include "common/art_transfer.hpp"
+#include "common/catalog_paths.hpp"
 #include "common/serialization.hpp"
 #include "host/host_app_config.hpp"
 #include "host/host_launch_planner.hpp"
@@ -7,6 +9,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -120,14 +123,42 @@ void poll_active_session_joins(
                 config.audio)));
             return;
         }
+        const auto art_root = config.art_root.empty() ? std::filesystem::path{DefaultArtRoot} : config.art_root;
+        if (const auto* art_request = std::get_if<ArtAssetRequest>(&first_payload); art_request != nullptr) {
+            stream->send_packet(serialize_packet(load_art_asset_response(
+                art_root,
+                art_request->asset_key,
+                art_request->role)));
+            return;
+        }
         const auto* game_list_request = std::get_if<GameListRequest>(&first_payload);
         if (game_list_request == nullptr) {
             throw std::runtime_error("expected GameListRequest from active-session client");
         }
         stream->send_packet(serialize_packet(catalog_delta_for_request(game_list, *game_list_request)));
 
-        const auto second_payload = receive_control_payload(*stream);
-        const auto* hello = std::get_if<ClientHello>(&second_payload);
+        auto next_payload = std::optional<PacketPayload>{};
+        while (true) {
+            const auto packet = stream->receive_packet();
+            if (!packet.has_value()) {
+                return;
+            }
+            auto payload = deserialize_packet(*packet);
+            if (const auto* art_request = std::get_if<ArtAssetRequest>(&payload); art_request != nullptr) {
+                stream->send_packet(serialize_packet(load_art_asset_response(
+                    art_root,
+                    art_request->asset_key,
+                    art_request->role)));
+                continue;
+            }
+            next_payload = std::move(payload);
+            break;
+        }
+        if (!next_payload.has_value()) {
+            return;
+        }
+
+        const auto* hello = std::get_if<ClientHello>(&*next_payload);
         if (hello == nullptr) {
             throw std::runtime_error("expected ClientHello from active-session client");
         }

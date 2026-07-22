@@ -48,6 +48,7 @@ void HostRunnerCli::print_usage() const {
         << "options:\n"
         << "  --rom-root <path>   ROM root to scan. Default: " << DefaultRomRoot << "\n"
         << "  --meta-root <path>  Metadata root. Default: sibling Meta directory next to ROM root.\n"
+        << "  --art-root <path>   Artwork root served to clients. Default: sibling Art next to ROM root.\n"
         << "  --mode <mode>       singleplayer or multiplayer. Default: singleplayer\n"
         << "  --players <count>   Number of virtual pads to plug. Default: 1\n"
         << "  --list              List games and exit.\n"
@@ -123,6 +124,9 @@ HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
         } else if (arg == "--meta-root") {
             if_throw(i, "--meta-root requires a path");
             args.meta_root = argv[i];
+        } else if (arg == "--art-root") {
+            if_throw(i, "--art-root requires a path");
+            args.art_root = argv[i];
         } else if (arg == "--mode") {
             if_throw(i, "--mode requires singleplayer or multiplayer");
             args.session_mode = parse_session_mode(argv[i]);

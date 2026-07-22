@@ -2,8 +2,10 @@
 #include "common/catalog_presenter.hpp"
 #include "client/client_app.hpp"
 #include "client/game_filter.hpp"
+#include "client/gstreamer_media_receiver.hpp"
 #include "game_picker_widget.hpp"
 #include "host_picker_widget.hpp"
+#include "common/addresses.hpp"
 #include "common/discovery.hpp"
 #include "common/game_assets.hpp"
 #include "common/platform/paths.hpp"
@@ -394,7 +396,7 @@ private:
         host_clients_->setRange(1, 2);
         host_clients_->setValue(1);
         host_role_ = new QComboBox(form_box);
-        // Viewer first: LAN remote play is the default host path.
+        // Viewer first: LAN remote play is the default host path (not seated).
         host_role_->addItem("Viewer", QStringLiteral("viewer"));
         host_role_->addItem("Player", QStringLiteral("player"));
         host_role_->setCurrentIndex(0);
@@ -405,6 +407,11 @@ private:
         host_video_->setChecked(true);
         host_audio_ = new QCheckBox("Stream audio", form_box);
         host_audio_->setChecked(true);
+        host_local_media_ = new QCheckBox("Watch stream locally", form_box);
+        host_local_media_->setChecked(false);
+        host_local_media_->setToolTip(
+            "Receive the host loopback RTP stream (same feed remotes get). "
+            "Can be toggled while the host is running.");
         host_advertise_ = new QCheckBox("Advertise on LAN", form_box);
         host_advertise_->setChecked(true);
 
@@ -421,6 +428,7 @@ private:
         form->addRow("Bridge controller", host_bridge_controller_);
         form->addRow("", host_video_);
         form->addRow("", host_audio_);
+        form->addRow("", host_local_media_);
         form->addRow("", host_advertise_);
 
         auto* start = new QPushButton("Start Host", page);
@@ -444,6 +452,23 @@ private:
         });
         connect(host_role_, &QComboBox::currentIndexChanged, this, [this] {
             sync_host_role_and_bridge();
+        });
+        connect(host_local_media_, &QCheckBox::toggled, this, [this](bool) {
+            sync_host_local_media();
+        });
+        connect(host_video_, &QCheckBox::toggled, this, [this](bool) {
+            if (!host_video_->isChecked() && !host_audio_->isChecked()) {
+                stop_host_local_media();
+            } else {
+                sync_host_local_media();
+            }
+        });
+        connect(host_audio_, &QCheckBox::toggled, this, [this](bool) {
+            if (!host_video_->isChecked() && !host_audio_->isChecked()) {
+                stop_host_local_media();
+            } else {
+                sync_host_local_media();
+            }
         });
         connect(host_bridge_controller_, &QComboBox::currentIndexChanged, this, [this] {
             if (syncing_host_role_) {
@@ -1094,7 +1119,7 @@ private:
                         append_log(
                             client_log_,
                             "Requested video, but host did not provide a video endpoint "
-                            "(Host Player skips streaming — use Host Viewer to stream to remotes).");
+                            "(host is not streaming video — enable Stream video on the Host tab).");
                     }
                     if (!endpoint.audio_uri.empty()) {
                         append_log(client_log_, QString("Audio: %1").arg(QString::fromStdString(endpoint.audio_uri)));
@@ -1198,6 +1223,7 @@ private:
                 }
             });
             connect(host_process_, &QProcess::finished, this, [this](int code, QProcess::ExitStatus status) {
+                stop_host_local_media();
                 sync_host_advertise(false);
                 host_status_->setText("Host stopped");
                 append_log(host_log_, QString("Host exited: code=%1 status=%2")
@@ -1234,26 +1260,18 @@ private:
             args << "--bridge-controller" << QString::number(bridge_index);
         }
         if (host_video_->isChecked()) {
-            if (!host_role_is_viewer(host_role_)) {
-                append_log(
-                    host_log_,
-                    "Stream video left off for Host Player so RetroArch stays on your screen. "
-                    "Use Host Viewer when you need to stream to remotes.");
-            } else {
-                args << "--video" << "--video-port" << QString::number(host_video_port_->value());
-            }
+            args << "--video" << "--video-port" << QString::number(host_video_port_->value());
+        } else {
+            args << "--no-video";
         }
         if (host_audio_->isChecked()) {
-            if (!host_role_is_viewer(host_role_)) {
-                // Local host audio plays through RetroArch/Pulse normally; skip capture fanout.
-                append_log(host_log_, "Stream audio left off for Host Player (local audio via RetroArch).");
-            } else {
-                args << "--audio" << "--audio-port" << QString::number(host_audio_port_->value());
-                append_log(
-                    host_log_,
-                    QString("Audio streaming enabled on base UDP port %1 (captures default output monitor).")
-                        .arg(host_audio_port_->value()));
-            }
+            args << "--audio" << "--audio-port" << QString::number(host_audio_port_->value());
+            append_log(
+                host_log_,
+                QString("Audio streaming enabled on base UDP port %1 (captures default output monitor).")
+                    .arg(host_audio_port_->value()));
+        } else {
+            args << "--no-audio";
         }
         args << host_debug_args_;
         if (!host_game_picker_->hasSelection()) {
@@ -1292,9 +1310,16 @@ private:
         if (host_advertise_ != nullptr && host_advertise_->isChecked()) {
             sync_host_advertise(true);
         }
+        // Give host_runner time to bring up capture/fanout before opening the local receiver.
+        if (host_local_media_ != nullptr && host_local_media_->isChecked()) {
+            QTimer::singleShot(2500, this, [this] {
+                sync_host_local_media();
+            });
+        }
     }
 
     void stop_host() {
+        stop_host_local_media();
         sync_host_advertise(false);
         if (host_process_ == nullptr || host_process_->state() == QProcess::NotRunning) {
             return;
@@ -1303,6 +1328,61 @@ private:
         if (!host_process_->waitForFinished(3000)) {
             host_process_->kill();
             host_process_->waitForFinished(3000);
+        }
+    }
+
+    void stop_host_local_media() {
+        if (host_local_receiver_) {
+            try {
+                host_local_receiver_->disconnect();
+            } catch (const std::exception& error) {
+                append_log(host_log_, QString("Local media stop: %1").arg(error.what()));
+            }
+            host_local_receiver_.reset();
+        }
+    }
+
+    void sync_host_local_media() {
+        if (host_local_media_ == nullptr) {
+            return;
+        }
+        const bool want = host_local_media_->isChecked();
+        const bool host_up =
+            host_process_ != nullptr && host_process_->state() != QProcess::NotRunning;
+        const bool streaming = host_video_->isChecked() || host_audio_->isChecked();
+
+        if (!want || !host_up || !streaming) {
+            if (host_local_receiver_) {
+                append_log(host_log_, "Local stream watch stopped.");
+            }
+            stop_host_local_media();
+            return;
+        }
+
+        archstreamer::MediaEndpoint endpoint;
+        if (host_video_->isChecked()) {
+            endpoint.video_uri = archstreamer::rtp_h264_uri(
+                "127.0.0.1",
+                static_cast<std::uint16_t>(host_video_port_->value()));
+        }
+        if (host_audio_->isChecked()) {
+            endpoint.audio_uri = archstreamer::rtp_opus_uri(
+                "127.0.0.1",
+                static_cast<std::uint16_t>(host_audio_port_->value()));
+        }
+
+        try {
+            stop_host_local_media();
+            host_local_receiver_ = std::make_unique<archstreamer::GStreamerMediaReceiver>();
+            host_local_receiver_->connect(endpoint);
+            append_log(
+                host_log_,
+                QString("Watching local stream (video port %1, audio port %2).")
+                    .arg(host_video_port_->value())
+                    .arg(host_audio_port_->value()));
+        } catch (const std::exception& error) {
+            stop_host_local_media();
+            append_log(host_log_, QString("Local stream watch failed: %1").arg(error.what()));
         }
     }
 #endif // ARCHSTREAMER_HAS_HOST
@@ -1323,6 +1403,7 @@ private:
     QProcess* host_process_ = nullptr;
     QStringList host_debug_args_;
     std::unique_ptr<archstreamer::HostDiscoveryAnnouncer> host_announcer_;
+    std::unique_ptr<archstreamer::GStreamerMediaReceiver> host_local_receiver_;
     QTimer* host_advertise_timer_ = nullptr;
 #endif
 
@@ -1357,6 +1438,7 @@ private:
     QComboBox* host_bridge_controller_ = nullptr;
     QCheckBox* host_video_ = nullptr;
     QCheckBox* host_audio_ = nullptr;
+    QCheckBox* host_local_media_ = nullptr;
     QCheckBox* host_advertise_ = nullptr;
     QLabel* host_status_ = nullptr;
     archstreamer::gui::GamePickerWidget* host_game_picker_ = nullptr;

@@ -2,8 +2,6 @@
 
 #ifdef _WIN32
 
-#include "common/binary.hpp"
-
 #include <array>
 #include <cstring>
 #include <mutex>
@@ -54,7 +52,7 @@ WindowsTcpStream& WindowsTcpStream::operator=(WindowsTcpStream&& other) noexcept
     return *this;
 }
 
-WindowsTcpStream WindowsTcpStream::connect(const std::string& host, std::uint16_t port) {
+WindowsTcpStream WindowsTcpStream::connect_to(const std::string& host, std::uint16_t port) {
     ensure_winsock_initialized();
 
     SOCKET fd = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -82,16 +80,18 @@ void WindowsTcpStream::send_packet(const ByteBuffer& packet) {
     write_all(packet.data(), packet.size());
 }
 
-ByteBuffer WindowsTcpStream::recv_packet() {
-    constexpr std::size_t header_size = 10;
-    ByteBuffer header(header_size);
+std::optional<ByteBuffer> WindowsTcpStream::receive_packet() {
+    constexpr std::size_t header_size =
+        sizeof(std::uint32_t) + sizeof(std::uint16_t) + sizeof(PacketType) + sizeof(std::uint32_t);
+    std::array<std::uint8_t, header_size> header{};
     if (!read_all(header.data(), header.size())) {
-        throw std::runtime_error("TCP stream ended before packet header");
+        return std::nullopt;
     }
 
-    BinaryReader reader(header);
+    Reader reader(header);
     const auto magic = reader.read_pod<std::uint32_t>();
     const auto version = reader.read_pod<std::uint16_t>();
+    reader.read_pod<PacketType>();
     const auto payload_size = reader.read_pod<std::uint32_t>();
     if (magic != ProtocolMagic) {
         throw std::runtime_error("bad TCP protocol magic");

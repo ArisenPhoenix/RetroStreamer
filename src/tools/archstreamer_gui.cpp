@@ -4,10 +4,13 @@
 #include "client/game_filter.hpp"
 #include "game_picker_widget.hpp"
 #include "host_picker_widget.hpp"
-#include "host/game_catalog_scanner.hpp"
 #include "common/discovery.hpp"
 #include "common/game_assets.hpp"
+#include "common/platform/paths.hpp"
 #include "common/steam_art_import.hpp"
+#ifdef ARCHSTREAMER_HAS_HOST
+#include "host/game_catalog_scanner.hpp"
+#endif
 
 #include <QApplication>
 #include <QCheckBox>
@@ -125,6 +128,7 @@ archstreamer::ClientParticipantRole selected_client_role(const QComboBox* combo)
         : archstreamer::ClientParticipantRole::Player;
 }
 
+#ifdef ARCHSTREAMER_HAS_HOST
 bool host_role_is_viewer(const QComboBox* combo) {
     return combo->currentData().toString() == QStringLiteral("viewer");
 }
@@ -135,18 +139,21 @@ QString host_role_text(const QComboBox* combo) {
 
 QString host_runner_program() {
     const auto app_dir = std::filesystem::path(QCoreApplication::applicationDirPath().toStdString());
-    const auto sibling = app_dir / "host_runner";
-    if (std::filesystem::exists(sibling)) {
-        return QString::fromStdString(sibling.string());
+    const auto candidates = {
+        app_dir / "host_runner",
+        app_dir / "host_runner.exe",
+        std::filesystem::current_path() / "build" / "host_runner",
+        std::filesystem::current_path() / "build" / "Release" / "host_runner.exe",
+        std::filesystem::current_path() / "build" / "host_runner.exe",
+    };
+    for (const auto& candidate : candidates) {
+        if (std::filesystem::exists(candidate)) {
+            return QString::fromStdString(candidate.string());
+        }
     }
-
-    const auto repo_relative = std::filesystem::current_path() / "build" / "host_runner";
-    if (std::filesystem::exists(repo_relative)) {
-        return QString::fromStdString(repo_relative.string());
-    }
-
-    return "./build/host_runner";
+    return QStringLiteral("./build/host_runner");
 }
+#endif
 
 class MainWindow final : public QMainWindow {
 public:
@@ -156,7 +163,9 @@ public:
 
         auto* tabs = new QTabWidget(this);
         tabs->addTab(build_client_tab(), "Client");
+#ifdef ARCHSTREAMER_HAS_HOST
         tabs->addTab(build_host_tab(), "Host");
+#endif
         tabs->addTab(build_settings_tab(), "Settings");
         setCentralWidget(tabs);
         load_persisted_settings();
@@ -166,13 +175,16 @@ public:
         save_persisted_settings();
         stop_client();
         stop_client_connect();
+#ifdef ARCHSTREAMER_HAS_HOST
         stop_host();
+#endif
         if (art_refresh_thread_.joinable()) {
             art_refresh_thread_.join();
         }
     }
 
     void apply_debug_profile(const QString& profile) {
+#ifdef ARCHSTREAMER_HAS_HOST
         if (profile != "local-viewer") {
             append_log(host_log_, "Unknown debug profile: " + profile);
             return;
@@ -209,6 +221,10 @@ public:
         QTimer::singleShot(6500, this, [this] {
             start_client();
         });
+#else
+        append_log(client_log_, "Debug profiles require a host-capable build (ARCHSTREAMER_BUILD_HOST=ON).");
+        Q_UNUSED(profile);
+#endif
     }
 
 private:
@@ -228,7 +244,11 @@ private:
         client_input_port_ = new QSpinBox(form_box);
         client_input_port_->setRange(1, 65535);
         client_input_port_->setValue(DefaultInputPort);
-        client_username_ = new QLineEdit(qEnvironmentVariable("USER", "local"), form_box);
+        client_username_ = new QLineEdit(form_box);
+        {
+            const auto username = QString::fromStdString(archstreamer::current_username());
+            client_username_->setText(username.isEmpty() ? QStringLiteral("local") : username);
+        }
         client_role_ = new QComboBox(form_box);
         client_role_->addItems({"Player", "Viewer"});
         client_mode_ = new QComboBox(form_box);
@@ -343,6 +363,7 @@ private:
         return page;
     }
 
+#ifdef ARCHSTREAMER_HAS_HOST
     QWidget* build_host_tab() {
         auto* page = new QWidget(this);
         auto* root = new QHBoxLayout(page);
@@ -352,7 +373,11 @@ private:
 
         host_rom_root_ = new QLineEdit(archstreamer::DefaultRomRoot, form_box);
         host_meta_root_ = new QLineEdit(archstreamer::DefaultMetaRoot, form_box);
-        host_username_ = new QLineEdit(qEnvironmentVariable("USER", "host"), form_box);
+        host_username_ = new QLineEdit(form_box);
+        {
+            const auto username = QString::fromStdString(archstreamer::current_username());
+            host_username_->setText(username.isEmpty() ? QStringLiteral("host") : username);
+        }
         host_control_port_ = new QSpinBox(form_box);
         host_control_port_->setRange(1, 65535);
         host_control_port_->setValue(45555);
@@ -480,6 +505,7 @@ private:
         load_host_games();
         return page;
     }
+#endif // ARCHSTREAMER_HAS_HOST
 
     QWidget* build_settings_tab() {
         auto* page = new QWidget(this);
@@ -536,10 +562,17 @@ private:
         auto* left = new QVBoxLayout();
         left->addWidget(form_box);
         left->addWidget(new QLabel(
+#ifdef ARCHSTREAMER_HAS_HOST
             "Art root is for host-side artwork and Steam import.\n"
             "Clients cache host art under ~/.cache/archstreamer/hosts/<host>/Art.\n"
             "Steam account ID: leave blank to auto-detect.\n"
             "Host lobby wait is how long the host keeps accepting remote joins.",
+#else
+            "Art root is used for local Steam import when available.\n"
+            "Clients cache host art under the ArchStreamer cache directory.\n"
+            "Steam account ID: leave blank to auto-detect.\n"
+            "Host lobby wait is unused in this client-only build.",
+#endif
             page));
         left->addStretch();
 
@@ -565,6 +598,7 @@ private:
         }
     }
 
+#ifdef ARCHSTREAMER_HAS_HOST
     void refresh_host_controllers() {
         const auto previous = host_bridge_controller_->currentData().toInt();
         host_bridge_controller_->clear();
@@ -670,6 +704,7 @@ private:
             append_log(host_log_, QString("Load games failed: %1").arg(error.what()));
         }
     }
+#endif // ARCHSTREAMER_HAS_HOST
 
     void load_persisted_settings() {
         QSettings settings("ArchStreamer", "ArchStreamer");
@@ -721,9 +756,11 @@ private:
 
     void apply_art_root_to_pickers() {
         const auto art_root = art_root_path();
+#ifdef ARCHSTREAMER_HAS_HOST
         if (host_game_picker_ != nullptr) {
             host_game_picker_->setArtRoot(art_root);
         }
+#endif
         // Don't overwrite client host-art cache after a successful Connect.
         if (client_game_picker_ != nullptr && !client_catalog_loaded_) {
             client_game_picker_->setArtRoot(art_root);
@@ -733,7 +770,7 @@ private:
     void detect_steam_account() {
         const auto account = archstreamer::resolve_steam_account();
         if (!account.has_value()) {
-            append_log(settings_log_, "No Steam userdata account found under ~/.local/share/Steam (or Flatpak Steam).");
+            append_log(settings_log_, "No Steam userdata account found (checked common Steam install paths).");
             return;
         }
         const auto text = QString::fromStdString(account->account_id);
@@ -748,6 +785,11 @@ private:
     }
 
     void refresh_art_from_steam() {
+#ifndef ARCHSTREAMER_HAS_HOST
+        append_log(
+            settings_log_,
+            "Steam art refresh from a local ROM catalog requires a host-capable build.");
+#else
         if (art_refresh_thread_.joinable()) {
             if (art_refreshing_.load()) {
                 append_log(settings_log_, "Art refresh already running.");
@@ -829,6 +871,7 @@ private:
                 },
                 Qt::QueuedConnection);
         });
+#endif
     }
 
     archstreamer::GameFilter client_filter_from_fields() const {
@@ -1000,6 +1043,9 @@ private:
                 .arg(QString::fromStdString(*config.game_selector)));
 
         client_stop_requested_ = false;
+        if (client_host_picker_ != nullptr) {
+            client_host_picker_->setBrowsing(false);
+        }
         client_thread_ = std::thread([this, config = std::move(config)]() mutable {
             try {
                 auto connected_client_id = std::optional<archstreamer::ClientId>{};
@@ -1052,7 +1098,7 @@ private:
                     }
                     if (!endpoint.audio_uri.empty()) {
                         append_log(client_log_, QString("Audio: %1").arg(QString::fromStdString(endpoint.audio_uri)));
-                        append_log(client_log_, "Starting GStreamer audio receiver (autoaudiosink).");
+                        append_log(client_log_, "Starting GStreamer audio receiver.");
                     } else if (client_audio_->isChecked()) {
                         append_log(client_log_, "Requested audio, but host did not provide an audio endpoint.");
                     }
@@ -1101,6 +1147,9 @@ private:
                 client_catalog_status_,
                 [this] {
                     client_catalog_status_->setText("Client stopped");
+                    if (client_host_picker_ != nullptr) {
+                        client_host_picker_->setBrowsing(true);
+                    }
                 },
                 Qt::QueuedConnection);
             append_log(client_log_, "Client worker stopped.");
@@ -1112,6 +1161,9 @@ private:
         if (client_thread_.joinable()) {
             client_thread_.join();
         }
+        if (client_host_picker_ != nullptr) {
+            client_host_picker_->setBrowsing(true);
+        }
     }
 
     void stop_client_connect() {
@@ -1120,6 +1172,7 @@ private:
         }
     }
 
+#ifdef ARCHSTREAMER_HAS_HOST
     void start_host() {
         if (host_process_ != nullptr && host_process_->state() != QProcess::NotRunning) {
             append_log(host_log_, "Host is already running.");
@@ -1252,21 +1305,26 @@ private:
             host_process_->waitForFinished(3000);
         }
     }
+#endif // ARCHSTREAMER_HAS_HOST
 
     archstreamer::ClientApp client_app_;
     archstreamer::GameList client_full_catalog_;
     bool client_catalog_loaded_ = false;
+#ifdef ARCHSTREAMER_HAS_HOST
     bool syncing_host_role_ = false;
+#endif
     std::atomic_bool client_stop_requested_ = false;
     std::atomic_bool client_connecting_ = false;
     std::atomic_bool art_refreshing_ = false;
     std::thread client_connect_thread_;
     std::thread client_thread_;
     std::thread art_refresh_thread_;
+#ifdef ARCHSTREAMER_HAS_HOST
     QProcess* host_process_ = nullptr;
     QStringList host_debug_args_;
     std::unique_ptr<archstreamer::HostDiscoveryAnnouncer> host_announcer_;
     QTimer* host_advertise_timer_ = nullptr;
+#endif
 
     QLineEdit* client_host_ = nullptr;
     QSpinBox* client_port_ = nullptr;
@@ -1285,6 +1343,7 @@ private:
     QListWidget* client_controllers_ = nullptr;
     QPlainTextEdit* client_log_ = nullptr;
 
+#ifdef ARCHSTREAMER_HAS_HOST
     QLineEdit* host_rom_root_ = nullptr;
     QLineEdit* host_meta_root_ = nullptr;
     QLineEdit* host_username_ = nullptr;
@@ -1302,6 +1361,7 @@ private:
     QLabel* host_status_ = nullptr;
     archstreamer::gui::GamePickerWidget* host_game_picker_ = nullptr;
     QPlainTextEdit* host_log_ = nullptr;
+#endif
 
     QLineEdit* settings_art_root_ = nullptr;
     QLineEdit* settings_steam_account_ = nullptr;

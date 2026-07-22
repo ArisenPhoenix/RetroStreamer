@@ -23,7 +23,9 @@ int archstreamer::run_session_client(int argc, char** argv) {
 
         std::signal(SIGINT, handle_signal);
         std::signal(SIGTERM, handle_signal);
+#ifndef _WIN32
         std::signal(SIGPIPE, SIG_IGN);
+#endif
 
         const ClientApp app;
         return cli.run(

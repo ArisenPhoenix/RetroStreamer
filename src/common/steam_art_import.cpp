@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <string_view>
@@ -373,9 +374,19 @@ std::vector<std::filesystem::path> steam_userdata_roots(const std::filesystem::p
     if (!home.has_value()) {
         return roots;
     }
+#ifdef _WIN32
+    roots.push_back(*home / "AppData" / "Local" / "Steam" / "userdata");
+    if (const auto program_files = std::getenv("ProgramFiles"); program_files != nullptr) {
+        roots.push_back(std::filesystem::path{program_files} / "Steam" / "userdata");
+    }
+    if (const auto program_files_x86 = std::getenv("ProgramFiles(x86)"); program_files_x86 != nullptr) {
+        roots.push_back(std::filesystem::path{program_files_x86} / "Steam" / "userdata");
+    }
+#else
     roots.push_back(*home / ".local/share/Steam/userdata");
     roots.push_back(*home / ".steam/steam/userdata");
     roots.push_back(*home / ".var/app/com.valvesoftware.Steam/data/Steam/userdata");
+#endif
     return roots;
 }
 

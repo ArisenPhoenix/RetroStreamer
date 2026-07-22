@@ -4,6 +4,7 @@
 
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace archstreamer {
 namespace {
@@ -34,6 +35,21 @@ std::string join_command_line(const std::vector<std::string>& args) {
         command += quote_windows_arg(args[i]);
     }
     return command;
+}
+
+// CreateProcess will not append .exe when the token already contains a dot
+// (e.g. gst-launch-1.0). Resolve via SearchPath so PATH lookups work.
+std::string resolve_executable(const std::string& program) {
+    if (program.find('\\') != std::string::npos || program.find('/') != std::string::npos) {
+        return program;
+    }
+
+    char found[MAX_PATH] = {};
+    const DWORD length = SearchPathA(nullptr, program.c_str(), ".exe", MAX_PATH, found, nullptr);
+    if (length > 0 && length < MAX_PATH) {
+        return std::string(found, length);
+    }
+    return program;
 }
 
 std::string build_environment_block(
@@ -93,6 +109,20 @@ std::string build_environment_block(
     return block;
 }
 
+HANDLE open_nul_handle(DWORD access) {
+    SECURITY_ATTRIBUTES security{};
+    security.nLength = sizeof(security);
+    security.bInheritHandle = TRUE;
+    return CreateFileA(
+        "NUL",
+        access,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        &security,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+}
+
 } // namespace
 
 WindowsChildProcess::~WindowsChildProcess() {
@@ -128,17 +158,32 @@ void WindowsChildProcess::start(
         stop();
     }
 
-    auto command = join_command_line(args);
+    auto resolved_args = args;
+    resolved_args[0] = resolve_executable(args[0]);
+    auto command = join_command_line(resolved_args);
     auto env_block = build_environment_block(env, unset_env);
 
-    STARTUPINFOA startup{};
-    startup.cb = sizeof(startup);
-    HANDLE stderr_handle = INVALID_HANDLE_VALUE;
+    // Never inherit the parent's full handle table (Qt/console timers, HWNDS, etc.).
+    // That path exhausts USER objects and breaks d3d11videosink under the GUI.
+    HANDLE stdin_handle = open_nul_handle(GENERIC_READ);
+    HANDLE stdout_handle = open_nul_handle(GENERIC_WRITE);
+    HANDLE stderr_handle = stdout_handle;
+    HANDLE stderr_file = INVALID_HANDLE_VALUE;
+    if (stdin_handle == INVALID_HANDLE_VALUE || stdout_handle == INVALID_HANDLE_VALUE) {
+        if (stdin_handle != INVALID_HANDLE_VALUE) {
+            CloseHandle(stdin_handle);
+        }
+        if (stdout_handle != INVALID_HANDLE_VALUE) {
+            CloseHandle(stdout_handle);
+        }
+        throw std::runtime_error("failed to open NUL for child stdio");
+    }
+
     if (!stderr_path.empty()) {
         SECURITY_ATTRIBUTES security{};
         security.nLength = sizeof(security);
         security.bInheritHandle = TRUE;
-        stderr_handle = CreateFileA(
+        stderr_file = CreateFileA(
             stderr_path.c_str(),
             GENERIC_WRITE,
             FILE_SHARE_READ,
@@ -146,14 +191,69 @@ void WindowsChildProcess::start(
             CREATE_ALWAYS,
             FILE_ATTRIBUTE_NORMAL,
             nullptr);
-        if (stderr_handle == INVALID_HANDLE_VALUE) {
+        if (stderr_file == INVALID_HANDLE_VALUE) {
+            CloseHandle(stdin_handle);
+            CloseHandle(stdout_handle);
             throw std::runtime_error("failed to open child stderr path");
         }
-        startup.dwFlags |= STARTF_USESTDHANDLES;
-        startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-        startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-        startup.hStdError = stderr_handle;
+        stderr_handle = stderr_file;
     }
+
+    SIZE_T attr_size = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &attr_size);
+    auto* attr_bytes = static_cast<std::uint8_t*>(HeapAlloc(GetProcessHeap(), 0, attr_size));
+    if (attr_bytes == nullptr) {
+        CloseHandle(stdin_handle);
+        CloseHandle(stdout_handle);
+        if (stderr_file != INVALID_HANDLE_VALUE) {
+            CloseHandle(stderr_file);
+        }
+        throw std::runtime_error("failed to allocate process attribute list");
+    }
+    auto* attr_list = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attr_bytes);
+    if (!InitializeProcThreadAttributeList(attr_list, 1, 0, &attr_size)) {
+        HeapFree(GetProcessHeap(), 0, attr_bytes);
+        CloseHandle(stdin_handle);
+        CloseHandle(stdout_handle);
+        if (stderr_file != INVALID_HANDLE_VALUE) {
+            CloseHandle(stderr_file);
+        }
+        throw std::runtime_error("InitializeProcThreadAttributeList failed");
+    }
+
+    HANDLE inherit_handles[3];
+    DWORD inherit_count = 0;
+    inherit_handles[inherit_count++] = stdin_handle;
+    inherit_handles[inherit_count++] = stdout_handle;
+    if (stderr_handle != stdout_handle) {
+        inherit_handles[inherit_count++] = stderr_handle;
+    }
+
+    if (!UpdateProcThreadAttribute(
+            attr_list,
+            0,
+            PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+            inherit_handles,
+            inherit_count * sizeof(HANDLE),
+            nullptr,
+            nullptr)) {
+        DeleteProcThreadAttributeList(attr_list);
+        HeapFree(GetProcessHeap(), 0, attr_bytes);
+        CloseHandle(stdin_handle);
+        CloseHandle(stdout_handle);
+        if (stderr_file != INVALID_HANDLE_VALUE) {
+            CloseHandle(stderr_file);
+        }
+        throw std::runtime_error("UpdateProcThreadAttribute failed");
+    }
+
+    STARTUPINFOEXA startup_ex{};
+    startup_ex.StartupInfo.cb = sizeof(startup_ex);
+    startup_ex.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startup_ex.StartupInfo.hStdInput = stdin_handle;
+    startup_ex.StartupInfo.hStdOutput = stdout_handle;
+    startup_ex.StartupInfo.hStdError = stderr_handle;
+    startup_ex.lpAttributeList = attr_list;
 
     PROCESS_INFORMATION info{};
     std::vector<char> command_mutable(command.begin(), command.end());
@@ -164,19 +264,25 @@ void WindowsChildProcess::start(
         command_mutable.data(),
         nullptr,
         nullptr,
-        stderr_handle != INVALID_HANDLE_VALUE ? TRUE : FALSE,
-        0,
+        TRUE,
+        CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
         env_block.empty() ? nullptr : env_block.data(),
         nullptr,
-        &startup,
+        &startup_ex.StartupInfo,
         &info);
 
-    if (stderr_handle != INVALID_HANDLE_VALUE) {
-        CloseHandle(stderr_handle);
+    DeleteProcThreadAttributeList(attr_list);
+    HeapFree(GetProcessHeap(), 0, attr_bytes);
+    CloseHandle(stdin_handle);
+    CloseHandle(stdout_handle);
+    if (stderr_file != INVALID_HANDLE_VALUE) {
+        CloseHandle(stderr_file);
     }
 
     if (!ok) {
-        throw std::runtime_error("CreateProcess failed");
+        throw std::runtime_error(
+            "CreateProcess failed for '" + resolved_args[0] + "' (Win32 " +
+            std::to_string(GetLastError()) + ")");
     }
 
     CloseHandle(info.hThread);

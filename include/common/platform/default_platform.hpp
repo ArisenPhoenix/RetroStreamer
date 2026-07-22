@@ -1,8 +1,9 @@
 #pragma once
 
 #if defined(_WIN32)
-#include "common/platform/windows_process.hpp"
+// winsock2.h must come before windows.h (via process) to avoid winsock.h conflicts.
 #include "common/platform/windows_socket.hpp"
+#include "common/platform/windows_process.hpp"
 #else
 #include "common/platform/posix_process.hpp"
 #include "common/platform/posix_socket.hpp"

@@ -14,6 +14,10 @@
   </description>
   <launchable type="desktop-id">io.github.ArisenPhoenix.ArchStreamer.desktop</launchable>
   <url type="homepage">https://github.com/ArisenPhoenix/RetroStreamer</url>
+  <categories>
+    <category>Game</category>
+    <category>Emulator</category>
+  </categories>
   <provides>
     <binary>archstreamer_gui</binary>
   </provides>

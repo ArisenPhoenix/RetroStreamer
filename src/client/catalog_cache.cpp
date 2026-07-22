@@ -1,7 +1,8 @@
 #include "client/catalog_cache.hpp"
 
+#include "common/platform/paths.hpp"
+
 #include <algorithm>
-#include <cstdlib>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -9,11 +10,8 @@
 namespace archstreamer {
 
 std::filesystem::path default_catalog_cache_path() {
-    if (const char* cache_home = std::getenv("XDG_CACHE_HOME"); cache_home != nullptr && cache_home[0] != '\0') {
-        return std::filesystem::path{cache_home} / "archstreamer" / "catalog.json";
-    }
-    if (const char* home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
-        return std::filesystem::path{home} / ".cache" / "archstreamer" / "catalog.json";
+    if (const auto cache = archstreamer_cache_directory(); !cache.empty()) {
+        return std::filesystem::path{cache} / "catalog.json";
     }
     return std::filesystem::temp_directory_path() / "archstreamer-catalog.json";
 }

@@ -3,6 +3,14 @@
 #include <array>
 #include <cstdio>
 
+#ifdef _WIN32
+#define archstreamer_popen _popen
+#define archstreamer_pclose _pclose
+#else
+#define archstreamer_popen popen
+#define archstreamer_pclose pclose
+#endif
+
 namespace archstreamer {
 
 std::string trim_ascii_whitespace(std::string value) {
@@ -20,7 +28,7 @@ std::string trim_ascii_whitespace(std::string value) {
 }
 
 std::string read_command_output(const char* command) {
-    auto* pipe = popen(command, "r");
+    auto* pipe = archstreamer_popen(command, "r");
     if (pipe == nullptr) {
         return {};
     }
@@ -30,7 +38,7 @@ std::string read_command_output(const char* command) {
     while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
         output += buffer.data();
     }
-    pclose(pipe);
+    archstreamer_pclose(pipe);
     return trim_ascii_whitespace(std::move(output));
 }
 

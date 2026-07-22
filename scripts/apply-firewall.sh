@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Apply ArchStreamer LAN firewall allowances.
 # Requires root: sudo ./scripts/apply-firewall.sh
+#
+# Run on BOTH machines when testing across a LAN:
+#   - Host: control TCP, input UDP, discovery UDP (clients connect inbound here)
+#   - Client: video/audio UDP (host sends RTP inbound to the client)
+# Opening only the host is not enough for picture/sound on the remote client.
 set -euo pipefail
 
 CONTROL_TCP="${ARCHSTREAMER_CONTROL_PORT:-45555}"
@@ -19,11 +24,25 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 echo "ArchStreamer firewall allowances:"
-echo "  TCP  ${CONTROL_TCP}            (session control)"
-echo "  UDP  ${INPUT_UDP}              (controller input to host)"
-echo "  UDP  ${DISCOVERY_UDP}          (LAN host discovery)"
-echo "  UDP  ${VIDEO_UDP_START}-${VIDEO_UDP_END}   (RTP video to clients)"
-echo "  UDP  ${AUDIO_UDP_START}-${AUDIO_UDP_END}   (RTP audio to clients)"
+echo "  TCP  ${CONTROL_TCP}            (session control — host)"
+echo "  UDP  ${INPUT_UDP}              (controller input — host)"
+echo "  UDP  ${DISCOVERY_UDP}          (LAN host discovery — host)"
+echo "  UDP  ${VIDEO_UDP_START}-${VIDEO_UDP_END}   (RTP video — CLIENT inbound)"
+echo "  UDP  ${AUDIO_UDP_START}-${AUDIO_UDP_END}   (RTP audio — CLIENT inbound)"
+echo
+echo "Tip: on Bazzite/Steam Deck clients, these media UDP ports are required for a video window."
+echo
+
+if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+  firewall-cmd --permanent --add-port="${CONTROL_TCP}/tcp"
+  firewall-cmd --permanent --add-port="${INPUT_UDP}/udp"
+  firewall-cmd --permanent --add-port="${DISCOVERY_UDP}/udp"
+  firewall-cmd --permanent --add-port="${VIDEO_UDP_START}-${VIDEO_UDP_END}/udp"
+  firewall-cmd --permanent --add-port="${AUDIO_UDP_START}-${AUDIO_UDP_END}/udp"
+  firewall-cmd --reload
+  echo "Done (firewalld). Bazzite/Fedora: ports opened permanently."
+  exit 0
+fi
 
 if command -v ufw >/dev/null 2>&1; then
   ufw allow "${CONTROL_TCP}/tcp" comment 'ArchStreamer control'
@@ -52,5 +71,7 @@ if command -v nft >/dev/null 2>&1; then
   exit 0
 fi
 
-echo "Neither ufw nor nft found." >&2
+echo "Neither firewalld, ufw, nor nft found." >&2
+echo "Manually open: TCP ${CONTROL_TCP}, UDP ${INPUT_UDP}, UDP ${DISCOVERY_UDP}," >&2
+echo "  UDP ${VIDEO_UDP_START}-${VIDEO_UDP_END}, UDP ${AUDIO_UDP_START}-${AUDIO_UDP_END}" >&2
 exit 1

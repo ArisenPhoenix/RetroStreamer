@@ -1,9 +1,9 @@
 #include "common/steam_art_import.hpp"
+#include "common/platform/paths.hpp"
 #include "common/sha256.hpp"
 
 #include <algorithm>
 #include <cctype>
-#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <string_view>
@@ -15,7 +15,7 @@ namespace archstreamer {
 namespace {
 
 std::optional<std::filesystem::path> home_directory() {
-    if (const char* home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
+    if (const auto home = user_home_directory(); !home.empty()) {
         return std::filesystem::path{home};
     }
     return std::nullopt;

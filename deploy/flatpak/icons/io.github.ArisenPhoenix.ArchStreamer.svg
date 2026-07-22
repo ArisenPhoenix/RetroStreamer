@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="ArchStreamer">
+  <rect width="128" height="128" rx="28" fill="#1a1f24"/>
+  <!-- stream arcs -->
+  <path d="M44 38c12-10 28-10 40 0" fill="none" stroke="#3db8a0" stroke-width="5" stroke-linecap="round"/>
+  <path d="M52 48c8-6 16-6 24 0" fill="none" stroke="#3db8a0" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="64" cy="56" r="4" fill="#3db8a0"/>
+  <!-- gamepad -->
+  <rect x="30" y="66" width="68" height="36" rx="14" fill="#e8a54b"/>
+  <circle cx="46" cy="84" r="6" fill="#1a1f24"/>
+  <rect x="72" y="78" width="16" height="5" rx="2" fill="#1a1f24"/>
+  <rect x="77.5" y="73" width="5" height="16" rx="2" fill="#1a1f24"/>
+</svg>

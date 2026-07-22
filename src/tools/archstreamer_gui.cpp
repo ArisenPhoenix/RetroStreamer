@@ -68,12 +68,16 @@ std::ofstream& log_file() {
 
 void write_to_log_file(const std::string& message) {
     auto& f = log_file();
+    f << message << '\n';
+    f.flush();
+}
+
+QString log_timestamp() {
     const auto now = std::chrono::system_clock::now();
     const auto time_t = std::chrono::system_clock::to_time_t(now);
     char ts[32];
     std::strftime(ts, sizeof(ts), "%H:%M:%S", std::localtime(&time_t));
-    f << '[' << ts << "] " << message << '\n';
-    f.flush();
+    return QString::fromLatin1(ts);
 }
 
 QString mode_name(archstreamer::GameSessionMode mode) {
@@ -81,6 +85,15 @@ QString mode_name(archstreamer::GameSessionMode mode) {
 }
 
 void append_log(QPlainTextEdit* log, QString message) {
+    if (log != nullptr) {
+        const auto name = log->objectName();
+        if (name == QLatin1String("hostLog") && !message.startsWith("[host]")) {
+            message = "[host] " + message;
+        } else if (name == QLatin1String("clientLog") && !message.startsWith("[client]")) {
+            message = "[client] " + message;
+        }
+    }
+    message = QString("[%1] %2").arg(log_timestamp(), message);
     write_to_log_file(message.toStdString());
     if (mirror_gui_logs_to_stdout.load()) {
         std::cout << message.toStdString() << '\n';
@@ -112,8 +125,12 @@ archstreamer::ClientParticipantRole selected_client_role(const QComboBox* combo)
         : archstreamer::ClientParticipantRole::Player;
 }
 
+bool host_role_is_viewer(const QComboBox* combo) {
+    return combo->currentData().toString() == QStringLiteral("viewer");
+}
+
 QString host_role_text(const QComboBox* combo) {
-    return combo->currentIndex() == 1 ? "viewer" : "player";
+    return host_role_is_viewer(combo) ? QStringLiteral("viewer") : QStringLiteral("player");
 }
 
 QString host_runner_program() {
@@ -163,7 +180,7 @@ public:
 
         host_video_->setChecked(true);
         host_audio_->setChecked(true);
-        host_role_->setCurrentIndex(1);
+        host_role_->setCurrentIndex(0); // Viewer
         host_bridge_controller_->setCurrentIndex(0);
         host_control_port_->setValue(45755);
         host_input_port_->setValue(45456);
@@ -202,7 +219,9 @@ private:
         auto* form_box = new QGroupBox("Client Session", page);
         auto* form = new QFormLayout(form_box);
 
-        client_host_ = new QLineEdit("127.0.0.1", form_box);
+        client_host_ = new QLineEdit(form_box);
+        client_host_->setPlaceholderText("select a LAN host below, or type an IP");
+        client_host_->setClearButtonEnabled(true);
         client_port_ = new QSpinBox(form_box);
         client_port_->setRange(1, 65535);
         client_port_->setValue(45555);
@@ -239,13 +258,19 @@ private:
         client_host_picker_ = new archstreamer::gui::HostPickerWidget(page);
         connect(client_host_picker_, &archstreamer::gui::HostPickerWidget::hostSelected, this,
             [this](const QString& address, int control_port, int input_port) {
+                const auto changed =
+                    client_host_->text() != address ||
+                    client_port_->value() != control_port ||
+                    client_input_port_->value() != input_port;
                 client_host_->setText(address);
                 client_port_->setValue(control_port);
                 client_input_port_->setValue(input_port);
-                append_log(client_log_, QString("Selected host %1 (control %2, input %3)")
-                    .arg(address)
-                    .arg(control_port)
-                    .arg(input_port));
+                if (changed) {
+                    append_log(client_log_, QString("Selected host %1 (control %2, input %3)")
+                        .arg(address)
+                        .arg(control_port)
+                        .arg(input_port));
+                }
             });
 
         client_game_picker_ = new archstreamer::gui::GamePickerWidget(page);
@@ -309,6 +334,7 @@ private:
         left->addStretch();
 
         client_log_ = new QPlainTextEdit(page);
+        client_log_->setObjectName("clientLog");
         client_log_->setReadOnly(true);
         root->addLayout(left, 1);
         root->addWidget(client_log_, 2);
@@ -343,13 +369,17 @@ private:
         host_clients_->setRange(1, 2);
         host_clients_->setValue(1);
         host_role_ = new QComboBox(form_box);
-        host_role_->addItems({"Player", "Viewer"});
-        host_role_->setCurrentIndex(1);
+        // Viewer first: LAN remote play is the default host path.
+        host_role_->addItem("Viewer", QStringLiteral("viewer"));
+        host_role_->addItem("Player", QStringLiteral("player"));
+        host_role_->setCurrentIndex(0);
         host_mode_ = new QComboBox(form_box);
         host_mode_->addItems({"Singleplayer", "Multiplayer"});
         host_bridge_controller_ = new QComboBox(form_box);
         host_video_ = new QCheckBox("Stream video", form_box);
+        host_video_->setChecked(true);
         host_audio_ = new QCheckBox("Stream audio", form_box);
+        host_audio_->setChecked(true);
         host_advertise_ = new QCheckBox("Advertise on LAN", form_box);
         host_advertise_->setChecked(true);
 
@@ -394,12 +424,14 @@ private:
             if (syncing_host_role_) {
                 return;
             }
-            if (host_bridge_controller_->currentData().toInt() >= 0) {
-                if (host_role_->currentIndex() != 0) {
-                    syncing_host_role_ = true;
-                    host_role_->setCurrentIndex(0);
-                    syncing_host_role_ = false;
-                }
+            // Do not silently flip Viewer → Player; local bridge is opt-in via Host role.
+            if (host_role_is_viewer(host_role_) && host_bridge_controller_->currentData().toInt() >= 0) {
+                syncing_host_role_ = true;
+                host_bridge_controller_->setCurrentIndex(0);
+                syncing_host_role_ = false;
+                append_log(
+                    host_log_,
+                    "Bridge controller needs Host role Player. Staying on Viewer (bridge cleared).");
             }
         });
         connect(host_control_port_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int value) {
@@ -409,7 +441,16 @@ private:
             client_input_port_->setValue(value);
         });
         connect(host_advertise_, &QCheckBox::toggled, this, [this](bool checked) {
-            sync_host_advertise(checked);
+            // Only broadcast while a host session is actually running; otherwise this
+            // machine shows up in other clients' host lists as a fake peer.
+            if (checked && host_process_ != nullptr && host_process_->state() != QProcess::NotRunning) {
+                sync_host_advertise(true);
+            } else {
+                sync_host_advertise(false);
+                if (checked) {
+                    append_log(host_log_, "Advertise armed — broadcasting starts when Host is running.");
+                }
+            }
         });
 
         host_advertise_timer_ = new QTimer(page);
@@ -431,12 +472,12 @@ private:
         left->addStretch();
 
         host_log_ = new QPlainTextEdit(page);
+        host_log_->setObjectName("hostLog");
         host_log_->setReadOnly(true);
         root->addLayout(left, 1);
         root->addWidget(host_log_, 2);
         refresh_host_controllers();
         load_host_games();
-        sync_host_advertise(host_advertise_->isChecked());
         return page;
     }
 
@@ -457,8 +498,17 @@ private:
         steam_layout->addWidget(settings_steam_account_, 1);
         steam_layout->addWidget(detect_steam);
 
-        form->addRow("Art root", settings_art_root_);
+        settings_session_timeout_ = new QSpinBox(form_box);
+        settings_session_timeout_->setRange(5, 3600);
+        settings_session_timeout_->setValue(30);
+        settings_session_timeout_->setSuffix(" s");
+        settings_session_timeout_->setToolTip(
+            "How long the host waits for remote clients to join before giving up.\n"
+            "Increase this when testing LAN connections between machines.");
+
+        form->addRow("Art root (host / local import)", settings_art_root_);
         form->addRow("Steam account ID", steam_row);
+        form->addRow("Host lobby wait", settings_session_timeout_);
 
         auto* refresh_art = new QPushButton("Refresh Art from Steam", form_box);
         form->addRow("", refresh_art);
@@ -473,6 +523,9 @@ private:
         connect(settings_steam_account_, &QLineEdit::editingFinished, this, [this] {
             save_persisted_settings();
         });
+        connect(settings_session_timeout_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
+            save_persisted_settings();
+        });
         connect(detect_steam, &QPushButton::clicked, this, [this] {
             detect_steam_account();
         });
@@ -483,8 +536,10 @@ private:
         auto* left = new QVBoxLayout();
         left->addWidget(form_box);
         left->addWidget(new QLabel(
-            "Steam account ID is used for art import and SRM-related paths.\n"
-            "Leave blank to auto-detect the best userdata/<id> on this machine.",
+            "Art root is for host-side artwork and Steam import.\n"
+            "Clients cache host art under ~/.cache/archstreamer/hosts/<host>/Art.\n"
+            "Steam account ID: leave blank to auto-detect.\n"
+            "Host lobby wait is how long the host keeps accepting remote joins.",
             page));
         left->addStretch();
 
@@ -547,7 +602,7 @@ private:
             return;
         }
         syncing_host_role_ = true;
-        if (host_role_->currentIndex() == 1 && host_bridge_controller_->currentData().toInt() >= 0) {
+        if (host_role_is_viewer(host_role_) && host_bridge_controller_->currentData().toInt() >= 0) {
             host_bridge_controller_->setCurrentIndex(0);
             append_log(host_log_, "Host Viewer selected; bridge controller cleared to None.");
         }
@@ -572,11 +627,11 @@ private:
             }
             host_advertise_timer_->start();
             advertise_host();
-            append_log(host_log_, "LAN advertise enabled.");
+            append_log(host_log_, "LAN advertise broadcasting (UDP 45550).");
         } else {
             host_advertise_timer_->stop();
             host_announcer_.reset();
-            append_log(host_log_, "LAN advertise disabled.");
+            append_log(host_log_, "LAN advertise stopped.");
         }
     }
 
@@ -592,7 +647,7 @@ private:
             });
             host_announcer_->advertise();
         } catch (const std::exception& error) {
-            append_log(host_log_, QString("Advertise error: %1").arg(error.what()));
+            append_log(host_log_, QString("Advertise error: %1 (check firewall UDP 45550)").arg(error.what()));
         }
     }
 
@@ -620,11 +675,15 @@ private:
         QSettings settings("ArchStreamer", "ArchStreamer");
         const auto art_root = settings.value("paths/artRoot", archstreamer::DefaultArtRoot).toString();
         const auto account = settings.value("steam/accountId").toString().trimmed();
+        const auto session_timeout = settings.value("host/sessionTimeoutSeconds", 30).toInt();
         if (settings_art_root_ != nullptr) {
             settings_art_root_->setText(art_root);
         }
         if (settings_steam_account_ != nullptr) {
             settings_steam_account_->setText(account);
+        }
+        if (settings_session_timeout_ != nullptr) {
+            settings_session_timeout_->setValue(qBound(session_timeout, 5, 3600));
         }
         apply_art_root_to_pickers();
         if (!account.isEmpty() && settings_log_ != nullptr) {
@@ -636,6 +695,14 @@ private:
         QSettings settings("ArchStreamer", "ArchStreamer");
         settings.setValue("paths/artRoot", QString::fromStdString(art_root_path().string()));
         settings.setValue("steam/accountId", QString::fromStdString(steam_account_id_text()));
+        settings.setValue("host/sessionTimeoutSeconds", session_timeout_seconds());
+    }
+
+    int session_timeout_seconds() const {
+        if (settings_session_timeout_ == nullptr) {
+            return 30;
+        }
+        return settings_session_timeout_->value();
     }
 
     std::filesystem::path art_root_path() const {
@@ -654,11 +721,12 @@ private:
 
     void apply_art_root_to_pickers() {
         const auto art_root = art_root_path();
-        if (client_game_picker_ != nullptr) {
-            client_game_picker_->setArtRoot(art_root);
-        }
         if (host_game_picker_ != nullptr) {
             host_game_picker_->setArtRoot(art_root);
+        }
+        // Don't overwrite client host-art cache after a successful Connect.
+        if (client_game_picker_ != nullptr && !client_catalog_loaded_) {
+            client_game_picker_->setArtRoot(art_root);
         }
     }
 
@@ -811,15 +879,19 @@ private:
         return config;
     }
 
-    bool connect_client() {
+    void connect_client() {
+        if (client_host_ == nullptr || client_host_->text().trimmed().isEmpty()) {
+            append_log(client_log_, "Set Host to a LAN IP (click a discovered host, or type one) before Connect.");
+            return;
+        }
         if (client_thread_.joinable()) {
             append_log(client_log_, "Stop the running client session before reconnecting.");
-            return false;
+            return;
         }
         if (client_connect_thread_.joinable()) {
             if (client_connecting_.load()) {
                 append_log(client_log_, "Client catalog fetch is already running.");
-                return false;
+                return;
             }
             client_connect_thread_.join();
         }
@@ -836,9 +908,15 @@ private:
                 const auto catalog = client_app_.fetch_catalog(config);
                 QMetaObject::invokeMethod(
                     this,
-                    [this, full = std::move(catalog.full_catalog), filtered = std::move(catalog.filtered_catalog)]() mutable {
+                    [this, full = std::move(catalog.full_catalog), filtered = std::move(catalog.filtered_catalog),
+                     art_cache = std::move(catalog.art_cache_root)]() mutable {
                         client_full_catalog_ = std::move(full);
                         client_catalog_loaded_ = true;
+                        if (!art_cache.empty()) {
+                            client_game_picker_->setArtRoot(art_cache);
+                            append_log(client_log_, QString("Using host art cache: %1")
+                                .arg(QString::fromStdString(art_cache.string())));
+                        }
                         client_game_picker_->setCatalog(filtered);
                         client_catalog_status_->setText(QString("%1 game(s) from host, %2 shown")
                             .arg(client_full_catalog_.games.size())
@@ -875,7 +953,6 @@ private:
             }
             client_connecting_ = false;
         });
-        return true;
     }
 
     void start_client() {
@@ -966,6 +1043,12 @@ private:
                 callbacks.on_media_endpoint = [this](const archstreamer::MediaEndpoint& endpoint) {
                     if (!endpoint.video_uri.empty()) {
                         append_log(client_log_, QString("Video: %1").arg(QString::fromStdString(endpoint.video_uri)));
+                        append_log(client_log_, "Starting GStreamer video receiver (separate window).");
+                    } else if (client_video_->isChecked()) {
+                        append_log(
+                            client_log_,
+                            "Requested video, but host did not provide a video endpoint "
+                            "(Host Player skips streaming — use Host Viewer to stream to remotes).");
                     }
                     if (!endpoint.audio_uri.empty()) {
                         append_log(client_log_, QString("Audio: %1").arg(QString::fromStdString(endpoint.audio_uri)));
@@ -987,9 +1070,15 @@ private:
                     append_log(client_log_, QString("Streaming input to %1:%2.")
                         .arg(QString::fromStdString(host))
                         .arg(port));
+                    append_log(
+                        client_log_,
+                        "Session live — heartbeats/input run quietly until Stop or the host ends.");
                 };
                 callbacks.on_waiting_without_input = [this] {
                     append_log(client_log_, "Waiting for session end (no input streaming).");
+                };
+                callbacks.on_status = [this](const std::string& message) {
+                    append_log(client_log_, QString::fromStdString(message));
                 };
 
                 client_app_.run_session(
@@ -1040,14 +1129,25 @@ private:
         if (host_process_ == nullptr) {
             host_process_ = new QProcess(this);
             connect(host_process_, &QProcess::readyReadStandardOutput, this, [this] {
-                host_log_->appendPlainText(QString::fromLocal8Bit(host_process_->readAllStandardOutput()));
+                const auto text = QString::fromLocal8Bit(host_process_->readAllStandardOutput()).trimmed();
+                if (!text.isEmpty()) {
+                    for (const auto& line : text.split('\n')) {
+                        append_log(host_log_, line);
+                    }
+                }
             });
             connect(host_process_, &QProcess::readyReadStandardError, this, [this] {
-                host_log_->appendPlainText(QString::fromLocal8Bit(host_process_->readAllStandardError()));
+                const auto text = QString::fromLocal8Bit(host_process_->readAllStandardError()).trimmed();
+                if (!text.isEmpty()) {
+                    for (const auto& line : text.split('\n')) {
+                        append_log(host_log_, line);
+                    }
+                }
             });
             connect(host_process_, &QProcess::finished, this, [this](int code, QProcess::ExitStatus status) {
+                sync_host_advertise(false);
                 host_status_->setText("Host stopped");
-                host_log_->appendPlainText(QString("Host exited: code=%1 status=%2")
+                append_log(host_log_, QString("Host exited: code=%1 status=%2")
                     .arg(code)
                     .arg(status == QProcess::NormalExit ? "normal" : "crashed"));
             });
@@ -1057,19 +1157,21 @@ private:
         args
             << "--rom-root" << host_rom_root_->text()
             << "--meta-root" << host_meta_root_->text()
+            << "--art-root" << QString::fromStdString(art_root_path().string())
             << "--control-port" << QString::number(host_control_port_->value())
             << "--input-port" << QString::number(host_input_port_->value())
             << "--clients" << QString::number(host_clients_->value())
+            << "--session-timeout" << QString::number(session_timeout_seconds())
             << "--host-role" << host_role_text(host_role_)
             << "--mode" << mode_name(selected_mode(host_mode_));
         const auto bridge_index = host_bridge_controller_->currentData().toInt();
-        if (host_role_->currentIndex() == 0 && bridge_index < 0) {
+        if (!host_role_is_viewer(host_role_) && bridge_index < 0) {
             host_status_->setText("Host not started");
             append_log(host_log_, "Host role is Player, but no bridge controller is selected.");
             append_log(host_log_, "Select a controller or change Host role to Viewer.");
             return;
         }
-        if (host_role_->currentIndex() == 1 && bridge_index >= 0) {
+        if (host_role_is_viewer(host_role_) && bridge_index >= 0) {
             host_status_->setText("Host not started");
             append_log(host_log_, "Host role is Viewer, but a bridge controller is selected.");
             append_log(host_log_, "Select None for bridge controller or change Host role to Player.");
@@ -1079,17 +1181,17 @@ private:
             args << "--bridge-controller" << QString::number(bridge_index);
         }
         if (host_video_->isChecked()) {
-            if (host_role_->currentIndex() == 0) {
+            if (!host_role_is_viewer(host_role_)) {
                 append_log(
                     host_log_,
                     "Stream video left off for Host Player so RetroArch stays on your screen. "
-                    "Use Host Viewer (or uncheck Player) when you only need to stream to remotes.");
+                    "Use Host Viewer when you need to stream to remotes.");
             } else {
                 args << "--video" << "--video-port" << QString::number(host_video_port_->value());
             }
         }
         if (host_audio_->isChecked()) {
-            if (host_role_->currentIndex() == 0) {
+            if (!host_role_is_viewer(host_role_)) {
                 // Local host audio plays through RetroArch/Pulse normally; skip capture fanout.
                 append_log(host_log_, "Stream audio left off for Host Player (local audio via RetroArch).");
             } else {
@@ -1122,7 +1224,8 @@ private:
         } else {
             append_log(
                 host_log_,
-                QString("Host Viewer: waiting for remote players (mode=%1, max clients=%2).")
+                QString("Host Viewer: waiting up to %1s for remote players (mode=%2, max clients=%3).")
+                    .arg(session_timeout_seconds())
                     .arg(mode_name(selected_mode(host_mode_)))
                     .arg(host_clients_->value()));
         }
@@ -1133,9 +1236,13 @@ private:
             return;
         }
         host_status_->setText(QString("Host running on port %1").arg(host_control_port_->value()));
+        if (host_advertise_ != nullptr && host_advertise_->isChecked()) {
+            sync_host_advertise(true);
+        }
     }
 
     void stop_host() {
+        sync_host_advertise(false);
         if (host_process_ == nullptr || host_process_->state() == QProcess::NotRunning) {
             return;
         }
@@ -1198,6 +1305,7 @@ private:
 
     QLineEdit* settings_art_root_ = nullptr;
     QLineEdit* settings_steam_account_ = nullptr;
+    QSpinBox* settings_session_timeout_ = nullptr;
     QPlainTextEdit* settings_log_ = nullptr;
 };
 
@@ -1207,8 +1315,8 @@ int main(int argc, char** argv) {
     std::cout << std::unitbuf;
     std::cerr << std::unitbuf;
 
-    write_to_log_file("=== archstreamer_gui started ===");
-    write_to_log_file("Log file: " + gui_log_path().string());
+    write_to_log_file("[" + log_timestamp().toStdString() + "] === archstreamer_gui started ===");
+    write_to_log_file("[" + log_timestamp().toStdString() + "] Log file: " + gui_log_path().string());
 
     QApplication app(argc, argv);
     MainWindow window;

@@ -29,7 +29,7 @@ signals:
 private:
     void refreshUi();
     void pollDiscovery();
-    void applySelection();
+    void applySelection(bool force = false);
 
     std::unique_ptr<HostDiscoveryBrowser> browser_;
     QTimer* timer_ = nullptr;

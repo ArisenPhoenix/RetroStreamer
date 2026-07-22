@@ -51,6 +51,7 @@ struct ClientAppCallbacks {
     std::function<void()> on_host_disconnected;
     std::function<void(const std::string& host, std::uint16_t input_port)> on_input_streaming_started;
     std::function<void()> on_waiting_without_input;
+    std::function<void(const std::string& message)> on_status;
 };
 
 struct ClientRunResult {
@@ -74,6 +75,7 @@ struct ClientSessionDraft {
 struct ClientCatalogView {
     GameList full_catalog;
     GameList filtered_catalog;
+    std::filesystem::path art_cache_root;
 };
 
 class ClientApp {

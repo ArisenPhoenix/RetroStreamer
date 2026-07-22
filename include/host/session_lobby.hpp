@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <optional>
 #include <string>
@@ -67,6 +68,7 @@ SessionPlan wait_for_session_clients(
     const GameList& game_list,
     std::chrono::seconds timeout,
     std::optional<ClientHello> host_hello = std::nullopt,
-    std::function<bool()> should_stop = {});
+    std::function<bool()> should_stop = {},
+    std::filesystem::path art_root = {});
 
 } // namespace archstreamer

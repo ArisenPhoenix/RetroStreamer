@@ -47,6 +47,7 @@ struct HostAppConfig {
     std::optional<std::string> ignore_controller;
     std::string retroarch_joypad_driver = "udev";
     std::filesystem::path save_root;
+    std::filesystem::path art_root;
     std::string username;
 };
 

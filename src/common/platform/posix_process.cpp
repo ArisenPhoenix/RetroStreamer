@@ -3,11 +3,13 @@
 #include <cerrno>
 #include <chrono>
 #include <cstring>
+#include <fcntl.h>
 #include <stdexcept>
 #include <thread>
 
 #include <signal.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -30,7 +32,9 @@ PosixChildProcess& PosixChildProcess::operator=(PosixChildProcess&& other) noexc
 
 void PosixChildProcess::start(
     std::vector<std::string> args,
-    const std::vector<std::pair<std::string, std::string>>& environment) {
+    const std::vector<std::pair<std::string, std::string>>& environment,
+    const std::vector<std::string>& unset_environment,
+    const std::optional<std::string>& stderr_path) {
     if (args.empty()) {
         throw std::runtime_error("cannot start empty command");
     }
@@ -44,8 +48,23 @@ void PosixChildProcess::start(
     }
 
     if (child == 0) {
+        for (const auto& key : unset_environment) {
+            unsetenv(key.c_str());
+        }
         for (const auto& [key, value] : environment) {
             setenv(key.c_str(), value.c_str(), 1);
+        }
+        if (stderr_path.has_value()) {
+            const int fd = open(
+                stderr_path->c_str(),
+                O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC,
+                0644);
+            if (fd >= 0) {
+                dup2(fd, STDERR_FILENO);
+                if (fd != STDERR_FILENO) {
+                    close(fd);
+                }
+            }
         }
 
         std::vector<char*> argv;

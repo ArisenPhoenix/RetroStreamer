@@ -2,6 +2,7 @@
 #include "common/cli_common.hpp"
 #include "common/participant_role.hpp"
 #include "common/platform/default_platform.hpp"
+#include "client/controller_backend.hpp"
 #include "host/game_catalog_scanner.hpp"
 #include "host/gstreamer_media_server.hpp"
 #include "host/host_app.hpp"
@@ -13,9 +14,11 @@
 #include "host/network_input_receiver.hpp"
 #include "host/platform/default_host_platform.hpp"
 #include "host/retroarch_config_writer.hpp"
+#include "host/retroarch_resolve.hpp"
 #include "host/save_profile.hpp"
 #include "host/session_control_monitor.hpp"
 #include "host/session_service.hpp"
+#include "host/virtual_joypad_resolve.hpp"
 
 #include <chrono>
 #include <iostream>
@@ -112,7 +115,10 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                 list,
                 std::chrono::seconds(config.session_timeout_seconds),
                 std::move(host_hello),
-                should_stop);
+                should_stop,
+                config.art_root.empty()
+                    ? (config.rom_root.parent_path() / "Art")
+                    : config.art_root);
             session_plan = session_service.wait_for_ready_session();
             if (config.retroarch_joypad_driver == "udev" && !config.ignore_controller.has_value()) {
                 config.retroarch_joypad_driver = "sdl2";
@@ -156,23 +162,16 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         const auto save_profile = prepare_save_profile(config.save_root, launch_plan.save_username);
 
         auto launch_config = catalog.launch_config_for(launch_plan.game_id);
-        launch_config.extra_args.insert(launch_config.extra_args.begin(), "-f");
-        if (config.verbose) {
-            launch_config.extra_args.insert(launch_config.extra_args.begin(), "--verbose");
-        }
-        const auto default_joypad_index =
-            (config.bridge_controller_index.has_value() || config.control_port.has_value()) &&
-                config.retroarch_joypad_driver == "sdl2" ? 0 : 1;
-        const auto virtual_joypad_index = config.virtual_joypad_index.value_or(default_joypad_index);
-        const auto runtime_override = write_retroarch_input_override(
-            virtual_joypad_index,
-            launch_plan.virtual_identities,
-            config.retroarch_joypad_driver,
-            launch_plan.players,
-            save_profile,
-            config.audio || config.video);
-        launch_config.extra_args.push_back("-c");
-        launch_config.extra_args.push_back(runtime_override.string());
+        const auto resolved_retroarch = resolve_retroarch();
+        launch_config.retroarch_path = resolved_retroarch.display_path;
+        launch_config.command_prefix = resolved_retroarch.argv_prefix;
+        // Avoid -f on the host's real Wayland session (can exit immediately). When video
+        // streams from a virtual display, force fullscreen via the override config instead.
+        launch_config.extra_args.insert(launch_config.extra_args.begin(), "--verbose");
+        const bool host_plays_locally =
+            config.host_role == ParticipantRole::Player &&
+            config.bridge_controller_index.has_value();
+        const bool capture_fullscreen = config.video && !host_plays_locally;
         if (config.audio || config.video) {
             launch_config.environment.emplace_back("SDL_AUDIODRIVER", "pulse");
         }
@@ -188,13 +187,46 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                 config.ignore_controller = hex_vid_pid(bridge_device->vendor_id, bridge_device->product_id);
             }
         }
-        if (config.ignore_controller.has_value()) {
-            launch_config.environment.emplace_back("SDL_GAMECONTROLLER_IGNORE_DEVICES", *config.ignore_controller);
-            if (config.retroarch_joypad_driver != "sdl2") {
-                std::cerr
-                    << "Warning: SDL_GAMECONTROLLER_IGNORE_DEVICES only affects RetroArch when "
-                    << "--retroarch-joypad-driver is sdl2.\n";
+        // Blacklist every physical pad currently attached so RetroArch is less likely to
+        // bind P1 to a host controller. Virtual ArchStreamer pads are created after this.
+        {
+            try {
+                ControllerBackend host_pads;
+                std::string host_ignore;
+                for (const auto& device : host_pads.list_devices()) {
+                    if (device.vendor_id == 0 || device.product_id == 0) {
+                        continue;
+                    }
+                    const auto id = hex_vid_pid(device.vendor_id, device.product_id);
+                    if (!host_ignore.empty()) {
+                        host_ignore += ",";
+                    }
+                    host_ignore += id;
+                }
+                if (!host_ignore.empty()) {
+                    if (config.ignore_controller.has_value() && !config.ignore_controller->empty()) {
+                        config.ignore_controller = *config.ignore_controller + "," + host_ignore;
+                    } else {
+                        config.ignore_controller = host_ignore;
+                    }
+                }
+            } catch (const std::exception& error) {
+                std::cerr << "Warning: host controller scan for ignore list failed: " << error.what() << '\n';
             }
+        }
+        auto ignore_devices = config.ignore_controller.value_or("");
+        const char* steam_input = "0x28de/0x11ff,0x28de/0x1205,0x28de/0x1201";
+        if (ignore_devices.empty()) {
+            ignore_devices = steam_input;
+        } else {
+            ignore_devices = ignore_devices + "," + steam_input;
+        }
+        config.ignore_controller = ignore_devices;
+        launch_config.environment.emplace_back("SDL_GAMECONTROLLER_IGNORE_DEVICES", *config.ignore_controller);
+        if (config.retroarch_joypad_driver != "sdl2") {
+            std::cerr
+                << "Warning: SDL_GAMECONTROLLER_IGNORE_DEVICES only affects RetroArch when "
+                << "--retroarch-joypad-driver is sdl2.\n";
         }
         const auto media_config = media_plan_config_for(config);
         auto media_destinations = std::vector<HostMediaDestination>{};
@@ -211,9 +243,6 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         if (config.video) {
             // Keep RetroArch on the real display when the host is playing locally.
             // Streaming still uses a virtual capture display for remote clients only.
-            const bool host_plays_locally =
-                config.host_role == ParticipantRole::Player &&
-                config.bridge_controller_index.has_value();
             if (!host_plays_locally) {
                 launch_config.environment.emplace_back("DISPLAY", config.virtual_display);
             } else {
@@ -268,7 +297,7 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                 << '\n';
         }
         if (config.ignore_controller.has_value()) {
-            std::cout << "Ignoring:  " << *config.ignore_controller << " for SDL2 controller discovery\n";
+            std::cout << "Ignoring:  " << *config.ignore_controller << '\n';
         }
 
         if (config.dry_run) {
@@ -287,6 +316,48 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             gamepads.plug(port);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(750));
+
+        // Resolve real SDL indices after uinput pads appear. Prefer discovered index so
+        // RetroArch binds the ArchStreamer pad even when host controllers remain visible.
+        // If EXCEPT whitelist is honored, index 0 is also correct — discovery still logs truth.
+        auto resolved_indices = find_archstreamer_sdl_joypad_indices(
+            launch_plan.players,
+            config.ignore_controller.value_or(""));
+        std::size_t virtual_joypad_index = 0;
+        if (config.virtual_joypad_index.has_value()) {
+            virtual_joypad_index = *config.virtual_joypad_index;
+            std::cout << "Using explicit --virtual-joypad-index " << virtual_joypad_index << '\n';
+        } else if (!resolved_indices.empty()) {
+            virtual_joypad_index = resolved_indices.front();
+            std::cout
+                << "Resolved virtual joypad SDL index " << virtual_joypad_index
+                << " (with same ignore list RetroArch will use)\n";
+        } else {
+            std::cerr
+                << "Warning: ArchStreamer virtual pads not visible to SDL yet; "
+                << "defaulting RetroArch joypad index to 0.\n";
+        }
+
+        const auto runtime_override = write_retroarch_input_override(
+            virtual_joypad_index,
+            launch_plan.virtual_identities,
+            config.retroarch_joypad_driver,
+            launch_plan.players,
+            save_profile,
+            config.audio || config.video,
+            capture_fullscreen,
+            config.video_resolution);
+        launch_config.extra_args.push_back("-c");
+        launch_config.extra_args.push_back(runtime_override.string());
+        std::cout
+            << "RetroArch config: " << runtime_override
+            << "\nVirtual joypad index: " << virtual_joypad_index
+            << " (driver=" << config.retroarch_joypad_driver << ")\n";
+        if (capture_fullscreen) {
+            std::cout
+                << "Capture fullscreen: " << config.video_resolution
+                << " on virtual display " << config.virtual_display << '\n';
+        }
 
         InputRouter input_router(gamepads);
         input_router.set_seat_assignment(launch_plan.seats);
@@ -344,7 +415,30 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         }
 
         HostRetroArchProcess retroarch;
+        {
+            std::string command = resolved_retroarch.display_path;
+            for (const auto& arg : launch_config.extra_args) {
+                command.push_back(' ');
+                command += arg;
+            }
+            command += " -L ";
+            command += launch_config.core_path.string();
+            command.push_back(' ');
+            command += launch_config.content_path.string();
+            std::cout << "Launching RetroArch...\nCommand: " << command << '\n';
+        }
         retroarch.launch(launch_config);
+        // Flatpak RetroArch can take a moment; failed exec exits almost immediately.
+        for (int i = 0; i < 10 && retroarch.running(); ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        if (!retroarch.running()) {
+            const auto code = retroarch.last_exit_code().value_or(127);
+            throw std::runtime_error(
+                "RetroArch exited immediately (code " + std::to_string(code) + "). "
+                "On Bazzite, install Flatpak RetroArch (org.libretro.RetroArch) or ensure "
+                "the RetroArch binary is runnable.");
+        }
 
         if (config.pulse_input && launch_plan.players > 0) {
             std::this_thread::sleep_for(std::chrono::seconds(2));
@@ -382,6 +476,14 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         }
 
         retroarch.stop();
+        if (const auto code = retroarch.last_exit_code(); code.has_value()) {
+            std::cout << "RetroArch exited with code " << *code << '\n';
+            if (*code == 127) {
+                std::cerr
+                    << "hint: exit 127 usually means the RetroArch launcher was not found. "
+                    << "On Bazzite install: flatpak install flathub org.libretro.RetroArch\n";
+            }
+        }
         if (media_server) {
             media_server->stop();
         }

@@ -5,6 +5,7 @@
 #include "client/media_receiver.hpp"
 #include "client/input_sender.hpp"
 #include "client/session_service.hpp"
+#include "common/addresses.hpp"
 #include "common/platform/default_platform.hpp"
 #include "common/serialization.hpp"
 
@@ -146,6 +147,7 @@ ClientCatalogView ClientApp::fetch_catalog(
     return ClientCatalogView{
         std::move(pending_session.game_list),
         std::move(filtered_catalog),
+        std::move(pending_session.art_cache_root),
     };
 }
 
@@ -243,19 +245,35 @@ ClientRunResult ClientApp::join_session(
     result.starting = start.starting;
     result.media_endpoint = start.media_endpoint;
 
-    auto media_receiver = std::unique_ptr<MediaReceiver>{};
-    if (result.media_endpoint.has_value() &&
-        ((config.wants_video && !result.media_endpoint->video_uri.empty()) ||
-         (config.wants_audio && !result.media_endpoint->audio_uri.empty()))) {
+    auto media_receiver = std::unique_ptr<GStreamerMediaReceiver>{};
+    const bool expect_video =
+        config.wants_video &&
+        result.media_endpoint.has_value() &&
+        !result.media_endpoint->video_uri.empty();
+    const bool expect_audio =
+        config.wants_audio &&
+        result.media_endpoint.has_value() &&
+        !result.media_endpoint->audio_uri.empty();
+    if (expect_video || expect_audio) {
         if (callbacks.on_media_endpoint) {
             callbacks.on_media_endpoint(*result.media_endpoint);
         }
-        auto receiver = std::make_unique<GStreamerMediaReceiver>();
-        receiver->connect(MediaEndpoint{
-            config.wants_video ? result.media_endpoint->video_uri : "",
-            config.wants_audio ? result.media_endpoint->audio_uri : "",
+        media_receiver = std::make_unique<GStreamerMediaReceiver>();
+        media_receiver->connect(MediaEndpoint{
+            expect_video ? result.media_endpoint->video_uri : "",
+            expect_audio ? result.media_endpoint->audio_uri : "",
         });
-        media_receiver = std::move(receiver);
+        if (callbacks.on_status) {
+            if (!media_receiver->video_pipeline_info().empty()) {
+                callbacks.on_status("Video pipeline: " + media_receiver->video_pipeline_info());
+            }
+            if (expect_video) {
+                const auto port = video_port_from_endpoint(*result.media_endpoint);
+                callbacks.on_status(
+                    "If no video window appears, open UDP " + std::to_string(port) +
+                    "+ on THIS client (firewalld/ufw). Control/input can work while media is blocked.");
+            }
+        }
     }
     if (callbacks.on_session_starting) {
         callbacks.on_session_starting(result.starting);
@@ -278,6 +296,8 @@ ClientRunResult ClientApp::join_session(
 
     std::uint32_t heartbeat_sequence = 0;
     auto next_heartbeat = std::chrono::steady_clock::now();
+    auto media_watch_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    auto media_watch_armed = media_receiver != nullptr;
     while (!should_stop()) {
         if (!handle_control_message(joined_session.stream, callbacks, result)) {
             break;
@@ -291,6 +311,27 @@ ClientRunResult ClientApp::join_session(
         }
 
         const auto now = std::chrono::steady_clock::now();
+        if (media_watch_armed && now >= media_watch_deadline) {
+            media_watch_armed = false;
+            if (expect_video && media_receiver && !media_receiver->video_running()) {
+                if (callbacks.on_status) {
+                    callbacks.on_status("Video receiver died — check GStreamer plugins / display sink.");
+                }
+            } else if (expect_audio && media_receiver && !media_receiver->audio_running()) {
+                if (callbacks.on_status) {
+                    callbacks.on_status("Audio receiver died — check GStreamer Opus/Pulse plugins.");
+                }
+            } else if (expect_video && media_receiver && !media_receiver->video_frames_seen()) {
+                if (callbacks.on_status) {
+                    callbacks.on_status(
+                        "Video receiver is up but no decoded frames yet. "
+                        "Usually RTP video datagrams are dropped on Wi‑Fi/VPN (host now uses mtu=1200), "
+                        "or the host capture display has no picture. See gst-video-receiver.log in cache.");
+                }
+            } else if (callbacks.on_status) {
+                callbacks.on_status("Media receivers still running; decoded video frames are flowing.");
+            }
+        }
         if (now >= next_heartbeat && result.client_id.has_value()) {
             joined_session.stream.send_packet(serialize_packet(ViewerHeartbeat{
                 *result.client_id,

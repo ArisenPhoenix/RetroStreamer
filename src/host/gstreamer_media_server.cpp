@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <thread>
@@ -65,14 +66,10 @@ std::string trim_command_output(std::string value) {
 }
 
 AudioCaptureBackend choose_audio_capture_backend(AudioCaptureBackend requested) {
-    if (requested != AudioCaptureBackend::Pulse) {
-        return requested;
-    }
-    if (command_available("pw-cli") && std::getenv("XDG_RUNTIME_DIR") != nullptr) {
-        return AudioCaptureBackend::PipeWire;
-    }
-
-    return AudioCaptureBackend::Pulse;
+    // Keep Pulse as the auto default. We resolve monitors via pactl (…sink.monitor), which
+    // pulsesrc understands on PipeWire-with-Pulse. Auto-picking pipewiresrc with that name
+    // fails with "target not found".
+    return requested;
 }
 
 std::string default_audio_monitor_source() {
@@ -118,7 +115,7 @@ void GStreamerVideoSender::start(
     const std::string& display,
     const std::string& destination_host,
     std::uint16_t port) {
-    process_.start({
+    auto args = std::vector<std::string>{
         "gst-launch-1.0",
         "-q",
         "ximagesrc",
@@ -132,13 +129,30 @@ void GStreamerVideoSender::start(
         "!",
         "queue",
         "!",
+        // Constrained baseline + byte-stream so Flatpak openh264dec can decode.
         "x264enc",
         "tune=zerolatency",
         "speed-preset=ultrafast",
-        "bitrate=2500",
+        "bitrate=1500",
         "key-int-max=30",
+        "byte-stream=true",
+        "bframes=0",
+        "threads=1",
+        "!",
+        "video/x-h264,profile=constrained-baseline,stream-format=byte-stream",
+    };
+    // h264parse is ideal but not always installed (gst-plugins-bad).
+    if (command_available("gst-inspect-1.0")) {
+        if (std::system("gst-inspect-1.0 h264parse >/dev/null 2>&1") == 0) {
+            args.insert(args.end(), {"!", "h264parse", "config-interval=-1"});
+        }
+    }
+    args.insert(args.end(), {
         "!",
         "rtph264pay",
+        // Keep RTP under typical Wi‑Fi/VPN MTUs; oversized video datagrams are often
+        // dropped silently while small Opus audio packets still arrive.
+        "mtu=1200",
         "config-interval=1",
         "pt=96",
         "!",
@@ -148,6 +162,15 @@ void GStreamerVideoSender::start(
         "sync=false",
         "async=false",
     });
+    process_.start(std::move(args));
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    if (!process_.running()) {
+        throw std::runtime_error(
+            "video capture pipeline exited immediately (need Xvfb/Xephyr, ximagesrc, x264enc)");
+    }
+    std::cout
+        << "Video capture running to " << destination_host << ':' << port
+        << " (H.264 baseline, RTP mtu=1200)\n";
 }
 
 void GStreamerVideoSender::stop() {
@@ -235,7 +258,8 @@ void GStreamerAudioSender::start(
         args.push_back("pipewiresrc");
         args.push_back("client-name=ArchStreamer");
         args.push_back("do-timestamp=true");
-        if (!source.empty()) {
+        // Pulse-style "…sink.monitor" names are not valid pipewiresrc targets.
+        if (!source.empty() && source.find(".monitor") == std::string::npos) {
             args.push_back("target-object=" + source);
         } else {
             args.push_back("target-object=@DEFAULT_MONITOR@");
@@ -266,6 +290,11 @@ void GStreamerAudioSender::start(
     };
     args.insert(args.end(), tail.begin(), tail.end());
     process_.start(std::move(args));
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    if (!process_.running()) {
+        throw std::runtime_error(
+            "audio capture pipeline exited immediately (need pulsesrc/pipewiresrc and opusenc)");
+    }
 }
 
 void GStreamerAudioSender::stop() {
@@ -352,17 +381,23 @@ void GStreamerMediaServer::start(
         }
     }
     if (capture_.audio) {
-        audio_fanout_.emplace();
-        const auto audio_streams = audio_fanout_->start(
-            capture_.audio_backend,
-            capture_.audio_source,
-            audio_requests_from_media_destinations(plan, destinations));
-        for (const auto& stream : audio_streams) {
-            for (auto& media_stream : streams) {
-                if (media_stream.client_id == stream.client_id) {
-                    media_stream.endpoint.audio_uri = stream.endpoint.audio_uri;
+        try {
+            audio_fanout_.emplace();
+            const auto audio_streams = audio_fanout_->start(
+                capture_.audio_backend,
+                capture_.audio_source,
+                audio_requests_from_media_destinations(plan, destinations));
+            for (const auto& stream : audio_streams) {
+                for (auto& media_stream : streams) {
+                    if (media_stream.client_id == stream.client_id) {
+                        media_stream.endpoint.audio_uri = stream.endpoint.audio_uri;
+                    }
                 }
             }
+        } catch (const std::exception& error) {
+            audio_fanout_.reset();
+            capture_.audio = false;
+            std::cerr << "Warning: audio streaming disabled: " << error.what() << '\n';
         }
     }
 }

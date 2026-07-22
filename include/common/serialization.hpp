@@ -34,6 +34,7 @@ public:
     bool read_bool();
     std::string read_string();
     std::optional<std::string> read_optional_string();
+    std::vector<std::uint8_t> read_bytes();
 
 private:
     template <typename T, bool IsEnum = std::is_enum_v<T>>
@@ -67,6 +68,8 @@ ByteBuffer serialize_payload(const SessionReady& payload);
 ByteBuffer serialize_payload(const SessionStarting& payload);
 ByteBuffer serialize_payload(const SessionEnded& payload);
 ByteBuffer serialize_payload(const MediaEndpoint& payload);
+ByteBuffer serialize_payload(const ArtAssetRequest& payload);
+ByteBuffer serialize_payload(const ArtAssetResponse& payload);
 
 PacketType packet_type_for(const ClientHello& payload);
 PacketType packet_type_for(const HostWelcome& payload);
@@ -83,6 +86,8 @@ PacketType packet_type_for(const SessionReady& payload);
 PacketType packet_type_for(const SessionStarting& payload);
 PacketType packet_type_for(const SessionEnded& payload);
 PacketType packet_type_for(const MediaEndpoint& payload);
+PacketType packet_type_for(const ArtAssetRequest& payload);
+PacketType packet_type_for(const ArtAssetResponse& payload);
 
 ByteBuffer serialize_packet(const ClientHello& payload);
 ByteBuffer serialize_packet(const HostWelcome& payload);
@@ -99,6 +104,8 @@ ByteBuffer serialize_packet(const SessionReady& payload);
 ByteBuffer serialize_packet(const SessionStarting& payload);
 ByteBuffer serialize_packet(const SessionEnded& payload);
 ByteBuffer serialize_packet(const MediaEndpoint& payload);
+ByteBuffer serialize_packet(const ArtAssetRequest& payload);
+ByteBuffer serialize_packet(const ArtAssetResponse& payload);
 
 PacketPayload deserialize_packet(std::span<const std::uint8_t> packet);
 

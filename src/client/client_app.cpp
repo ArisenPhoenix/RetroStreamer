@@ -267,6 +267,9 @@ ClientRunResult ClientApp::join_session(
             if (!media_receiver->video_pipeline_info().empty()) {
                 callbacks.on_status("Video pipeline: " + media_receiver->video_pipeline_info());
             }
+            if (!media_receiver->audio_pipeline_info().empty()) {
+                callbacks.on_status("Audio pipeline: " + media_receiver->audio_pipeline_info());
+            }
             if (expect_video) {
                 const auto port = video_port_from_endpoint(*result.media_endpoint);
                 callbacks.on_status(

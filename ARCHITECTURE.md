@@ -217,7 +217,7 @@ Until those backends exist, `default_host_platform.hpp` may keep a clear `_WIN32
 - ~~Add Windows platform objects for `ChildProcess`, `TcpStream`, `TcpListener`, and `UdpSocket`~~
 - ~~Add Windows path helpers and CMake client-capable `WIN32` builds (`ARCHSTREAMER_BUILD_HOST=OFF`)~~
 - Package/copy SDL2 (and document GStreamer) for Windows clients
-- Client-only Qt GUI when `ARCHSTREAMER_BUILD_HOST=OFF` (GUI still requires host today)
+- ~~Client-only Qt GUI when `ARCHSTREAMER_BUILD_HOST=OFF`~~
 - Embedded GUI media later needs platform-specific GStreamer window integration
 - Host backends (ViGEm, capture, WASAPI loopback) after the client milestone
 

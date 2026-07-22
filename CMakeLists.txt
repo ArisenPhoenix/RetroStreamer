@@ -295,8 +295,8 @@ target_link_libraries(client_catalog_probe
         archstreamer_client
 )
 
-# GUI currently links the host stack (host tab + local catalog scan).
-if(Qt6Widgets_FOUND AND ARCHSTREAMER_BUILD_HOST)
+# Client GUI always when Qt is present; Host tab only when ARCHSTREAMER_BUILD_HOST=ON.
+if(Qt6Widgets_FOUND)
     set(CMAKE_AUTOMOC ON)
     add_executable(archstreamer_gui
         src/gui/game_picker_widget.cpp
@@ -311,12 +311,23 @@ if(Qt6Widgets_FOUND AND ARCHSTREAMER_BUILD_HOST)
     target_link_libraries(archstreamer_gui
         PRIVATE
             archstreamer_client
-            archstreamer_host
             Qt6::Widgets
     )
+    if(ARCHSTREAMER_BUILD_HOST)
+        target_link_libraries(archstreamer_gui PRIVATE archstreamer_host)
+    endif()
+    if(WIN32)
+        # Keep SDL2 next to the GUI for controller listing / sessions.
+        if(TARGET SDL2::SDL2)
+            add_custom_command(TARGET archstreamer_gui POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:SDL2::SDL2>
+                    $<TARGET_FILE_DIR:archstreamer_gui>
+                VERBATIM
+            )
+        endif()
+    endif()
     list(APPEND ARCHSTREAMER_INSTALL_TARGETS archstreamer_gui)
-elseif(Qt6Widgets_FOUND AND NOT ARCHSTREAMER_BUILD_HOST)
-    message(STATUS "Qt6 found, but archstreamer_gui requires ARCHSTREAMER_BUILD_HOST=ON (skipped)")
 endif()
 
 install(TARGETS ${ARCHSTREAMER_INSTALL_TARGETS}
@@ -333,12 +344,13 @@ if(DEFINED SDL2_VERSION)
 else()
     message(STATUS "  SDL2:             found")
 endif()
-if(Qt6Widgets_FOUND AND ARCHSTREAMER_BUILD_HOST)
+if(Qt6Widgets_FOUND)
     message(STATUS "  Qt6 Widgets:      ${Qt6Widgets_VERSION}")
-    message(STATUS "  GUI target:       yes (archstreamer_gui)")
-elseif(Qt6Widgets_FOUND)
-    message(STATUS "  Qt6 Widgets:      ${Qt6Widgets_VERSION}")
-    message(STATUS "  GUI target:       no (needs BUILD_HOST)")
+    if(ARCHSTREAMER_BUILD_HOST)
+        message(STATUS "  GUI target:       yes (archstreamer_gui, client+host tabs)")
+    else()
+        message(STATUS "  GUI target:       yes (archstreamer_gui, client-only)")
+    endif()
 else()
     message(STATUS "  Qt6 Widgets:      not found")
     message(STATUS "  GUI target:       no")

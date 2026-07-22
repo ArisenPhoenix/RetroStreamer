@@ -2,7 +2,7 @@
 
 #ifdef _WIN32
 
-#include "common/protocol.hpp"
+#include "common/serialization.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -34,10 +34,10 @@ public:
     WindowsTcpStream(WindowsTcpStream&& other) noexcept;
     WindowsTcpStream& operator=(WindowsTcpStream&& other) noexcept;
 
-    static WindowsTcpStream connect(const std::string& host, std::uint16_t port);
+    static WindowsTcpStream connect_to(const std::string& host, std::uint16_t port);
 
     void send_packet(const ByteBuffer& packet);
-    ByteBuffer recv_packet();
+    std::optional<ByteBuffer> receive_packet();
     bool open() const;
     const std::string& peer_address() const;
     bool peer_closed() const;

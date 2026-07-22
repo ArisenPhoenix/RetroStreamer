@@ -13,11 +13,13 @@ public:
     bool audio_running() const;
     bool video_frames_seen() const;
     const std::string& video_pipeline_info() const;
+    const std::string& audio_pipeline_info() const;
 
 private:
     ChildProcess video_process_;
     ChildProcess audio_process_;
     std::string video_pipeline_info_;
+    std::string audio_pipeline_info_;
 };
 
 } // namespace archstreamer

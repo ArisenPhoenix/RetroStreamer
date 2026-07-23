@@ -184,6 +184,7 @@ add_library(archstreamer_client
     src/client/controller_manager.cpp
     src/client/game_filter.cpp
     src/client/gstreamer_media_receiver.cpp
+    src/client/gstreamer_synced_media_session.cpp
     src/client/input_sender.cpp
     src/client/session_client.cpp
     src/client/session_service.cpp

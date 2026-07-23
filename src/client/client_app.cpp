@@ -2,6 +2,7 @@
 
 #include "client/controller_backend.hpp"
 #include "client/gstreamer_media_receiver.hpp"
+#include "client/gstreamer_synced_media_session.hpp"
 #include "client/media_receiver.hpp"
 #include "client/input_sender.hpp"
 #include "client/session_service.hpp"
@@ -11,6 +12,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <memory>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
@@ -30,6 +32,85 @@ bool is_number(std::string_view value) {
     }
     return true;
 }
+
+// Thin facade so the session loop can use either legacy or synced receivers.
+class ActiveMediaPlayback {
+public:
+    void connect_legacy(const MediaEndpoint& endpoint) {
+        synced_.reset();
+        legacy_ = std::make_unique<GStreamerMediaReceiver>();
+        legacy_->connect(endpoint);
+    }
+
+    void connect_synced(const MediaEndpoint& endpoint) {
+        legacy_.reset();
+        synced_ = std::make_unique<GStreamerSyncedMediaReceiver>();
+        synced_->connect(endpoint);
+    }
+
+    void disconnect() {
+        if (legacy_) {
+            legacy_->disconnect();
+        }
+        if (synced_) {
+            synced_->disconnect();
+        }
+        legacy_.reset();
+        synced_.reset();
+    }
+
+    bool video_running() const {
+        if (synced_) {
+            return synced_->video_running();
+        }
+        return legacy_ && legacy_->video_running();
+    }
+
+    bool audio_running() const {
+        if (synced_) {
+            return synced_->audio_running();
+        }
+        return legacy_ && legacy_->audio_running();
+    }
+
+    bool video_frames_seen() const {
+        if (synced_) {
+            return synced_->video_frames_seen();
+        }
+        return legacy_ && legacy_->video_frames_seen();
+    }
+
+    std::uint64_t decoded_frame_count() const {
+        if (synced_) {
+            return synced_->decoded_frame_count();
+        }
+        return legacy_ ? legacy_->decoded_frame_count() : 0;
+    }
+
+    const std::string& video_pipeline_info() const {
+        if (synced_) {
+            return synced_->video_pipeline_info();
+        }
+        static const std::string empty;
+        return legacy_ ? legacy_->video_pipeline_info() : empty;
+    }
+
+    const std::string& audio_pipeline_info() const {
+        if (synced_) {
+            return synced_->audio_pipeline_info();
+        }
+        static const std::string empty;
+        return legacy_ ? legacy_->audio_pipeline_info() : empty;
+    }
+
+    explicit operator bool() const {
+        return legacy_ != nullptr || synced_ != nullptr;
+    }
+
+private:
+    std::unique_ptr<GStreamerMediaReceiver> legacy_;
+    std::unique_ptr<GStreamerSyncedMediaReceiver> synced_;
+};
 
 bool handle_control_message(TcpStream& stream, const ClientAppCallbacks& callbacks, ClientRunResult& result) {
     if (!stream.readable()) {
@@ -246,7 +327,7 @@ ClientRunResult ClientApp::join_session(
     result.starting = start.starting;
     result.media_endpoint = start.media_endpoint;
 
-    auto media_receiver = std::unique_ptr<GStreamerMediaReceiver>{};
+    auto media_receiver = ActiveMediaPlayback{};
     const bool expect_video =
         config.wants_video &&
         result.media_endpoint.has_value() &&
@@ -259,17 +340,24 @@ ClientRunResult ClientApp::join_session(
         if (callbacks.on_media_endpoint) {
             callbacks.on_media_endpoint(*result.media_endpoint);
         }
-        media_receiver = std::make_unique<GStreamerMediaReceiver>();
-        media_receiver->connect(MediaEndpoint{
+        const auto endpoint = MediaEndpoint{
             expect_video ? result.media_endpoint->video_uri : "",
             expect_audio ? result.media_endpoint->audio_uri : "",
-        });
-        if (callbacks.on_status) {
-            if (!media_receiver->video_pipeline_info().empty()) {
-                callbacks.on_status("Video pipeline: " + media_receiver->video_pipeline_info());
+        };
+        if (config.synced_av) {
+            media_receiver.connect_synced(endpoint);
+            if (callbacks.on_status) {
+                callbacks.on_status("Using synced A/V pipeline (shared GStreamer clock).");
             }
-            if (!media_receiver->audio_pipeline_info().empty()) {
-                callbacks.on_status("Audio pipeline: " + media_receiver->audio_pipeline_info());
+        } else {
+            media_receiver.connect_legacy(endpoint);
+        }
+        if (callbacks.on_status) {
+            if (!media_receiver.video_pipeline_info().empty()) {
+                callbacks.on_status("Video pipeline: " + media_receiver.video_pipeline_info());
+            }
+            if (!media_receiver.audio_pipeline_info().empty()) {
+                callbacks.on_status("Audio pipeline: " + media_receiver.audio_pipeline_info());
             }
             if (expect_video) {
                 const auto port = video_port_from_endpoint(*result.media_endpoint);
@@ -303,7 +391,7 @@ ClientRunResult ClientApp::join_session(
     bool video_was_running = false;
     auto next_heartbeat = std::chrono::steady_clock::now();
     auto media_watch_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    auto media_watch_armed = media_receiver != nullptr;
+    auto media_watch_armed = static_cast<bool>(media_receiver);
     while (!should_stop()) {
         if (!handle_control_message(joined_session.stream, callbacks, result)) {
             break;
@@ -316,8 +404,8 @@ ClientRunResult ClientApp::join_session(
             break;
         }
 
-        if (expect_video && media_receiver != nullptr) {
-            if (media_receiver->video_running()) {
+        if (expect_video && media_receiver) {
+            if (media_receiver.video_running()) {
                 video_was_running = true;
             } else if (video_was_running) {
                 // Closing the sink window (or a mid-session pipeline crash) stops gst-launch.
@@ -332,15 +420,15 @@ ClientRunResult ClientApp::join_session(
         const auto now = std::chrono::steady_clock::now();
         if (media_watch_armed && now >= media_watch_deadline) {
             media_watch_armed = false;
-            if (expect_video && media_receiver && !media_receiver->video_running()) {
+            if (expect_video && media_receiver && !media_receiver.video_running()) {
                 if (callbacks.on_status) {
                     callbacks.on_status("Video receiver died — check GStreamer plugins / display sink.");
                 }
-            } else if (expect_audio && media_receiver && !media_receiver->audio_running()) {
+            } else if (expect_audio && media_receiver && !media_receiver.audio_running()) {
                 if (callbacks.on_status) {
                     callbacks.on_status("Audio receiver died — check GStreamer Opus/Pulse plugins.");
                 }
-            } else if (expect_video && media_receiver && !media_receiver->video_frames_seen()) {
+            } else if (expect_video && media_receiver && !media_receiver.video_frames_seen()) {
                 if (callbacks.on_status) {
                     callbacks.on_status(
                         "Video receiver is up but no decoded frames yet. "
@@ -354,12 +442,12 @@ ClientRunResult ClientApp::join_session(
         if (now >= next_heartbeat && result.client_id.has_value()) {
             std::uint16_t frames_delta = 0;
             std::uint16_t loss_permille = 0;
-            if (expect_video && media_receiver != nullptr) {
-                const auto frames = media_receiver->decoded_frame_count();
+            if (expect_video && media_receiver) {
+                const auto frames = media_receiver.decoded_frame_count();
                 const auto delta = frames >= last_decoded_frames ? frames - last_decoded_frames : 0;
                 last_decoded_frames = frames;
                 frames_delta = static_cast<std::uint16_t>(std::min<std::uint64_t>(delta, 65535));
-                if (!media_receiver->video_running()) {
+                if (!media_receiver.video_running()) {
                     loss_permille = 1000;
                 } else if (frames_delta == 0) {
                     // No decoded frames in the last second — treat as heavy loss until RTP stats exist.
@@ -390,7 +478,7 @@ ClientRunResult ClientApp::join_session(
         std::this_thread::sleep_for(std::chrono::milliseconds(8));
     }
     if (media_receiver) {
-        media_receiver->disconnect();
+        media_receiver.disconnect();
     }
 
     return result;

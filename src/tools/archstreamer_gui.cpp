@@ -31,6 +31,7 @@
 #include <QCoreApplication>
 #include <QPushButton>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QTabWidget>
 #include <QThread>
@@ -59,6 +60,14 @@ constexpr int DefaultVideoPort = 5004;
 constexpr int DefaultAudioPort = 6004;
 
 std::atomic_bool mirror_gui_logs_to_stdout = false;
+
+enum class GuiLogLevel : int {
+    Quiet = 0,
+    Normal = 1,
+    Verbose = 2,
+};
+
+std::atomic<int> gui_log_level{static_cast<int>(GuiLogLevel::Normal)};
 
 std::filesystem::path gui_log_path() {
     const auto dir = std::filesystem::temp_directory_path() / "archstreamer-logs";
@@ -89,7 +98,58 @@ QString mode_name(archstreamer::GameSessionMode mode) {
     return mode == archstreamer::GameSessionMode::SinglePlayer ? "singleplayer" : "multiplayer";
 }
 
-void append_log(QPlainTextEdit* log, QString message) {
+bool is_retroarch_log_line(const QString& line) {
+    const auto text = line.trimmed();
+    if (text.isEmpty()) {
+        return false;
+    }
+    // RetroArch --verbose / libretro cores emit bracketed subsystem tags.
+    static const char* const kTags[] = {
+        "[INFO]",
+        "[WARN]",
+        "[ERROR]",
+        "[DEBUG]",
+        "[VERBOSE]",
+        "[libretro",
+        "[GLSL]",
+        "[Vulkan]",
+        "[GLCore]",
+        "[Wayland]",
+        "[DRM]",
+        "[X11]",
+        "[PulseAudio]",
+        "[ALSA]",
+        "[Joypad]",
+        "[Config]",
+        "[Environ]",
+        "[Autoconf]",
+        "[Input]",
+        "[Audio]",
+        "[Video]",
+        "[Core]",
+        "[Content]",
+        "[State]",
+        "[SRAM]",
+        "[Savestate]",
+        "[Playlist]",
+        "[Threaded]",
+        "[Fonts]",
+        "[Menu]",
+        "[Overrides]",
+        "[Shaders]",
+    };
+    for (const char* tag : kTags) {
+        if (text.contains(QLatin1String(tag))) {
+            return true;
+        }
+    }
+    return text.contains(QLatin1String("RetroArch "));
+}
+
+void append_log(QPlainTextEdit* log, QString message, GuiLogLevel level = GuiLogLevel::Normal) {
+    if (static_cast<int>(level) > gui_log_level.load()) {
+        return;
+    }
     if (log != nullptr) {
         const auto name = log->objectName();
         if (name == QLatin1String("hostLog") && !message.startsWith("[host]")) {
@@ -116,6 +176,17 @@ void append_log(QPlainTextEdit* log, QString message) {
             log->appendPlainText(message);
         },
         Qt::QueuedConnection);
+}
+
+void append_host_process_log(QPlainTextEdit* log, const QString& line) {
+    const auto trimmed = line.trimmed();
+    if (trimmed.isEmpty()) {
+        return;
+    }
+    append_log(
+        log,
+        trimmed,
+        is_retroarch_log_line(trimmed) ? GuiLogLevel::Verbose : GuiLogLevel::Normal);
 }
 
 archstreamer::GameSessionMode selected_mode(const QComboBox* combo) {
@@ -274,6 +345,11 @@ private:
         client_video_->setChecked(true);
         client_audio_ = new QCheckBox("Receive audio", form_box);
         client_audio_->setChecked(true);
+        client_synced_av_ = new QCheckBox("Synced A/V (experimental)", form_box);
+        client_synced_av_->setChecked(false);
+        client_synced_av_->setToolTip(
+            "Use one shared-clock GStreamer pipeline for video+audio lip-sync.\n"
+            "Leave unchecked to keep the current dual-pipeline receivers.");
 
         form->addRow("Host", host_row);        form->addRow("Control port", client_port_);
         form->addRow("Input port", client_input_port_);
@@ -285,6 +361,7 @@ private:
         form->addRow("Language filter", client_language_);
         form->addRow("", client_video_);
         form->addRow("", client_audio_);
+        form->addRow("", client_synced_av_);
 
         client_host_picker_ = new archstreamer::gui::HostPickerWidget(page);
         connect(client_host_picker_, &archstreamer::gui::HostPickerWidget::hostSelected, this,
@@ -571,9 +648,20 @@ private:
             "How long the host waits for remote clients to join before giving up.\n"
             "Increase this when testing LAN connections between machines.");
 
+        settings_log_level_ = new QComboBox(form_box);
+        settings_log_level_->addItem("Quiet", static_cast<int>(GuiLogLevel::Quiet));
+        settings_log_level_->addItem("Normal", static_cast<int>(GuiLogLevel::Normal));
+        settings_log_level_->addItem("Verbose", static_cast<int>(GuiLogLevel::Verbose));
+        settings_log_level_->setCurrentIndex(1);
+        settings_log_level_->setToolTip(
+            "Quiet: errors and critical session events only.\n"
+            "Normal: ArchStreamer host/client activity (default).\n"
+            "Verbose: also logs RetroArch output and enables RetroArch --verbose.");
+
         form->addRow("Art root (host / local import)", settings_art_root_);
         form->addRow("Steam account ID", steam_row);
         form->addRow("Host lobby wait", settings_session_timeout_);
+        form->addRow("Log level", settings_log_level_);
 
         auto* refresh_art = new QPushButton("Refresh Art from Steam", form_box);
         form->addRow("", refresh_art);
@@ -591,6 +679,10 @@ private:
         connect(settings_session_timeout_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
             save_persisted_settings();
         });
+        connect(settings_log_level_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+            apply_log_level_from_settings();
+            save_persisted_settings();
+        });
         connect(detect_steam, &QPushButton::clicked, this, [this] {
             detect_steam_account();
         });
@@ -605,12 +697,14 @@ private:
             "Art root is for host-side artwork and Steam import.\n"
             "Clients cache host art under ~/.cache/archstreamer/hosts/<host>/Art.\n"
             "Steam account ID: leave blank to auto-detect.\n"
-            "Host lobby wait is how long the host keeps accepting remote joins.",
+            "Host lobby wait is how long the host keeps accepting remote joins.\n"
+            "Log level Verbose is required to see RetroArch console output.",
 #else
             "Art root is used for local Steam import when available.\n"
             "Clients cache host art under the ArchStreamer cache directory.\n"
             "Steam account ID: leave blank to auto-detect.\n"
-            "Host lobby wait is unused in this client-only build.",
+            "Host lobby wait is unused in this client-only build.\n"
+            "Log level Verbose includes extra client diagnostics.",
 #endif
             page));
         left->addStretch();
@@ -633,7 +727,7 @@ private:
             }
             append_log(client_log_, QString("Detected %1 controller(s).").arg(devices.size()));
         } catch (const std::exception& error) {
-            append_log(client_log_, QString("Controller scan failed: %1").arg(error.what()));
+            append_log(client_log_, QString("Controller scan failed: %1").arg(error.what()), GuiLogLevel::Quiet);
         }
     }
 
@@ -666,7 +760,7 @@ private:
             }
             sync_host_role_and_bridge();
         } catch (const std::exception& error) {
-            append_log(host_log_, QString("Host controller scan failed: %1").arg(error.what()));
+            append_log(host_log_, QString("Host controller scan failed: %1").arg(error.what()), GuiLogLevel::Quiet);
         }
     }
 
@@ -708,7 +802,7 @@ private:
                             static_cast<std::uint16_t>(host_input_port_->value()),
                         });
                 } catch (const std::exception& error) {
-                    append_log(host_log_, QString("Advertise failed: %1").arg(error.what()));
+                    append_log(host_log_, QString("Advertise failed: %1").arg(error.what()), GuiLogLevel::Quiet);
                     host_advertise_->setChecked(false);
                     return;
                 }
@@ -735,7 +829,7 @@ private:
             });
             host_announcer_->advertise();
         } catch (const std::exception& error) {
-            append_log(host_log_, QString("Advertise error: %1 (check firewall UDP 45550)").arg(error.what()));
+            append_log(host_log_, QString("Advertise error: %1 (check firewall UDP 45550)").arg(error.what()), GuiLogLevel::Quiet);
         }
     }
 
@@ -755,7 +849,7 @@ private:
         } catch (const std::exception& error) {
             host_game_picker_->setCatalog({});
             host_status_->setText("Host stopped; game load failed");
-            append_log(host_log_, QString("Load games failed: %1").arg(error.what()));
+            append_log(host_log_, QString("Load games failed: %1").arg(error.what()), GuiLogLevel::Quiet);
         }
     }
 #endif // ARCHSTREAMER_HAS_HOST
@@ -765,6 +859,7 @@ private:
         const auto art_root = settings.value("paths/artRoot", archstreamer::DefaultArtRoot).toString();
         const auto account = settings.value("steam/accountId").toString().trimmed();
         const auto session_timeout = settings.value("host/sessionTimeoutSeconds", 30).toInt();
+        const auto log_level = settings.value("ui/logLevel", static_cast<int>(GuiLogLevel::Normal)).toInt();
         if (settings_art_root_ != nullptr) {
             settings_art_root_->setText(art_root);
         }
@@ -774,6 +869,13 @@ private:
         if (settings_session_timeout_ != nullptr) {
             settings_session_timeout_->setValue(qBound(session_timeout, 5, 3600));
         }
+        if (settings_log_level_ != nullptr) {
+            const auto index = settings_log_level_->findData(qBound(log_level, 0, 2));
+            // Block signals so loading doesn't rewrite settings before apply completes.
+            const QSignalBlocker blocker(settings_log_level_);
+            settings_log_level_->setCurrentIndex(index >= 0 ? index : 1);
+        }
+        apply_log_level_from_settings();
         apply_art_root_to_pickers();
         if (!account.isEmpty() && settings_log_ != nullptr) {
             append_log(settings_log_, QString("Loaded Steam account ID %1").arg(account));
@@ -785,6 +887,18 @@ private:
         settings.setValue("paths/artRoot", QString::fromStdString(art_root_path().string()));
         settings.setValue("steam/accountId", QString::fromStdString(steam_account_id_text()));
         settings.setValue("host/sessionTimeoutSeconds", session_timeout_seconds());
+        settings.setValue("ui/logLevel", static_cast<int>(current_log_level()));
+    }
+
+    void apply_log_level_from_settings() {
+        gui_log_level.store(static_cast<int>(current_log_level()));
+    }
+
+    GuiLogLevel current_log_level() const {
+        if (settings_log_level_ == nullptr) {
+            return GuiLogLevel::Normal;
+        }
+        return static_cast<GuiLogLevel>(settings_log_level_->currentData().toInt());
     }
 
     int session_timeout_seconds() const {
@@ -969,6 +1083,7 @@ private:
         config.filter = client_filter_from_fields();
         config.wants_video = client_video_->isChecked();
         config.wants_audio = client_audio_->isChecked();
+        config.synced_av = client_synced_av_ != nullptr && client_synced_av_->isChecked();
 
         for (const auto* item : client_controllers_->selectedItems()) {
             config.controller_indexes.push_back(static_cast<std::size_t>(client_controllers_->row(item)));
@@ -1039,7 +1154,7 @@ private:
                 QMetaObject::invokeMethod(
                     this,
                     [this, message] {
-                        append_log(client_log_, QString("Connect failed: %1").arg(message));
+                        append_log(client_log_, QString("Connect failed: %1").arg(message), GuiLogLevel::Quiet);
                         if (message.contains("failed to connect TCP socket")) {
                             append_log(client_log_, "No host is listening on that address/port.");
                             append_log(client_log_, "Start Host first and wait until the Host tab says it is running.");
@@ -1161,10 +1276,10 @@ private:
                     append_log(client_log_, QString("Session starting: %1 player(s).").arg(starting.player_count));
                 };
                 callbacks.on_session_ended = [this](const std::string& reason) {
-                    append_log(client_log_, QString("Session ended: %1").arg(QString::fromStdString(reason)));
+                    append_log(client_log_, QString("Session ended: %1").arg(QString::fromStdString(reason)), GuiLogLevel::Quiet);
                 };
                 callbacks.on_host_disconnected = [this] {
-                    append_log(client_log_, "Host disconnected.");
+                    append_log(client_log_, "Host disconnected.", GuiLogLevel::Quiet);
                 };
                 callbacks.on_input_streaming_started = [this](const std::string& host, std::uint16_t port) {
                     append_log(client_log_, QString("Streaming input to %1:%2.")
@@ -1189,7 +1304,7 @@ private:
                     callbacks);
             } catch (const std::exception& error) {
                 const auto message = QString::fromLocal8Bit(error.what());
-                append_log(client_log_, QString("Client error: %1").arg(message));
+                append_log(client_log_, QString("Client error: %1").arg(message), GuiLogLevel::Quiet);
                 if (message.contains("selected different games") || message.contains("selected different session modes")) {
                     append_log(client_log_, "Host already locked game/mode. Match the Host tab selection and try again.");
                 }
@@ -1206,7 +1321,7 @@ private:
                     }
                 },
                 Qt::QueuedConnection);
-            append_log(client_log_, "Client worker stopped.");
+            append_log(client_log_, "Client worker stopped.", GuiLogLevel::Quiet);
         });
     }
 
@@ -1239,7 +1354,7 @@ private:
                 const auto text = QString::fromLocal8Bit(host_process_->readAllStandardOutput()).trimmed();
                 if (!text.isEmpty()) {
                     for (const auto& line : text.split('\n')) {
-                        append_log(host_log_, line);
+                        append_host_process_log(host_log_, line);
                     }
                 }
             });
@@ -1247,7 +1362,7 @@ private:
                 const auto text = QString::fromLocal8Bit(host_process_->readAllStandardError()).trimmed();
                 if (!text.isEmpty()) {
                     for (const auto& line : text.split('\n')) {
-                        append_log(host_log_, line);
+                        append_host_process_log(host_log_, line);
                     }
                 }
             });
@@ -1257,7 +1372,7 @@ private:
                 host_status_->setText("Host stopped");
                 append_log(host_log_, QString("Host exited: code=%1 status=%2")
                     .arg(code)
-                    .arg(status == QProcess::NormalExit ? "normal" : "crashed"));
+                    .arg(status == QProcess::NormalExit ? "normal" : "crashed"), GuiLogLevel::Quiet);
             });
         }
 
@@ -1272,6 +1387,9 @@ private:
             << "--session-timeout" << QString::number(session_timeout_seconds())
             << "--host-role" << host_role_text(host_role_)
             << "--mode" << mode_name(selected_mode(host_mode_));
+        if (current_log_level() == GuiLogLevel::Verbose) {
+            args << "--verbose";
+        }
         const auto bridge_index = host_bridge_controller_->currentData().toInt();
         if (!host_role_is_viewer(host_role_) && bridge_index < 0) {
             host_status_->setText("Host not started");
@@ -1411,7 +1529,7 @@ private:
                     .arg(host_audio_port_->value()));
         } catch (const std::exception& error) {
             stop_host_local_media();
-            append_log(host_log_, QString("Local stream watch failed: %1").arg(error.what()));
+            append_log(host_log_, QString("Local stream watch failed: %1").arg(error.what()), GuiLogLevel::Quiet);
         }
     }
 #endif // ARCHSTREAMER_HAS_HOST
@@ -1447,6 +1565,7 @@ private:
     QLineEdit* client_language_ = nullptr;
     QCheckBox* client_video_ = nullptr;
     QCheckBox* client_audio_ = nullptr;
+    QCheckBox* client_synced_av_ = nullptr;
     QLabel* client_catalog_status_ = nullptr;
     archstreamer::gui::HostPickerWidget* client_host_picker_ = nullptr;
     archstreamer::gui::GamePickerWidget* client_game_picker_ = nullptr;
@@ -1477,6 +1596,7 @@ private:
     QLineEdit* settings_art_root_ = nullptr;
     QLineEdit* settings_steam_account_ = nullptr;
     QSpinBox* settings_session_timeout_ = nullptr;
+    QComboBox* settings_log_level_ = nullptr;
     QPlainTextEdit* settings_log_ = nullptr;
 };
 

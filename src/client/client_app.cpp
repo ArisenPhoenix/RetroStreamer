@@ -300,6 +300,7 @@ ClientRunResult ClientApp::join_session(
 
     std::uint32_t heartbeat_sequence = 0;
     std::uint64_t last_decoded_frames = 0;
+    bool video_was_running = false;
     auto next_heartbeat = std::chrono::steady_clock::now();
     auto media_watch_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     auto media_watch_armed = media_receiver != nullptr;
@@ -313,6 +314,19 @@ ClientRunResult ClientApp::join_session(
                 callbacks.on_host_disconnected();
             }
             break;
+        }
+
+        if (expect_video && media_receiver != nullptr) {
+            if (media_receiver->video_running()) {
+                video_was_running = true;
+            } else if (video_was_running) {
+                // Closing the sink window (or a mid-session pipeline crash) stops gst-launch.
+                result.ended_reason = "video window closed";
+                if (callbacks.on_session_ended) {
+                    callbacks.on_session_ended(*result.ended_reason);
+                }
+                break;
+            }
         }
 
         const auto now = std::chrono::steady_clock::now();

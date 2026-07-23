@@ -14,6 +14,24 @@
 #include <unistd.h>
 
 namespace archstreamer {
+namespace {
+
+void close_inherited_fds() {
+    // Keep stdin/stdout/stderr; drop everything else so host sockets (especially
+    // the controller UDP port) are not shared with Xvfb/GStreamer/RetroArch.
+    int max_fd = static_cast<int>(sysconf(_SC_OPEN_MAX));
+    if (max_fd < 1024) {
+        max_fd = 1024;
+    }
+    if (max_fd > 65536) {
+        max_fd = 65536;
+    }
+    for (int fd = 3; fd < max_fd; ++fd) {
+        close(fd);
+    }
+}
+
+} // namespace
 
 PosixChildProcess::~PosixChildProcess() {
     stop();
@@ -48,6 +66,7 @@ void PosixChildProcess::start(
     }
 
     if (child == 0) {
+        close_inherited_fds();
         for (const auto& key : unset_environment) {
             unsetenv(key.c_str());
         }

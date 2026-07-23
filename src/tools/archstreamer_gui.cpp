@@ -1360,9 +1360,17 @@ private:
             return;
         }
         if (config.role == archstreamer::ClientParticipantRole::Player) {
+            refresh_client_controllers();
+            config = client_config_from_fields();
             if (config.filter.requested_players == 0) {
                 append_log(client_log_, "Player role requires at least one local player seat.");
                 return;
+            }
+            if (config.controller_indexes.empty() && client_controllers_->count() == 1 &&
+                config.filter.requested_players == 1) {
+                client_controllers_->item(0)->setSelected(true);
+                config = client_config_from_fields();
+                append_log(client_log_, "Auto-selected the only connected controller.");
             }
             if (config.controller_indexes.size() < config.filter.requested_players) {
                 append_log(
@@ -1370,6 +1378,14 @@ private:
                     QString("Select %1 controller(s) before joining as a player.")
                         .arg(config.filter.requested_players));
                 return;
+            }
+            for (std::size_t index : config.controller_indexes) {
+                if (static_cast<int>(index) < client_controllers_->count()) {
+                    append_log(
+                        client_log_,
+                        QString("Using controller: %1")
+                            .arg(client_controllers_->item(static_cast<int>(index))->text()));
+                }
             }
         } else if (!config.controller_indexes.empty()) {
             append_log(client_log_, "Viewer role ignores selected controllers.");

@@ -56,10 +56,10 @@ void write_virtual_pad_autoconfig(
         << "input_device = \"" << device_name << "\"\n"
         << "input_vendor_id = \"" << port_identity.vendor_id << "\"\n"
         << "input_product_id = \"" << port_identity.product_id << "\"\n"
-        << "input_b_btn = \"0\"\n"
-        << "input_a_btn = \"1\"\n"
-        << "input_y_btn = \"2\"\n"
-        << "input_x_btn = \"3\"\n"
+        << "input_b_btn = \"1\"\n"
+        << "input_a_btn = \"0\"\n"
+        << "input_y_btn = \"3\"\n"
+        << "input_x_btn = \"2\"\n"
         << "input_l_btn = \"4\"\n"
         << "input_r_btn = \"5\"\n"
         << "input_select_btn = \"6\"\n"
@@ -76,14 +76,11 @@ void write_virtual_pad_autoconfig(
         << "input_r_x_plus_axis = \"+3\"\n"
         << "input_r_y_minus_axis = \"-4\"\n"
         << "input_r_y_plus_axis = \"+4\"\n"
-        << "input_up_btn = \"11\"\n"
-        << "input_down_btn = \"12\"\n"
-        << "input_left_btn = \"13\"\n"
-        << "input_right_btn = \"14\"\n"
-        << "input_left_axis = \"-6\"\n"
-        << "input_right_axis = \"+6\"\n"
-        << "input_up_axis = \"-7\"\n"
-        << "input_down_axis = \"+7\"\n";
+        // sdl2 exposes ABS_HAT0 as hat 0, not as axes 6/7.
+        << "input_up_btn = \"h0up\"\n"
+        << "input_down_btn = \"h0down\"\n"
+        << "input_left_btn = \"h0left\"\n"
+        << "input_right_btn = \"h0right\"\n";
 }
 
 } // namespace
@@ -188,10 +185,10 @@ std::filesystem::path write_retroarch_input_override(
         const auto joypad_index = first_virtual_joypad_index + port;
         file
             << "input_player" << player << "_joypad_index = \"" << joypad_index << "\"\n"
-            << "input_player" << player << "_b_btn = \"0\"\n"
-            << "input_player" << player << "_a_btn = \"1\"\n"
-            << "input_player" << player << "_y_btn = \"2\"\n"
-            << "input_player" << player << "_x_btn = \"3\"\n"
+            << "input_player" << player << "_b_btn = \"1\"\n"
+            << "input_player" << player << "_a_btn = \"0\"\n"
+            << "input_player" << player << "_y_btn = \"3\"\n"
+            << "input_player" << player << "_x_btn = \"2\"\n"
             << "input_player" << player << "_l_btn = \"4\"\n"
             << "input_player" << player << "_r_btn = \"5\"\n"
             << "input_player" << player << "_select_btn = \"6\"\n"
@@ -208,14 +205,10 @@ std::filesystem::path write_retroarch_input_override(
             << "input_player" << player << "_r_x_plus_axis = \"+3\"\n"
             << "input_player" << player << "_r_y_minus_axis = \"-4\"\n"
             << "input_player" << player << "_r_y_plus_axis = \"+4\"\n"
-            << "input_player" << player << "_up_btn = \"11\"\n"
-            << "input_player" << player << "_down_btn = \"12\"\n"
-            << "input_player" << player << "_left_btn = \"13\"\n"
-            << "input_player" << player << "_right_btn = \"14\"\n"
-            << "input_player" << player << "_left_axis = \"-6\"\n"
-            << "input_player" << player << "_right_axis = \"+6\"\n"
-            << "input_player" << player << "_up_axis = \"-7\"\n"
-            << "input_player" << player << "_down_axis = \"+7\"\n";
+            << "input_player" << player << "_up_btn = \"h0up\"\n"
+            << "input_player" << player << "_down_btn = \"h0down\"\n"
+            << "input_player" << player << "_left_btn = \"h0left\"\n"
+            << "input_player" << player << "_right_btn = \"h0right\"\n";
     }
 
     return path;

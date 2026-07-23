@@ -2,12 +2,41 @@
 #include "host/local_controller_bridge.hpp"
 
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
 
 namespace archstreamer {
+namespace {
+
+std::string resolve_live_device_id(const ControllerDevice& wanted) {
+    ControllerBackend backend;
+    const auto devices = backend.list_devices();
+    for (const auto& device : devices) {
+        if (!wanted.guid.empty() && device.guid == wanted.guid) {
+            return device.id;
+        }
+    }
+    for (const auto& device : devices) {
+        if (wanted.vendor_id != 0 && wanted.product_id != 0 &&
+            device.vendor_id == wanted.vendor_id &&
+            device.product_id == wanted.product_id) {
+            return device.id;
+        }
+    }
+    for (const auto& device : devices) {
+        if (!wanted.path.empty() && device.path == wanted.path) {
+            return device.id;
+        }
+    }
+    throw std::runtime_error(
+        "local bridge controller is no longer visible to SDL (unplugged or ignored): " +
+        wanted.name);
+}
+
+} // namespace
 
 void pulse_virtual_pad_a(VirtualGamepadBus& gamepads) {
     ControllerState state;
@@ -36,14 +65,19 @@ ControllerDevice local_bridge_device_for(std::size_t selected_index) {
 
 LocalControllerBridge::LocalControllerBridge(ControllerDevice device)
     : device_(std::move(device)) {
+    // RetroArch gets IGNORE via its own env; the host bridge must still see the real pad.
+    unsetenv("SDL_GAMECONTROLLER_IGNORE_DEVICES");
+    // Re-resolve by GUID/vid/pid. The SDL index captured at selection time is stale once
+    // virtual ArchStreamer pads appear (and must not run under the RetroArch ignore list).
+    const auto live_id = resolve_live_device_id(device_);
     std::cout
         << "Bridging local controller "
         << ": " << device_.name
-        << " [id=" << device_.id << "]"
+        << " [selected id=" << device_.id << " live id=" << live_id << "]"
         << " vid/pid=" << hex_vid_pid(device_.vendor_id, device_.product_id)
         << "\n";
 
-    backend_.open_selected({device_.id});
+    backend_.open_selected({live_id});
 }
 
 const ControllerDevice& LocalControllerBridge::device() const {

@@ -191,15 +191,16 @@ struct VideoEncodeSettings {
 };
 
 inline VideoEncodeSettings video_encode_settings_for_tier(MediaQualityTier tier) {
+    // key_int_max ~0.5s so remotes get an IDR quickly after join / pipeline restart.
     switch (tier) {
     case MediaQualityTier::Low:
-        return VideoEncodeSettings{800, 20, 20};
+        return VideoEncodeSettings{800, 20, 10};
     case MediaQualityTier::High:
-        return VideoEncodeSettings{3500, 30, 30};
+        return VideoEncodeSettings{3500, 30, 15};
     case MediaQualityTier::Medium:
     case MediaQualityTier::Auto:
     default:
-        return VideoEncodeSettings{1500, 30, 30};
+        return VideoEncodeSettings{1500, 30, 15};
     }
 }
 

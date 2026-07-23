@@ -14,6 +14,9 @@ public:
 private:
     UdpSocket socket_;
     InputRouter& input_router_;
+    std::uint64_t packets_received_ = 0;
+    std::uint64_t packets_applied_ = 0;
+    bool logged_first_receive_ = false;
 };
 
 } // namespace archstreamer

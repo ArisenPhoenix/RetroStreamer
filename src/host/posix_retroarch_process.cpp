@@ -24,6 +24,19 @@ std::string path_string(const std::filesystem::path& path, const char* label) {
     return path.string();
 }
 
+void close_inherited_fds() {
+    int max_fd = static_cast<int>(sysconf(_SC_OPEN_MAX));
+    if (max_fd < 1024) {
+        max_fd = 1024;
+    }
+    if (max_fd > 65536) {
+        max_fd = 65536;
+    }
+    for (int fd = 3; fd < max_fd; ++fd) {
+        close(fd);
+    }
+}
+
 } // namespace
 
 PosixRetroArchProcess::~PosixRetroArchProcess() {
@@ -59,6 +72,7 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
     }
 
     if (child == 0) {
+        close_inherited_fds();
         for (const auto& [key, value] : config.environment) {
             setenv(key.c_str(), value.c_str(), 1);
         }

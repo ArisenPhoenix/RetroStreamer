@@ -53,9 +53,12 @@ std::vector<std::size_t> find_archstreamer_sdl_joypad_indices(
     const std::string& ignore_devices) {
     // Must match RetroArch's environment: ignored pads disappear from SDL's joystick
     // list and renumber remaining devices (often moving ArchStreamer from 2 → 0).
+    // Use a process hint only for this scan — never setenv, or the host bridge can no
+    // longer open the real pad afterward.
     if (!ignore_devices.empty()) {
         SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES, ignore_devices.c_str());
-        setenv("SDL_GAMECONTROLLER_IGNORE_DEVICES", ignore_devices.c_str(), 1);
+    } else {
+        SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES, "");
     }
 
     if (SDL_WasInit(SDL_INIT_JOYSTICK) != 0) {
@@ -67,6 +70,7 @@ std::vector<std::size_t> find_archstreamer_sdl_joypad_indices(
     if (SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) != 0) {
         std::cerr << "Warning: SDL joystick init failed while resolving virtual pads: "
                   << SDL_GetError() << '\n';
+        SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES, "");
         return {};
     }
 
@@ -74,6 +78,8 @@ std::vector<std::size_t> find_archstreamer_sdl_joypad_indices(
     const int count = SDL_NumJoysticks();
     if (count < 0) {
         std::cerr << "Warning: SDL_NumJoysticks failed: " << SDL_GetError() << '\n';
+        SDL_QuitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER);
+        SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES, "");
         return {};
     }
 
@@ -102,6 +108,9 @@ std::vector<std::size_t> find_archstreamer_sdl_joypad_indices(
     for (std::size_t i = 0; i < players && i < found.size(); ++i) {
         indices.push_back(static_cast<std::size_t>(found[i].second));
     }
+
+    SDL_QuitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER);
+    SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES, "");
     return indices;
 }
 

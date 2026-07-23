@@ -62,7 +62,7 @@ void HostRunnerCli::print_usage() const {
         << "  --session-timeout <seconds>\n"
         << "                      Maximum time to wait for enough players. Default: 30\n"
         << "  --client-timeout <seconds>\n"
-        << "                      Maximum time without client heartbeat during play. Default: 5\n"
+        << "                      Maximum time without client heartbeat during play. Default: 20\n"
         << "  --player-reconnect-timeout <seconds>\n"
         << "                      Time to reserve disconnected player seats. Default: 60\n"
         << "  --host-role <role>  player or viewer for the host. Default: viewer\n"

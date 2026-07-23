@@ -33,6 +33,7 @@ struct SessionClientCliArgs {
     bool active_session = false;
     bool wants_video = true;
     bool wants_audio = true;
+    MediaQualityTier wanted_tier = MediaQualityTier::Auto;
 
     ClientAppConfig app_config() const;
 };

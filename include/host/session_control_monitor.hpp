@@ -25,6 +25,8 @@ public:
 private:
     bool remove_viewer(std::size_t index, std::string_view reason);
     void mark_player_disconnected(SessionClientConnection& client, std::string_view reason);
+    void handle_heartbeat(SessionClientConnection& client, const ViewerHeartbeat& heartbeat);
+    void apply_video_tier(SessionClientConnection& client, MediaQualityTier tier, std::string_view reason);
     static std::string client_label(const SessionClientConnection& client);
 
     SessionPlan& plan_;
@@ -32,6 +34,7 @@ private:
     MediaServer& media_server_;
     std::chrono::seconds heartbeat_timeout_;
     std::chrono::seconds reconnect_timeout_;
+    std::chrono::steady_clock::time_point started_at_;
 };
 
 } // namespace archstreamer

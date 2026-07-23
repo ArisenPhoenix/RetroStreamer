@@ -30,6 +30,9 @@ struct ClientAppConfig {
     std::vector<std::size_t> controller_indexes;
     bool wants_video = true;
     bool wants_audio = true;
+    MediaQualityTier wanted_tier = MediaQualityTier::Auto;
+    // 0 = use tier default bitrate cap on the host.
+    std::uint16_t max_bitrate_kbps = 0;
 };
 
 struct ClientConnectionInfo {

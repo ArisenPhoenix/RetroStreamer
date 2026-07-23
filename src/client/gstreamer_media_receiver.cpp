@@ -488,23 +488,28 @@ const std::string& GStreamerMediaReceiver::audio_pipeline_info() const {
 }
 
 bool GStreamerMediaReceiver::video_frames_seen() const {
+    return decoded_frame_count() > 0;
+}
+
+std::uint64_t GStreamerMediaReceiver::decoded_frame_count() const {
     const auto marker = video_pipeline_info_.find("log=");
     if (marker == std::string::npos) {
-        return false;
+        return 0;
     }
     const auto path = video_pipeline_info_.substr(marker + 4);
     std::ifstream in(path);
     if (!in) {
-        return false;
+        return 0;
     }
+    std::uint64_t count = 0;
     std::string line;
     while (std::getline(in, line)) {
         // identity silent=false emits lines containing "identity" / buffer info.
         if (line.find("identity") != std::string::npos || line.find("buffer") != std::string::npos) {
-            return true;
+            ++count;
         }
     }
-    return false;
+    return count;
 }
 
 } // namespace archstreamer

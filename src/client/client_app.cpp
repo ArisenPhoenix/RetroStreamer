@@ -9,6 +9,7 @@
 #include "common/platform/default_platform.hpp"
 #include "common/serialization.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <stdexcept>
 #include <string_view>
@@ -298,6 +299,7 @@ ClientRunResult ClientApp::join_session(
     }
 
     std::uint32_t heartbeat_sequence = 0;
+    std::uint64_t last_decoded_frames = 0;
     auto next_heartbeat = std::chrono::steady_clock::now();
     auto media_watch_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     auto media_watch_armed = media_receiver != nullptr;
@@ -336,9 +338,27 @@ ClientRunResult ClientApp::join_session(
             }
         }
         if (now >= next_heartbeat && result.client_id.has_value()) {
+            std::uint16_t frames_delta = 0;
+            std::uint16_t loss_permille = 0;
+            if (expect_video && media_receiver != nullptr) {
+                const auto frames = media_receiver->decoded_frame_count();
+                const auto delta = frames >= last_decoded_frames ? frames - last_decoded_frames : 0;
+                last_decoded_frames = frames;
+                frames_delta = static_cast<std::uint16_t>(std::min<std::uint64_t>(delta, 65535));
+                if (!media_receiver->video_running()) {
+                    loss_permille = 1000;
+                } else if (frames_delta == 0) {
+                    // No decoded frames in the last second — treat as heavy loss until RTP stats exist.
+                    loss_permille = 500;
+                }
+            }
             joined_session.stream.send_packet(serialize_packet(ViewerHeartbeat{
                 *result.client_id,
                 heartbeat_sequence++,
+                loss_permille,
+                frames_delta,
+                config.wanted_tier,
+                config.max_bitrate_kbps,
             }));
             next_heartbeat = now + std::chrono::seconds(1);
         }

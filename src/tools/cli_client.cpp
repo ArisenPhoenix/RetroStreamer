@@ -89,6 +89,7 @@ ClientAppConfig SessionClientCliArgs::app_config() const {
     config.controller_indexes = controller_indexes;
     config.wants_video = wants_video;
     config.wants_audio = wants_audio;
+    config.wanted_tier = wanted_tier;
     return config;
 }
 
@@ -105,7 +106,8 @@ void SessionClientCli::print_usage() const {
         << "                      [--language code] [--list-languages]\n"
         << "                      [--active-session]\n"
         << "                      [--controller index] [--controller index] [--game index-or-id]\n"
-        << "                      [--input-port port] [--no-video] [--list-games]\n";
+        << "                      [--input-port port] [--no-video] [--no-audio]\n"
+        << "                      [--stream-quality auto|low|medium|high] [--list-games]\n";
 }
 
 SessionClientCliArgs SessionClientCli::parse(int argc, char** argv) const {
@@ -190,6 +192,22 @@ SessionClientCliArgs SessionClientCli::parse(int argc, char** argv) const {
             args.wants_video = false;
         } else if (arg == "--no-audio") {
             args.wants_audio = false;
+        } else if (arg == "--stream-quality") {
+            if (++i >= argc) {
+                throw std::runtime_error("--stream-quality requires auto|low|medium|high");
+            }
+            const std::string value = argv[i];
+            if (value == "auto") {
+                args.wanted_tier = MediaQualityTier::Auto;
+            } else if (value == "low") {
+                args.wanted_tier = MediaQualityTier::Low;
+            } else if (value == "medium") {
+                args.wanted_tier = MediaQualityTier::Medium;
+            } else if (value == "high") {
+                args.wanted_tier = MediaQualityTier::High;
+            } else {
+                throw std::runtime_error("--stream-quality requires auto|low|medium|high");
+            }
         } else if (arg == "--help" || arg == "-h") {
             print_usage();
             std::exit(0);

@@ -81,6 +81,71 @@ std::string default_audio_monitor_source() {
     return sink + ".monitor";
 }
 
+namespace {
+
+constexpr const char* kStreamingAudioSinkName = "archstreamer";
+
+bool sink_exists(const std::string& sink_name) {
+    const auto sinks = archstreamer::read_command_output("pactl list short sinks 2>/dev/null");
+    if (sinks.empty()) {
+        return false;
+    }
+    // Match a whole sink name column (name is the second whitespace-separated field).
+    std::string::size_type line_start = 0;
+    while (line_start < sinks.size()) {
+        const auto line_end = sinks.find('\n', line_start);
+        const auto line = sinks.substr(
+            line_start,
+            line_end == std::string::npos ? std::string::npos : line_end - line_start);
+        line_start = line_end == std::string::npos ? sinks.size() : line_end + 1;
+
+        std::string::size_type field = 0;
+        std::string::size_type pos = 0;
+        while (pos < line.size()) {
+            while (pos < line.size() && (line[pos] == ' ' || line[pos] == '\t')) {
+                ++pos;
+            }
+            if (pos >= line.size()) {
+                break;
+            }
+            const auto end = line.find_first_of(" \t", pos);
+            const auto token = line.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
+            if (field == 1 && token == sink_name) {
+                return true;
+            }
+            ++field;
+            if (end == std::string::npos) {
+                break;
+            }
+            pos = end;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+std::string ensure_streaming_audio_sink() {
+    if (sink_exists(kStreamingAudioSinkName)) {
+        return kStreamingAudioSinkName;
+    }
+
+    const auto module = archstreamer::read_command_output(
+        "pactl load-module module-null-sink "
+        "sink_name=archstreamer "
+        "sink_properties=device.description=ArchStreamer 2>/dev/null");
+    if (module.empty() || !sink_exists(kStreamingAudioSinkName)) {
+        throw std::runtime_error(
+            "failed to create ArchStreamer null sink (need pactl / module-null-sink). "
+            "Host speakers would otherwise play RetroArch audio while streaming.");
+    }
+    return kStreamingAudioSinkName;
+}
+
+std::string streaming_audio_monitor_source() {
+    return ensure_streaming_audio_sink() + ".monitor";
+}
+
 VirtualDisplayProcess::~VirtualDisplayProcess() {
     stop();
 }

@@ -2,11 +2,19 @@
 
 #include <algorithm>
 #include <cstring>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include "common/platform/windows_socket.hpp"
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <iphlpapi.h>
 #else
 #include <ifaddrs.h>
@@ -43,10 +51,11 @@ std::optional<std::string> read_string(const ByteBuffer& bytes, std::size_t& off
     return value;
 }
 
-std::vector<std::string> ipv4_broadcast_targets() {
-    std::vector<std::string> targets{"255.255.255.255"};
+std::vector<std::string> getIPTargets() {return {"255.255.255.255", "127.0.0.1"};}
 
 #ifdef _WIN32
+std::vector<std::string> ipv4_broadcast_targets() {
+    auto targets = getIPTargets();
     ensure_winsock_initialized();
 
     ULONG buffer_size = 16 * 1024;
@@ -91,7 +100,15 @@ std::vector<std::string> ipv4_broadcast_targets() {
             }
         }
     }
+
+
+    return targets;
+}
+
 #else
+std::vector<std::string> ipv4_broadcast_targets() {
+    auto targets = getIPTargets();
+    
     ifaddrs* interfaces = nullptr;
     if (getifaddrs(&interfaces) != 0) {
         return targets;
@@ -123,9 +140,13 @@ std::vector<std::string> ipv4_broadcast_targets() {
     }
 
     freeifaddrs(interfaces);
-#endif
+
+
     return targets;
 }
+
+#endif
+
 
 } // namespace
 
@@ -200,6 +221,8 @@ void HostDiscoveryBrowser::poll() {
         }
 
         const auto now = std::chrono::steady_clock::now();
+        // Keep one row per (username, source address). The same process may legitimately
+        // appear on LAN, loopback, docker, and VPN IPs — each is a distinct connect path.
         auto existing = std::find_if(hosts_.begin(), hosts_.end(), [&](const DiscoveredHost& host) {
             return host.username == announcement->username && host.address == datagram->host;
         });

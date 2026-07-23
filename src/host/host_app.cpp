@@ -45,11 +45,42 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         if (config.audio) {
             config.audio_backend = choose_audio_capture_backend(config.audio_backend);
             if (config.audio_source.empty()) {
-                config.audio_source = default_audio_monitor_source();
-                if (config.audio_source.empty()) {
-                    std::cerr
-                        << "Warning: could not determine default audio monitor source; "
-                        << "audio capture will use the audio server default source.\n";
+                const bool host_plays_locally =
+                    config.host_role == ParticipantRole::Player &&
+                    config.bridge_controller_index.has_value();
+                // Host Player should hear RetroArch on the real speakers. Dedicated hosts
+                // (Viewer) use a null sink so speakers stay quiet unless Watch stream locally.
+                if (host_plays_locally) {
+                    config.audio_source = default_audio_monitor_source();
+                    if (config.audio_source.empty()) {
+                        std::cerr
+                            << "Warning: could not determine default audio monitor source; "
+                            << "audio capture will use the audio server default source.\n";
+                    } else {
+                        std::cout
+                            << "Audio capture: " << config.audio_source
+                            << " (host player uses default sink so local speakers work)\n";
+                    }
+                } else {
+                    try {
+                        config.audio_source = streaming_audio_monitor_source();
+                        std::cout
+                            << "Audio capture: " << config.audio_source
+                            << " (null sink; host speakers stay quiet unless Watch stream locally)\n";
+                    } catch (const std::exception& error) {
+                        config.audio_source = default_audio_monitor_source();
+                        std::cerr << "Warning: " << error.what() << '\n';
+                        if (config.audio_source.empty()) {
+                            std::cerr
+                                << "Warning: could not determine audio monitor source; "
+                                << "audio capture will use the audio server default source.\n";
+                        } else {
+                            std::cerr
+                                << "Warning: falling back to default sink monitor "
+                                << config.audio_source
+                                << " (host may hear game audio locally).\n";
+                        }
+                    }
                 }
             }
         }
@@ -68,6 +99,11 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         auto bridge_device = std::optional<ControllerDevice>{};
         if (config.host_role == ParticipantRole::Viewer && config.bridge_controller_index.has_value()) {
             throw std::runtime_error("--bridge-controller cannot be used with --host-role viewer");
+        }
+        if (config.host_role == ParticipantRole::Player && !config.bridge_controller_index.has_value()) {
+            throw std::runtime_error(
+                "--host-role player requires --bridge-controller "
+                "(or use --host-role viewer for a dedicated streaming host)");
         }
         if (config.host_role == ParticipantRole::Player && config.bridge_controller_index.has_value()) {
             bridge_device = local_bridge_device_for(*config.bridge_controller_index);
@@ -171,9 +207,6 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         const bool host_plays_locally =
             config.host_role == ParticipantRole::Player &&
             config.bridge_controller_index.has_value();
-        // When streaming video, RetroArch always runs on the virtual capture display.
-        // Host Player still seats/bridges locally; picture is via "Watch stream locally".
-        const bool capture_fullscreen = config.video;
         if (config.audio || config.video) {
             launch_config.environment.emplace_back("SDL_AUDIODRIVER", "pulse");
         }
@@ -230,6 +263,21 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                 << "Warning: SDL_GAMECONTROLLER_IGNORE_DEVICES only affects RetroArch when "
                 << "--retroarch-joypad-driver is sdl2.\n";
         }
+
+        // Host Player keeps the real DISPLAY (and speakers). Video capture needs a virtual
+        // display, so local play disables video streaming rather than hiding the game.
+        if (config.video && host_plays_locally) {
+            std::cout
+                << "Host player keeps the current DISPLAY; video streaming disabled for this session.\n"
+                << "Use Host Viewer (or Watch stream locally with a dedicated host) to stream video.\n";
+            config.video = false;
+        }
+        const bool use_virtual_capture = config.video;
+        const bool capture_fullscreen = use_virtual_capture;
+        if (use_virtual_capture) {
+            launch_config.environment.emplace_back("DISPLAY", config.virtual_display);
+        }
+
         const auto media_config = media_plan_config_for(config);
         auto media_destinations = std::vector<HostMediaDestination>{};
         auto media_streams = std::vector<MediaClientStream>{};
@@ -240,15 +288,6 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             } else {
                 media_destinations = media_destinations_for_host(media_config);
                 media_streams = media_streams_for_dry_run(media_config, media_destinations);
-            }
-        }
-        if (config.video) {
-            launch_config.environment.emplace_back("DISPLAY", config.virtual_display);
-            if (host_plays_locally) {
-                std::cout
-                    << "Host player is seated locally; video capture uses virtual display "
-                    << config.virtual_display
-                    << ". Use Watch stream locally (or a client) to see the picture.\n";
             }
         }
 

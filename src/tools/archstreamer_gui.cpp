@@ -240,6 +240,16 @@ private:
         client_host_ = new QLineEdit(form_box);
         client_host_->setPlaceholderText("select a LAN host below, or type an IP");
         client_host_->setClearButtonEnabled(true);
+        auto* host_row = new QWidget(form_box);
+        auto* host_row_layout = new QHBoxLayout(host_row);
+        host_row_layout->setContentsMargins(0, 0, 0, 0);
+        host_row_layout->addWidget(client_host_, 1);
+        auto* this_pc = new QPushButton("This PC", host_row);
+        this_pc->setToolTip("Connect to a host running on this machine (127.0.0.1).");
+        connect(this_pc, &QPushButton::clicked, this, [this] {
+            client_host_->setText(QStringLiteral("127.0.0.1"));
+        });
+        host_row_layout->addWidget(this_pc);
         client_port_ = new QSpinBox(form_box);
         client_port_->setRange(1, 65535);
         client_port_->setValue(45555);
@@ -265,8 +275,7 @@ private:
         client_audio_ = new QCheckBox("Receive audio", form_box);
         client_audio_->setChecked(true);
 
-        form->addRow("Host", client_host_);
-        form->addRow("Control port", client_port_);
+        form->addRow("Host", host_row);        form->addRow("Control port", client_port_);
         form->addRow("Input port", client_input_port_);
         form->addRow("Username", client_username_);
         form->addRow("Role", client_role_);
@@ -411,7 +420,12 @@ private:
         host_local_media_->setChecked(false);
         host_local_media_->setToolTip(
             "Receive the host loopback RTP stream (same feed remotes get). "
-            "Can be toggled while the host is running.");
+            "Can be toggled while the host is running. "
+            "With Stream audio on, game audio is routed to a silent null sink — "
+            "enable this to hear it on the host.");
+        host_audio_->setToolTip(
+            "Capture RetroArch audio for remotes. Uses a dedicated null sink so the "
+            "host speakers stay quiet unless Watch stream locally is enabled.");
         host_advertise_ = new QCheckBox("Advertise on LAN", form_box);
         host_advertise_->setChecked(true);
 
@@ -664,6 +678,21 @@ private:
         if (host_role_is_viewer(host_role_) && host_bridge_controller_->currentData().toInt() >= 0) {
             host_bridge_controller_->setCurrentIndex(0);
             append_log(host_log_, "Host Viewer selected; bridge controller cleared to None.");
+        }
+        // Viewer = dedicated stream host (capture on). Player = local play on the real display.
+        if (host_video_ != nullptr && host_audio_ != nullptr && host_local_media_ != nullptr) {
+            if (host_role_is_viewer(host_role_)) {
+                host_video_->setChecked(true);
+                host_audio_->setChecked(true);
+            } else {
+                host_video_->setChecked(false);
+                host_audio_->setChecked(false);
+                host_local_media_->setChecked(false);
+                append_log(
+                    host_log_,
+                    "Host Player: Stream video/audio off so RetroArch stays on this screen. "
+                    "Use Host Viewer to stream to a same-machine or remote client.");
+            }
         }
         syncing_host_role_ = false;
     }

@@ -318,10 +318,28 @@ std::filesystem::path video_stderr_log_path() {
 void ensure_process_stayed_up(const ChildProcess& process, const char* label) {
     std::this_thread::sleep_for(std::chrono::milliseconds(400));
     if (!process.running()) {
+        std::string detail;
+        const auto log_path = video_stderr_log_path();
+        std::ifstream log(log_path);
+        if (log) {
+            std::string line;
+            while (std::getline(log, line)) {
+                if (!detail.empty()) {
+                    detail.push_back(' ');
+                }
+                detail += line;
+                if (detail.size() > 240) {
+                    detail.resize(240);
+                    detail += "...";
+                    break;
+                }
+            }
+        }
         throw std::runtime_error(
             std::string(label) +
             " GStreamer pipeline exited immediately. "
-            "Check gst-launch-1.0 plugins (H.264 decode / Opus) and UDP media ports.");
+            "Check gst-launch-1.0 plugins (H.264 decode / Opus) and UDP media ports." +
+            (detail.empty() ? "" : (" Log: " + detail)));
     }
 }
 
@@ -347,11 +365,15 @@ std::vector<std::string> build_video_pipeline_args(
         "!",
         "rtph264depay",
         "!",
-        "h264parse",
-        "!",
-        decoder.element,
-        "!",
     };
+    // h264parse lives in plugins-bad. Prefer it when present; many decoders (avdec_h264)
+    // still work with depay output alone.
+    if (gst_element_available("h264parse")) {
+        args.push_back("h264parse");
+        args.push_back("!");
+    }
+    args.push_back(decoder.element);
+    args.push_back("!");
 
     if (decoder.d3d11_zero_copy && sink.kind == VideoSinkKind::D3D11) {
         // Keep frames in D3D11 memory for the Windows HW path.

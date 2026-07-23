@@ -162,6 +162,10 @@ The host CLI exposes this as `--host-role player|viewer` (default `viewer`). Hos
 
 Video/audio streaming defaults **on** (`--video` / `--audio`; disable with `--no-video` / `--no-audio`). When video is enabled, RetroArch runs on the virtual capture display. Client `wants_video` / `wants_audio` decide which remotes get RTP fanout. The host always reserves loopback destinations at the base `--video-port` / `--audio-port` so the GUI can toggle **Watch stream locally** mid-session without changing seats (host cannot become a player mid-session).
 
+When audio streaming is enabled without an explicit `--audio-source`, a dedicated host (Viewer) creates a Pulse/PipeWire null sink (`archstreamer`) so speakers stay quiet unless **Watch stream locally** plays the RTP feed. **Host Player** keeps the real display and default sink so singleplayer local play works; video streaming is disabled in that mode (use Host Viewer to stream to clients on this PC or the LAN).
+
+Same-machine client+host: run Host as **Viewer** with streaming on, then on the Client tab use **This PC** (`127.0.0.1`) or LAN discovery (announcements also target loopback).
+
 After a session starts, the host reopens the TCP control port for active-session joins. Late clients must select the same game and session mode as the active session. New late viewers can join with `requested_players=0`. Player clients cannot claim new seats after launch because RetroArch port assignment is fixed, but disconnected players can reconnect to their existing reserved seats.
 
 Viewer disconnects do not stop the game session.

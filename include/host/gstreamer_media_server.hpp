@@ -17,6 +17,10 @@ bool command_available(const char* command);
 VirtualDisplayBackend choose_virtual_display_backend(VirtualDisplayBackend requested);
 AudioCaptureBackend choose_audio_capture_backend(AudioCaptureBackend requested);
 std::string default_audio_monitor_source();
+// Dedicated null sink for RetroArch while streaming so the host speakers stay silent
+// unless "Watch stream locally" (or a remote) plays the RTP feed.
+std::string ensure_streaming_audio_sink();
+std::string streaming_audio_monitor_source();
 
 class VirtualDisplayProcess {
 public:

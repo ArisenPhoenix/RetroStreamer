@@ -1,5 +1,6 @@
 #include "client/gstreamer_media_receiver.hpp"
 
+#include "client/gstreamer_probe.hpp"
 #include "common/addresses.hpp"
 #include "common/platform/paths.hpp"
 
@@ -19,23 +20,6 @@
 
 namespace archstreamer {
 namespace {
-
-bool gst_element_available(const char* element) {
-#ifdef _WIN32
-    const auto command = std::string("gst-inspect-1.0 ") + element + " >NUL 2>&1";
-#else
-    const auto command = std::string("gst-inspect-1.0 ") + element + " >/dev/null 2>&1";
-#endif
-    return std::system(command.c_str()) == 0;
-}
-
-bool gst_inspect_available() {
-#ifdef _WIN32
-    return std::system("gst-inspect-1.0 --version >NUL 2>&1") == 0;
-#else
-    return std::system("gst-inspect-1.0 --version >/dev/null 2>&1") == 0;
-#endif
-}
 
 struct H264DecoderChoice {
     const char* element = nullptr;
@@ -81,41 +65,11 @@ H264DecoderChoice choose_h264_decoder() {
 #endif
 }
 
-enum class VideoSinkKind { X11, Wayland, D3D11, Other };
-
-struct VideoSinkChoice {
-    const char* element = "autovideosink";
-    VideoSinkKind kind = VideoSinkKind::Other;
-};
+using VideoSinkChoice = GstVideoSinkChoice;
+using VideoSinkKind = GstVideoSinkKind;
 
 VideoSinkChoice choose_video_sink(bool prefer_d3d11) {
-#ifdef _WIN32
-    if (prefer_d3d11 && gst_element_available("d3d11videosink")) {
-        return {"d3d11videosink", VideoSinkKind::D3D11};
-    }
-    if (gst_element_available("d3d11videosink")) {
-        return {"d3d11videosink", VideoSinkKind::D3D11};
-    }
-    return {"autovideosink", VideoSinkKind::Other};
-#else
-    (void)prefer_d3d11;
-    // Prefer X11 when DISPLAY exists (Flatpak fallback-x11 / XWayland).
-    if (std::getenv("DISPLAY") != nullptr) {
-        if (gst_element_available("xvimagesink")) {
-            return {"xvimagesink", VideoSinkKind::X11};
-        }
-        if (gst_element_available("ximagesink")) {
-            return {"ximagesink", VideoSinkKind::X11};
-        }
-    }
-    if (std::getenv("WAYLAND_DISPLAY") != nullptr && gst_element_available("waylandsink")) {
-        return {"waylandsink", VideoSinkKind::Wayland};
-    }
-    if (gst_element_available("glimagesink")) {
-        return {"glimagesink", VideoSinkKind::Other};
-    }
-    return {"autovideosink", VideoSinkKind::Other};
-#endif
+    return choose_usable_video_sink(prefer_d3d11);
 }
 
 std::string to_lower_copy(std::string value) {

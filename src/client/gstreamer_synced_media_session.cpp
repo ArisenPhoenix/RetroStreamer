@@ -128,8 +128,9 @@ void append_video_branch(
     args.insert(args.end(), {
         "videoconvert",
         "!",
-        "identity",
-        "silent=false",
+        // One line per second on stdout while decoded frames flow (see log path).
+        "progressreport",
+        "update-freq=1",
         "!",
         sink.element,
         "sync=true",
@@ -270,7 +271,7 @@ std::uint64_t GStreamerSyncedMediaSession::decoded_frame_count() const {
     std::uint64_t count = 0;
     std::string line;
     while (std::getline(in, line)) {
-        if (line.find("identity") != std::string::npos || line.find("buffer") != std::string::npos) {
+        if (line.find("progressreport") != std::string::npos) {
             ++count;
         }
     }

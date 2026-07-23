@@ -344,9 +344,10 @@ std::vector<std::string> build_video_pipeline_args(
     args.insert(args.end(), {
         "videoconvert",
         "!",
-        // Prints when decoded frames flow (shows up in the stderr log).
-        "identity",
-        "silent=false",
+        // One line per second on stdout while decoded frames flow (see log path).
+        // identity silent=false no longer prints without gst-launch -v (huge logs).
+        "progressreport",
+        "update-freq=1",
         "!",
         sink.element,
         "sync=false",
@@ -458,8 +459,8 @@ std::uint64_t GStreamerMediaReceiver::decoded_frame_count() const {
     std::uint64_t count = 0;
     std::string line;
     while (std::getline(in, line)) {
-        // identity silent=false emits lines containing "identity" / buffer info.
-        if (line.find("identity") != std::string::npos || line.find("buffer") != std::string::npos) {
+        // progressreport emits one line per second while buffers reach the sink.
+        if (line.find("progressreport") != std::string::npos) {
             ++count;
         }
     }

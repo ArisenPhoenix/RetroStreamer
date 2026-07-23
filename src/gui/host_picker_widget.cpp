@@ -9,7 +9,43 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include <algorithm>
+
 namespace archstreamer::gui {
+
+namespace {
+
+bool is_loopback_address(const std::string& address) {
+    return address == "127.0.0.1" || address.rfind("127.", 0) == 0;
+}
+
+std::vector<DiscoveredHost> ranked_hosts(std::vector<DiscoveredHost> hosts) {
+    const auto preferred = prefer_discovered_host(hosts);
+    std::stable_sort(hosts.begin(), hosts.end(), [&](const DiscoveredHost& left, const DiscoveredHost& right) {
+        const bool left_loop = is_loopback_address(left.address);
+        const bool right_loop = is_loopback_address(right.address);
+        if (left_loop != right_loop) {
+            return !left_loop;
+        }
+        if (preferred.has_value()) {
+            const bool left_pref =
+                left.address == preferred->address &&
+                left.control_port == preferred->control_port &&
+                left.username == preferred->username;
+            const bool right_pref =
+                right.address == preferred->address &&
+                right.control_port == preferred->control_port &&
+                right.username == preferred->username;
+            if (left_pref != right_pref) {
+                return left_pref;
+            }
+        }
+        return left.username < right.username;
+    });
+    return hosts;
+}
+
+} // namespace
 
 HostPickerWidget::HostPickerWidget(QWidget* parent)
     : QWidget(parent) {
@@ -36,15 +72,18 @@ HostPickerWidget::HostPickerWidget(QWidget* parent)
 
     connect(timer_, &QTimer::timeout, this, &HostPickerWidget::pollDiscovery);
     connect(refresh_, &QPushButton::clicked, this, &HostPickerWidget::pollDiscovery);
-    // itemClicked fires even when re-selecting the current row; selectionChanged alone does not.
     connect(list_, &QListWidget::itemClicked, this, [this](QListWidgetItem*) {
         applySelection(true);
     });
     connect(list_, &QListWidget::itemSelectionChanged, this, [this] {
         applySelection(false);
     });
+    connect(list_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem*) {
+        applySelection(true);
+        emit hostActivated();
+    });
 
-    setBrowsing(true);
+    setBrowsing(false);
 }
 
 void HostPickerWidget::setBrowsing(bool enabled) {
@@ -86,6 +125,13 @@ std::optional<DiscoveredHost> HostPickerWidget::selectedHost() const {
     return host;
 }
 
+std::optional<DiscoveredHost> HostPickerWidget::preferredHost() const {
+    if (!browser_) {
+        return std::nullopt;
+    }
+    return prefer_discovered_host(browser_->hosts());
+}
+
 void HostPickerWidget::pollDiscovery() {
     if (!browser_) {
         return;
@@ -101,11 +147,13 @@ void HostPickerWidget::pollDiscovery() {
 
 void HostPickerWidget::refreshUi() {
     const auto previous = selectedHost();
-    const auto hosts = browser_ ? browser_->hosts() : std::vector<DiscoveredHost>{};
+    const auto hosts = ranked_hosts(browser_ ? browser_->hosts() : std::vector<DiscoveredHost>{});
 
     {
         const QSignalBlocker blocker(list_);
         list_->clear();
+        QListWidgetItem* preferred_item = nullptr;
+        const auto preferred = prefer_discovered_host(hosts);
         for (const auto& host : hosts) {
             auto* item = new QListWidgetItem(
                 QString("%1  (%2:%3)")
@@ -123,6 +171,15 @@ void HostPickerWidget::refreshUi() {
                 previous->control_port == host.control_port) {
                 list_->setCurrentItem(item);
             }
+            if (preferred.has_value() &&
+                preferred->username == host.username &&
+                preferred->address == host.address &&
+                preferred->control_port == host.control_port) {
+                preferred_item = item;
+            }
+        }
+        if (list_->currentItem() == nullptr && preferred_item != nullptr) {
+            list_->setCurrentItem(preferred_item);
         }
     }
 
@@ -130,9 +187,8 @@ void HostPickerWidget::refreshUi() {
         status_->setText("No hosts found yet. On the host PC: Start Host with Advertise enabled.");
         last_emitted_.reset();
     } else {
-        status_->setText(QString("%1 host(s) found — click one to fill Host / ports above.")
+        status_->setText(QString("%1 host(s) found — select one, then OK.")
             .arg(hosts.size()));
-        // Keep the Host field in sync after list rebuilds (signals were blocked).
         applySelection(false);
     }
 }

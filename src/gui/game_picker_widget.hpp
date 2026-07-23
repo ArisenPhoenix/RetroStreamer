@@ -1,5 +1,6 @@
 #pragma once
 
+#include "client/game_filter.hpp"
 #include "common/protocol.hpp"
 
 #include <QWidget>
@@ -20,6 +21,7 @@ public:
 
     void setArtRoot(std::filesystem::path art_root);
     void setCatalog(const GameList& catalog);
+    void setSessionFilter(GameFilter filter);
     void setSelectedGameId(const std::string& game_id);
     void clearSelection();
     void refreshArtDisplay();
@@ -35,6 +37,7 @@ private:
     void updateSummary();
 
     GameList catalog_;
+    GameFilter session_filter_;
     std::optional<std::string> selected_id_;
     std::filesystem::path art_root_;
     QLabel* thumbnail_ = nullptr;

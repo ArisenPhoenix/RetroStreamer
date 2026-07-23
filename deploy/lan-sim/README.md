@@ -53,4 +53,6 @@ In another terminal on the metal machine:
 
 ## Why Docker instead of a full VM
 
-QEMU/libvirt are not installed on this machine. Docker already works, gives a separate IP stack, and is enough to exercise TCP control, UDP input, and RTP return paths before bringing up a second PC. A full VM can be added later if you need a complete desktop client OS.
+Docker already works, gives a separate IP stack, and is enough to exercise TCP control, UDP input, and RTP return paths before bringing up a second PC.
+
+For a **graphical** second client (GStreamer video window / media-lag eyeballing), use the KVM desktop VM instead: [`deploy/vm-client/`](../vm-client/README.md).

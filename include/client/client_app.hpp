@@ -30,6 +30,9 @@ struct ClientAppConfig {
     std::vector<std::size_t> controller_indexes;
     bool wants_video = true;
     bool wants_audio = true;
+    // Experimental: one shared-clock GStreamer pipeline for A/V lip-sync.
+    // Default false keeps the working dual gst-launch receivers.
+    bool synced_av = false;
     MediaQualityTier wanted_tier = MediaQualityTier::Auto;
     // 0 = use tier default bitrate cap on the host.
     std::uint16_t max_bitrate_kbps = 0;

@@ -203,7 +203,9 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         launch_config.command_prefix = resolved_retroarch.argv_prefix;
         // Avoid -f on the host's real Wayland session (can exit immediately). When video
         // streams from a virtual display, force fullscreen via the override config instead.
-        launch_config.extra_args.insert(launch_config.extra_args.begin(), "--verbose");
+        if (config.verbose) {
+            launch_config.extra_args.insert(launch_config.extra_args.begin(), "--verbose");
+        }
         const bool host_plays_locally =
             config.host_role == ParticipantRole::Player &&
             config.bridge_controller_index.has_value();

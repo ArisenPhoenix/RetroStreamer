@@ -59,4 +59,16 @@ private:
     std::vector<DiscoveredHost> hosts_;
 };
 
+/** Non-loopback IPv4 addresses on local interfaces (for same-subnet host ranking). */
+std::vector<std::string> local_ipv4_addresses();
+
+/** True when both addresses are IPv4 and share the same /24 prefix. */
+bool ipv4_same_subnet_24(std::string_view left, std::string_view right);
+
+/**
+ * Prefer a discovered LAN host on the same /24 as a local interface.
+ * Skips loopback; falls back to the first non-loopback host, else nullopt.
+ */
+std::optional<DiscoveredHost> prefer_discovered_host(const std::vector<DiscoveredHost>& hosts);
+
 } // namespace archstreamer

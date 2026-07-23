@@ -23,8 +23,12 @@ public:
     bool hasSelection() const;
     std::optional<DiscoveredHost> selectedHost() const;
 
+    /** Best LAN candidate (same-subnet preferred); never loopback. */
+    std::optional<DiscoveredHost> preferredHost() const;
+
 signals:
     void hostSelected(const QString& address, int control_port, int input_port);
+    void hostActivated();
 
 private:
     void refreshUi();

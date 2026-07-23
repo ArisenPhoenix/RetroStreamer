@@ -256,4 +256,129 @@ std::vector<DiscoveredHost> HostDiscoveryBrowser::hosts() const {
     return hosts_;
 }
 
+namespace {
+
+bool parse_ipv4(std::string_view text, std::uint32_t& out_host_order) {
+    if (text.empty() || text.size() >= INET_ADDRSTRLEN) {
+        return false;
+    }
+    char buffer[INET_ADDRSTRLEN]{};
+    std::memcpy(buffer, text.data(), text.size());
+    in_addr addr{};
+    if (inet_pton(AF_INET, buffer, &addr) != 1) {
+        return false;
+    }
+    out_host_order = ntohl(addr.s_addr);
+    return true;
+}
+
+bool is_loopback_ipv4(std::string_view address) {
+    std::uint32_t host = 0;
+    if (!parse_ipv4(address, host)) {
+        return false;
+    }
+    return (host >> 24) == 127;
+}
+
+} // namespace
+
+std::vector<std::string> local_ipv4_addresses() {
+    std::vector<std::string> addresses;
+
+#ifdef _WIN32
+    ULONG size = 0;
+    if (GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER, nullptr, nullptr, &size) !=
+            ERROR_BUFFER_OVERFLOW ||
+        size == 0) {
+        return addresses;
+    }
+    std::vector<std::uint8_t> buffer(size);
+    auto* adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
+    if (GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER, nullptr, adapters, &size) !=
+        NO_ERROR) {
+        return addresses;
+    }
+    for (auto* adapter = adapters; adapter != nullptr; adapter = adapter->Next) {
+        if (adapter->OperStatus != IfOperStatusUp) {
+            continue;
+        }
+        for (auto* unicast = adapter->FirstUnicastAddress; unicast != nullptr; unicast = unicast->Next) {
+            if (unicast->Address.lpSockaddr == nullptr ||
+                unicast->Address.lpSockaddr->sa_family != AF_INET) {
+                continue;
+            }
+            const auto* addr = reinterpret_cast<const sockaddr_in*>(unicast->Address.lpSockaddr);
+            char text[INET_ADDRSTRLEN]{};
+            if (inet_ntop(AF_INET, &addr->sin_addr, text, sizeof(text)) == nullptr) {
+                continue;
+            }
+            const std::string value{text};
+            if (is_loopback_ipv4(value)) {
+                continue;
+            }
+            if (std::find(addresses.begin(), addresses.end(), value) == addresses.end()) {
+                addresses.push_back(value);
+            }
+        }
+    }
+#else
+    ifaddrs* interfaces = nullptr;
+    if (getifaddrs(&interfaces) != 0) {
+        return addresses;
+    }
+    for (auto* entry = interfaces; entry != nullptr; entry = entry->ifa_next) {
+        if (entry->ifa_addr == nullptr || entry->ifa_addr->sa_family != AF_INET) {
+            continue;
+        }
+        if (entry->ifa_flags & IFF_LOOPBACK) {
+            continue;
+        }
+        if ((entry->ifa_flags & IFF_UP) == 0) {
+            continue;
+        }
+        char text[INET_ADDRSTRLEN]{};
+        const auto* addr = reinterpret_cast<const sockaddr_in*>(entry->ifa_addr);
+        if (inet_ntop(AF_INET, &addr->sin_addr, text, sizeof(text)) == nullptr) {
+            continue;
+        }
+        const std::string value{text};
+        if (std::find(addresses.begin(), addresses.end(), value) == addresses.end()) {
+            addresses.push_back(value);
+        }
+    }
+    freeifaddrs(interfaces);
+#endif
+
+    return addresses;
+}
+
+bool ipv4_same_subnet_24(std::string_view left, std::string_view right) {
+    std::uint32_t a = 0;
+    std::uint32_t b = 0;
+    if (!parse_ipv4(left, a) || !parse_ipv4(right, b)) {
+        return false;
+    }
+    return (a & 0xffffff00u) == (b & 0xffffff00u);
+}
+
+std::optional<DiscoveredHost> prefer_discovered_host(const std::vector<DiscoveredHost>& hosts) {
+    const auto local = local_ipv4_addresses();
+    for (const auto& host : hosts) {
+        if (is_loopback_ipv4(host.address)) {
+            continue;
+        }
+        for (const auto& local_address : local) {
+            if (ipv4_same_subnet_24(host.address, local_address)) {
+                return host;
+            }
+        }
+    }
+    for (const auto& host : hosts) {
+        if (!is_loopback_ipv4(host.address)) {
+            return host;
+        }
+    }
+    return std::nullopt;
+}
+
 } // namespace archstreamer

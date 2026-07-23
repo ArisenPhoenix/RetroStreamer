@@ -70,6 +70,10 @@ void GamePickerWidget::setCatalog(const GameList& catalog) {
     updateSummary();
 }
 
+void GamePickerWidget::setSessionFilter(GameFilter filter) {
+    session_filter_ = std::move(filter);
+}
+
 void GamePickerWidget::setSelectedGameId(const std::string& game_id) {
     selected_id_ = game_id;
     updateSummary();
@@ -108,7 +112,7 @@ void GamePickerWidget::openDialog() {
         return;
     }
 
-    GameSelectionDialog dialog(catalog_, selected_id_, art_root_, this);
+    GameSelectionDialog dialog(catalog_, selected_id_, art_root_, session_filter_, this);
     if (dialog.exec() != QDialog::Accepted) {
         return;
     }

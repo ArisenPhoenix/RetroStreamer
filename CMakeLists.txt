@@ -306,6 +306,8 @@ if(Qt6Widgets_FOUND)
         src/gui/game_selection_dialog.hpp
         src/gui/host_picker_widget.cpp
         src/gui/host_picker_widget.hpp
+        src/gui/host_search_dialog.cpp
+        src/gui/host_search_dialog.hpp
         src/tools/archstreamer_gui.cpp
     )
     target_include_directories(archstreamer_gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/gui)

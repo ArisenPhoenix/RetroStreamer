@@ -28,6 +28,12 @@ struct SessionClientConnection {
     SessionConnectionState connection_state = SessionConnectionState::Connected;
     std::chrono::steady_clock::time_point last_seen = std::chrono::steady_clock::now();
     std::chrono::steady_clock::time_point disconnected_at = {};
+    MediaQualityTier wanted_tier = MediaQualityTier::Auto;
+    MediaQualityTier applied_tier = MediaQualityTier::Medium;
+    std::uint16_t max_bitrate_kbps = 0;
+    std::uint8_t bad_health_streak = 0;
+    std::uint8_t good_health_streak = 0;
+    std::chrono::steady_clock::time_point last_video_reconfigure = {};
 };
 
 struct SessionPlan {

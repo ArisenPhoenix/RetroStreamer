@@ -243,6 +243,10 @@ ByteBuffer serialize_payload(const ViewerHeartbeat& payload) {
     Writer writer;
     writer.write_pod<ClientId>(payload.client_id);
     writer.write_pod<std::uint32_t>(payload.sequence);
+    writer.write_pod<std::uint16_t>(payload.loss_permille);
+    writer.write_pod<std::uint16_t>(payload.frames_decoded_delta);
+    writer.write_pod<std::uint8_t>(static_cast<std::uint8_t>(payload.wanted_tier));
+    writer.write_pod<std::uint16_t>(payload.max_bitrate_kbps);
     return writer.take();
 }
 
@@ -520,6 +524,10 @@ ViewerHeartbeat read_viewer_heartbeat(Reader& reader) {
     ViewerHeartbeat payload;
     payload.client_id = reader.read_pod<ClientId>();
     payload.sequence = reader.read_pod<std::uint32_t>();
+    payload.loss_permille = reader.read_pod<std::uint16_t>();
+    payload.frames_decoded_delta = reader.read_pod<std::uint16_t>();
+    payload.wanted_tier = static_cast<MediaQualityTier>(reader.read_pod<std::uint8_t>());
+    payload.max_bitrate_kbps = reader.read_pod<std::uint16_t>();
     return payload;
 }
 

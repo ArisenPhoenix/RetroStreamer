@@ -179,7 +179,11 @@ MediaEndpoint GStreamerVideoSender::endpoint(std::string host, std::uint16_t por
 void GStreamerVideoSender::start(
     const std::string& display,
     const std::string& destination_host,
-    std::uint16_t port) {
+    std::uint16_t port,
+    const VideoEncodeSettings& settings) {
+    const auto bitrate = settings.bitrate_kbps == 0 ? 1500 : settings.bitrate_kbps;
+    const auto framerate = settings.framerate == 0 ? 30 : settings.framerate;
+    const auto key_int_max = settings.key_int_max == 0 ? framerate : settings.key_int_max;
     auto args = std::vector<std::string>{
         "gst-launch-1.0",
         "-q",
@@ -188,7 +192,7 @@ void GStreamerVideoSender::start(
         "use-damage=0",
         "show-pointer=false",
         "!",
-        "video/x-raw,framerate=30/1",
+        "video/x-raw,framerate=" + std::to_string(framerate) + "/1",
         "!",
         "videoconvert",
         "!",
@@ -198,8 +202,8 @@ void GStreamerVideoSender::start(
         "x264enc",
         "tune=zerolatency",
         "speed-preset=ultrafast",
-        "bitrate=1500",
-        "key-int-max=30",
+        "bitrate=" + std::to_string(bitrate),
+        "key-int-max=" + std::to_string(key_int_max),
         "byte-stream=true",
         "bframes=0",
         "threads=1",
@@ -235,7 +239,8 @@ void GStreamerVideoSender::start(
     }
     std::cout
         << "Video capture running to " << destination_host << ':' << port
-        << " (H.264 baseline, RTP mtu=1200)\n";
+        << " (H.264 baseline, " << bitrate << " kbps, " << static_cast<int>(framerate)
+        << " fps, RTP mtu=1200)\n";
 }
 
 void GStreamerVideoSender::stop() {
@@ -253,6 +258,7 @@ std::vector<MediaClientStream> GStreamerVideoFanout::start(
         throw std::runtime_error("video fanout is already running");
     }
 
+    display_ = display;
     auto streams = std::vector<MediaClientStream>{};
     streams.reserve(destinations.size());
 
@@ -265,12 +271,17 @@ std::vector<MediaClientStream> GStreamerVideoFanout::start(
 
 MediaClientStream GStreamerVideoFanout::add(
     const std::string& display,
-    const MediaStreamRequest& destination) {
-    auto sender = GStreamerVideoSender{};
-    const auto endpoint = sender.endpoint(destination.destination_host, destination.port);
-    sender.start(display, destination.destination_host, destination.port);
+    const MediaStreamRequest& destination,
+    const VideoEncodeSettings& settings) {
+    display_ = display;
+    auto slot = ClientVideoSender{};
+    slot.destination_host = destination.destination_host;
+    slot.port = destination.port;
+    slot.settings = settings.bitrate_kbps == 0 ? video_encode_settings_for_tier(MediaQualityTier::Medium) : settings;
+    const auto endpoint = slot.sender.endpoint(destination.destination_host, destination.port);
+    slot.sender.start(display, destination.destination_host, destination.port, slot.settings);
     stop_client(destination.client_id);
-    senders_.emplace(destination.client_id, std::move(sender));
+    senders_.emplace(destination.client_id, std::move(slot));
     return MediaClientStream{
         destination.client_id,
         destination.destination_host,
@@ -278,10 +289,30 @@ MediaClientStream GStreamerVideoFanout::add(
     };
 }
 
+bool GStreamerVideoFanout::reconfigure_client(ClientId client_id, const VideoEncodeSettings& settings) {
+    const auto sender = senders_.find(client_id);
+    if (sender == senders_.end()) {
+        return false;
+    }
+    if (display_.empty()) {
+        return false;
+    }
+    auto& slot = sender->second;
+    if (slot.settings.bitrate_kbps == settings.bitrate_kbps &&
+        slot.settings.framerate == settings.framerate &&
+        slot.settings.key_int_max == settings.key_int_max) {
+        return false;
+    }
+    slot.sender.stop();
+    slot.settings = settings;
+    slot.sender.start(display_, slot.destination_host, slot.port, slot.settings);
+    return true;
+}
+
 void GStreamerVideoFanout::stop() {
     for (auto& [client_id, sender] : senders_) {
         (void)client_id;
-        sender.stop();
+        sender.sender.stop();
     }
     senders_.clear();
 }
@@ -291,7 +322,7 @@ void GStreamerVideoFanout::stop_client(ClientId client_id) {
     if (sender == senders_.end()) {
         return;
     }
-    sender->second.stop();
+    sender->second.sender.stop();
     senders_.erase(sender);
 }
 
@@ -498,6 +529,13 @@ void GStreamerMediaServer::remove_client(ClientId client_id) {
     if (audio_fanout_.has_value()) {
         audio_fanout_->stop_client(client_id);
     }
+}
+
+bool GStreamerMediaServer::reconfigure_client_video(ClientId client_id, const VideoEncodeSettings& settings) {
+    if (!video_fanout_.has_value()) {
+        return false;
+    }
+    return video_fanout_->reconfigure_client(client_id, settings);
 }
 
 void GStreamerMediaServer::stop() {

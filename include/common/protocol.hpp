@@ -14,7 +14,7 @@
 namespace archstreamer {
 
 constexpr std::uint32_t ProtocolMagic = 0x41525354; // "ARST"
-constexpr std::uint16_t ProtocolVersion = 8;
+constexpr std::uint16_t ProtocolVersion = 9;
 constexpr std::uint8_t MaxRemoteClients = 2;
 constexpr std::uint8_t MaxPlayersPerClient = 2;
 constexpr std::uint8_t MaxRetroArchPorts = 5; // Ports 0-3 plus a host player if desired.
@@ -177,9 +177,82 @@ struct ControllerInput {
     ControllerState state;
 };
 
+enum class MediaQualityTier : std::uint8_t {
+    Auto = 0,
+    Low = 1,
+    Medium = 2,
+    High = 3,
+};
+
+struct VideoEncodeSettings {
+    std::uint16_t bitrate_kbps = 1500;
+    std::uint8_t framerate = 30;
+    std::uint16_t key_int_max = 30;
+};
+
+inline VideoEncodeSettings video_encode_settings_for_tier(MediaQualityTier tier) {
+    switch (tier) {
+    case MediaQualityTier::Low:
+        return VideoEncodeSettings{800, 20, 20};
+    case MediaQualityTier::High:
+        return VideoEncodeSettings{3500, 30, 30};
+    case MediaQualityTier::Medium:
+    case MediaQualityTier::Auto:
+    default:
+        return VideoEncodeSettings{1500, 30, 30};
+    }
+}
+
+inline MediaQualityTier step_quality_tier_down(MediaQualityTier tier) {
+    switch (tier) {
+    case MediaQualityTier::High:
+        return MediaQualityTier::Medium;
+    case MediaQualityTier::Medium:
+    case MediaQualityTier::Auto:
+        return MediaQualityTier::Low;
+    case MediaQualityTier::Low:
+    default:
+        return MediaQualityTier::Low;
+    }
+}
+
+inline MediaQualityTier step_quality_tier_up(MediaQualityTier tier) {
+    switch (tier) {
+    case MediaQualityTier::Low:
+        return MediaQualityTier::Medium;
+    case MediaQualityTier::Medium:
+    case MediaQualityTier::Auto:
+        return MediaQualityTier::High;
+    case MediaQualityTier::High:
+    default:
+        return MediaQualityTier::High;
+    }
+}
+
+inline const char* media_quality_tier_name(MediaQualityTier tier) {
+    switch (tier) {
+    case MediaQualityTier::Auto:
+        return "auto";
+    case MediaQualityTier::Low:
+        return "low";
+    case MediaQualityTier::Medium:
+        return "medium";
+    case MediaQualityTier::High:
+        return "high";
+    }
+    return "unknown";
+}
+
 struct ViewerHeartbeat {
     ClientId client_id = 0;
     std::uint32_t sequence = 0;
+    // 0–1000: estimated RTP/media loss in tenths of a percent (best-effort).
+    std::uint16_t loss_permille = 0;
+    // Decoded video frames since the previous heartbeat (0 if no video / stalled).
+    std::uint16_t frames_decoded_delta = 0;
+    MediaQualityTier wanted_tier = MediaQualityTier::Auto;
+    // 0 = use tier default bitrate cap.
+    std::uint16_t max_bitrate_kbps = 0;
 };
 
 struct ErrorPacket {

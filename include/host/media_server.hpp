@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/media.hpp"
+#include "common/protocol.hpp"
 #include "host/host_launch_planner.hpp"
 
 #include <cstddef>
@@ -24,6 +25,8 @@ public:
         bool wants_video,
         bool wants_audio) = 0;
     virtual void remove_client(ClientId client_id) = 0;
+    // Restart that client's video gst-launch with new encode settings. Returns false if no video sender.
+    virtual bool reconfigure_client_video(ClientId client_id, const VideoEncodeSettings& settings) = 0;
     virtual void stop() = 0;
 };
 

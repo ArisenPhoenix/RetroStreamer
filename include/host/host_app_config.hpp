@@ -28,7 +28,7 @@ struct HostAppConfig {
     std::optional<std::uint16_t> input_port;
     std::uint8_t clients = 1;
     std::uint16_t session_timeout_seconds = 30;
-    std::uint16_t client_timeout_seconds = 5;
+    std::uint16_t client_timeout_seconds = 20;
     std::uint16_t player_reconnect_timeout_seconds = 60;
     ParticipantRole host_role = ParticipantRole::Viewer;
     bool video = true;

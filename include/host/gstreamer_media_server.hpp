@@ -37,7 +37,11 @@ private:
 class GStreamerVideoSender {
 public:
     MediaEndpoint endpoint(std::string host, std::uint16_t port) const;
-    void start(const std::string& display, const std::string& destination_host, std::uint16_t port);
+    void start(
+        const std::string& display,
+        const std::string& destination_host,
+        std::uint16_t port,
+        const VideoEncodeSettings& settings = {});
     void stop();
 
 private:
@@ -53,12 +57,22 @@ public:
         const std::vector<MediaStreamRequest>& destinations);
     MediaClientStream add(
         const std::string& display,
-        const MediaStreamRequest& destination);
+        const MediaStreamRequest& destination,
+        const VideoEncodeSettings& settings = {});
+    bool reconfigure_client(ClientId client_id, const VideoEncodeSettings& settings);
     void stop();
     void stop_client(ClientId client_id);
 
 private:
-    std::map<ClientId, GStreamerVideoSender> senders_;
+    struct ClientVideoSender {
+        GStreamerVideoSender sender;
+        std::string destination_host;
+        std::uint16_t port = 0;
+        VideoEncodeSettings settings;
+    };
+
+    std::string display_;
+    std::map<ClientId, ClientVideoSender> senders_;
 };
 
 class GStreamerAudioSender {
@@ -119,6 +133,7 @@ public:
         bool wants_video,
         bool wants_audio) override;
     void remove_client(ClientId client_id) override;
+    bool reconfigure_client_video(ClientId client_id, const VideoEncodeSettings& settings) override;
     void stop() override;
 
 private:

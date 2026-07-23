@@ -196,6 +196,9 @@ void WindowsChildProcess::start(
             CloseHandle(stdout_handle);
             throw std::runtime_error("failed to open child stderr path");
         }
+        // Merge stdout into the same log (gst-launch progressreport / status).
+        CloseHandle(stdout_handle);
+        stdout_handle = stderr_file;
         stderr_handle = stderr_file;
     }
 
@@ -205,7 +208,7 @@ void WindowsChildProcess::start(
     if (attr_bytes == nullptr) {
         CloseHandle(stdin_handle);
         CloseHandle(stdout_handle);
-        if (stderr_file != INVALID_HANDLE_VALUE) {
+        if (stderr_file != INVALID_HANDLE_VALUE && stderr_file != stdout_handle) {
             CloseHandle(stderr_file);
         }
         throw std::runtime_error("failed to allocate process attribute list");
@@ -215,7 +218,7 @@ void WindowsChildProcess::start(
         HeapFree(GetProcessHeap(), 0, attr_bytes);
         CloseHandle(stdin_handle);
         CloseHandle(stdout_handle);
-        if (stderr_file != INVALID_HANDLE_VALUE) {
+        if (stderr_file != INVALID_HANDLE_VALUE && stderr_file != stdout_handle) {
             CloseHandle(stderr_file);
         }
         throw std::runtime_error("InitializeProcThreadAttributeList failed");
@@ -241,7 +244,7 @@ void WindowsChildProcess::start(
         HeapFree(GetProcessHeap(), 0, attr_bytes);
         CloseHandle(stdin_handle);
         CloseHandle(stdout_handle);
-        if (stderr_file != INVALID_HANDLE_VALUE) {
+        if (stderr_file != INVALID_HANDLE_VALUE && stderr_file != stdout_handle) {
             CloseHandle(stderr_file);
         }
         throw std::runtime_error("UpdateProcThreadAttribute failed");
@@ -275,7 +278,7 @@ void WindowsChildProcess::start(
     HeapFree(GetProcessHeap(), 0, attr_bytes);
     CloseHandle(stdin_handle);
     CloseHandle(stdout_handle);
-    if (stderr_file != INVALID_HANDLE_VALUE) {
+    if (stderr_file != INVALID_HANDLE_VALUE && stderr_file != stdout_handle) {
         CloseHandle(stderr_file);
     }
 

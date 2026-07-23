@@ -55,13 +55,16 @@ void PosixChildProcess::start(
             setenv(key.c_str(), value.c_str(), 1);
         }
         if (stderr_path.has_value()) {
+            // Capture both stdout and stderr: gst-launch prints pipeline status /
+            // progressreport on stdout, while plugin warnings go to stderr.
             const int fd = open(
                 stderr_path->c_str(),
                 O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC,
                 0644);
             if (fd >= 0) {
+                dup2(fd, STDOUT_FILENO);
                 dup2(fd, STDERR_FILENO);
-                if (fd != STDERR_FILENO) {
+                if (fd != STDOUT_FILENO && fd != STDERR_FILENO) {
                     close(fd);
                 }
             }

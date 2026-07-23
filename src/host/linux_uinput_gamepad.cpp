@@ -42,10 +42,6 @@ void set_button_bit(int fd, int button) {
     checked_ioctl(fd, UI_SET_KEYBIT, button, "failed to set uinput button bit");
 }
 
-void emit_button(int fd, const ControllerState& state, ControllerButton source, int target) {
-    emit_event(fd, EV_KEY, target, (state.buttons & source) != 0 ? 1 : 0);
-}
-
 } // namespace
 
 LinuxUinputGamepadBus::LinuxUinputGamepadBus(VirtualGamepadIdentity identity)
@@ -98,10 +94,7 @@ void LinuxUinputGamepadBus::plug(RetroArchPort port) {
         set_button_bit(fd, BTN_THUMBR);
         set_button_bit(fd, BTN_TL);
         set_button_bit(fd, BTN_TR);
-        set_button_bit(fd, BTN_DPAD_UP);
-        set_button_bit(fd, BTN_DPAD_DOWN);
-        set_button_bit(fd, BTN_DPAD_LEFT);
-        set_button_bit(fd, BTN_DPAD_RIGHT);
+        // D-pad is exposed via ABS_HAT0 only (see update()).
 
         checked_ioctl(fd, UI_SET_ABSBIT, ABS_X, "failed to set ABS_X");
         checked_ioctl(fd, UI_SET_ABSBIT, ABS_Y, "failed to set ABS_Y");
@@ -153,6 +146,8 @@ void LinuxUinputGamepadBus::unplug(RetroArchPort port) {
     close(pad.fd);
     pad.fd = -1;
     pad.plugged = false;
+    pad.has_last = false;
+    pad.last = {};
 }
 
 void LinuxUinputGamepadBus::update(RetroArchPort port, const ControllerState& state) {
@@ -161,34 +156,66 @@ void LinuxUinputGamepadBus::update(RetroArchPort port, const ControllerState& st
         plug(port);
     }
 
-    emit_event(pad.fd, EV_ABS, ABS_X, state.left_x);
-    emit_event(pad.fd, EV_ABS, ABS_Y, state.left_y);
-    emit_event(pad.fd, EV_ABS, ABS_RX, state.right_x);
-    emit_event(pad.fd, EV_ABS, ABS_RY, state.right_y);
-    emit_event(pad.fd, EV_ABS, ABS_Z, state.left_trigger);
-    emit_event(pad.fd, EV_ABS, ABS_RZ, state.right_trigger);
+    const auto& prev = pad.last;
+    const bool first = !pad.has_last;
+    bool dirty = first;
 
-    emit_event(pad.fd, EV_ABS, ABS_HAT0X,
-        (state.buttons & ButtonDpadRight ? 1 : 0) - (state.buttons & ButtonDpadLeft ? 1 : 0));
-    emit_event(pad.fd, EV_ABS, ABS_HAT0Y,
-        (state.buttons & ButtonDpadDown ? 1 : 0) - (state.buttons & ButtonDpadUp ? 1 : 0));
+    const auto emit_abs_if_changed = [&](std::uint16_t code, std::int32_t value, std::int32_t previous) {
+        if (first || value != previous) {
+            emit_event(pad.fd, EV_ABS, code, value);
+            dirty = true;
+        }
+    };
+    const auto emit_btn_if_changed = [&](ControllerButton source, int target) {
+        const bool pressed = (state.buttons & source) != 0;
+        const bool was_pressed = (prev.buttons & source) != 0;
+        if (first || pressed != was_pressed) {
+            emit_event(pad.fd, EV_KEY, target, pressed ? 1 : 0);
+            dirty = true;
+        }
+    };
 
-    emit_button(pad.fd, state, ButtonA, BTN_SOUTH);
-    emit_button(pad.fd, state, ButtonB, BTN_EAST);
-    emit_button(pad.fd, state, ButtonX, BTN_WEST);
-    emit_button(pad.fd, state, ButtonY, BTN_NORTH);
-    emit_button(pad.fd, state, ButtonBack, BTN_SELECT);
-    emit_button(pad.fd, state, ButtonGuide, BTN_MODE);
-    emit_button(pad.fd, state, ButtonStart, BTN_START);
-    emit_button(pad.fd, state, ButtonLeftStick, BTN_THUMBL);
-    emit_button(pad.fd, state, ButtonRightStick, BTN_THUMBR);
-    emit_button(pad.fd, state, ButtonLeftShoulder, BTN_TL);
-    emit_button(pad.fd, state, ButtonRightShoulder, BTN_TR);
-    emit_button(pad.fd, state, ButtonDpadUp, BTN_DPAD_UP);
-    emit_button(pad.fd, state, ButtonDpadDown, BTN_DPAD_DOWN);
-    emit_button(pad.fd, state, ButtonDpadLeft, BTN_DPAD_LEFT);
-    emit_button(pad.fd, state, ButtonDpadRight, BTN_DPAD_RIGHT);
-    emit_event(pad.fd, EV_SYN, SYN_REPORT, 0);
+    emit_abs_if_changed(ABS_X, state.left_x, prev.left_x);
+    emit_abs_if_changed(ABS_Y, state.left_y, prev.left_y);
+    emit_abs_if_changed(ABS_RX, state.right_x, prev.right_x);
+    emit_abs_if_changed(ABS_RY, state.right_y, prev.right_y);
+    emit_abs_if_changed(ABS_Z, state.left_trigger, prev.left_trigger);
+    emit_abs_if_changed(ABS_RZ, state.right_trigger, prev.right_trigger);
+
+    // D-pad as hat only. RetroArch sdl2 binds h0up/h0down/h0left/h0right.
+    // Do not also emit BTN_DPAD_*: that double-fires menu navigation.
+    const auto hat_x =
+        ((state.buttons & ButtonDpadRight) != 0 ? 1 : 0) -
+        ((state.buttons & ButtonDpadLeft) != 0 ? 1 : 0);
+    const auto hat_y =
+        ((state.buttons & ButtonDpadDown) != 0 ? 1 : 0) -
+        ((state.buttons & ButtonDpadUp) != 0 ? 1 : 0);
+    const auto prev_hat_x =
+        ((prev.buttons & ButtonDpadRight) != 0 ? 1 : 0) -
+        ((prev.buttons & ButtonDpadLeft) != 0 ? 1 : 0);
+    const auto prev_hat_y =
+        ((prev.buttons & ButtonDpadDown) != 0 ? 1 : 0) -
+        ((prev.buttons & ButtonDpadUp) != 0 ? 1 : 0);
+    emit_abs_if_changed(ABS_HAT0X, hat_x, prev_hat_x);
+    emit_abs_if_changed(ABS_HAT0Y, hat_y, prev_hat_y);
+
+    emit_btn_if_changed(ButtonA, BTN_SOUTH);
+    emit_btn_if_changed(ButtonB, BTN_EAST);
+    emit_btn_if_changed(ButtonX, BTN_WEST);
+    emit_btn_if_changed(ButtonY, BTN_NORTH);
+    emit_btn_if_changed(ButtonBack, BTN_SELECT);
+    emit_btn_if_changed(ButtonGuide, BTN_MODE);
+    emit_btn_if_changed(ButtonStart, BTN_START);
+    emit_btn_if_changed(ButtonLeftStick, BTN_THUMBL);
+    emit_btn_if_changed(ButtonRightStick, BTN_THUMBR);
+    emit_btn_if_changed(ButtonLeftShoulder, BTN_TL);
+    emit_btn_if_changed(ButtonRightShoulder, BTN_TR);
+
+    if (dirty) {
+        emit_event(pad.fd, EV_SYN, SYN_REPORT, 0);
+    }
+    pad.last = state;
+    pad.has_last = true;
 }
 
 LinuxUinputGamepadBus::Pad& LinuxUinputGamepadBus::pad_for(RetroArchPort port) {

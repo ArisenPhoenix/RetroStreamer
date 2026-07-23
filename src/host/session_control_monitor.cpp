@@ -42,7 +42,9 @@ SessionControlMonitor::SessionControlMonitor(
     const auto now = started_at_;
     for (auto& client : plan_.clients) {
         client.last_seen = now;
-        client.applied_tier = MediaQualityTier::Medium;
+        // Start at High so Auto does not restart the gst pipeline ~20s in for a step-up
+        // (restart blanks the remote until the next IDR). Auto can still step down.
+        client.applied_tier = MediaQualityTier::High;
         client.wanted_tier = MediaQualityTier::Auto;
     }
 }

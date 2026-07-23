@@ -40,7 +40,7 @@ PosixTcpStream& PosixTcpStream::operator=(PosixTcpStream&& other) noexcept {
 }
 
 PosixTcpStream PosixTcpStream::connect_to(const std::string& host, std::uint16_t port) {
-    const int fd = socket(AF_INET, SOCK_STREAM, 0);
+    const int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) {
         throw std::runtime_error("failed to create TCP socket");
     }
@@ -189,7 +189,7 @@ void PosixTcpStream::close_if_open() {
 }
 
 PosixTcpListener::PosixTcpListener(std::uint16_t port) {
-    fd_ = socket(AF_INET, SOCK_STREAM, 0);
+    fd_ = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd_ < 0) {
         throw std::runtime_error("failed to create TCP listener");
     }
@@ -225,7 +225,11 @@ PosixTcpStream PosixTcpListener::accept_one() {
     while (true) {
         sockaddr_in peer{};
         socklen_t peer_length = sizeof(peer);
-        const int client_fd = accept(fd_, reinterpret_cast<sockaddr*>(&peer), &peer_length);
+        const int client_fd = accept4(
+            fd_,
+            reinterpret_cast<sockaddr*>(&peer),
+            &peer_length,
+            SOCK_CLOEXEC);
         if (client_fd >= 0) {
             char address[INET_ADDRSTRLEN] = {};
             const char* result = inet_ntop(AF_INET, &peer.sin_addr, address, sizeof(address));
@@ -269,7 +273,9 @@ std::optional<PosixTcpStream> PosixTcpListener::accept_for(std::chrono::millisec
 }
 
 PosixUdpSocket::PosixUdpSocket() {
-    fd_ = socket(AF_INET, SOCK_DGRAM, 0);
+    // CLOEXEC is required: host_runner forks Xvfb/gst/RetroArch, and a shared
+    // input UDP fd can leave controller packets unread by the host loop.
+    fd_ = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
     if (fd_ < 0) {
         throw std::runtime_error("failed to create UDP socket");
     }

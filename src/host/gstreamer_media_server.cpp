@@ -126,19 +126,23 @@ bool sink_exists(const std::string& sink_name) {
 } // namespace
 
 std::string ensure_streaming_audio_sink() {
-    if (sink_exists(kStreamingAudioSinkName)) {
-        return kStreamingAudioSinkName;
+    if (!sink_exists(kStreamingAudioSinkName)) {
+        const auto module = archstreamer::read_command_output(
+            "pactl load-module module-null-sink "
+            "sink_name=archstreamer "
+            "sink_properties='device.description=ArchStreamer session.suspend-timeout.seconds=0' "
+            "2>/dev/null");
+        if (module.empty() || !sink_exists(kStreamingAudioSinkName)) {
+            throw std::runtime_error(
+                "failed to create ArchStreamer null sink (need pactl / module-null-sink). "
+                "Host speakers would otherwise play RetroArch audio while streaming.");
+        }
     }
 
-    const auto module = archstreamer::read_command_output(
-        "pactl load-module module-null-sink "
-        "sink_name=archstreamer "
-        "sink_properties=device.description=ArchStreamer 2>/dev/null");
-    if (module.empty() || !sink_exists(kStreamingAudioSinkName)) {
-        throw std::runtime_error(
-            "failed to create ArchStreamer null sink (need pactl / module-null-sink). "
-            "Host speakers would otherwise play RetroArch audio while streaming.");
-    }
+    // PipeWire suspends idle sinks; pulsesrc then times out connecting to *.monitor
+    // and remote clients get silence. Keep the capture sink awake.
+    (void)archstreamer::read_command_output(
+        "pactl suspend-sink archstreamer 0 2>/dev/null");
     return kStreamingAudioSinkName;
 }
 
@@ -277,7 +281,7 @@ MediaClientStream GStreamerVideoFanout::add(
     auto slot = ClientVideoSender{};
     slot.destination_host = destination.destination_host;
     slot.port = destination.port;
-    slot.settings = settings.bitrate_kbps == 0 ? video_encode_settings_for_tier(MediaQualityTier::Medium) : settings;
+    slot.settings = settings.bitrate_kbps == 0 ? video_encode_settings_for_tier(MediaQualityTier::High) : settings;
     const auto endpoint = slot.sender.endpoint(destination.destination_host, destination.port);
     slot.sender.start(display, destination.destination_host, destination.port, slot.settings);
     stop_client(destination.client_id);

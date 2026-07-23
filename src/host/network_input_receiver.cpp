@@ -20,10 +20,28 @@ void NetworkInputReceiver::poll() {
             return;
         }
 
+        ++packets_received_;
         try {
             auto payload = deserialize_packet(*bytes);
             if (auto* input = std::get_if<ControllerInput>(&payload); input != nullptr) {
-                input_router_.route(*input);
+                if (!logged_first_receive_) {
+                    logged_first_receive_ = true;
+                    std::cout
+                        << "First controller UDP packet received from client "
+                        << static_cast<int>(input->client_id)
+                        << " (local P" << static_cast<int>(input->local_player) + 1
+                        << ", buttons=0x" << std::hex << input->state.buttons << std::dec
+                        << ")\n";
+                }
+                if (input_router_.route(*input)) {
+                    ++packets_applied_;
+                } else if (packets_applied_ == 0 && packets_received_ <= 5) {
+                    std::cerr
+                        << "Controller input from client "
+                        << static_cast<int>(input->client_id)
+                        << " local P" << static_cast<int>(input->local_player) + 1
+                        << " has no seat assignment; ignored\n";
+                }
             }
         } catch (const std::exception& error) {
             std::cerr << "Ignoring bad input packet: " << error.what() << '\n';

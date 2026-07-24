@@ -125,6 +125,7 @@ void GStreamerSyncedMediaReceiver::connect(const MediaEndpoint& endpoint) {
     bound_audio_device_ = endpoint.audio_uri.empty()
         ? std::string{}
         : current_audio_playback_device_key();
+    bound_audio_epoch_ = audio_output_preference_epoch();
     next_audio_device_check_ = std::chrono::steady_clock::now() + kAudioDevicePollInterval;
     session_.connect(endpoint_);
 }
@@ -139,8 +140,10 @@ bool GStreamerSyncedMediaReceiver::poll() {
     if (endpoint_.audio_uri.empty()) {
         return false;
     }
+    const auto epoch = audio_output_preference_epoch();
+    const bool preference_changed = epoch != bound_audio_epoch_;
     const auto now = std::chrono::steady_clock::now();
-    if (now < next_audio_device_check_) {
+    if (!preference_changed && now < next_audio_device_check_) {
         return false;
     }
     next_audio_device_check_ = now + kAudioDevicePollInterval;
@@ -148,12 +151,13 @@ bool GStreamerSyncedMediaReceiver::poll() {
     const auto device = current_audio_playback_device_key();
     const bool device_changed = !device.empty() && device != bound_audio_device_;
     const bool died = !session_.running();
-    if (!device_changed && !died) {
+    if (!preference_changed && !device_changed && !died) {
         return false;
     }
 
     session_.disconnect();
     bound_audio_device_ = device;
+    bound_audio_epoch_ = epoch;
     session_.connect(endpoint_);
     return true;
 }

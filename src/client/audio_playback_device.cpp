@@ -3,14 +3,20 @@
 #include "client/gstreamer_probe.hpp"
 #include "common/platform/process_utils.hpp"
 
+#include <atomic>
 #include <cctype>
 #include <cstdio>
+#include <mutex>
 #include <optional>
 #include <string_view>
 #include <utility>
 
 namespace archstreamer {
 namespace {
+
+std::mutex g_preferred_mutex;
+std::string g_preferred_audio_output = "auto";
+std::atomic<std::uint64_t> g_preferred_epoch{1};
 
 std::string to_lower_copy(std::string value) {
     for (char& ch : value) {
@@ -128,7 +134,16 @@ std::vector<WasapiSinkDevice> list_wasapi2_sink_devices() {
 }
 
 std::optional<WasapiSinkDevice> choose_preferred_wasapi2_device() {
+    const auto preferred = preferred_audio_output_device();
     const auto devices = list_wasapi2_sink_devices();
+    if (!preferred.empty() && preferred != "auto") {
+        for (const auto& device : devices) {
+            if (device.id == preferred && !looks_like_controller_audio_device(device.name)) {
+                return device;
+            }
+        }
+    }
+
     auto score = [](const WasapiSinkDevice& device) {
         if (device.id.empty() || looks_like_controller_audio_device(device.name)) {
             return -1000;
@@ -176,16 +191,148 @@ std::string linux_default_pulse_sink() {
 #endif
 }
 
+std::string sink_description_from_pactl_list(const std::string& dump, const std::string& sink_name) {
+    std::string::size_type pos = 0;
+    while (pos < dump.size()) {
+        const auto next = dump.find("Sink #", pos + 1);
+        const auto block = dump.substr(
+            pos,
+            next == std::string::npos ? std::string::npos : next - pos);
+        pos = next == std::string::npos ? dump.size() : next;
+
+        const auto name_key = block.find("Name: ");
+        if (name_key == std::string::npos) {
+            continue;
+        }
+        auto name = block.substr(name_key + 6);
+        const auto name_nl = name.find('\n');
+        if (name_nl != std::string::npos) {
+            name = name.substr(0, name_nl);
+        }
+        if (trim_copy(name) != sink_name) {
+            continue;
+        }
+        const auto desc_key = block.find("Description: ");
+        if (desc_key == std::string::npos) {
+            return sink_name;
+        }
+        auto desc = block.substr(desc_key + 13);
+        const auto desc_nl = desc.find('\n');
+        if (desc_nl != std::string::npos) {
+            desc = desc.substr(0, desc_nl);
+        }
+        desc = trim_copy(std::move(desc));
+        return desc.empty() ? sink_name : desc;
+    }
+    return sink_name;
+}
+
+std::vector<AudioOutputDevice> list_pulse_output_devices() {
+    std::vector<AudioOutputDevice> devices;
+#ifndef _WIN32
+    const auto defaults = linux_default_pulse_sink();
+    const auto details = read_command_output("pactl list sinks 2>/dev/null");
+    const auto short_list = read_command_output("pactl list short sinks 2>/dev/null");
+    std::string::size_type pos = 0;
+    while (pos < short_list.size()) {
+        const auto end = short_list.find('\n', pos);
+        const auto line = short_list.substr(
+            pos,
+            end == std::string::npos ? std::string::npos : end - pos);
+        pos = end == std::string::npos ? short_list.size() : end + 1;
+        if (line.empty()) {
+            continue;
+        }
+        const auto tab1 = line.find('\t');
+        if (tab1 == std::string::npos) {
+            continue;
+        }
+        auto rest = line.substr(tab1 + 1);
+        const auto tab2 = rest.find('\t');
+        const auto name = tab2 == std::string::npos ? rest : rest.substr(0, tab2);
+        if (name.empty()) {
+            continue;
+        }
+        // Hide ArchStreamer capture null sinks (and any leftover park sinks).
+        if (name == "archstreamer" || name.rfind("archstreamer", 0) == 0) {
+            continue;
+        }
+        AudioOutputDevice device;
+        device.id = name;
+        device.name = sink_description_from_pactl_list(details, name);
+        device.is_default = (name == defaults);
+        devices.push_back(std::move(device));
+    }
+#endif
+    return devices;
+}
+
+std::string resolve_preferred_pulse_sink() {
+    const auto preferred = preferred_audio_output_device();
+    if (!preferred.empty() && preferred != "auto") {
+        return preferred;
+    }
+    return linux_default_pulse_sink();
+}
+
 } // namespace
+
+void set_preferred_audio_output_device(std::string id) {
+    if (id.empty()) {
+        id = "auto";
+    }
+    {
+        std::lock_guard lock(g_preferred_mutex);
+        if (g_preferred_audio_output == id) {
+            return;
+        }
+        g_preferred_audio_output = std::move(id);
+    }
+    g_preferred_epoch.fetch_add(1, std::memory_order_relaxed);
+}
+
+std::string preferred_audio_output_device() {
+    std::lock_guard lock(g_preferred_mutex);
+    return g_preferred_audio_output;
+}
+
+std::uint64_t audio_output_preference_epoch() {
+    return g_preferred_epoch.load(std::memory_order_relaxed);
+}
+
+std::vector<AudioOutputDevice> list_audio_output_devices() {
+    std::vector<AudioOutputDevice> devices;
+    devices.push_back(AudioOutputDevice{"auto", "Auto (system default)", true});
+#ifdef _WIN32
+    for (const auto& device : list_wasapi2_sink_devices()) {
+        if (device.id.empty() || looks_like_controller_audio_device(device.name)) {
+            continue;
+        }
+        if (contains_ci(device.name, "default audio render device")) {
+            continue;
+        }
+        devices.push_back(AudioOutputDevice{device.id, device.name, device.is_default});
+    }
+#else
+    for (auto& device : list_pulse_output_devices()) {
+        if (device.is_default) {
+            devices[0].name = "Auto → " + device.name;
+        }
+        devices.push_back(std::move(device));
+    }
+#endif
+    return devices;
+}
 
 std::string current_audio_playback_device_key() {
 #ifdef _WIN32
     if (const auto device = choose_preferred_wasapi2_device(); device.has_value()) {
         return device->id;
     }
-    return "default";
+    const auto preferred = preferred_audio_output_device();
+    return preferred.empty() ? std::string("default") : preferred;
 #else
-    return linux_default_pulse_sink();
+    return resolve_preferred_pulse_sink();
 #endif
 }
 
@@ -218,7 +365,7 @@ AudioPlaybackSink choose_audio_playback_sink(bool sync) {
         };
     }
 #else
-    const auto pulse_sink = linux_default_pulse_sink();
+    const auto pulse_sink = resolve_preferred_pulse_sink();
     if (!pulse_sink.empty() && gst_element_available("pulsesink")) {
         return {
             {

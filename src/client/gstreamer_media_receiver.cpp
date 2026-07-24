@@ -28,6 +28,7 @@ void GStreamerMediaReceiver::start_audio_pipeline(bool wait_for_ready) {
 
     const auto sink = choose_audio_playback_sink(false);
     bound_audio_device_ = sink.device_key.empty() ? current_audio_playback_device_key() : sink.device_key;
+    bound_audio_epoch_ = audio_output_preference_epoch();
     audio_pipeline_info_ = sink.description;
     audio_args.insert(audio_args.end(), sink.gst_args.begin(), sink.gst_args.end());
     audio_process_.start(audio_args);
@@ -82,8 +83,10 @@ bool GStreamerMediaReceiver::poll() {
     if (endpoint_.audio_uri.empty()) {
         return false;
     }
+    const auto epoch = audio_output_preference_epoch();
+    const bool preference_changed = epoch != bound_audio_epoch_;
     const auto now = std::chrono::steady_clock::now();
-    if (now < next_audio_device_check_) {
+    if (!preference_changed && now < next_audio_device_check_) {
         return false;
     }
     next_audio_device_check_ = now + kAudioDevicePollInterval;
@@ -91,7 +94,7 @@ bool GStreamerMediaReceiver::poll() {
     const auto device = current_audio_playback_device_key();
     const bool device_changed = !device.empty() && device != bound_audio_device_;
     const bool died = !audio_process_.running();
-    if (!device_changed && !died) {
+    if (!preference_changed && !device_changed && !died) {
         return false;
     }
 

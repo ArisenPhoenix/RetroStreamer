@@ -86,6 +86,7 @@ private:
     GStreamerSyncedMediaSession session_;
     MediaEndpoint endpoint_;
     std::string bound_audio_device_;
+    std::uint64_t bound_audio_epoch_ = 0;
     std::chrono::steady_clock::time_point next_audio_device_check_{};
 };
 

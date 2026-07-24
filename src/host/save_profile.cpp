@@ -50,6 +50,9 @@ SaveProfile prepare_save_profile(
     std::filesystem::create_directories(root_directory);
     std::filesystem::create_directories(template_directory / "saves");
     std::filesystem::create_directories(template_directory / "states");
+    // Per-user Yuzu isolation (XDG roots seeded at launch via prepare_yuzu_user_profile).
+    std::filesystem::create_directories(template_directory / "yuzu" / "xdg-data" / "yuzu" / "keys");
+    std::filesystem::create_directories(template_directory / "yuzu" / "xdg-config" / "yuzu");
 
     if (new_user) {
         std::filesystem::create_directories(user_directory);

@@ -32,6 +32,25 @@ bool is_archstreamer_joystick(int device_index) {
     return name != nullptr && std::string(name).rfind("ArchStreamer", 0) == 0;
 }
 
+std::string guid_string_for_index(int device_index) {
+    char guid_text[33] = {};
+    SDL_JoystickGetGUIDString(SDL_JoystickGetDeviceGUID(device_index), guid_text, sizeof(guid_text));
+    return guid_text;
+}
+
+// Yuzu's SDL driver zeroes the controller-name CRC (bytes 2-3) before storing/matching
+// GUIDs. Bindings that keep the host SDL CRC never match at runtime.
+std::string yuzu_filtered_sdl_guid(std::string guid) {
+    if (guid.size() < 8) {
+        return guid;
+    }
+    guid[4] = '0';
+    guid[5] = '0';
+    guid[6] = '0';
+    guid[7] = '0';
+    return guid;
+}
+
 } // namespace
 
 std::string sdl_archstreamer_pad_whitelist(std::size_t players) {
@@ -48,9 +67,10 @@ std::string sdl_archstreamer_pad_whitelist(std::size_t players) {
     return result;
 }
 
-std::vector<std::size_t> find_archstreamer_sdl_joypad_indices(
+std::vector<ArchStreamerSdlPad> find_archstreamer_sdl_pads(
     std::size_t players,
-    const std::string& ignore_devices) {
+    const std::string& ignore_devices,
+    bool verbose) {
     // Must match RetroArch's environment: ignored pads disappear from SDL's joystick
     // list and renumber remaining devices (often moving ArchStreamer from 2 → 0).
     // Use a process hint only for this scan — never setenv, or the host bridge can no
@@ -83,34 +103,59 @@ std::vector<std::size_t> find_archstreamer_sdl_joypad_indices(
         return {};
     }
 
-    std::cout << "SDL joysticks after ignore filter: " << count << '\n';
-    std::vector<std::pair<std::uint16_t, int>> found;
+    if (verbose) {
+        std::cout << "SDL joysticks after ignore filter: " << count << '\n';
+    }
+    std::vector<std::pair<std::uint16_t, ArchStreamerSdlPad>> found;
     for (int index = 0; index < count; ++index) {
         const char* name = SDL_JoystickNameForIndex(index);
         const auto vendor = static_cast<std::uint16_t>(SDL_JoystickGetDeviceVendor(index));
         const auto product = static_cast<std::uint16_t>(SDL_JoystickGetDeviceProduct(index));
-        std::cout
-            << "  [" << index << "] " << (name != nullptr ? name : "?")
-            << " " << hex_vid_pid(vendor, product)
-            << (is_archstreamer_joystick(index) ? " (virtual)" : "") << '\n';
-        if (!is_archstreamer_joystick(index)) {
+        const bool virtual_pad = is_archstreamer_joystick(index);
+        if (verbose) {
+            std::cout
+                << "  [" << index << "] " << (name != nullptr ? name : "?")
+                << " " << hex_vid_pid(vendor, product)
+                << (virtual_pad ? " (virtual)" : "") << '\n';
+        }
+        if (!virtual_pad) {
             continue;
         }
-        found.push_back({product, index});
+        found.push_back({
+            product,
+            ArchStreamerSdlPad{
+                static_cast<std::size_t>(index),
+                yuzu_filtered_sdl_guid(guid_string_for_index(index)),
+                product,
+            },
+        });
     }
 
     std::sort(found.begin(), found.end(), [](const auto& left, const auto& right) {
         return left.first < right.first;
     });
 
-    std::vector<std::size_t> indices;
-    indices.reserve(players);
+    std::vector<ArchStreamerSdlPad> pads;
+    pads.reserve(players);
     for (std::size_t i = 0; i < players && i < found.size(); ++i) {
-        indices.push_back(static_cast<std::size_t>(found[i].second));
+        pads.push_back(std::move(found[i].second));
     }
 
     SDL_QuitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER);
     SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES, "");
+    return pads;
+}
+
+std::vector<std::size_t> find_archstreamer_sdl_joypad_indices(
+    std::size_t players,
+    const std::string& ignore_devices,
+    bool verbose) {
+    const auto pads = find_archstreamer_sdl_pads(players, ignore_devices, verbose);
+    std::vector<std::size_t> indices;
+    indices.reserve(pads.size());
+    for (const auto& pad : pads) {
+        indices.push_back(pad.sdl_index);
+    }
     return indices;
 }
 

@@ -1,0 +1,56 @@
+#pragma once
+
+#include "host/save_profile.hpp"
+
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace archstreamer {
+
+struct ResolvedStandaloneEmulator {
+    std::filesystem::path path;
+    // Args inserted before the content path (e.g. Yuzu: -f -g).
+    std::vector<std::string> args_before_content;
+    std::string display_name;
+};
+
+struct YuzuUserProfile {
+    // Per-session XDG roots so each ArchStreamer user gets isolated Yuzu saves/config.
+    std::filesystem::path xdg_data_home;
+    std::filesystem::path xdg_config_home;
+    std::filesystem::path keys_directory;
+};
+
+// Managed tree: ~/.local/share/archstreamer/yuzu/{yuzu.AppImage,keys/...}
+std::filesystem::path default_yuzu_runtime_root();
+
+// Ensure AppImage + shared keys exist under the managed runtime (copy from
+// ~/Apps/Yuzu and ~/.local/share/yuzu/keys when missing).
+std::optional<ResolvedStandaloneEmulator> ensure_yuzu_runtime();
+
+// Alias used by catalog scan / launch.
+inline std::optional<ResolvedStandaloneEmulator> resolve_yuzu() {
+    return ensure_yuzu_runtime();
+}
+
+// Create per-user Yuzu data/config under the save profile and seed keys.
+// force_opengl: VirtualGL/Xvfb path (Vulkan often lacks a present queue there).
+// force_vulkan: gamescope path (OpenGL left over from VGL sessions presents poorly).
+YuzuUserProfile prepare_yuzu_user_profile(
+    const SaveProfile& save_profile,
+    bool force_opengl = false,
+    bool force_vulkan = false);
+
+// Bind player_N Controls to ArchStreamer uinput pads (engine:sdl + GUID).
+// Call after pads are plugged so GUIDs match what Yuzu's SDL will see.
+void configure_yuzu_archstreamer_controls(
+    const YuzuUserProfile& profile,
+    const std::vector<std::string>& sdl_guids);
+
+std::vector<std::pair<std::string, std::string>> yuzu_launch_environment(
+    const YuzuUserProfile& profile);
+
+} // namespace archstreamer

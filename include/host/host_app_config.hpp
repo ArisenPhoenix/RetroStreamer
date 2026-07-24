@@ -51,6 +51,9 @@ struct HostAppConfig {
     std::string username;
     // "auto" or a GpuDevice::id from list_render_gpus() (e.g. nvidia:0).
     std::string render_gpu = "auto";
+    // Preferred API for Yuzu/standalone. Auto = backend default (Vulkan on gamescope,
+    // OpenGL on VirtualGL). Ignored for RetroArch.
+    GraphicsApiPreference graphics_api = GraphicsApiPreference::Auto;
 };
 
 HostMediaPlanConfig media_plan_config_for(const HostAppConfig& config);

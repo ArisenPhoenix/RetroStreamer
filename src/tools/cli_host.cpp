@@ -20,8 +20,14 @@ VirtualDisplayBackend parse_display_backend(std::string_view value) {
     if (value == "xephyr") {
         return VirtualDisplayBackend::Xephyr;
     }
+    if (value == "virtualgl" || value == "vgl") {
+        return VirtualDisplayBackend::VirtualGL;
+    }
+    if (value == "gamescope" || value == "gs") {
+        return VirtualDisplayBackend::Gamescope;
+    }
 
-    throw std::runtime_error("--display-backend must be auto, xvfb, or xephyr");
+    throw std::runtime_error("--display-backend must be auto, xvfb, xephyr, virtualgl, or gamescope");
 }
 
 AudioCaptureBackend parse_audio_backend(std::string_view value) {
@@ -33,6 +39,20 @@ AudioCaptureBackend parse_audio_backend(std::string_view value) {
     }
 
     throw std::runtime_error("--audio-backend must be pulse or pipewire");
+}
+
+GraphicsApiPreference parse_graphics_api(std::string_view value) {
+    if (value == "auto") {
+        return GraphicsApiPreference::Auto;
+    }
+    if (value == "opengl" || value == "gl" || value == "ogl") {
+        return GraphicsApiPreference::OpenGL;
+    }
+    if (value == "vulkan" || value == "vk") {
+        return GraphicsApiPreference::Vulkan;
+    }
+
+    throw std::runtime_error("--renderer must be auto, opengl, or vulkan");
 }
 
 } // namespace
@@ -83,8 +103,12 @@ void HostRunnerCli::print_usage() const {
         << "                      X display for virtual RetroArch output. Default: :99\n"
         << "  --video-resolution <WxH>\n"
         << "                      Virtual display resolution. Default: 1280x720\n"
-        << "  --display-backend <auto|xvfb|xephyr>\n"
+        << "  --display-backend <auto|xvfb|xephyr|virtualgl|gamescope>\n"
         << "                      Virtual display backend. Default: auto\n"
+        << "                      (Switch/standalone defaults to gamescope when streaming).\n"
+        << "  --renderer <auto|opengl|vulkan>\n"
+        << "                      Preferred graphics API for standalone (Yuzu). Default: auto\n"
+        << "                      (Vulkan on gamescope, OpenGL on VirtualGL). Ignored for RetroArch.\n"
         << "  --bridge-controller <index>\n"
         << "                      Use a local SDL2 controller as host player 1.\n"
         << "  --ignore-controller <vid/pid>\n"
@@ -96,8 +120,8 @@ void HostRunnerCli::print_usage() const {
         << "  --virtual-joypad-index <index>\n"
         << "                      RetroArch joypad index for the virtual pad. Default: 1 with bridge.\n"
         << "  --gpu <auto|id|name>\n"
-        << "                      Host Player render GPU (auto = most performant). "
-        << "Ids from nvidia-smi order as nvidia:0, nvidia:1, …\n";
+        << "                      Render GPU for Host Player and streamed standalone (Yuzu/gamescope).\n"
+        << "                      Auto = most performant. Ids from nvidia-smi as nvidia:0, nvidia:1, …\n";
 }
 
 HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
@@ -206,9 +230,12 @@ HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
             args.video = true;
             args.video_resolution = argv[i];
         } else if (arg == "--display-backend") {
-            if_throw(i, "--display-backend requires auto, xvfb, or xephyr");
+            if_throw(i, "--display-backend requires auto, xvfb, xephyr, virtualgl, or gamescope");
             args.video = true;
             args.display_backend = parse_display_backend(argv[i]);
+        } else if (arg == "--renderer") {
+            if_throw(i, "--renderer requires auto, opengl, or vulkan");
+            args.graphics_api = parse_graphics_api(argv[i]);
         } else if (arg == "--bridge-controller") {
             if_throw(i, "--bridge-controller requires a controller index");
             args.bridge_controller_index = static_cast<std::size_t>(std::stoul(argv[i]));

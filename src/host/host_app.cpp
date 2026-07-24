@@ -18,11 +18,14 @@
 #include "host/retroarch_config_writer.hpp"
 #include "host/retroarch_resolve.hpp"
 #include "host/save_profile.hpp"
+#include "host/standalone_emulator.hpp"
 #include "host/session_control_monitor.hpp"
 #include "host/session_service.hpp"
 #include "host/virtual_joypad_resolve.hpp"
+#include "host/virtual_display.hpp"
 
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
 #include <optional>
 #include <thread>
@@ -197,11 +200,25 @@ int HostApp::run(const std::function<bool()>& should_stop) {
 
         auto launch_config = catalog.launch_config_for(launch_plan.game_id);
         const auto resolved_retroarch = resolve_retroarch();
-        launch_config.retroarch_path = resolved_retroarch.display_path;
-        launch_config.command_prefix = resolved_retroarch.argv_prefix;
+        if (session_plan.has_value()) {
+            if (const auto hosted = catalog.find_hosted(launch_plan.game_id); hosted.has_value()) {
+                session_plan->playlist_discs = hosted->get().info.playlist_discs;
+                session_plan->current_disc_index = 0;
+                session_plan->retroarch_netcmd_port = DefaultRetroArchNetcmdPort;
+                if (!session_plan->playlist_discs.empty()) {
+                    std::cout
+                        << "Multi-disc playlist: " << session_plan->playlist_discs.size()
+                        << " disc(s); netcmd port " << session_plan->retroarch_netcmd_port << '\n';
+                }
+            }
+        }
+        if (!launch_config.standalone) {
+            launch_config.retroarch_path = resolved_retroarch.display_path;
+            launch_config.command_prefix = resolved_retroarch.argv_prefix;
+        }
         // Avoid -f on the host's real Wayland session (can exit immediately). When video
         // streams from a virtual display, force fullscreen via the override config instead.
-        if (config.verbose) {
+        if (config.verbose && !launch_config.standalone) {
             launch_config.extra_args.insert(launch_config.extra_args.begin(), "--verbose");
         }
         // Streaming already forced off above for Host Player.
@@ -270,15 +287,27 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                 << "--retroarch-joypad-driver is sdl2.\n";
         }
 
-        // Host Player keeps the real DISPLAY (and speakers). Video capture needs a virtual
-        // display; local play already forced video/audio off above.
+        // Host Player keeps the real DISPLAY (and speakers). Streamed RetroArch uses Xvfb.
+        // Switch/Yuzu uses headless gamescope + PipeWire capture (VirtualGL kept as fallback).
         const bool use_virtual_capture = config.video;
-        const bool capture_fullscreen = use_virtual_capture;
-        if (use_virtual_capture) {
+        const bool capture_fullscreen = config.video;
+        const std::string capture_display = config.virtual_display;
+        auto display_backend = config.display_backend;
+        if (launch_config.standalone && use_virtual_capture &&
+            display_backend == VirtualDisplayBackend::None) {
+            display_backend = VirtualDisplayBackend::Gamescope;
+        }
+        const bool gamescope_capture =
+            use_virtual_capture && display_backend == VirtualDisplayBackend::Gamescope;
+        const bool virtualgl_capture =
+            use_virtual_capture && display_backend == VirtualDisplayBackend::VirtualGL;
+        // Xvfb/Xephyr/VirtualGL need DISPLAY=:99. Gamescope provides nested Xwayland itself.
+        if (use_virtual_capture && !gamescope_capture) {
             launch_config.environment.emplace_back("DISPLAY", config.virtual_display);
         }
 
         auto resolved_gpu = resolve_render_gpu(config.render_gpu);
+        std::string gamescope_vk_device;
         if (resolved_gpu.has_value()) {
             std::cout
                 << "Render GPU: " << resolved_gpu->name
@@ -290,15 +319,23 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                 std::cout << " prime=" << resolved_gpu->prime_provider;
             }
             std::cout << '\n';
-            if (!use_virtual_capture) {
+            if (const auto vd = pci_vendor_device_id(resolved_gpu->pci_bus); vd.has_value()) {
+                gamescope_vk_device = *vd;
+            }
+            // GPU env for Host Player, VirtualGL, and gamescope/Yuzu (OpenGL + Vulkan).
+            if (launch_config.standalone || !use_virtual_capture || virtualgl_capture || gamescope_capture) {
                 for (const auto& entry : render_gpu_environment(*resolved_gpu)) {
                     launch_config.environment.push_back(entry);
                 }
             } else if (config.render_gpu != "auto" && !config.render_gpu.empty()) {
                 std::cout
-                    << "Note: GPU selection applies to Host Player on the real display; "
-                    << "stream capture uses the virtual display (:99).\n";
+                    << "Note: GPU selection applies to Host Player / standalone streaming; "
+                    << "Xvfb RetroArch capture stays on the virtual display.\n";
             }
+        }
+        if (gamescope_vk_device.empty()) {
+            // Prefer RTX 3060 then 1660 Ti on this host when auto-detect fails.
+            gamescope_vk_device = "10de:2504";
         }
 
         const auto media_config = media_plan_config_for(config);
@@ -332,7 +369,7 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                 std::cout
                     << "Video:     client " << static_cast<int>(stream.client_id)
                     << " " << stream.endpoint.video_uri
-                    << " from display " << config.virtual_display
+                    << " from display " << capture_display
                     << " at " << config.video_resolution << '\n';
             }
             if (!stream.endpoint.audio_uri.empty()) {
@@ -385,48 +422,139 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         // Resolve real SDL indices after uinput pads appear. Prefer discovered index so
         // RetroArch binds the ArchStreamer pad even when host controllers remain visible.
         // If EXCEPT whitelist is honored, index 0 is also correct — discovery still logs truth.
-        auto resolved_indices = find_archstreamer_sdl_joypad_indices(
+        const auto resolved_pads = find_archstreamer_sdl_pads(
             launch_plan.players,
-            config.ignore_controller.value_or(""));
+            config.ignore_controller.value_or(""),
+            config.verbose);
+        std::vector<std::size_t> resolved_indices;
+        resolved_indices.reserve(resolved_pads.size());
+        for (const auto& pad : resolved_pads) {
+            resolved_indices.push_back(pad.sdl_index);
+        }
         std::size_t virtual_joypad_index = 0;
         if (config.virtual_joypad_index.has_value()) {
             virtual_joypad_index = *config.virtual_joypad_index;
             std::cout << "Using explicit --virtual-joypad-index " << virtual_joypad_index << '\n';
         } else if (!resolved_indices.empty()) {
             virtual_joypad_index = resolved_indices.front();
-            std::cout
-                << "Resolved virtual joypad SDL index " << virtual_joypad_index
-                << " (with same ignore list RetroArch will use)\n";
+            if (config.verbose) {
+                std::cout
+                    << "Resolved virtual joypad SDL index " << virtual_joypad_index
+                    << " (with same ignore list RetroArch will use)\n";
+            }
         } else {
             std::cerr
                 << "Warning: ArchStreamer virtual pads not visible to SDL yet; "
                 << "defaulting RetroArch joypad index to 0.\n";
         }
 
-        const auto runtime_override = write_retroarch_input_override(
-            virtual_joypad_index,
-            launch_plan.virtual_identities,
-            config.retroarch_joypad_driver,
-            launch_plan.players,
-            save_profile,
-            config.audio || config.video,
-            capture_fullscreen,
-            config.video_resolution,
-            (!use_virtual_capture && resolved_gpu.has_value()) ? resolved_gpu->vulkan_index : -1);
-        launch_config.extra_args.push_back("-c");
-        launch_config.extra_args.push_back(runtime_override.string());
-        std::cout
-            << "RetroArch config: " << runtime_override
-            << "\nVirtual joypad index: " << virtual_joypad_index
-            << " (driver=" << config.retroarch_joypad_driver << ")\n";
+        if (launch_config.standalone) {
+            // Resolve Yuzu renderer: explicit preference wins; otherwise backend default.
+            bool force_opengl = false;
+            bool force_vulkan = false;
+            if (config.graphics_api == GraphicsApiPreference::OpenGL) {
+                force_opengl = true;
+            } else if (config.graphics_api == GraphicsApiPreference::Vulkan) {
+                if (virtualgl_capture) {
+                    std::cerr << "Warning: VirtualGL path cannot present Vulkan; using OpenGL.\n";
+                    force_opengl = true;
+                } else {
+                    force_vulkan = true;
+                }
+            } else if (virtualgl_capture) {
+                force_opengl = true;
+            } else if (gamescope_capture) {
+                force_vulkan = true;
+            }
+            const auto yuzu_user = prepare_yuzu_user_profile(save_profile, force_opengl, force_vulkan);
+            std::vector<std::string> pad_guids;
+            pad_guids.reserve(resolved_pads.size());
+            for (const auto& pad : resolved_pads) {
+                pad_guids.push_back(pad.guid);
+            }
+            configure_yuzu_archstreamer_controls(yuzu_user, pad_guids);
+            for (const auto& entry : yuzu_launch_environment(yuzu_user)) {
+                launch_config.environment.push_back(entry);
+            }
+            // Always restore fullscreen launch args for standalone.
+            launch_config.standalone_args_before_content = {"-f", "-g"};
+            launch_config.quiet_stdio = !config.verbose;
+            std::cout
+                << "Yuzu renderer: "
+                << (force_opengl ? "OpenGL" : force_vulkan ? "Vulkan" : "default")
+                << '\n';
+
+            if (gamescope_capture) {
+                const auto x_pos = config.video_resolution.find('x');
+                int width = 1280;
+                int height = 720;
+                if (x_pos != std::string::npos) {
+                    try {
+                        width = std::stoi(config.video_resolution.substr(0, x_pos));
+                        height = std::stoi(config.video_resolution.substr(x_pos + 1));
+                    } catch (const std::exception&) {
+                    }
+                }
+                auto prefix = gamescope_command_prefix(width, height, gamescope_vk_device);
+                if (prefix.empty()) {
+                    throw std::runtime_error(
+                        "Switch streaming requires gamescope. Install it or set ARCHSTREAMER_GAMESCOPE "
+                        "(managed: ~/.local/share/archstreamer/gamescope/archstreamer-gamescope)");
+                }
+                launch_config.command_prefix = std::move(prefix);
+                if (config.verbose) {
+                    std::cout
+                        << "Yuzu: gamescope headless via " << launch_config.command_prefix.front()
+                        << " (" << width << "x" << height
+                        << ", prefer-vk-device " << gamescope_vk_device << ")\n";
+                }
+            } else if (virtualgl_capture) {
+                auto prefix = virtual_gl_command_prefix();
+                if (prefix.empty()) {
+                    throw std::runtime_error(
+                        "VirtualGL (vglrun) not found; install VirtualGL or set ARCHSTREAMER_VGLRUN");
+                }
+                launch_config.command_prefix = std::move(prefix);
+                for (const auto& entry : virtual_gl_environment()) {
+                    launch_config.environment.push_back(entry);
+                }
+                std::cout
+                    << "Yuzu: VirtualGL OpenGL via " << launch_config.command_prefix.front()
+                    << " (3D " << default_vgl_display()
+                    << ", capture " << capture_display << ")\n";
+            }
+            std::cout
+                << "Yuzu user data: " << yuzu_user.xdg_data_home
+                << "\nYuzu keys:      " << yuzu_user.keys_directory << '\n';
+        } else {
+            const auto runtime_override = write_retroarch_input_override(
+                virtual_joypad_index,
+                launch_plan.virtual_identities,
+                config.retroarch_joypad_driver,
+                launch_plan.players,
+                save_profile,
+                config.audio || config.video,
+                capture_fullscreen && use_virtual_capture,
+                config.video_resolution,
+                (!use_virtual_capture && resolved_gpu.has_value()) ? resolved_gpu->vulkan_index : -1);
+            launch_config.extra_args.push_back("-c");
+            launch_config.extra_args.push_back(runtime_override.string());
+            std::cout
+                << "RetroArch config: " << runtime_override
+                << "\nVirtual joypad index: " << virtual_joypad_index
+                << " (driver=" << config.retroarch_joypad_driver << ")\n";
+        }
         if (capture_fullscreen) {
             std::cout
                 << "Capture fullscreen: " << config.video_resolution
-                << " on virtual display " << config.virtual_display << '\n';
+                << " on display " << capture_display
+                << (use_virtual_capture ? " (virtual)" : " (host)") << '\n';
         }
 
-        // Keep QEMU/SPICE host playback off the speakers RetroArch (or Watch stream) uses.
-        park_vm_host_audio_streams();
+        // Pin Viewer RetroArch to the capture null sink (speakers stay quiet unless Watch-local).
+        if (config.audio) {
+            park_streaming_game_audio();
+        }
 
         InputRouter input_router(gamepads);
         input_router.set_seat_assignment(launch_plan.seats);
@@ -442,11 +570,12 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             media_server = make_host_media_server(GStreamerMediaCaptureConfig{
                 config.video,
                 config.audio,
-                config.virtual_display,
+                capture_display,
                 config.video_resolution,
-                config.display_backend,
+                display_backend,
                 config.audio_backend,
                 config.audio_source,
+                config.verbose,
             });
             media_server->start(media_config, media_destinations, media_streams);
         }
@@ -488,16 +617,42 @@ int HostApp::run(const std::function<bool()>& should_stop) {
 
         HostRetroArchProcess retroarch;
         {
-            std::string command = resolved_retroarch.display_path;
-            for (const auto& arg : launch_config.extra_args) {
+            std::string command;
+            if (launch_config.standalone) {
+                command.clear();
+                for (const auto& arg : launch_config.command_prefix) {
+                    if (!command.empty()) {
+                        command.push_back(' ');
+                    }
+                    command += arg;
+                }
+                if (!command.empty()) {
+                    command.push_back(' ');
+                }
+                command += launch_config.core_path.string();
+                for (const auto& arg : launch_config.standalone_args_before_content) {
+                    command.push_back(' ');
+                    command += arg;
+                }
+                for (const auto& arg : launch_config.extra_args) {
+                    command.push_back(' ');
+                    command += arg;
+                }
                 command.push_back(' ');
-                command += arg;
+                command += launch_config.content_path.string();
+                std::cout << "Launching standalone emulator...\nCommand: " << command << '\n';
+            } else {
+                command = resolved_retroarch.display_path;
+                for (const auto& arg : launch_config.extra_args) {
+                    command.push_back(' ');
+                    command += arg;
+                }
+                command += " -L ";
+                command += launch_config.core_path.string();
+                command.push_back(' ');
+                command += launch_config.content_path.string();
+                std::cout << "Launching RetroArch...\nCommand: " << command << '\n';
             }
-            command += " -L ";
-            command += launch_config.core_path.string();
-            command.push_back(' ');
-            command += launch_config.content_path.string();
-            std::cout << "Launching RetroArch...\nCommand: " << command << '\n';
         }
         retroarch.launch(launch_config);
         // Flatpak RetroArch can take a moment; failed exec exits almost immediately.
@@ -506,10 +661,49 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         }
         if (!retroarch.running()) {
             const auto code = retroarch.last_exit_code().value_or(127);
+            if (launch_config.standalone) {
+                throw std::runtime_error(
+                    "Standalone emulator exited immediately (code " + std::to_string(code) + "). "
+                    "Check Yuzu AppImage/keys under ~/.local/share/archstreamer/yuzu and "
+                    "per-user data under the save profile yuzu/ directory.");
+            }
             throw std::runtime_error(
                 "RetroArch exited immediately (code " + std::to_string(code) + "). "
                 "On Bazzite, install Flatpak RetroArch (org.libretro.RetroArch) or ensure "
                 "the RetroArch binary is runnable.");
+        }
+        if (auto* gst = dynamic_cast<GStreamerMediaServer*>(media_server.get());
+            gst != nullptr && gst->video_deferred()) {
+            if (config.verbose) {
+                std::cout << "Waiting for gamescope PipeWire video node...\n";
+            }
+            int expect_w = 1280;
+            int expect_h = 720;
+            const auto x_pos = config.video_resolution.find('x');
+            if (x_pos != std::string::npos) {
+                try {
+                    expect_w = std::stoi(config.video_resolution.substr(0, x_pos));
+                    expect_h = std::stoi(config.video_resolution.substr(x_pos + 1));
+                } catch (const std::exception&) {
+                }
+            }
+            const auto node = wait_for_gamescope_pipewire_node(
+                std::chrono::seconds(20),
+                expect_w,
+                expect_h);
+            if (!node.has_value()) {
+                throw std::runtime_error(
+                    "gamescope did not publish a PipeWire Video/Source (media.name=gamescope)");
+            }
+            if (config.verbose) {
+                std::cout << "Gamescope PipeWire node: " << *node << '\n';
+            }
+            gst->start_pipewire_video(*node, media_streams);
+        }
+        if (config.audio) {
+            // Pulse connects asynchronously; re-park after the sink-input appears.
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            park_streaming_game_audio();
         }
 
         if (config.pulse_input && launch_plan.players > 0) {
@@ -522,6 +716,7 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             network_receiver->start();
         }
 
+        auto next_audio_park = std::chrono::steady_clock::now();
         while (!should_stop() && retroarch.running()) {
             if (local_bridge.has_value()) {
                 local_bridge->update(input_router);
@@ -539,6 +734,13 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                 if (const auto reason = session_monitor->poll(); reason.has_value()) {
                     std::cerr << "Stopping session: " << *reason << '\n';
                     break;
+                }
+            }
+            if (config.audio) {
+                const auto now = std::chrono::steady_clock::now();
+                if (now >= next_audio_park) {
+                    park_streaming_game_audio();
+                    next_audio_park = now + std::chrono::seconds(3);
                 }
             }
 
@@ -566,11 +768,15 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         if (media_server) {
             media_server->stop();
         }
+        if (config.audio) {
+            restore_default_sink_after_streaming();
+        }
         if (session_plan.has_value()) {
             send_session_ended_to_clients(*session_plan, should_stop() ? "host stopped" : "retroarch exited");
         }
         return 0;
     } catch (const std::exception& error) {
+        restore_default_sink_after_streaming();
         if (should_stop()) {
             std::cout << "Host stopped.\n";
             return 0;

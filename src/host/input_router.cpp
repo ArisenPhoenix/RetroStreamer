@@ -23,8 +23,10 @@ bool InputRouter::route(const ControllerInput& input) {
 
     const PlayerKey key{input.client_id, input.local_player};
     const auto last_timestamp = last_input_timestamp_by_player_.find(key);
+    // Strictly older timestamps are late/reordered UDP; equal timestamps are allowed so
+    // clients can send duplicate datagrams for loss recovery.
     if (last_timestamp != last_input_timestamp_by_player_.end() &&
-        input.state.timestamp_us <= last_timestamp->second) {
+        input.state.timestamp_us < last_timestamp->second) {
         return false;
     }
 

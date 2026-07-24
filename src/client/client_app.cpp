@@ -9,9 +9,11 @@
 #include "common/addresses.hpp"
 #include "common/platform/default_platform.hpp"
 #include "common/serialization.hpp"
+#include "common/time.hpp"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <stdexcept>
@@ -414,6 +416,8 @@ ClientRunResult ClientApp::join_session(
     auto controller_backend = std::optional<ControllerBackend>{};
     auto input_sender = std::optional<InputSender>{};
     auto input_socket = std::optional<UdpSocket>{};
+    std::atomic<bool> input_stop{false};
+    std::thread input_thread;
     if (config.input_port.has_value() && config.filter.requested_players > 0 && result.client_id.has_value()) {
         controller_backend.emplace();
         controller_backend->open_selected(controller_device_ids);
@@ -422,6 +426,58 @@ ClientRunResult ClientApp::join_session(
         if (callbacks.on_input_streaming_started) {
             callbacks.on_input_streaming_started(config.host, *config.input_port);
         }
+
+        // Dedicated thread: media/TCP work on the session loop must not stall pads.
+        // ~125 Hz keepalive + triple-send on edges (fresh timestamps) for Wi‑Fi loss.
+        input_thread = std::thread([
+            &input_stop,
+            &controller_backend,
+            &input_sender,
+            &input_socket,
+            &config
+        ] {
+            std::array<ControllerState, MaxPlayersPerClient> last_sent{};
+            std::array<bool, MaxPlayersPerClient> have_last_sent{};
+            constexpr auto kInputTick = std::chrono::milliseconds(8);
+            constexpr int kChangeCopies = 3;
+            while (!input_stop.load(std::memory_order_relaxed)) {
+                const auto tick_start = std::chrono::steady_clock::now();
+                for (LocalPlayerIndex player = 0; player < config.filter.requested_players; ++player) {
+                    const auto state = controller_backend->poll(player);
+                    if (!state.has_value()) {
+                        continue;
+                    }
+                    const bool changed =
+                        !have_last_sent[player] || !same_controls(last_sent[player], *state);
+                    // Always send each tick so lost button-down edges recover quickly.
+                    const int copies = changed ? kChangeCopies : 1;
+                    for (int copy = 0; copy < copies; ++copy) {
+                        auto sample = *state;
+                        // Distinct timestamps so host ordering accepts each UDP copy.
+                        sample.timestamp_us =
+                            archstreamer::steady_timestamp_us() + static_cast<std::uint64_t>(copy);
+                        if (copy > 0) {
+                            sample.sequence = state->sequence + static_cast<std::uint32_t>(copy);
+                        }
+                        const auto packet = input_sender->make_input(player, sample);
+                        try {
+                            input_socket->send_to(
+                                serialize_packet(packet),
+                                config.host,
+                                *config.input_port);
+                        } catch (...) {
+                            // Transient send failures should not kill the session loop.
+                        }
+                    }
+                    last_sent[player] = *state;
+                    have_last_sent[player] = true;
+                }
+                const auto elapsed = std::chrono::steady_clock::now() - tick_start;
+                if (elapsed < kInputTick) {
+                    std::this_thread::sleep_for(kInputTick - elapsed);
+                }
+            }
+        });
     } else if (callbacks.on_waiting_without_input) {
         callbacks.on_waiting_without_input();
     }
@@ -432,10 +488,6 @@ ClientRunResult ClientApp::join_session(
     auto next_heartbeat = std::chrono::steady_clock::now();
     auto media_watch_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     auto media_watch_armed = static_cast<bool>(media_receiver);
-    std::array<ControllerState, MaxPlayersPerClient> last_sent{};
-    std::array<bool, MaxPlayersPerClient> have_last_sent{};
-    std::array<std::chrono::steady_clock::time_point, MaxPlayersPerClient> last_input_send_at{};
-    constexpr auto kInputResendInterval = std::chrono::milliseconds(16);
     while (!should_stop()) {
         if (!handle_control_message(joined_session.stream, callbacks, result)) {
             break;
@@ -525,37 +577,11 @@ ClientRunResult ClientApp::join_session(
             next_heartbeat = now + std::chrono::seconds(1);
         }
 
-        if (controller_backend.has_value() && input_sender.has_value() && input_socket.has_value()) {
-            for (LocalPlayerIndex player = 0; player < config.filter.requested_players; ++player) {
-                const auto state = controller_backend->poll(player);
-                if (!state.has_value()) {
-                    continue;
-                }
-                // UDP drops button edges under video load if we only send on change.
-                // Resend the current pad state at ~60 Hz so held buttons and missed
-                // edges recover; duplicate immediate change packets for short taps.
-                const bool changed =
-                    !have_last_sent[player] || !same_controls(last_sent[player], *state);
-                const bool resend_due =
-                    !have_last_sent[player] ||
-                    (now - last_input_send_at[player]) >= kInputResendInterval;
-                if (!changed && !resend_due) {
-                    continue;
-                }
-                const auto packet = input_sender->make_input(player, *state);
-                const auto bytes = serialize_packet(packet);
-                input_socket->send_to(bytes, config.host, *config.input_port);
-                if (changed) {
-                    input_socket->send_to(bytes, config.host, *config.input_port);
-                }
-                last_sent[player] = *state;
-                have_last_sent[player] = true;
-                last_input_send_at[player] = now;
-            }
-            std::this_thread::sleep_for(std::chrono::microseconds(500));
-        } else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    input_stop.store(true, std::memory_order_relaxed);
+    if (input_thread.joinable()) {
+        input_thread.join();
     }
     if (media_receiver) {
         media_receiver.disconnect();

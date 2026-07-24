@@ -567,6 +567,9 @@ std::vector<std::pair<std::string, std::string>> yuzu_launch_environment(
     return {
         {"XDG_DATA_HOME", profile.xdg_data_home.string()},
         {"XDG_CONFIG_HOME", profile.xdg_config_home.string()},
+        // gamescope headless often leaves the child without "focus"; without this SDL may
+        // stop delivering joystick updates and Yuzu sees intermittent pad input.
+        {"SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1"},
     };
 }
 

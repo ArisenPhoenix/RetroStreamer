@@ -228,12 +228,15 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/network_input_receiver.cpp
         src/host/posix_retroarch_process.cpp
         src/host/retroarch_config_writer.cpp
+        src/host/retroarch_netcmd.cpp
         src/host/retroarch_resolve.cpp
         src/host/save_profile.cpp
+        src/host/standalone_emulator.cpp
         src/host/seat_manager.cpp
         src/host/session_control_monitor.cpp
         src/host/session_lobby.cpp
         src/host/session_service.cpp
+        src/host/virtual_display.cpp
         src/host/virtual_joypad_resolve.cpp
     )
     target_compile_definitions(archstreamer_host PUBLIC ARCHSTREAMER_HAS_HOST=1)

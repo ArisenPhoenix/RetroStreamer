@@ -8,6 +8,7 @@
 #include <thread>
 #include <vector>
 
+#include <fcntl.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <sys/wait.h>
@@ -51,19 +52,42 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
     last_exit_code_.reset();
 
     std::vector<std::string> args;
-    if (!config.command_prefix.empty()) {
-        args = config.command_prefix;
+    if (config.standalone) {
+        // Standalone emulator binary lives in core_path (same field catalog uses for display).
+        // Optional command_prefix wraps the binary (e.g. vglrun for VirtualGL OpenGL).
+        if (!config.command_prefix.empty()) {
+            args = config.command_prefix;
+        }
+        args.push_back(path_string(config.core_path, "standalone emulator"));
+        args.insert(
+            args.end(),
+            config.standalone_args_before_content.begin(),
+            config.standalone_args_before_content.end());
+        args.insert(args.end(), config.extra_args.begin(), config.extra_args.end());
+        args.push_back(path_string(config.content_path, "content"));
     } else {
-        args.push_back(path_string(config.retroarch_path, "RetroArch executable"));
+        if (!config.command_prefix.empty()) {
+            args = config.command_prefix;
+        } else {
+            args.push_back(path_string(config.retroarch_path, "RetroArch executable"));
+        }
+        args.insert(args.end(), config.extra_args.begin(), config.extra_args.end());
+        args.push_back("-L");
+        args.push_back(path_string(config.core_path, "RetroArch core"));
+        args.push_back(path_string(config.content_path, "RetroArch content"));
     }
-    args.insert(args.end(), config.extra_args.begin(), config.extra_args.end());
-    args.push_back("-L");
-    args.push_back(path_string(config.core_path, "RetroArch core"));
-    args.push_back(path_string(config.content_path, "RetroArch content"));
 
-    if (config.command_prefix.empty() && access(args.front().c_str(), X_OK) != 0) {
+    const auto& executable = config.standalone
+        ? path_string(config.core_path, "standalone emulator")
+        : args.front();
+    if (access(executable.c_str(), X_OK) != 0) {
         throw std::runtime_error(
-            "RetroArch executable is missing or not executable: " + args.front());
+            std::string(config.standalone ? "Emulator" : "RetroArch") +
+            " executable is missing or not executable: " + executable);
+    }
+    if (!config.command_prefix.empty() && access(args.front().c_str(), X_OK) != 0) {
+        throw std::runtime_error(
+            "Launch prefix executable is missing or not executable: " + args.front());
     }
 
     pid_t child = fork();
@@ -73,6 +97,16 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
 
     if (child == 0) {
         close_inherited_fds();
+        if (config.quiet_stdio) {
+            const int null_fd = open("/dev/null", O_RDWR);
+            if (null_fd >= 0) {
+                dup2(null_fd, STDOUT_FILENO);
+                dup2(null_fd, STDERR_FILENO);
+                if (null_fd > STDERR_FILENO) {
+                    close(null_fd);
+                }
+            }
+        }
         for (const auto& [key, value] : config.environment) {
             setenv(key.c_str(), value.c_str(), 1);
         }

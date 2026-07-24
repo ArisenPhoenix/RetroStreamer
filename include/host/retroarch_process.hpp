@@ -14,8 +14,13 @@ struct RetroArchLaunchConfig {
     std::filesystem::path content_path;
     std::vector<std::string> extra_args;
     std::vector<std::pair<std::string, std::string>> environment;
-    // Optional argv prefix before RetroArch flags (e.g. flatpak run org.libretro.RetroArch).
+    // Optional argv prefix (flatpak run …, or vglrun for VirtualGL standalone launches).
     std::vector<std::string> command_prefix;
+    // Standalone emulator (Yuzu, etc.): run executable + args + content, no -L core.
+    bool standalone = false;
+    std::vector<std::string> standalone_args_before_content;
+    // Drop child stdout/stderr (gamescope/Yuzu chatter) unless --verbose.
+    bool quiet_stdio = false;
 };
 
 class RetroArchProcess {

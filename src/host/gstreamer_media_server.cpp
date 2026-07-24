@@ -19,49 +19,6 @@
 
 namespace archstreamer {
 
-bool command_available(const char* command) {
-    const auto check_path = [command](const std::filesystem::path& directory) {
-        if (directory.empty()) {
-            return false;
-        }
-        const auto path = directory / command;
-        return access(path.c_str(), X_OK) == 0;
-    };
-
-    const char* path_env = std::getenv("PATH");
-    if (path_env != nullptr) {
-        auto paths = std::string{path_env};
-        std::string::size_type start = 0;
-        while (start <= paths.size()) {
-            const auto end = paths.find(':', start);
-            const auto directory = paths.substr(start, end == std::string::npos ? std::string::npos : end - start);
-            if (check_path(directory)) {
-                return true;
-            }
-            if (end == std::string::npos) {
-                break;
-            }
-            start = end + 1;
-        }
-    }
-
-    return check_path("/usr/bin") || check_path("/usr/local/bin");
-}
-
-VirtualDisplayBackend choose_virtual_display_backend(VirtualDisplayBackend requested) {
-    if (requested != VirtualDisplayBackend::None) {
-        return requested;
-    }
-    if (command_available("Xvfb")) {
-        return VirtualDisplayBackend::Xvfb;
-    }
-    if (command_available("Xephyr")) {
-        return VirtualDisplayBackend::Xephyr;
-    }
-
-    throw std::runtime_error("no virtual display backend found; install Xvfb or Xephyr");
-}
-
 std::string trim_command_output(std::string value) {
     return trim_ascii_whitespace(std::move(value));
 }
@@ -85,7 +42,6 @@ std::string default_audio_monitor_source() {
 namespace {
 
 constexpr const char* kStreamingAudioSinkName = "archstreamer";
-constexpr const char* kVmAudioParkSinkName = "archstreamer-vm";
 
 bool sink_exists(const std::string& sink_name) {
     const auto sinks = archstreamer::read_command_output("pactl list short sinks 2>/dev/null");
@@ -155,21 +111,14 @@ std::string streaming_audio_monitor_source() {
     return ensure_streaming_audio_sink() + ".monitor";
 }
 
-void park_vm_host_audio_streams() {
-    // Best-effort: QEMU spice/PipeWire playback on the metal host (see
-    // deploy/vm-client/fix-host-vm-audio.sh) shares the default sink with Host Player
-    // and with "Watch stream locally", at 44100 Hz vs RetroArch's 48000 — that mix is
-    // a common source of muddy/crackly metal-host audio.
-    try {
-        ensure_named_null_sink(kVmAudioParkSinkName, "ArchStreamer-VM-park");
-    } catch (const std::exception& error) {
-        std::cerr << "Warning: could not create VM audio park sink: " << error.what() << '\n';
-        return;
-    }
+namespace {
 
+using SinkInputMatchFn = bool (*)(const std::string&);
+
+int move_matching_sink_inputs_to(const char* destination_sink, SinkInputMatchFn matches) {
     const auto dump = archstreamer::read_command_output("pactl list sink-inputs 2>/dev/null");
     if (dump.empty()) {
-        return;
+        return 0;
     }
 
     int moved = 0;
@@ -181,10 +130,10 @@ void park_vm_host_audio_streams() {
             next == std::string::npos ? std::string::npos : next - pos);
         pos = next == std::string::npos ? dump.size() : next;
 
-        if (block.find("qemu-system-x86_64") == std::string::npos &&
-            block.find("spice") == std::string::npos) {
+        if (!matches(block)) {
             continue;
         }
+
         const auto hash = block.find('#');
         if (hash == std::string::npos) {
             continue;
@@ -196,43 +145,84 @@ void park_vm_host_audio_streams() {
         if (id.empty()) {
             continue;
         }
+
         const auto result = archstreamer::read_command_output(
-            (std::string("pactl move-sink-input ") + id + " " + kVmAudioParkSinkName +
+            (std::string("pactl move-sink-input ") + id + " " + destination_sink +
              " 2>/dev/null && echo ok")
                 .c_str());
         if (result.find("ok") != std::string::npos) {
             ++moved;
         }
     }
+    return moved;
+}
+
+bool block_looks_like_retroarch(const std::string& block) {
+    return block.find("application.process.binary = \"retroarch\"") != std::string::npos ||
+        block.find("application.name = \"RetroArch\"") != std::string::npos ||
+        block.find("node.name = \"RetroArch\"") != std::string::npos;
+}
+
+} // namespace
+
+void park_streaming_game_audio() {
+    // Viewer RetroArch must stay on the silent null sink. PipeWire stream-restore can
+    // reattach it to HDMI/USB after a prior move, which leaks game audio to speakers
+    // even when Watch-local is off (Watch is the only intentional local listen path).
+    try {
+        ensure_streaming_audio_sink();
+    } catch (const std::exception& error) {
+        std::cerr << "Warning: could not ensure streaming audio sink: " << error.what() << '\n';
+        return;
+    }
+
+    const auto moved = move_matching_sink_inputs_to(
+        kStreamingAudioSinkName,
+        block_looks_like_retroarch);
     if (moved > 0) {
         std::cout
             << "Parked " << moved
-            << " VM host-audio stream(s) on '" << kVmAudioParkSinkName
-            << "' so they do not share the game playback sink.\n";
+            << " RetroArch stream(s) on '" << kStreamingAudioSinkName
+            << "' (speakers stay quiet unless Watch stream locally).\n";
     }
 }
 
-VirtualDisplayProcess::~VirtualDisplayProcess() {
-    stop();
-}
-
-void VirtualDisplayProcess::start(
-    VirtualDisplayBackend backend,
-    const std::string& display,
-    const std::string& resolution) {
-    backend_ = choose_virtual_display_backend(backend);
-    if (backend_ == VirtualDisplayBackend::Xvfb) {
-        process_.start({"Xvfb", display, "-screen", "0", resolution + "x24", "-nolisten", "tcp"});
-    } else if (backend_ == VirtualDisplayBackend::Xephyr) {
-        process_.start({"Xephyr", display, "-screen", resolution, "-ac", "-noreset"});
-    } else {
+void restore_default_sink_after_streaming() {
+    // Never leave the session default on the silent capture sink — that mutes desktop
+    // audio until the user notices.
+    const auto current = archstreamer::read_command_output("pactl get-default-sink 2>/dev/null");
+    if (current != kStreamingAudioSinkName) {
         return;
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(750));
-}
 
-void VirtualDisplayProcess::stop() {
-    process_.stop();
+    const auto sinks = archstreamer::read_command_output("pactl list short sinks 2>/dev/null");
+    std::string::size_type pos = 0;
+    while (pos < sinks.size()) {
+        const auto end = sinks.find('\n', pos);
+        const auto line = sinks.substr(
+            pos,
+            end == std::string::npos ? std::string::npos : end - pos);
+        pos = end == std::string::npos ? sinks.size() : end + 1;
+        if (line.empty()) {
+            continue;
+        }
+        const auto first_tab = line.find('\t');
+        if (first_tab == std::string::npos) {
+            continue;
+        }
+        auto rest = line.substr(first_tab + 1);
+        const auto second_tab = rest.find('\t');
+        const auto name = second_tab == std::string::npos ? rest : rest.substr(0, second_tab);
+        if (name.empty() || name == kStreamingAudioSinkName) {
+            continue;
+        }
+        const auto result = archstreamer::read_command_output(
+            (std::string("pactl set-default-sink ") + name + " 2>/dev/null && echo ok").c_str());
+        if (result.find("ok") != std::string::npos) {
+            std::cout << "Restored default sink to '" << name << "' after streaming session.\n";
+            return;
+        }
+    }
 }
 
 namespace {
@@ -272,7 +262,41 @@ std::vector<MediaClientStream> GStreamerVideoFanout::start(
         throw std::runtime_error("video fanout is already running");
     }
 
+    source_kind_ = SourceKind::X11;
     display_ = display;
+    pipewire_node_.clear();
+    shared_settings_ = video_encode_settings_for_tier(MediaQualityTier::High);
+    auto streams = std::vector<MediaClientStream>{};
+    streams.reserve(destinations.size());
+    for (const auto& destination : destinations) {
+        Destination slot{};
+        slot.client_id = destination.client_id;
+        slot.host = destination.destination_host;
+        slot.port = destination.port;
+        slot.settings = shared_settings_;
+        destinations_.push_back(slot);
+        streams.push_back(MediaClientStream{
+            destination.client_id,
+            destination.destination_host,
+            MediaEndpoint{rtp_h264_uri(destination.destination_host, destination.port), ""},
+        });
+    }
+    if (!destinations_.empty()) {
+        restart_pipeline();
+    }
+    return streams;
+}
+
+std::vector<MediaClientStream> GStreamerVideoFanout::start_pipewire(
+    const std::string& pipewire_node,
+    const std::vector<MediaStreamRequest>& destinations) {
+    if (!destinations_.empty() || process_.running()) {
+        throw std::runtime_error("video fanout is already running");
+    }
+
+    source_kind_ = SourceKind::PipeWire;
+    display_.clear();
+    pipewire_node_ = pipewire_node;
     shared_settings_ = video_encode_settings_for_tier(MediaQualityTier::High);
     auto streams = std::vector<MediaClientStream>{};
     streams.reserve(destinations.size());
@@ -333,7 +357,13 @@ bool GStreamerVideoFanout::reconfigure_client(ClientId client_id, const VideoEnc
             break;
         }
     }
-    if (slot == nullptr || display_.empty()) {
+    if (slot == nullptr) {
+        return false;
+    }
+    if (source_kind_ == SourceKind::X11 && display_.empty()) {
+        return false;
+    }
+    if (source_kind_ == SourceKind::PipeWire && pipewire_node_.empty()) {
         return false;
     }
     if (slot->settings.bitrate_kbps == settings.bitrate_kbps &&
@@ -387,11 +417,20 @@ void GStreamerVideoFanout::stop_client(ClientId client_id) {
 
 void GStreamerVideoFanout::restart_pipeline() {
     process_.stop();
-    if (display_.empty() || destinations_.empty()) {
+    if (destinations_.empty()) {
+        return;
+    }
+    if (source_kind_ == SourceKind::X11 && display_.empty()) {
+        return;
+    }
+    if (source_kind_ == SourceKind::PipeWire && pipewire_node_.empty()) {
         return;
     }
     if (!gst_element_available("multiudpsink")) {
         throw std::runtime_error("multiudpsink is required for shared video fanout (gst-plugins-good)");
+    }
+    if (source_kind_ == SourceKind::PipeWire && !gst_element_available("pipewiresrc")) {
+        throw std::runtime_error("pipewiresrc is required for gamescope video capture (gst-plugin-pipewire)");
     }
 
     const auto bitrate = shared_settings_.bitrate_kbps == 0 ? 1500 : shared_settings_.bitrate_kbps;
@@ -405,17 +444,36 @@ void GStreamerVideoFanout::restart_pipeline() {
         clients.emplace_back(destination.host, destination.port);
     }
 
-    auto args = std::vector<std::string>{
-        "gst-launch-1.0",
-        "-q",
-        "ximagesrc",
-        "display-name=" + display_,
-        "use-damage=0",
-        "show-pointer=false",
-        "!",
-        "video/x-raw,framerate=" + std::to_string(framerate) + "/1",
-        "!",
-        "videoconvert",
+    auto args = std::vector<std::string>{"gst-launch-1.0", "-q"};
+    if (source_kind_ == SourceKind::PipeWire) {
+        // gamescope advertises BGRx/NV12 at framerate 0/1. Forcing framerate on the
+        // pipewiresrc link causes "no more input formats" / not-negotiated.
+        args.insert(args.end(), {
+            "pipewiresrc",
+            "path=" + pipewire_node_,
+            "do-timestamp=true",
+            "!",
+            "video/x-raw,format=BGRx",
+            "!",
+            "videoconvert",
+            "!",
+            "videorate",
+            "!",
+            "video/x-raw,framerate=" + std::to_string(framerate) + "/1",
+        });
+    } else {
+        args.insert(args.end(), {
+            "ximagesrc",
+            "display-name=" + display_,
+            "use-damage=0",
+            "show-pointer=false",
+            "!",
+            "video/x-raw,framerate=" + std::to_string(framerate) + "/1",
+            "!",
+            "videoconvert",
+        });
+    }
+    args.insert(args.end(), {
         "!",
         "queue",
         "!",
@@ -429,7 +487,7 @@ void GStreamerVideoFanout::restart_pipeline() {
         "threads=1",
         "!",
         "video/x-h264,profile=constrained-baseline,stream-format=byte-stream",
-    };
+    });
     if (gst_element_available("h264parse")) {
         args.insert(args.end(), {"!", "h264parse", "config-interval=-1"});
     }
@@ -449,11 +507,15 @@ void GStreamerVideoFanout::restart_pipeline() {
     std::this_thread::sleep_for(std::chrono::milliseconds(400));
     if (!process_.running()) {
         throw std::runtime_error(
-            "video capture pipeline exited immediately (need Xvfb/Xephyr, ximagesrc, x264enc, multiudpsink)");
+            source_kind_ == SourceKind::PipeWire
+                ? "video capture pipeline exited immediately (need pipewiresrc, x264enc, multiudpsink)"
+                : "video capture pipeline exited immediately (need Xvfb/Xephyr, ximagesrc, x264enc, multiudpsink)");
     }
     std::cout
         << "Video capture (shared): " << destinations_.size() << " destination(s), "
-        << bitrate << " kbps, " << static_cast<int>(framerate) << " fps\n";
+        << bitrate << " kbps, " << static_cast<int>(framerate) << " fps"
+        << (source_kind_ == SourceKind::PipeWire ? " via pipewire" : " via ximagesrc")
+        << '\n';
 }
 
 GStreamerAudioFanout::~GStreamerAudioFanout() {
@@ -616,17 +678,60 @@ void GStreamerMediaServer::start(
     const std::vector<HostMediaDestination>& destinations,
     std::vector<MediaClientStream>& streams) {
     plan_ = plan;
+    destinations_ = destinations;
     if (capture_.video) {
-        virtual_display_.emplace();
-        virtual_display_->start(capture_.display_backend, capture_.virtual_display, capture_.video_resolution);
-        video_fanout_.emplace();
-        const auto video_streams = video_fanout_->start(
-            capture_.virtual_display,
-            video_requests_from_media_destinations(plan, destinations));
-        for (const auto& stream : video_streams) {
-            for (auto& media_stream : streams) {
-                if (media_stream.client_id == stream.client_id) {
-                    media_stream.endpoint.video_uri = stream.endpoint.video_uri;
+        virtual_display_ = make_virtual_display(capture_.display_backend);
+        if (virtual_display_) {
+            virtual_display_->start(capture_.virtual_display, capture_.video_resolution);
+            if (capture_.verbose) {
+                std::cout << "Virtual display backend=";
+                switch (virtual_display_->backend()) {
+                case VirtualDisplayBackend::Gamescope:
+                    std::cout << "gamescope (headless + PipeWire)";
+                    break;
+                case VirtualDisplayBackend::VirtualGL:
+                    std::cout << "virtualgl (Xvfb + vglrun)";
+                    break;
+                case VirtualDisplayBackend::Xephyr:
+                    std::cout << "xephyr on " << capture_.virtual_display;
+                    break;
+                case VirtualDisplayBackend::Xvfb:
+                    std::cout << "xvfb on " << capture_.virtual_display;
+                    break;
+                case VirtualDisplayBackend::None:
+                    std::cout << "none";
+                    break;
+                }
+                std::cout << '\n';
+            }
+        }
+
+        defer_pipewire_video_ =
+            virtual_display_ && virtual_display_->uses_pipewire_video();
+        if (defer_pipewire_video_) {
+            // Assign RTP URIs now; attach pipewiresrc after gamescope publishes its node.
+            const auto requests = video_requests_from_media_destinations(plan, destinations);
+            for (const auto& request : requests) {
+                for (auto& media_stream : streams) {
+                    if (media_stream.client_id == request.client_id) {
+                        media_stream.endpoint.video_uri =
+                            rtp_h264_uri(request.destination_host, request.port);
+                    }
+                }
+            }
+            if (capture_.verbose) {
+                std::cout << "Video capture deferred until gamescope PipeWire node is ready.\n";
+            }
+        } else {
+            video_fanout_.emplace();
+            const auto video_streams = video_fanout_->start(
+                capture_.virtual_display,
+                video_requests_from_media_destinations(plan, destinations));
+            for (const auto& stream : video_streams) {
+                for (auto& media_stream : streams) {
+                    if (media_stream.client_id == stream.client_id) {
+                        media_stream.endpoint.video_uri = stream.endpoint.video_uri;
+                    }
                 }
             }
         }
@@ -651,6 +756,34 @@ void GStreamerMediaServer::start(
             std::cerr << "Warning: audio streaming disabled: " << error.what() << '\n';
         }
     }
+}
+
+bool GStreamerMediaServer::video_deferred() const {
+    return defer_pipewire_video_ && !video_fanout_.has_value();
+}
+
+void GStreamerMediaServer::start_pipewire_video(
+    const std::string& pipewire_node,
+    std::vector<MediaClientStream>& streams) {
+    if (!capture_.video || pipewire_node.empty()) {
+        return;
+    }
+    if (video_fanout_.has_value()) {
+        video_fanout_->stop();
+        video_fanout_.reset();
+    }
+    video_fanout_.emplace();
+    const auto video_streams = video_fanout_->start_pipewire(
+        pipewire_node,
+        video_requests_from_media_destinations(plan_, destinations_));
+    for (const auto& stream : video_streams) {
+        for (auto& media_stream : streams) {
+            if (media_stream.client_id == stream.client_id) {
+                media_stream.endpoint.video_uri = stream.endpoint.video_uri;
+            }
+        }
+    }
+    defer_pipewire_video_ = false;
 }
 
 MediaEndpoint GStreamerMediaServer::add_client(
@@ -702,7 +835,7 @@ void GStreamerMediaServer::stop() {
         video_fanout_->stop();
         video_fanout_.reset();
     }
-    if (virtual_display_.has_value()) {
+    if (virtual_display_) {
         virtual_display_->stop();
         virtual_display_.reset();
     }

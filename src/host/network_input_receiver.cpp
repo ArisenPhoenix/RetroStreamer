@@ -1,7 +1,9 @@
 #include "common/serialization.hpp"
 #include "host/network_input_receiver.hpp"
 
+#include <chrono>
 #include <iostream>
+#include <thread>
 #include <variant>
 
 namespace archstreamer {
@@ -11,6 +13,35 @@ NetworkInputReceiver::NetworkInputReceiver(std::uint16_t port, InputRouter& inpu
     socket_.bind_any(port);
     socket_.set_nonblocking(true);
     std::cout << "Receiving UDP controller input on port " << port << '\n';
+}
+
+NetworkInputReceiver::~NetworkInputReceiver() {
+    stop();
+}
+
+void NetworkInputReceiver::start() {
+    if (running_.exchange(true)) {
+        return;
+    }
+    worker_ = std::thread([this] { thread_main(); });
+}
+
+void NetworkInputReceiver::stop() {
+    if (!running_.exchange(false)) {
+        return;
+    }
+    if (worker_.joinable()) {
+        worker_.join();
+    }
+}
+
+void NetworkInputReceiver::thread_main() {
+    while (running_.load(std::memory_order_relaxed)) {
+        poll();
+        // Change-filtered uinput means a short sleep is enough for latency without
+        // burning a core. ~500 µs ≈ 2 kHz sample ceiling.
+        std::this_thread::sleep_for(std::chrono::microseconds(500));
+    }
 }
 
 void NetworkInputReceiver::poll() {

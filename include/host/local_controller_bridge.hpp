@@ -7,6 +7,7 @@
 #include "host/virtual_gamepad.hpp"
 
 #include <cstddef>
+#include <optional>
 
 namespace archstreamer {
 
@@ -21,7 +22,8 @@ public:
     void update(InputRouter& input_router);
 
 private:
-    ControllerBackend backend_;
+    // Optional so SDL_Init runs only after IGNORE env/hint are cleared.
+    std::optional<ControllerBackend> backend_;
     ControllerDevice device_;
 };
 

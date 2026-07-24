@@ -33,8 +33,8 @@ private:
     struct Pad {
         int fd = -1;
         bool plugged = false;
-        // Last emitted state. uinput ABS writes are delivered even when unchanged;
-        // re-emitting every poll (~8ms) makes RetroArch menus treat holds as many taps.
+        // Last emitted state. uinput ABS/KEY writes are delivered even when unchanged;
+        // only emit on change so RetroArch menus do not treat holds as many taps.
         bool has_last = false;
         ControllerState last{};
     };

@@ -23,6 +23,7 @@ std::filesystem::path write_retroarch_input_override(
     const SaveProfile& save_profile,
     bool realtime_pacing,
     bool capture_fullscreen = false,
-    std::string_view capture_resolution = {});
+    std::string_view capture_resolution = {},
+    int vulkan_gpu_index = -1);
 
 } // namespace archstreamer

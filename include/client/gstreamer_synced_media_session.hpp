@@ -1,8 +1,10 @@
 #pragma once
 
 #include "client/media_receiver.hpp"
+#include "common/media.hpp"
 #include "common/platform/default_platform.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <string>
 
@@ -68,6 +70,7 @@ class GStreamerSyncedMediaReceiver final : public MediaReceiver {
 public:
     void connect(const MediaEndpoint& endpoint) override;
     void disconnect() override;
+    bool poll() override;
 
     bool video_running() const;
     bool audio_running() const;
@@ -81,6 +84,9 @@ public:
 
 private:
     GStreamerSyncedMediaSession session_;
+    MediaEndpoint endpoint_;
+    std::string bound_audio_device_;
+    std::chrono::steady_clock::time_point next_audio_device_check_{};
 };
 
 } // namespace archstreamer

@@ -158,7 +158,7 @@ The host can also reserve one local player slot. When enabled, remote player ass
 
 In session mode, a host local controller is represented as client id `0`. `host_runner --bridge-controller <index> --control-port <port> <game>` makes the host player one and routes the selected SDL2 controller through the same `InputRouter` and `SeatAssignment` path used by remote clients. For multiplayer, the host counts as one player toward the selected game's minimum player requirement. For singleplayer, the host alone can satisfy the session and launch without waiting for a remote client.
 
-The host CLI exposes this as `--host-role player|viewer` (default `viewer`). Host viewer mode does not create a local input seat. Host player mode requires `--bridge-controller` and reserves RetroArch port 0. Host role does **not** gate streaming.
+The host CLI exposes this as `--host-role player|viewer` (default `viewer`). Host viewer mode does not create a local input seat. Host player mode requires `--bridge-controller` and reserves RetroArch port 0. **Host Player** runs RetroArch on the real display with video streaming off (use Host Viewer to stream to clients on this PC or the LAN). Host Viewer enables the virtual capture display and RTP fanout when `--video` / `--audio` are on.
 
 Video/audio streaming defaults **on** (`--video` / `--audio`; disable with `--no-video` / `--no-audio`). When video is enabled, RetroArch runs on the virtual capture display. Client `wants_video` / `wants_audio` decide which remotes get RTP fanout. The host always reserves loopback destinations at the base `--video-port` / `--audio-port` so the GUI can toggle **Watch stream locally** mid-session without changing seats (host cannot become a player mid-session).
 
@@ -278,7 +278,7 @@ The first implemented video path is opt-in on the host:
 host_runner --video --video-dest <client-ip> --video-port <udp-port>
 ```
 
-When video is enabled, the host starts RetroArch on a virtual X display, captures that display with `ximagesrc`, encodes H.264 with `x264enc`, packetizes with `rtph264pay`, and sends RTP over UDP with `udpsink`. `Xvfb` is preferred for a headless display; `Xephyr` is used as the fallback when `Xvfb` is not installed.
+When video is enabled, the host starts RetroArch on a virtual X display, captures that display with `ximagesrc`, encodes H.264 with `x264enc`, packetizes with `rtph264pay`, and fans the same RTP to Watch-local + remotes with `multiudpsink` (one capture/encode). `Xvfb` is preferred for a headless display; `Xephyr` is used as the fallback when `Xvfb` is not installed.
 
 Clients request video by default and can opt out with `session_client --no-video`. If a `MediaEndpoint` is received, the client starts a GStreamer RTP/H.264 receiver and displays it through `autovideosink`.
 
@@ -290,7 +290,7 @@ Audio is opt-in on the host:
 host_runner --audio --audio-source <source>
 ```
 
-The first audio path captures a PulseAudio/PipeWire source with `pulsesrc`, encodes Opus with `opusenc`, packetizes with `rtpopuspay`, and sends RTP over UDP. If `--audio-source` is omitted and `pactl` is available, the host uses the default sink monitor, for example `<default-sink>.monitor`, so it captures game/output audio instead of the default microphone. The client receives `rtp+opus://` endpoints with `udpsrc`, `rtpopusdepay`, `opusdec`, and `autoaudiosink`.
+The first audio path captures a PulseAudio/PipeWire source with `pulsesrc`, encodes Opus with `opusenc`, packetizes with `rtpopuspay`, and fans the **same** RTP packets to every destination with `multiudpsink` (Watch locally on `127.0.0.1` plus remotes). One capture/encode — not one `pulsesrc` per client. If `--audio-source` is omitted on a streaming host (Viewer), the host creates a dedicated null sink named `archstreamer` and captures `archstreamer.monitor` so RetroArch audio does not play on the host speakers unless **Watch stream locally** is enabled. Host Player keeps the default sink for local speakers. The client receives `rtp+opus://` endpoints with `udpsrc`, `rtpopusdepay`, `opusdec`, and `autoaudiosink`.
 
 Current limitations:
 
@@ -302,11 +302,13 @@ Current limitations:
 
 Client controller polling should produce `ControllerState`, wrap it in `ControllerInput`, serialize it, and send it to the host. The host `InputRouter` maps `(client_id, local_player)` to a RetroArch port and updates the corresponding virtual gamepad.
 
+This path is the same for a bare-metal client and a VM client. The client uses SDL2 GameController APIs; D-pad bits may also be filled from joystick hat 0 when a device only exposes a hat (for example virtio-evdev in a guest). The host Linux uinput pad emits face/D-pad buttons and stick axes, **only on change**, and RetroArch is bound to those button indices (D-pad = 11–14). Do not also bind hat axes on the virtual pad — that double-steps menus.
+
 `session_client --input-port <port>` is the current integrated input sender. It receives the authoritative `client_id` and `SeatAssignment` from the host before sending controller packets, so it replaces the old UDP-only `input_client` probe.
 
-Each `ControllerState` carries a monotonic `timestamp_us` captured when the client sampled the physical controller. The host tracks the last accepted timestamp per `(client_id, local_player)` and ignores older or duplicate input packets.
+Each `ControllerState` carries a monotonic `timestamp_us` captured when the client sampled the physical controller. The host tracks the last accepted timestamp per `(client_id, local_player)` and ignores older or duplicate input packets. Remote UDP input is drained on a dedicated host thread so session heartbeats cannot stall pads.
 
-Client backends normalize controller input before transmission. Stick axes use signed `-32768..32767` values with a deadzone around center, so small Bluetooth/controller drift becomes zero. Triggers use unsigned `0..65535` values with a small lower deadzone.
+Client backends normalize controller input before transmission. Stick axes use signed `-32768..32767` values with a deadzone around center, so small Bluetooth/controller drift becomes zero. Triggers use unsigned `0..65535` values with a small lower deadzone. Clients send a packet only when controls change (after the first sample), while still polling at a high cadence.
 
 On Linux, the virtual gamepad implementation uses `uinput`. RetroArch can then see each assigned player as a normal controller. The process needs permission to open `/dev/uinput`, which usually means a udev rule, running with elevated privileges during early testing, or adding the user to the relevant device-access group depending on the distro setup.
 

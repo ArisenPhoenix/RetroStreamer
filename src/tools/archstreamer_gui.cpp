@@ -14,6 +14,7 @@
 #include "common/steam_art_import.hpp"
 #ifdef ARCHSTREAMER_HAS_HOST
 #include "host/game_catalog_scanner.hpp"
+#include "host/gpu_select.hpp"
 #endif
 
 #include <QApplication>
@@ -701,6 +702,15 @@ private:
         form->addRow("Art root (host / local import)", settings_art_root_);
         form->addRow("Host lobby wait", settings_session_timeout_);
         form->addRow("Log level", settings_log_level_);
+#ifdef ARCHSTREAMER_HAS_HOST
+        settings_gpu_ = new QComboBox(form_box);
+        settings_gpu_->setToolTip(
+            "GPU used for Host Player RetroArch on this machine.\n"
+            "Auto picks the highest-scoring discrete card.\n"
+            "Stream capture on :99 is unchanged.");
+        refresh_settings_gpus();
+        form->addRow("Host render GPU", settings_gpu_);
+#endif
 
         auto* refresh_art = new QPushButton("Refresh Art from Steam", form_box);
         form->addRow("", refresh_art);
@@ -719,6 +729,11 @@ private:
             apply_log_level_from_settings();
             save_persisted_settings();
         });
+#ifdef ARCHSTREAMER_HAS_HOST
+        connect(settings_gpu_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+            save_persisted_settings();
+        });
+#endif
         connect(refresh_art, &QPushButton::clicked, this, [this] {
             refresh_art_from_steam();
         });
@@ -765,6 +780,52 @@ private:
     }
 
 #ifdef ARCHSTREAMER_HAS_HOST
+    void refresh_settings_gpus() {
+        if (settings_gpu_ == nullptr) {
+            return;
+        }
+        const QSignalBlocker blocker(settings_gpu_);
+        const auto previous = settings_gpu_->currentData().toString();
+        settings_gpu_->clear();
+        settings_gpu_->addItem("Auto (most performant)", QStringLiteral("auto"));
+        try {
+            const auto devices = archstreamer::list_render_gpus();
+            for (const auto& device : devices) {
+                QString label = QString::fromStdString(device.name);
+                if (device.memory_mib > 0) {
+                    label += QString(" (%1 MiB)").arg(device.memory_mib);
+                }
+                label += QString(" [%1]").arg(QString::fromStdString(device.id));
+                settings_gpu_->addItem(label, QString::fromStdString(device.id));
+            }
+            if (!devices.empty()) {
+                const auto& preferred = archstreamer::preferred_render_gpu(devices);
+                settings_gpu_->setItemText(
+                    0,
+                    QString("Auto → %1 [%2]")
+                        .arg(QString::fromStdString(preferred.name))
+                        .arg(QString::fromStdString(preferred.id)));
+            }
+        } catch (const std::exception& error) {
+            if (settings_log_ != nullptr) {
+                append_log(
+                    settings_log_,
+                    QString("GPU scan failed: %1").arg(error.what()),
+                    GuiLogLevel::Quiet);
+            }
+        }
+        const auto index = settings_gpu_->findData(previous.isEmpty() ? QStringLiteral("auto") : previous);
+        settings_gpu_->setCurrentIndex(index >= 0 ? index : 0);
+    }
+
+    std::string selected_render_gpu_id() const {
+        if (settings_gpu_ == nullptr || settings_gpu_->currentData().isNull()) {
+            return "auto";
+        }
+        const auto id = settings_gpu_->currentData().toString().trimmed();
+        return id.isEmpty() ? std::string("auto") : id.toStdString();
+    }
+
     void refresh_host_controllers() {
         const auto previous = host_bridge_controller_->currentData().toInt();
         host_bridge_controller_->clear();
@@ -925,6 +986,14 @@ private:
             const QSignalBlocker blocker(settings_log_level_);
             settings_log_level_->setCurrentIndex(index >= 0 ? index : 1);
         }
+#ifdef ARCHSTREAMER_HAS_HOST
+        if (settings_gpu_ != nullptr) {
+            const auto gpu_id = settings.value("graphics/gpuId", "auto").toString();
+            const QSignalBlocker blocker(settings_gpu_);
+            const auto index = settings_gpu_->findData(gpu_id);
+            settings_gpu_->setCurrentIndex(index >= 0 ? index : 0);
+        }
+#endif
         apply_log_level_from_settings();
         apply_art_root_to_pickers();
         if (!account.isEmpty() && profile_log_ != nullptr) {
@@ -940,6 +1009,9 @@ private:
         settings.setValue("profile/hostName", QString::fromStdString(profile_host_name()));
         settings.setValue("host/sessionTimeoutSeconds", session_timeout_seconds());
         settings.setValue("ui/logLevel", static_cast<int>(current_log_level()));
+#ifdef ARCHSTREAMER_HAS_HOST
+        settings.setValue("graphics/gpuId", QString::fromStdString(selected_render_gpu_id()));
+#endif
     }
 
     void apply_log_level_from_settings() {
@@ -1566,7 +1638,8 @@ private:
             << "--clients" << QString::number(host_clients_->value())
             << "--session-timeout" << QString::number(session_timeout_seconds())
             << "--host-role" << host_role_text(host_role_)
-            << "--mode" << mode_name(selected_mode(host_mode_));
+            << "--mode" << mode_name(selected_mode(host_mode_))
+            << "--gpu" << QString::fromStdString(selected_render_gpu_id());
         if (current_log_level() == GuiLogLevel::Verbose) {
             args << "--verbose";
         }
@@ -1659,6 +1732,9 @@ private:
     }
 
     void stop_host_local_media() {
+        if (host_local_media_poll_timer_ != nullptr) {
+            host_local_media_poll_timer_->stop();
+        }
         if (host_local_receiver_) {
             try {
                 host_local_receiver_->disconnect();
@@ -1708,6 +1784,26 @@ private:
                 host_local_receiver_ = std::make_unique<archstreamer::GStreamerMediaReceiver>();
             }
             host_local_receiver_->connect(endpoint);
+            if (host_local_media_poll_timer_ == nullptr) {
+                host_local_media_poll_timer_ = new QTimer(this);
+                host_local_media_poll_timer_->setInterval(2000);
+                connect(host_local_media_poll_timer_, &QTimer::timeout, this, [this] {
+                    if (!host_local_receiver_) {
+                        return;
+                    }
+                    try {
+                        if (host_local_receiver_->poll()) {
+                            append_log(host_log_, "Local watch: audio output device changed; playback rebound.");
+                        }
+                    } catch (const std::exception& error) {
+                        append_log(
+                            host_log_,
+                            QString("Local watch audio rebind failed: %1").arg(error.what()),
+                            GuiLogLevel::Quiet);
+                    }
+                });
+            }
+            host_local_media_poll_timer_->start();
             append_log(
                 host_log_,
                 QString("Watching local stream (video port %1, audio port %2, %3).")
@@ -1738,6 +1834,7 @@ private:
     QStringList host_debug_args_;
     std::unique_ptr<archstreamer::HostDiscoveryAnnouncer> host_announcer_;
     std::unique_ptr<archstreamer::MediaReceiver> host_local_receiver_;
+    QTimer* host_local_media_poll_timer_ = nullptr;
     QTimer* host_advertise_timer_ = nullptr;
 #endif
 
@@ -1787,6 +1884,9 @@ private:
     QLineEdit* settings_art_root_ = nullptr;
     QSpinBox* settings_session_timeout_ = nullptr;
     QComboBox* settings_log_level_ = nullptr;
+#ifdef ARCHSTREAMER_HAS_HOST
+    QComboBox* settings_gpu_ = nullptr;
+#endif
     QPlainTextEdit* settings_log_ = nullptr;
 };
 

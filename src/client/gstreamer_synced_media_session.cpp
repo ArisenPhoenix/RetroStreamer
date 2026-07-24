@@ -1,15 +1,13 @@
 #include "client/gstreamer_synced_media_session.hpp"
 
-#include "client/gstreamer_probe.hpp"
+#include "client/audio_playback_device.hpp"
+#include "client/gstreamer_media_pipeline.hpp"
+#include "client/gstreamer_media_platform.hpp"
 #include "common/addresses.hpp"
-#include "common/platform/paths.hpp"
 
 #include <chrono>
-#include <cstdlib>
-#include <filesystem>
 #include <fstream>
 #include <stdexcept>
-#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -17,149 +15,15 @@
 namespace archstreamer {
 namespace {
 
-struct H264DecoderChoice {
-    const char* element = nullptr;
-    bool d3d11_zero_copy = false;
-};
-
-H264DecoderChoice choose_h264_decoder() {
-    if (!gst_inspect_available()) {
-#ifdef _WIN32
-        throw std::runtime_error(
-            "gst-inspect-1.0 not found on PATH. Install the GStreamer MSVC runtime "
-            "and add its bin directory to PATH.");
-#else
-        throw std::runtime_error(
-            "gst-inspect-1.0 not found on PATH. Install GStreamer tools and ensure they are on PATH.");
-#endif
-    }
-#ifdef _WIN32
-    if (gst_element_available("d3d11h264dec")) {
-        return {"d3d11h264dec", true};
-    }
-    if (gst_element_available("mfh264dec")) {
-        return {"mfh264dec", false};
-    }
-#endif
-    if (gst_element_available("avdec_h264")) {
-        return {"avdec_h264", false};
-    }
-    if (gst_element_available("openh264dec")) {
-        return {"openh264dec", false};
-    }
-    throw std::runtime_error("no H.264 decoder found for synced media session");
-}
-
-using VideoSinkChoice = GstVideoSinkChoice;
-using VideoSinkKind = GstVideoSinkKind;
-
-VideoSinkChoice choose_video_sink(bool prefer_d3d11) {
-    return choose_usable_video_sink(prefer_d3d11);
-}
-
-struct AudioSinkChoice {
-    std::vector<std::string> args;
-    std::string description = "autoaudiosink";
-};
-
-AudioSinkChoice choose_audio_sink_synced() {
-#ifdef _WIN32
-    if (gst_element_available("wasapisink")) {
-        return {{"wasapisink", "role=multimedia", "sync=true"}, "wasapisink role=multimedia sync=true"};
-    }
-    if (gst_element_available("directsoundsink")) {
-        return {{"directsoundsink", "sync=true"}, "directsoundsink sync=true"};
-    }
-#endif
-    return {{"autoaudiosink", "sync=true"}, "autoaudiosink sync=true"};
-}
-
-const char* gst_launch_bin() {
-#ifdef _WIN32
-    return "gst-launch-1.0.exe";
-#else
-    return "gst-launch-1.0";
-#endif
-}
-
-std::filesystem::path synced_stderr_log_path() {
-    auto root = archstreamer_cache_directory();
-    if (root.empty()) {
-        root = (std::filesystem::temp_directory_path() / "archstreamer").string();
-    }
-    std::error_code ec;
-    std::filesystem::create_directories(root, ec);
-    return std::filesystem::path{root} / "gst-synced-media-receiver.log";
-}
-
-void append_video_branch(
-    std::vector<std::string>& args,
-    std::uint16_t port,
-    const H264DecoderChoice& decoder,
-    const VideoSinkChoice& sink) {
-    args.insert(args.end(), {
-        "udpsrc",
-        "port=" + std::to_string(port),
-        "buffer-size=2097152",
-        "caps=application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000",
-        "!",
-        "rtpjitterbuffer",
-        "latency=80",
-        "!",
-        "rtph264depay",
-        "!",
-    });
-    if (gst_element_available("h264parse")) {
-        args.push_back("h264parse");
-        args.push_back("!");
-    }
-    args.push_back(decoder.element);
-    args.push_back("!");
-
-    if (decoder.d3d11_zero_copy && sink.kind == VideoSinkKind::D3D11) {
-        args.push_back(sink.element);
-        args.push_back("sync=true");
-        return;
-    }
-    if (decoder.d3d11_zero_copy) {
-        args.push_back("d3d11download");
-        args.push_back("!");
-    }
-    args.insert(args.end(), {
-        "videoconvert",
-        "!",
-        // One line per second on stdout while decoded frames flow (see log path).
-        "progressreport",
-        "update-freq=1",
-        "!",
-        sink.element,
-        "sync=true",
-    });
-}
+constexpr auto kAudioDevicePollInterval = std::chrono::seconds(2);
 
 void append_audio_branch(
     std::vector<std::string>& args,
     std::uint16_t port,
-    const AudioSinkChoice& sink) {
-    args.insert(args.end(), {
-        "udpsrc",
-        "port=" + std::to_string(port),
-        "caps=application/x-rtp,media=audio,encoding-name=OPUS,payload=97,clock-rate=48000,encoding-params=2",
-        "!",
-        "rtpjitterbuffer",
-        // Match video jitter latency so the shared clock has less skew to absorb.
-        "latency=80",
-        "!",
-        "rtpopusdepay",
-        "!",
-        "opusdec",
-        "!",
-        "audioconvert",
-        "!",
-        "audioresample",
-        "!",
-    });
-    args.insert(args.end(), sink.args.begin(), sink.args.end());
+    const AudioPlaybackSink& sink) {
+    const auto decode = gst_opus_rtp_decode_args(port, 80);
+    args.insert(args.end(), decode.begin(), decode.end());
+    args.insert(args.end(), sink.gst_args.begin(), sink.gst_args.end());
 }
 
 } // namespace
@@ -194,61 +58,35 @@ void GStreamerSyncedMediaSession::connect(const MediaEndpoint& endpoint) {
         return;
     }
 
-    auto args = std::vector<std::string>{gst_launch_bin(), "-q"};
+    auto args = std::vector<std::string>{GStreamerMediaPlatform::gst_launch_bin(), "-q"};
     auto environment = std::vector<std::pair<std::string, std::string>>{};
     auto unset = std::vector<std::string>{};
-    stderr_log_path_ = synced_stderr_log_path().string();
+    stderr_log_path_ = gst_synced_receiver_log_path().string();
 
     if (want_video) {
-        const auto decoder = choose_h264_decoder();
-        const auto sink = choose_video_sink(decoder.d3d11_zero_copy);
+        const auto decoder = GStreamerMediaPlatform::choose_h264_decoder();
+        const auto sink = GStreamerMediaPlatform::choose_video_sink(decoder.d3d11_zero_copy);
         video_.enabled_ = true;
         video_.pipeline_info_ = std::string("synced decoder=") + decoder.element +
             " sink=" + sink.element + " sync=true log=" + stderr_log_path_;
-        append_video_branch(args, video_port_from_endpoint(endpoint), decoder, sink);
-
-        if (sink.kind == VideoSinkKind::X11) {
-            environment.push_back({"GDK_BACKEND", "x11"});
-            environment.push_back({"GST_GL_WINDOW", "x11"});
-            environment.push_back({"GST_GL_PLATFORM", "glx"});
-            unset.push_back("WAYLAND_DISPLAY");
-            unset.push_back("WAYLAND_SOCKET");
-        }
+        GStreamerMediaPlatform::append_video_branch(
+            args,
+            video_port_from_endpoint(endpoint),
+            decoder,
+            sink,
+            true);
+        GStreamerMediaPlatform::configure_display_for_sink(sink, environment, unset);
     }
 
     if (want_audio) {
-        const auto sink = choose_audio_sink_synced();
+        const auto sink = choose_audio_playback_sink(true);
         audio_.enabled_ = true;
         audio_.pipeline_info_ = "synced " + sink.description;
         append_audio_branch(args, audio_port_from_endpoint(endpoint), sink);
     }
 
     process_.start(std::move(args), environment, unset, stderr_log_path_);
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(400));
-    if (!process_.running()) {
-        std::string detail;
-        if (!stderr_log_path_.empty()) {
-            std::ifstream log(stderr_log_path_);
-            std::string line;
-            while (log && std::getline(log, line)) {
-                if (!detail.empty()) {
-                    detail.push_back(' ');
-                }
-                detail += line;
-                if (detail.size() > 240) {
-                    detail.resize(240);
-                    detail += "...";
-                    break;
-                }
-            }
-        }
-        disconnect();
-        throw std::runtime_error(
-            "Synced media pipeline exited immediately. "
-            "Check gst-launch-1.0 plugins (H.264 / Opus) and UDP media ports." +
-            (detail.empty() ? "" : (" Log: " + detail)));
-    }
+    ensure_gst_child_stayed_up(process_, "Synced media", stderr_log_path_);
 }
 
 void GStreamerSyncedMediaSession::disconnect() {
@@ -283,11 +121,41 @@ bool GStreamerSyncedMediaSession::video_frames_seen() const {
 }
 
 void GStreamerSyncedMediaReceiver::connect(const MediaEndpoint& endpoint) {
-    session_.connect(endpoint);
+    endpoint_ = endpoint;
+    bound_audio_device_ = endpoint.audio_uri.empty()
+        ? std::string{}
+        : current_audio_playback_device_key();
+    next_audio_device_check_ = std::chrono::steady_clock::now() + kAudioDevicePollInterval;
+    session_.connect(endpoint_);
 }
 
 void GStreamerSyncedMediaReceiver::disconnect() {
     session_.disconnect();
+    endpoint_ = {};
+    bound_audio_device_.clear();
+}
+
+bool GStreamerSyncedMediaReceiver::poll() {
+    if (endpoint_.audio_uri.empty()) {
+        return false;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now < next_audio_device_check_) {
+        return false;
+    }
+    next_audio_device_check_ = now + kAudioDevicePollInterval;
+
+    const auto device = current_audio_playback_device_key();
+    const bool device_changed = !device.empty() && device != bound_audio_device_;
+    const bool died = !session_.running();
+    if (!device_changed && !died) {
+        return false;
+    }
+
+    session_.disconnect();
+    bound_audio_device_ = device;
+    session_.connect(endpoint_);
+    return true;
 }
 
 bool GStreamerSyncedMediaReceiver::video_running() const {

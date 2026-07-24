@@ -111,6 +111,37 @@ CLI example from the guest after bootstrap:
 
 Phone-cam both windows while opening a sharp in-game menu is enough to judge tens-of-ms gaps.
 
+## Controller in the VM (virtio-evdev)
+
+USB hostdev passthrough of DualShock 4 (`054c:09cc`) fails on many hosts (guest enumeration `-71`). Prefer **virtio input / evdev** passthrough of the metal joystick node:
+
+```bash
+# Metal: pad plugged into the host — give it to the VM client
+./deploy/vm-client/attach-ds4-evdev.sh
+
+# Metal Host Player / bare-metal client needs the pad back:
+./deploy/vm-client/attach-ds4-evdev.sh detach
+```
+
+While attached, QEMU typically **exclusive-grabs** the evdev node. Host Player on the metal machine will look like a dead controller until you detach (Host Player also best-effort auto-detaches `archstreamer-client` on start).
+
+In the guest the pad shows up under `/proc/bus/input/devices` (not `lsusb`). ArchStreamer uses the **same SDL client path** as on bare metal — no VM-specific input code.
+
+If you only care about native (non-VM) play: keep the pad detached (or never attach) and plug it into the client/host machine.
+
+## Guest audio on the host speakers
+
+SPICE audio is often muted/broken. Optional metal helper (parameterized):
+
+```bash
+sudo ./deploy/vm-client/fix-host-vm-audio.sh          # default domain archstreamer-client
+sudo ./deploy/vm-client/fix-host-vm-audio.sh my-vm 1000
+```
+
+That routes QEMU into the **host** PipeWire session (often the HDMI default sink at 44100 Hz). It fights RetroArch / Watch-stream playback on the same sink (48000 Hz) and sounds muddy. `host_runner` now parks those `qemu-system-x86_64` streams onto a silent `archstreamer-vm` null sink for each session.
+
+Quick guest-side check: `./deploy/vm-client/guest-audio-check.sh` (run inside the VM).
+
 ## Useful virsh commands (metal)
 
 ```bash

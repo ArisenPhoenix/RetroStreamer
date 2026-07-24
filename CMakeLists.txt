@@ -184,12 +184,23 @@ add_library(archstreamer_client
     src/client/controller_manager.cpp
     src/client/game_filter.cpp
     src/client/gstreamer_probe.cpp
+    src/client/audio_playback_device.cpp
+    src/client/gstreamer_media_pipeline.cpp
     src/client/gstreamer_media_receiver.cpp
     src/client/gstreamer_synced_media_session.cpp
     src/client/input_sender.cpp
     src/client/session_client.cpp
     src/client/session_service.cpp
 )
+if(WIN32)
+    target_sources(archstreamer_client PRIVATE
+        src/client/windows_gstreamer_media_platform.cpp
+    )
+else()
+    target_sources(archstreamer_client PRIVATE
+        src/client/posix_gstreamer_media_platform.cpp
+    )
+endif()
 target_link_libraries(archstreamer_client
     PUBLIC
         archstreamer_controller
@@ -204,6 +215,7 @@ if(ARCHSTREAMER_BUILD_HOST)
     add_library(archstreamer_host
         src/host/game_catalog.cpp
         src/host/game_catalog_scanner.cpp
+        src/host/gpu_select.cpp
         src/host/gstreamer_media_server.cpp
         src/host/host_app.cpp
         src/host/host_app_config.cpp

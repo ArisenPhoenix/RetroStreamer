@@ -11,6 +11,7 @@
 #include "common/serialization.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <memory>
 #include <stdexcept>
@@ -31,6 +32,16 @@ bool is_number(std::string_view value) {
         }
     }
     return true;
+}
+
+bool same_controls(const ControllerState& a, const ControllerState& b) {
+    return a.buttons == b.buttons &&
+        a.left_x == b.left_x &&
+        a.left_y == b.left_y &&
+        a.right_x == b.right_x &&
+        a.right_y == b.right_y &&
+        a.left_trigger == b.left_trigger &&
+        a.right_trigger == b.right_trigger;
 }
 
 // Thin facade so the session loop can use either legacy or synced receivers.
@@ -101,6 +112,13 @@ public:
         }
         static const std::string empty;
         return legacy_ ? legacy_->audio_pipeline_info() : empty;
+    }
+
+    bool poll() {
+        if (synced_) {
+            return synced_->poll();
+        }
+        return legacy_ && legacy_->poll();
     }
 
     explicit operator bool() const {
@@ -392,6 +410,8 @@ ClientRunResult ClientApp::join_session(
     auto next_heartbeat = std::chrono::steady_clock::now();
     auto media_watch_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     auto media_watch_armed = static_cast<bool>(media_receiver);
+    std::array<ControllerState, MaxPlayersPerClient> last_sent{};
+    std::array<bool, MaxPlayersPerClient> have_last_sent{};
     while (!should_stop()) {
         if (!handle_control_message(joined_session.stream, callbacks, result)) {
             break;
@@ -418,6 +438,11 @@ ClientRunResult ClientApp::join_session(
         }
 
         const auto now = std::chrono::steady_clock::now();
+        if (media_receiver) {
+            if (media_receiver.poll() && callbacks.on_status) {
+                callbacks.on_status("Audio output device changed; playback rebound.");
+            }
+        }
         if (media_watch_armed && now >= media_watch_deadline) {
             media_watch_armed = false;
             if (expect_video && media_receiver && !media_receiver.video_running()) {
@@ -468,14 +493,22 @@ ClientRunResult ClientApp::join_session(
         if (controller_backend.has_value() && input_sender.has_value() && input_socket.has_value()) {
             for (LocalPlayerIndex player = 0; player < config.filter.requested_players; ++player) {
                 const auto state = controller_backend->poll(player);
-                if (state.has_value()) {
-                    const auto packet = input_sender->make_input(player, *state);
-                    input_socket->send_to(serialize_packet(packet), config.host, *config.input_port);
+                if (!state.has_value()) {
+                    continue;
                 }
+                // Send only on change so we can poll faster without flooding UDP / host.
+                if (have_last_sent[player] && same_controls(last_sent[player], *state)) {
+                    continue;
+                }
+                const auto packet = input_sender->make_input(player, *state);
+                input_socket->send_to(serialize_packet(packet), config.host, *config.input_port);
+                last_sent[player] = *state;
+                have_last_sent[player] = true;
             }
+            std::this_thread::sleep_for(std::chrono::microseconds(500));
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(8));
     }
     if (media_receiver) {
         media_receiver.disconnect();

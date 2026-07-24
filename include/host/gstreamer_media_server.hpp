@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -21,6 +22,9 @@ std::string default_audio_monitor_source();
 // unless "Watch stream locally" (or a remote) plays the RTP feed.
 std::string ensure_streaming_audio_sink();
 std::string streaming_audio_monitor_source();
+// Move QEMU/SPICE host playback off the default sink so it does not fight RetroArch
+// (VM audio is often 44100 Hz on the same HDMI device as game audio at 48000).
+void park_vm_host_audio_streams();
 
 class VirtualDisplayProcess {
 public:
@@ -34,20 +38,7 @@ private:
     ChildProcess process_;
 };
 
-class GStreamerVideoSender {
-public:
-    MediaEndpoint endpoint(std::string host, std::uint16_t port) const;
-    void start(
-        const std::string& display,
-        const std::string& destination_host,
-        std::uint16_t port,
-        const VideoEncodeSettings& settings = {});
-    void stop();
-
-private:
-    ChildProcess process_;
-};
-
+// One ximagesrc/x264 encode shared by Watch-local + all remotes (multiudpsink).
 class GStreamerVideoFanout {
 public:
     ~GStreamerVideoFanout();
@@ -64,31 +55,22 @@ public:
     void stop_client(ClientId client_id);
 
 private:
-    struct ClientVideoSender {
-        GStreamerVideoSender sender;
-        std::string destination_host;
+    struct Destination {
+        ClientId client_id = 0;
+        std::string host;
         std::uint16_t port = 0;
         VideoEncodeSettings settings;
     };
 
+    void restart_pipeline();
+
     std::string display_;
-    std::map<ClientId, ClientVideoSender> senders_;
-};
-
-class GStreamerAudioSender {
-public:
-    MediaEndpoint endpoint(std::string host, std::uint16_t port) const;
-    void start(
-        AudioCaptureBackend backend,
-        const std::string& source,
-        const std::string& destination_host,
-        std::uint16_t port);
-    void stop();
-
-private:
+    VideoEncodeSettings shared_settings_;
+    std::vector<Destination> destinations_;
     ChildProcess process_;
 };
 
+// One pulsesrc/opus encode shared by Watch-local + all remotes (multiudpsink).
 class GStreamerAudioFanout {
 public:
     ~GStreamerAudioFanout();
@@ -105,7 +87,18 @@ public:
     void stop_client(ClientId client_id);
 
 private:
-    std::map<ClientId, GStreamerAudioSender> senders_;
+    struct Destination {
+        ClientId client_id = 0;
+        std::string host;
+        std::uint16_t port = 0;
+    };
+
+    void restart_pipeline();
+
+    AudioCaptureBackend backend_ = AudioCaptureBackend::Pulse;
+    std::string source_;
+    std::vector<Destination> destinations_;
+    ChildProcess process_;
 };
 
 struct GStreamerMediaCaptureConfig {

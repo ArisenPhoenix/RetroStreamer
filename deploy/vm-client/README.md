@@ -60,6 +60,27 @@ bash deploy/vm-client/guest-bootstrap.sh
 Default clone URL: `https://github.com/ArisenPhoenix/RetroStreamer.git`  
 Override with `ARCHSTREAMER_REPO_URL=...` if needed.
 
+### Push a metal build into the VM (no guest rebuild)
+
+After changing client/protocol code on metal, copy the binary in:
+
+```bash
+# Metal — optional --build rebuilds first
+./deploy/vm-client/copy-gui-to-vm.sh --build
+```
+
+Defaults: SSH `merk_virt@<dhcp or 192.168.122.6>`, remote dir `~/Documents/RetroStreamer/build`.
+Override with `ARCHSTREAMER_VM_USER`, `ARCHSTREAMER_VM_HOST`, `ARCHSTREAMER_VM_DIR`.
+Add `--also-session-client` to copy `session_client` too. Restart the guest GUI after copy.
+
+Auth: uses an existing SSH key if present; otherwise password via env or an interactive prompt:
+
+```bash
+ARCHSTREAMER_VM_PASSWORD='…' ./deploy/vm-client/copy-gui-to-vm.sh
+# or, after one successful password copy, key auth is installed automatically
+ssh-copy-id merk_virt@192.168.122.6
+```
+
 ## Firewall (metal)
 
 Guest traffic hits the host via `virbr0`. If UFW/firewalld blocks LAN ports, open them:
@@ -131,14 +152,37 @@ If you only care about native (non-VM) play: keep the pad detached (or never att
 
 ## Guest audio on the host speakers
 
-SPICE audio is often muted/broken. Optional metal helper (parameterized):
+## Guest audio on the host speakers
+
+Default helper uses **SPICE audio** (heard in virt-manager / virt-viewer):
 
 ```bash
-sudo ./deploy/vm-client/fix-host-vm-audio.sh          # default domain archstreamer-client
-sudo ./deploy/vm-client/fix-host-vm-audio.sh my-vm 1000
+sudo ./deploy/vm-client/fix-host-vm-audio.sh
 ```
 
-That routes QEMU into the **host** PipeWire session (often the HDMI default sink at 44100 Hz). It fights RetroArch / Watch-stream playback on the same sink (48000 Hz) and sounds muddy. `host_runner` now parks those `qemu-system-x86_64` streams onto a silent `archstreamer-vm` null sink for each session.
+That is the reliable path. System QEMU does not join your user PipeWire session.
+
+Optional (fragile): punch QEMU into the host Pulse socket:
+
+```bash
+sudo ./deploy/vm-client/fix-host-vm-audio.sh --host-pulse
+sudo ./deploy/vm-client/fix-host-vm-audio.sh my-vm 1000 --host-pulse
+```
+
+`--host-pulse` needs AppArmor + ACLs on `/run/user/$UID/pulse` and must be re-run after login. Direct `type=pipewire` for system QEMU often dies with `Failed to initialize PW context`; Pulse into PipeWire-Pulse is the workable host-session option.
+
+Prefer separate physical outputs over host-pulse routing tricks:
+
+```bash
+./deploy/vm-client/attach-usb-headset.sh          # metal → HDMI, earbuds → VM
+./deploy/vm-client/attach-usb-headset.sh detach   # earbuds back to metal
+```
+
+Default device: Samsung USBC Headset `04e8:a051`. In the guest, pick that sink under
+Settings → Audio output (or system default). Metal Host / Watch-local stays on HDMI;
+the VM client plays through the earbuds. No QEMU/SPICE audio parking required.
+
+`--host-pulse` remains available but is optional when the headset is passed through.
 
 Quick guest-side check: `./deploy/vm-client/guest-audio-check.sh` (run inside the VM).
 

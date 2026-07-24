@@ -1,2 +1,0 @@
-# Don't bind USB audio on DualShock 4 — keeps default mic clean and eases VM passthrough.
-ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="054c", ATTR{idProduct}=="09cc", RUN+="/bin/sh -c 'for i in /sys$DEVPATH:1.[012]; do [ -e $$i/driver ] && echo -n $$(basename $$i) > $$i/driver/unbind; done'"

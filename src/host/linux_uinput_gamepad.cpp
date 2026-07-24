@@ -94,7 +94,12 @@ void LinuxUinputGamepadBus::plug(RetroArchPort port) {
         set_button_bit(fd, BTN_THUMBR);
         set_button_bit(fd, BTN_TL);
         set_button_bit(fd, BTN_TR);
-        // D-pad is exposed via ABS_HAT0 only (see update()).
+        // D-pad as buttons only. RetroArch sdl2 binds indices 11-14; ABS_HAT / h0*
+        // bindings were unreliable here and dual hat+btn caused menu multi-steps.
+        set_button_bit(fd, BTN_DPAD_UP);
+        set_button_bit(fd, BTN_DPAD_DOWN);
+        set_button_bit(fd, BTN_DPAD_LEFT);
+        set_button_bit(fd, BTN_DPAD_RIGHT);
 
         checked_ioctl(fd, UI_SET_ABSBIT, ABS_X, "failed to set ABS_X");
         checked_ioctl(fd, UI_SET_ABSBIT, ABS_Y, "failed to set ABS_Y");
@@ -102,8 +107,6 @@ void LinuxUinputGamepadBus::plug(RetroArchPort port) {
         checked_ioctl(fd, UI_SET_ABSBIT, ABS_RY, "failed to set ABS_RY");
         checked_ioctl(fd, UI_SET_ABSBIT, ABS_Z, "failed to set ABS_Z");
         checked_ioctl(fd, UI_SET_ABSBIT, ABS_RZ, "failed to set ABS_RZ");
-        checked_ioctl(fd, UI_SET_ABSBIT, ABS_HAT0X, "failed to set ABS_HAT0X");
-        checked_ioctl(fd, UI_SET_ABSBIT, ABS_HAT0Y, "failed to set ABS_HAT0Y");
 
         const auto identity = identity_for(port);
 
@@ -120,8 +123,6 @@ void LinuxUinputGamepadBus::plug(RetroArchPort port) {
         setup_abs(device, ABS_RY, -32768, 32767, 8000);
         setup_abs(device, ABS_Z, 0, 65535);
         setup_abs(device, ABS_RZ, 0, 65535);
-        setup_abs(device, ABS_HAT0X, -1, 1);
-        setup_abs(device, ABS_HAT0Y, -1, 1);
 
         if (write(fd, &device, sizeof(device)) != sizeof(device)) {
             throw std::runtime_error(std::string("failed to configure uinput device: ") + std::strerror(errno));
@@ -182,23 +183,6 @@ void LinuxUinputGamepadBus::update(RetroArchPort port, const ControllerState& st
     emit_abs_if_changed(ABS_Z, state.left_trigger, prev.left_trigger);
     emit_abs_if_changed(ABS_RZ, state.right_trigger, prev.right_trigger);
 
-    // D-pad as hat only. RetroArch sdl2 binds h0up/h0down/h0left/h0right.
-    // Do not also emit BTN_DPAD_*: that double-fires menu navigation.
-    const auto hat_x =
-        ((state.buttons & ButtonDpadRight) != 0 ? 1 : 0) -
-        ((state.buttons & ButtonDpadLeft) != 0 ? 1 : 0);
-    const auto hat_y =
-        ((state.buttons & ButtonDpadDown) != 0 ? 1 : 0) -
-        ((state.buttons & ButtonDpadUp) != 0 ? 1 : 0);
-    const auto prev_hat_x =
-        ((prev.buttons & ButtonDpadRight) != 0 ? 1 : 0) -
-        ((prev.buttons & ButtonDpadLeft) != 0 ? 1 : 0);
-    const auto prev_hat_y =
-        ((prev.buttons & ButtonDpadDown) != 0 ? 1 : 0) -
-        ((prev.buttons & ButtonDpadUp) != 0 ? 1 : 0);
-    emit_abs_if_changed(ABS_HAT0X, hat_x, prev_hat_x);
-    emit_abs_if_changed(ABS_HAT0Y, hat_y, prev_hat_y);
-
     emit_btn_if_changed(ButtonA, BTN_SOUTH);
     emit_btn_if_changed(ButtonB, BTN_EAST);
     emit_btn_if_changed(ButtonX, BTN_WEST);
@@ -210,6 +194,10 @@ void LinuxUinputGamepadBus::update(RetroArchPort port, const ControllerState& st
     emit_btn_if_changed(ButtonRightStick, BTN_THUMBR);
     emit_btn_if_changed(ButtonLeftShoulder, BTN_TL);
     emit_btn_if_changed(ButtonRightShoulder, BTN_TR);
+    emit_btn_if_changed(ButtonDpadUp, BTN_DPAD_UP);
+    emit_btn_if_changed(ButtonDpadDown, BTN_DPAD_DOWN);
+    emit_btn_if_changed(ButtonDpadLeft, BTN_DPAD_LEFT);
+    emit_btn_if_changed(ButtonDpadRight, BTN_DPAD_RIGHT);
 
     if (dirty) {
         emit_event(pad.fd, EV_SYN, SYN_REPORT, 0);

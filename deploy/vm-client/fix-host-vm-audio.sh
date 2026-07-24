@@ -2,44 +2,57 @@
 # Fix ArchStreamer client VM audio by playing guest sound into the host
 # PipeWire/Pulse session (HDMI), bypassing broken SPICE playback.
 #
-# Run on the metal host:
-#   pkexec bash deploy/vm-client/fix-host-vm-audio.sh
+# Run on the metal host (as root):
+#   sudo ./deploy/vm-client/fix-host-vm-audio.sh
+#   sudo ./deploy/vm-client/fix-host-vm-audio.sh archstreamer-client 1000
 set -euo pipefail
 
-PROFILE=/etc/apparmor.d/libvirt/libvirt-e90c64d1-d551-4d8a-a8ce-3b035cc056b7
-XML=/tmp/archstreamer-client-audio.xml
-RUNTIME_USER=1000
-RUNTIME_DIR=/run/user/${RUNTIME_USER}
+VM="${1:-archstreamer-client}"
+RUNTIME_USER="${2:-${SUDO_UID:-$(id -u)}}"
+RUNTIME_DIR="/run/user/${RUNTIME_USER}"
+XML="/tmp/${VM}-audio.xml"
 
-if [[ ! -f "$PROFILE" ]]; then
-  echo "missing apparmor profile: $PROFILE" >&2
+UUID="$(virsh -c qemu:///system domuuid "$VM" 2>/dev/null || true)"
+if [[ -z "$UUID" ]]; then
+  echo "Domain not found: $VM (need virsh access to qemu:///system)" >&2
   exit 1
 fi
 
-echo "==> AppArmor: allow QEMU to use host Pulse/PipeWire"
-python3 - "$PROFILE" <<'PY'
+PROFILE="/etc/apparmor.d/libvirt/libvirt-${UUID}"
+if [[ ! -f "$PROFILE" ]]; then
+  echo "missing apparmor profile: $PROFILE" >&2
+  echo "(start the VM once so libvirt creates it, then re-run)" >&2
+  exit 1
+fi
+
+echo "==> AppArmor: allow QEMU to use host Pulse/PipeWire (uid ${RUNTIME_USER})"
+python3 - "$PROFILE" "$UUID" "$RUNTIME_USER" <<'PY'
 from pathlib import Path
+import re
 import sys
+
 p = Path(sys.argv[1])
+uuid = sys.argv[2]
+uid = sys.argv[3]
 text = p.read_text()
-needle = "#include <libvirt/libvirt-e90c64d1-d551-4d8a-a8ce-3b035cc056b7.files>"
-extra = """
+needle = f"#include <libvirt/libvirt-{uuid}.files>"
+extra = f"""
   # ArchStreamer: system QEMU -> host PipeWire/Pulse
-  /run/user/1000/ r,
-  /run/user/1000/pulse/ rw,
-  /run/user/1000/pulse/** rw,
-  /run/user/1000/pipewire-0 rw,
-  /run/user/1000/pipewire-0-manager rw,
+  /run/user/{uid}/ r,
+  /run/user/{uid}/pulse/ rw,
+  /run/user/{uid}/pulse/** rw,
+  /run/user/{uid}/pipewire-0 rw,
+  /run/user/{uid}/pipewire-0-manager rw,
   /usr/share/pipewire/** r,
   /usr/share/spa-*/** r,
   /usr/lib/*/spa-*/** mr,
   /usr/lib/*/pipewire-*/** mr,
 """
-if "/run/user/1000/pulse" in text and "/run/user/1000/ r" in text:
+marker = f"/run/user/{uid}/pulse"
+parent = f"/run/user/{uid}/ r"
+if marker in text and parent in text:
     print("apparmor already patched")
-elif "/run/user/1000/pulse" in text:
-    # older patch without parent dir read — refresh block
-    import re
+elif marker in text:
     text = re.sub(
         r"\n  # ArchStreamer:.*?(?=\n}\n?\\Z|\n  #include|\n})",
         "\n" + extra,
@@ -47,43 +60,41 @@ elif "/run/user/1000/pulse" in text:
         count=1,
         flags=re.S,
     )
-    if "/run/user/1000/ r" not in text:
+    if parent not in text:
         text = text.replace(needle, needle + "\n" + extra, 1)
     p.write_text(text)
     print("apparmor profile updated")
 else:
     if needle not in text:
-        raise SystemExit(f"needle missing in {p}")
+        raise SystemExit(f"needle missing in {p}: {needle}")
     p.write_text(text.replace(needle, needle + "\n" + extra, 1))
     print("apparmor profile patched")
 PY
 apparmor_parser -r "$PROFILE"
 echo "apparmor reloaded"
 
-echo "==> ACL: let libvirt-qemu traverse ${RUNTIME_DIR} (mode 700 otherwise blocks the socket)"
+echo "==> ACL: let libvirt-qemu traverse ${RUNTIME_DIR}"
 if [[ ! -d "${RUNTIME_DIR}/pulse" ]]; then
-  echo "Pulse runtime missing at ${RUNTIME_DIR}/pulse — is user ${RUNTIME_USER} logged into a graphical session?" >&2
+  echo "Pulse runtime missing at ${RUNTIME_DIR}/pulse — is uid ${RUNTIME_USER} in a graphical session?" >&2
   exit 1
 fi
-# Need execute on each path component to reach the socket; rw on pulse files.
 setfacl -m u:libvirt-qemu:--x /run/user || true
 setfacl -m u:libvirt-qemu:--x "${RUNTIME_DIR}"
 setfacl -m u:libvirt-qemu:rwx "${RUNTIME_DIR}/pulse"
 setfacl -m u:libvirt-qemu:rw "${RUNTIME_DIR}/pulse/native" || true
 setfacl -m u:libvirt-qemu:r "${RUNTIME_DIR}/pulse/pid" || true
-# PipeWire sockets if present
 [[ -S "${RUNTIME_DIR}/pipewire-0" ]] && setfacl -m u:libvirt-qemu:rw "${RUNTIME_DIR}/pipewire-0" || true
 [[ -S "${RUNTIME_DIR}/pipewire-0-manager" ]] && setfacl -m u:libvirt-qemu:rw "${RUNTIME_DIR}/pipewire-0-manager" || true
-getfacl -p "${RUNTIME_DIR}" | sed -n '1,20p'
-getfacl -p "${RUNTIME_DIR}/pulse" | sed -n '1,20p'
 
 echo "==> Domain XML: pulseaudio backend + env"
-virsh -c qemu:///system dumpxml archstreamer-client > "$XML"
-python3 - "$XML" <<'PY'
+virsh -c qemu:///system dumpxml "$VM" > "$XML"
+python3 - "$XML" "$RUNTIME_USER" <<'PY'
 from pathlib import Path
 import re
 import sys
+
 p = Path(sys.argv[1])
+uid = sys.argv[2]
 text = p.read_text()
 
 if "xmlns:qemu=" not in text:
@@ -103,10 +114,10 @@ print(f"audio replacements: {n}")
 
 text = re.sub(r"<qemu:commandline>.*?</qemu:commandline>\s*", "", text, flags=re.S)
 
-env_block = """  <qemu:commandline>
-    <qemu:env name='XDG_RUNTIME_DIR' value='/run/user/1000'/>
-    <qemu:env name='PULSE_SERVER' value='unix:/run/user/1000/pulse/native'/>
-    <qemu:env name='PIPEWIRE_RUNTIME_DIR' value='/run/user/1000'/>
+env_block = f"""  <qemu:commandline>
+    <qemu:env name='XDG_RUNTIME_DIR' value='/run/user/{uid}'/>
+    <qemu:env name='PULSE_SERVER' value='unix:/run/user/{uid}/pulse/native'/>
+    <qemu:env name='PIPEWIRE_RUNTIME_DIR' value='/run/user/{uid}'/>
   </qemu:commandline>
 """
 text = text.replace("</domain>", env_block + "</domain>", 1)
@@ -114,22 +125,21 @@ p.write_text(text)
 print("domain xml updated")
 PY
 
-virsh -c qemu:///system destroy archstreamer-client 2>/dev/null || true
+virsh -c qemu:///system destroy "$VM" 2>/dev/null || true
 virsh -c qemu:///system define "$XML"
-virsh -c qemu:///system start archstreamer-client
-echo "==> VM started"
-virsh -c qemu:///system dumpxml archstreamer-client | rg -n "audio|qemu:env|xmlns:qemu"
+virsh -c qemu:///system start "$VM"
+echo "==> VM started: $VM"
+virsh -c qemu:///system dumpxml "$VM" | grep -E "audio|qemu:env|xmlns:qemu" || true
 
-cat <<'EOF'
+cat <<EOF
 
 Done.
 
-Guest audio should now appear on the host as a QEMU/Pulse stream (not Virt Viewer).
+Guest audio should appear on the host as a QEMU/Pulse stream (not Virt Viewer).
 After the guest desktop is up:
   1. Play a tone / YouTube in the VM
   2. On the host: pactl list short sink-inputs
 
-If this machine reboots, re-run the ACL section (or this whole script) after login —
-/run/user/1000 is recreated each session.
-
+After host reboot, re-run the ACL section (or this whole script) after login —
+${RUNTIME_DIR} is recreated each session.
 EOF

@@ -4,6 +4,7 @@
 #include "host/virtual_gamepad.hpp"
 
 #include <map>
+#include <mutex>
 
 namespace archstreamer {
 
@@ -27,6 +28,7 @@ private:
     SeatAssignment assignment_;
     std::map<PlayerKey, std::uint64_t> last_input_timestamp_by_player_;
     bool first_input_logged_ = false;
+    mutable std::mutex mutex_;
 };
 
 } // namespace archstreamer

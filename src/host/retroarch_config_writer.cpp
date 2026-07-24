@@ -76,11 +76,10 @@ void write_virtual_pad_autoconfig(
         << "input_r_x_plus_axis = \"+3\"\n"
         << "input_r_y_minus_axis = \"-4\"\n"
         << "input_r_y_plus_axis = \"+4\"\n"
-        // sdl2 exposes ABS_HAT0 as hat 0, not as axes 6/7.
-        << "input_up_btn = \"h0up\"\n"
-        << "input_down_btn = \"h0down\"\n"
-        << "input_left_btn = \"h0left\"\n"
-        << "input_right_btn = \"h0right\"\n";
+        << "input_up_btn = \"11\"\n"
+        << "input_down_btn = \"12\"\n"
+        << "input_left_btn = \"13\"\n"
+        << "input_right_btn = \"14\"\n";
 }
 
 } // namespace
@@ -107,7 +106,8 @@ std::filesystem::path write_retroarch_input_override(
     const SaveProfile& save_profile,
     bool realtime_pacing,
     bool capture_fullscreen,
-    std::string_view capture_resolution) {
+    std::string_view capture_resolution,
+    int vulkan_gpu_index) {
     // Home path so Flatpak ArchStreamer + flatpak-spawn --host retroarch share the same files.
     const auto root = retroarch_runtime_root();
     const auto directory = root / "config";
@@ -144,9 +144,15 @@ std::filesystem::path write_retroarch_input_override(
         << "sort_savefiles_enable = \"false\"\n"
         << "sort_savefiles_by_content_enable = \"false\"\n"
         << "sort_savestates_enable = \"false\"\n"
-        << "sort_savestates_by_content_enable = \"false\"\n";
+        << "sort_savestates_by_content_enable = \"false\"\n"
+        // Input is driven through ArchStreamer virtual pads (host bridge or UDP).
+        // RetroArch's default pause_nonactive=true makes Host Player look like a
+        // dead controller as soon as the GUI or another window takes focus.
+        << "pause_nonactive = \"false\"\n";
 
     if (realtime_pacing) {
+        // Known-good streaming pacing (do not over-tune — host Watch-local used to be fine
+        // with just these knobs feeding the null-sink → Opus path).
         file
             << "audio_enable = \"true\"\n"
             << "audio_mute = \"false\"\n"
@@ -154,6 +160,17 @@ std::filesystem::path write_retroarch_input_override(
             << "audio_sync = \"true\"\n"
             << "video_vsync = \"false\"\n"
             << "runahead_enabled = \"false\"\n";
+    } else {
+        // Host Player on the real display. Prefer Vulkan with an explicit GPU index when
+        // known (multi-GPU). Streaming (:99) keeps the gl path via realtime_pacing.
+        file << "video_driver = \"vulkan\"\n";
+        if (vulkan_gpu_index >= 0) {
+            file << "vulkan_gpu_index = \"" << vulkan_gpu_index << "\"\n";
+        }
+        file
+            << "audio_enable = \"true\"\n"
+            << "audio_mute = \"false\"\n"
+            << "audio_driver = \"pulse\"\n";
     }
 
     if (capture_fullscreen) {
@@ -176,8 +193,7 @@ std::filesystem::path write_retroarch_input_override(
             << "video_fullscreen_y = \"" << height << "\"\n"
             << "video_window_show_decor = \"false\"\n"
             << "video_font_enable = \"false\"\n"
-            << "menu_enable = \"false\"\n"
-            << "pause_nonactive = \"false\"\n";
+            << "menu_enable = \"false\"\n";
     }
 
     for (RetroArchPort port = 0; port < players; ++port) {
@@ -205,10 +221,10 @@ std::filesystem::path write_retroarch_input_override(
             << "input_player" << player << "_r_x_plus_axis = \"+3\"\n"
             << "input_player" << player << "_r_y_minus_axis = \"-4\"\n"
             << "input_player" << player << "_r_y_plus_axis = \"+4\"\n"
-            << "input_player" << player << "_up_btn = \"h0up\"\n"
-            << "input_player" << player << "_down_btn = \"h0down\"\n"
-            << "input_player" << player << "_left_btn = \"h0left\"\n"
-            << "input_player" << player << "_right_btn = \"h0right\"\n";
+            << "input_player" << player << "_up_btn = \"11\"\n"
+            << "input_player" << player << "_down_btn = \"12\"\n"
+            << "input_player" << player << "_left_btn = \"13\"\n"
+            << "input_player" << player << "_right_btn = \"14\"\n";
     }
 
     return path;

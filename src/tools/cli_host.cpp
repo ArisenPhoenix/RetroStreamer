@@ -94,7 +94,10 @@ void HostRunnerCli::print_usage() const {
         << "  --save-root <path>  Base save profile directory. Default: ~/.local/share/archstreamer/saves\n"
         << "  --username <name>   Save profile username. Default: $USER or local.\n"
         << "  --virtual-joypad-index <index>\n"
-        << "                      RetroArch joypad index for the virtual pad. Default: 1 with bridge.\n";
+        << "                      RetroArch joypad index for the virtual pad. Default: 1 with bridge.\n"
+        << "  --gpu <auto|id|name>\n"
+        << "                      Host Player render GPU (auto = most performant). "
+        << "Ids from nvidia-smi order as nvidia:0, nvidia:1, …\n";
 }
 
 HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
@@ -224,6 +227,9 @@ HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
         } else if (arg == "--virtual-joypad-index") {
             if_throw(i, "--virtual-joypad-index requires an index");
             args.virtual_joypad_index = static_cast<std::size_t>(std::stoul(argv[i]));
+        } else if (arg == "--gpu") {
+            if_throw(i, "--gpu requires auto, a device id (nvidia:0), or a name substring");
+            args.render_gpu = argv[i];
         } else if (arg == "--help" || arg == "-h") {
             print_usage();
             std::exit(0);

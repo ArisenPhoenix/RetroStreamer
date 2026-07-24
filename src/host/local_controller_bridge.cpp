@@ -1,5 +1,8 @@
 #include "host/host_session_helpers.hpp"
 #include "host/local_controller_bridge.hpp"
+#include "common/platform/process_utils.hpp"
+
+#include <SDL.h>
 
 #include <chrono>
 #include <cstdlib>
@@ -7,9 +10,17 @@
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 
 namespace archstreamer {
 namespace {
+
+void clear_sdl_controller_ignore() {
+    // RetroArch gets IGNORE via its own child env; the host bridge must see the real pad.
+    // Clear both the process env and the SDL hint before any ControllerBackend SDL_Init.
+    unsetenv("SDL_GAMECONTROLLER_IGNORE_DEVICES");
+    SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES, "");
+}
 
 std::string resolve_live_device_id(const ControllerDevice& wanted) {
     ControllerBackend backend;
@@ -51,6 +62,7 @@ void pulse_virtual_pad_a(VirtualGamepadBus& gamepads) {
 }
 
 ControllerDevice local_bridge_device_for(std::size_t selected_index) {
+    clear_sdl_controller_ignore();
     ControllerBackend backend;
     const auto devices = backend.list_devices();
     if (devices.empty()) {
@@ -65,8 +77,24 @@ ControllerDevice local_bridge_device_for(std::size_t selected_index) {
 
 LocalControllerBridge::LocalControllerBridge(ControllerDevice device)
     : device_(std::move(device)) {
-    // RetroArch gets IGNORE via its own env; the host bridge must still see the real pad.
-    unsetenv("SDL_GAMECONTROLLER_IGNORE_DEVICES");
+    clear_sdl_controller_ignore();
+
+    // Best-effort: if a libvirt guest still has this pad via virtio-evdev, QEMU holds an
+    // exclusive grab and Host Player gets no events. Detach common default VM name.
+    (void)archstreamer::read_command_output(
+        "command -v virsh >/dev/null 2>&1 && "
+        "(sg libvirt -c 'virsh domstate archstreamer-client' 2>/dev/null | grep -q running) && "
+        "sg libvirt -c \"virsh dumpxml archstreamer-client\" 2>/dev/null | "
+        "python3 -c \"import sys,re; "
+        "m=re.search(r\\\"<input type='passthrough'.*?</input>\\\",sys.stdin.read(),re.S); "
+        "open('/tmp/archstreamer-evdev-detach.xml','w').write(m.group(0) if m else '')\" && "
+        "test -s /tmp/archstreamer-evdev-detach.xml && "
+        "sg libvirt -c 'virsh detach-device archstreamer-client /tmp/archstreamer-evdev-detach.xml --live' "
+        "2>/dev/null && "
+        "echo 'Detached virtio-evdev pad from archstreamer-client for Host Player.'");
+
+    clear_sdl_controller_ignore();
+
     // Re-resolve by GUID/vid/pid. The SDL index captured at selection time is stale once
     // virtual ArchStreamer pads appear (and must not run under the RetroArch ignore list).
     const auto live_id = resolve_live_device_id(device_);
@@ -77,7 +105,10 @@ LocalControllerBridge::LocalControllerBridge(ControllerDevice device)
         << " vid/pid=" << hex_vid_pid(device_.vendor_id, device_.product_id)
         << "\n";
 
-    backend_.open_selected({live_id});
+    // Construct the long-lived backend only after IGNORE is cleared so SDL_Init sees
+    // the physical pad (member default-init would race with a stale ignore hint).
+    backend_.emplace();
+    backend_->open_selected({live_id});
 }
 
 const ControllerDevice& LocalControllerBridge::device() const {
@@ -85,13 +116,25 @@ const ControllerDevice& LocalControllerBridge::device() const {
 }
 
 void LocalControllerBridge::update(InputRouter& input_router) {
-    const auto state = backend_.poll(0);
-    if (state.has_value()) {
-        input_router.route(ControllerInput{
+    if (!backend_.has_value()) {
+        return;
+    }
+    const auto state = backend_->poll(0);
+    if (!state.has_value()) {
+        return;
+    }
+    if (!input_router.route(ControllerInput{
             HostClientId,
             0,
             *state,
-        });
+        })) {
+        static bool logged_missing_seat = false;
+        if (!logged_missing_seat) {
+            logged_missing_seat = true;
+            std::cerr
+                << "Host bridge input has no seat assignment; "
+                << "virtual pad will not receive Host Player controls\n";
+        }
     }
 }
 

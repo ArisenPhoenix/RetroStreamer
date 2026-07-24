@@ -49,6 +49,8 @@ struct HostAppConfig {
     std::filesystem::path save_root;
     std::filesystem::path art_root;
     std::string username;
+    // "auto" or a GpuDevice::id from list_render_gpus() (e.g. nvidia:0).
+    std::string render_gpu = "auto";
 };
 
 HostMediaPlanConfig media_plan_config_for(const HostAppConfig& config);

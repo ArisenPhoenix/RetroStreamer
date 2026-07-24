@@ -2,8 +2,10 @@
 #include "common/cli_common.hpp"
 #include "common/participant_role.hpp"
 #include "common/platform/default_platform.hpp"
+#include "common/platform/process_utils.hpp"
 #include "client/controller_backend.hpp"
 #include "host/game_catalog_scanner.hpp"
+#include "host/gpu_select.hpp"
 #include "host/gstreamer_media_server.hpp"
 #include "host/host_app.hpp"
 #include "host/host_app_config.hpp"
@@ -42,44 +44,40 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         auto catalog = scan_game_catalog(config.rom_root, LibretroCoreRegistry::ubuntu_defaults(), config.meta_root);
         const auto list = catalog.list();
 
+        const bool host_plays_locally =
+            config.host_role == ParticipantRole::Player &&
+            config.bridge_controller_index.has_value();
+        // Host Player is local RetroArch on the real display/speakers. Streaming the
+        // same session captures the playback sink monitor (or fights virtio-evdev for
+        // the pad) and sounds/feels broken — force media off regardless of CLI/GUI.
+        if (host_plays_locally && (config.audio || config.video)) {
+            std::cout
+                << "Host Player: disabling stream video/audio for local play "
+                << "(use Host Viewer to stream).\n";
+            config.audio = false;
+            config.video = false;
+        }
+
         if (config.audio) {
             config.audio_backend = choose_audio_capture_backend(config.audio_backend);
             if (config.audio_source.empty()) {
-                const bool host_plays_locally =
-                    config.host_role == ParticipantRole::Player &&
-                    config.bridge_controller_index.has_value();
-                // Host Player should hear RetroArch on the real speakers. Dedicated hosts
-                // (Viewer) use a null sink so speakers stay quiet unless Watch stream locally.
-                if (host_plays_locally) {
+                try {
+                    config.audio_source = streaming_audio_monitor_source();
+                    std::cout
+                        << "Audio capture: " << config.audio_source
+                        << " (null sink; host speakers stay quiet unless Watch stream locally)\n";
+                } catch (const std::exception& error) {
                     config.audio_source = default_audio_monitor_source();
+                    std::cerr << "Warning: " << error.what() << '\n';
                     if (config.audio_source.empty()) {
                         std::cerr
-                            << "Warning: could not determine default audio monitor source; "
+                            << "Warning: could not determine audio monitor source; "
                             << "audio capture will use the audio server default source.\n";
                     } else {
-                        std::cout
-                            << "Audio capture: " << config.audio_source
-                            << " (host player uses default sink so local speakers work)\n";
-                    }
-                } else {
-                    try {
-                        config.audio_source = streaming_audio_monitor_source();
-                        std::cout
-                            << "Audio capture: " << config.audio_source
-                            << " (null sink; host speakers stay quiet unless Watch stream locally)\n";
-                    } catch (const std::exception& error) {
-                        config.audio_source = default_audio_monitor_source();
-                        std::cerr << "Warning: " << error.what() << '\n';
-                        if (config.audio_source.empty()) {
-                            std::cerr
-                                << "Warning: could not determine audio monitor source; "
-                                << "audio capture will use the audio server default source.\n";
-                        } else {
-                            std::cerr
-                                << "Warning: falling back to default sink monitor "
-                                << config.audio_source
-                                << " (host may hear game audio locally).\n";
-                        }
+                        std::cerr
+                            << "Warning: falling back to default sink monitor "
+                            << config.audio_source
+                            << " (host may hear game audio locally).\n";
                     }
                 }
             }
@@ -206,9 +204,7 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         if (config.verbose) {
             launch_config.extra_args.insert(launch_config.extra_args.begin(), "--verbose");
         }
-        const bool host_plays_locally =
-            config.host_role == ParticipantRole::Player &&
-            config.bridge_controller_index.has_value();
+        // Streaming already forced off above for Host Player.
         if (config.audio || config.video) {
             launch_config.environment.emplace_back("SDL_AUDIODRIVER", "pulse");
         }
@@ -217,6 +213,14 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                 launch_config.environment.emplace_back(
                     "PULSE_SINK",
                     config.audio_source.substr(0, config.audio_source.size() - std::string(".monitor").size()));
+            }
+        } else if (host_plays_locally) {
+            // Keep Host Player on the real default sink even if a prior stream left
+            // PULSE_SINK=archstreamer in the GUI process environment.
+            launch_config.environment.emplace_back("SDL_AUDIODRIVER", "pulse");
+            const auto default_sink = read_command_output("pactl get-default-sink 2>/dev/null");
+            if (!default_sink.empty() && default_sink != "archstreamer") {
+                launch_config.environment.emplace_back("PULSE_SINK", default_sink);
             }
         }
         if (bridge_device.has_value() && !config.ignore_controller.has_value()) {
@@ -267,17 +271,34 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         }
 
         // Host Player keeps the real DISPLAY (and speakers). Video capture needs a virtual
-        // display, so local play disables video streaming rather than hiding the game.
-        if (config.video && host_plays_locally) {
-            std::cout
-                << "Host player keeps the current DISPLAY; video streaming disabled for this session.\n"
-                << "Use Host Viewer (or Watch stream locally with a dedicated host) to stream video.\n";
-            config.video = false;
-        }
+        // display; local play already forced video/audio off above.
         const bool use_virtual_capture = config.video;
         const bool capture_fullscreen = use_virtual_capture;
         if (use_virtual_capture) {
             launch_config.environment.emplace_back("DISPLAY", config.virtual_display);
+        }
+
+        auto resolved_gpu = resolve_render_gpu(config.render_gpu);
+        if (resolved_gpu.has_value()) {
+            std::cout
+                << "Render GPU: " << resolved_gpu->name
+                << " [" << resolved_gpu->id << "]";
+            if (resolved_gpu->vulkan_index >= 0) {
+                std::cout << " vulkan_index=" << resolved_gpu->vulkan_index;
+            }
+            if (!resolved_gpu->prime_provider.empty()) {
+                std::cout << " prime=" << resolved_gpu->prime_provider;
+            }
+            std::cout << '\n';
+            if (!use_virtual_capture) {
+                for (const auto& entry : render_gpu_environment(*resolved_gpu)) {
+                    launch_config.environment.push_back(entry);
+                }
+            } else if (config.render_gpu != "auto" && !config.render_gpu.empty()) {
+                std::cout
+                    << "Note: GPU selection applies to Host Player on the real display; "
+                    << "stream capture uses the virtual display (:99).\n";
+            }
         }
 
         const auto media_config = media_plan_config_for(config);
@@ -390,7 +411,8 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             save_profile,
             config.audio || config.video,
             capture_fullscreen,
-            config.video_resolution);
+            config.video_resolution,
+            (!use_virtual_capture && resolved_gpu.has_value()) ? resolved_gpu->vulkan_index : -1);
         launch_config.extra_args.push_back("-c");
         launch_config.extra_args.push_back(runtime_override.string());
         std::cout
@@ -402,6 +424,9 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                 << "Capture fullscreen: " << config.video_resolution
                 << " on virtual display " << config.virtual_display << '\n';
         }
+
+        // Keep QEMU/SPICE host playback off the speakers RetroArch (or Watch stream) uses.
+        park_vm_host_audio_streams();
 
         InputRouter input_router(gamepads);
         input_router.set_seat_assignment(launch_plan.seats);
@@ -492,12 +517,14 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             pulse_virtual_pad_a(gamepads);
         }
 
+        // Start UDP input after the optional A-pulse so it does not race uinput updates.
+        if (network_receiver.has_value()) {
+            network_receiver->start();
+        }
+
         while (!should_stop() && retroarch.running()) {
             if (local_bridge.has_value()) {
                 local_bridge->update(input_router);
-            }
-            if (network_receiver.has_value()) {
-                network_receiver->poll();
             }
             if (late_viewer_listener.has_value() && session_plan.has_value() && media_server) {
                 poll_active_session_joins(
@@ -515,11 +542,16 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                 }
             }
 
-            if (local_bridge.has_value() || network_receiver.has_value()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(8));
+            // Network pads run on their own thread. Local bridge still needs a short cadence.
+            if (local_bridge.has_value()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             } else {
-                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
+        }
+
+        if (network_receiver.has_value()) {
+            network_receiver->stop();
         }
 
         retroarch.stop();

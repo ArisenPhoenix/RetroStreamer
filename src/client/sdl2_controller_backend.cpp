@@ -177,6 +177,28 @@ std::optional<ControllerState> Sdl2ControllerBackend::poll(LocalPlayerIndex loca
     set_button(controller, SDL_CONTROLLER_BUTTON_DPAD_LEFT, ButtonDpadLeft, state.buttons);
     set_button(controller, SDL_CONTROLLER_BUTTON_DPAD_RIGHT, ButtonDpadRight, state.buttons);
 
+    // Some paths (virtio-evdev, odd HID adapters) expose the D-pad only as hat 0 while
+    // SDL_GameControllerGetButton(DPAD_*) stays zero. Merge hat bits into the *same*
+    // ButtonDpad* flags. On a normal DualShock/Xbox pad the GameController mapping
+    // already covers the D-pad, so this is a no-op or a redundant OR — never a second
+    // logical press for RetroArch (the host emits each bit once).
+    if (SDL_Joystick* joystick = SDL_GameControllerGetJoystick(controller);
+        joystick != nullptr && SDL_JoystickNumHats(joystick) > 0) {
+        const Uint8 hat = SDL_JoystickGetHat(joystick, 0);
+        if ((hat & SDL_HAT_UP) != 0) {
+            state.buttons |= ButtonDpadUp;
+        }
+        if ((hat & SDL_HAT_DOWN) != 0) {
+            state.buttons |= ButtonDpadDown;
+        }
+        if ((hat & SDL_HAT_LEFT) != 0) {
+            state.buttons |= ButtonDpadLeft;
+        }
+        if ((hat & SDL_HAT_RIGHT) != 0) {
+            state.buttons |= ButtonDpadRight;
+        }
+    }
+
     return state;
 }
 

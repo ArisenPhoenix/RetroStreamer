@@ -9,11 +9,13 @@ InputRouter::InputRouter(VirtualGamepadBus& gamepads) : gamepads_(gamepads) {
 }
 
 void InputRouter::set_seat_assignment(SeatAssignment assignment) {
+    std::lock_guard lock(mutex_);
     assignment_ = std::move(assignment);
     last_input_timestamp_by_player_.clear();
 }
 
 bool InputRouter::route(const ControllerInput& input) {
+    std::lock_guard lock(mutex_);
     const auto port = find_retroarch_port(assignment_, input.client_id, input.local_player);
     if (!port.has_value()) {
         return false;
@@ -39,6 +41,7 @@ bool InputRouter::route(const ControllerInput& input) {
 }
 
 void InputRouter::neutralize_client(ClientId client_id) {
+    std::lock_guard lock(mutex_);
     for (const auto& seat : assignment_.seats) {
         if (seat.client_id != client_id) {
             continue;

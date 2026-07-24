@@ -4,6 +4,7 @@
 #include "client/game_filter.hpp"
 #include "client/gstreamer_media_receiver.hpp"
 #include "client/gstreamer_synced_media_session.hpp"
+#include "client/audio_playback_device.hpp"
 #include "client/media_receiver.hpp"
 #include "game_picker_widget.hpp"
 #include "host_search_dialog.hpp"
@@ -237,16 +238,19 @@ public:
         setWindowTitle("ArchStreamer");
         resize(1100, 720);
 
-        auto* tabs = new QTabWidget(this);
-        tabs->addTab(build_client_tab(), "Client");
+        tabs_ = new QTabWidget(this);
+        tabs_->addTab(build_client_tab(), "Client");
 #ifdef ARCHSTREAMER_HAS_HOST
-        tabs->addTab(build_host_tab(), "Host");
+        tabs_->addTab(build_host_tab(), "Host");
 #endif
-        tabs->addTab(build_profile_tab(), "Profile");
-        tabs->addTab(build_settings_tab(), "Settings");
-        setCentralWidget(tabs);
+        tabs_->addTab(build_game_options_tab(), "Game Options");
+        tabs_->addTab(build_profile_tab(), "Profile");
+        tabs_->addTab(build_settings_tab(), "Settings");
+        setCentralWidget(tabs_);
         load_persisted_settings();
+        restore_last_session_tab();
         start_client_host_auto_pick();
+        refresh_game_options_ui();
     }
 
     ~MainWindow() override {
@@ -364,6 +368,21 @@ private:
                 sync_host_local_media();
             }
 #endif
+            persist_settings_if_idle();
+        });
+        connect(client_port_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
+            update_client_host_summary(client_host_label_);
+            persist_settings_if_idle();
+        });
+        connect(client_input_port_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
+            update_client_host_summary(client_host_label_);
+            persist_settings_if_idle();
+        });
+        connect(client_video_, &QCheckBox::toggled, this, [this](bool) {
+            persist_settings_if_idle();
+        });
+        connect(client_audio_, &QCheckBox::toggled, this, [this](bool) {
+            persist_settings_if_idle();
         });
 
         form->addRow("Host", host_row);
@@ -389,15 +408,6 @@ private:
         auto* connect_host = new QPushButton("Connect", page);
         auto* join = new QPushButton("Join Session", page);
         auto* stop = new QPushButton("Stop Client", page);
-        connect(connect_host, &QPushButton::clicked, this, [this] {
-            connect_client();
-        });
-        connect(join, &QPushButton::clicked, this, [this] {
-            start_client();
-        });
-        connect(stop, &QPushButton::clicked, this, [this] {
-            stop_client();
-        });
         connect(client_role_, &QComboBox::currentIndexChanged, this, [this] {
             if (selected_client_role(client_role_) == archstreamer::ClientParticipantRole::Viewer) {
                 client_players_->setValue(0);
@@ -406,12 +416,26 @@ private:
                 client_players_->setValue(1);
             }
             refresh_filtered_client_games();
+            persist_settings_if_idle();
         });
         connect(client_mode_, &QComboBox::currentIndexChanged, this, [this] {
             refresh_filtered_client_games();
+            persist_settings_if_idle();
         });
         connect(client_players_, qOverload<int>(&QSpinBox::valueChanged), this, [this] {
             refresh_filtered_client_games();
+            persist_settings_if_idle();
+        });
+        connect(connect_host, &QPushButton::clicked, this, [this] {
+            remember_session_tab(QStringLiteral("client"));
+            connect_client();
+        });
+        connect(join, &QPushButton::clicked, this, [this] {
+            remember_session_tab(QStringLiteral("client"));
+            start_client();
+        });
+        connect(stop, &QPushButton::clicked, this, [this] {
+            stop_client();
         });
 
         auto* left = new QVBoxLayout();
@@ -437,6 +461,144 @@ private:
 
         refresh_client_controllers();
         return page;
+    }
+
+    QWidget* build_game_options_tab() {
+        auto* page = new QWidget(this);
+        auto* root = new QVBoxLayout(page);
+
+        auto* form_box = new QGroupBox("Disc control", page);
+        auto* form = new QFormLayout(form_box);
+        game_options_status_ = new QLabel(
+            "Join a multi-disc session (.m3u) to swap discs.",
+            form_box);
+        game_options_status_->setWordWrap(true);
+        game_options_disc_ = new QComboBox(form_box);
+        game_options_disc_->setEnabled(false);
+        auto* swap = new QPushButton("Switch to selected disc", form_box);
+        swap->setEnabled(false);
+        game_options_swap_ = swap;
+        auto* prev = new QPushButton("Previous disc", form_box);
+        auto* next = new QPushButton("Next disc", form_box);
+        prev->setEnabled(false);
+        next->setEnabled(false);
+        game_options_prev_ = prev;
+        game_options_next_ = next;
+
+        form->addRow("Status", game_options_status_);
+        form->addRow("Disc", game_options_disc_);
+        form->addRow("", swap);
+        auto* nav = new QHBoxLayout();
+        nav->addWidget(prev);
+        nav->addWidget(next);
+        form->addRow("", nav);
+
+        connect(swap, &QPushButton::clicked, this, [this] {
+            if (!disc_control_ || game_options_disc_ == nullptr) {
+                return;
+            }
+            const auto index = game_options_disc_->currentData().toInt();
+            if (index < 0) {
+                return;
+            }
+            disc_control_->request_set_index(static_cast<std::uint8_t>(index));
+            append_log(client_log_, QString("Requested disc index %1").arg(index));
+        });
+        connect(prev, &QPushButton::clicked, this, [this] {
+            if (disc_control_) {
+                disc_control_->request_prev();
+                append_log(client_log_, "Requested previous disc");
+            }
+        });
+        connect(next, &QPushButton::clicked, this, [this] {
+            if (disc_control_) {
+                disc_control_->request_next();
+                append_log(client_log_, "Requested next disc");
+            }
+        });
+
+        game_options_poll_timer_ = new QTimer(page);
+        game_options_poll_timer_->setInterval(500);
+        connect(game_options_poll_timer_, &QTimer::timeout, this, [this] {
+            refresh_game_options_ui();
+            if (!disc_control_) {
+                return;
+            }
+            if (const auto response = disc_control_->take_response(); response.has_value()) {
+                append_log(
+                    client_log_,
+                    response->ok
+                        ? QString("Disc control: %1").arg(QString::fromStdString(response->message))
+                        : QString("Disc control failed: %1").arg(QString::fromStdString(response->message)),
+                    response->ok ? GuiLogLevel::Normal : GuiLogLevel::Quiet);
+                if (response->ok && game_options_disc_ != nullptr) {
+                    const auto index = game_options_disc_->findData(static_cast<int>(response->disc_index));
+                    if (index >= 0) {
+                        game_options_disc_->setCurrentIndex(index);
+                    }
+                }
+            }
+        });
+        game_options_poll_timer_->start();
+
+        root->addWidget(form_box);
+        root->addStretch();
+        return page;
+    }
+
+    void refresh_game_options_ui() {
+        const bool active = disc_control_ != nullptr && [&] {
+            std::lock_guard lock(disc_control_->mutex);
+            return disc_control_->session_active && disc_control_->disc_labels.size() >= 2;
+        }();
+
+        if (game_options_status_ != nullptr) {
+            if (!disc_control_ || ![&] {
+                    std::lock_guard lock(disc_control_->mutex);
+                    return disc_control_->session_active;
+                }()) {
+                game_options_status_->setText("Join a multi-disc session (.m3u) to swap discs.");
+            } else if (!active) {
+                game_options_status_->setText("Active session has no multi-disc playlist.");
+            } else {
+                std::size_t count = 0;
+                {
+                    std::lock_guard lock(disc_control_->mutex);
+                    count = disc_control_->disc_labels.size();
+                }
+                game_options_status_->setText(
+                    QString("Multi-disc session active (%1 discs). Swap when the game asks.")
+                        .arg(count));
+            }
+        }
+
+        if (game_options_disc_ != nullptr) {
+            const QSignalBlocker blocker(game_options_disc_);
+            const auto previous = game_options_disc_->currentData().toInt();
+            game_options_disc_->clear();
+            if (active && disc_control_) {
+                std::lock_guard lock(disc_control_->mutex);
+                for (std::size_t i = 0; i < disc_control_->disc_labels.size(); ++i) {
+                    game_options_disc_->addItem(
+                        QString("%1: %2")
+                            .arg(i + 1)
+                            .arg(QString::fromStdString(disc_control_->disc_labels[i])),
+                        static_cast<int>(i));
+                }
+                const auto index = game_options_disc_->findData(previous);
+                game_options_disc_->setCurrentIndex(index >= 0 ? index : 0);
+            }
+            game_options_disc_->setEnabled(active);
+        }
+        if (game_options_swap_ != nullptr) {
+            game_options_swap_->setEnabled(active);
+        }
+        if (game_options_prev_ != nullptr) {
+            game_options_prev_->setEnabled(active);
+        }
+        if (game_options_next_ != nullptr) {
+            game_options_next_->setEnabled(active);
+        }
     }
 
 #ifdef ARCHSTREAMER_HAS_HOST
@@ -512,6 +674,7 @@ private:
         host_game_picker_ = new archstreamer::gui::GamePickerWidget(page);
         host_game_picker_->setArtRoot(art_root_path());
         connect(start, &QPushButton::clicked, this, [this] {
+            remember_session_tab(QStringLiteral("host"));
             start_host();
         });
         connect(stop, &QPushButton::clicked, this, [this] {
@@ -523,11 +686,31 @@ private:
         connect(refresh_host_controllers_button, &QPushButton::clicked, this, [this] {
             refresh_host_controllers();
         });
+        connect(host_rom_root_, &QLineEdit::editingFinished, this, [this] {
+            persist_settings_if_idle();
+        });
+        connect(host_meta_root_, &QLineEdit::editingFinished, this, [this] {
+            persist_settings_if_idle();
+        });
+        connect(host_video_port_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
+            persist_settings_if_idle();
+        });
+        connect(host_audio_port_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
+            persist_settings_if_idle();
+        });
+        connect(host_clients_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
+            persist_settings_if_idle();
+        });
         connect(host_role_, &QComboBox::currentIndexChanged, this, [this] {
             sync_host_role_and_bridge();
+            persist_settings_if_idle();
+        });
+        connect(host_mode_, &QComboBox::currentIndexChanged, this, [this](int) {
+            persist_settings_if_idle();
         });
         connect(host_local_media_, &QCheckBox::toggled, this, [this](bool) {
             sync_host_local_media();
+            persist_settings_if_idle();
         });
         connect(host_video_, &QCheckBox::toggled, this, [this](bool) {
             if (!host_video_->isChecked() && !host_audio_->isChecked()) {
@@ -535,6 +718,7 @@ private:
             } else {
                 sync_host_local_media();
             }
+            persist_settings_if_idle();
         });
         connect(host_audio_, &QCheckBox::toggled, this, [this](bool) {
             if (!host_video_->isChecked() && !host_audio_->isChecked()) {
@@ -542,6 +726,7 @@ private:
             } else {
                 sync_host_local_media();
             }
+            persist_settings_if_idle();
         });
         connect(host_bridge_controller_, &QComboBox::currentIndexChanged, this, [this] {
             if (syncing_host_role_) {
@@ -556,12 +741,15 @@ private:
                     host_log_,
                     "Bridge controller needs Host role Player. Staying on Viewer (bridge cleared).");
             }
+            persist_settings_if_idle();
         });
         connect(host_control_port_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int value) {
             client_port_->setValue(value);
+            persist_settings_if_idle();
         });
         connect(host_input_port_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int value) {
             client_input_port_->setValue(value);
+            persist_settings_if_idle();
         });
         connect(host_advertise_, &QCheckBox::toggled, this, [this](bool checked) {
             // Only broadcast while a host session is actually running; otherwise this
@@ -574,6 +762,7 @@ private:
                     append_log(host_log_, "Advertise armed — broadcasting starts when Host is running.");
                 }
             }
+            persist_settings_if_idle();
         });
 
         host_advertise_timer_ = new QTimer(page);
@@ -705,12 +894,32 @@ private:
 #ifdef ARCHSTREAMER_HAS_HOST
         settings_gpu_ = new QComboBox(form_box);
         settings_gpu_->setToolTip(
-            "GPU used for Host Player RetroArch on this machine.\n"
+            "GPU for Host Player RetroArch and streamed standalone (Yuzu/gamescope).\n"
             "Auto picks the highest-scoring discrete card.\n"
-            "Stream capture on :99 is unchanged.");
+            "Sets PRIME/GLX offload and gamescope --prefer-vk-device.");
         refresh_settings_gpus();
         form->addRow("Host render GPU", settings_gpu_);
+
+        settings_renderer_ = new QComboBox(form_box);
+        settings_renderer_->addItem("Auto", QStringLiteral("auto"));
+        settings_renderer_->addItem("OpenGL", QStringLiteral("opengl"));
+        settings_renderer_->addItem("Vulkan", QStringLiteral("vulkan"));
+        settings_renderer_->setCurrentIndex(0);
+        settings_renderer_->setToolTip(
+            "Preferred graphics API for standalone emulators (Yuzu).\n"
+            "Auto: Vulkan on gamescope, OpenGL on VirtualGL.\n"
+            "Ignored for RetroArch cores.");
+        form->addRow("Standalone renderer", settings_renderer_);
 #endif
+        settings_audio_out_ = new QComboBox(form_box);
+        settings_audio_out_->setToolTip(
+            "Playback device for Client receive audio and Host Watch stream locally.\n"
+            "Change anytime — including mid-session — to try outputs.");
+        refresh_settings_audio_outputs();
+        form->addRow("Audio output", settings_audio_out_);
+
+        auto* refresh_audio = new QPushButton("Refresh audio devices", form_box);
+        form->addRow("", refresh_audio);
 
         auto* refresh_art = new QPushButton("Refresh Art from Steam", form_box);
         form->addRow("", refresh_art);
@@ -733,7 +942,20 @@ private:
         connect(settings_gpu_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
             save_persisted_settings();
         });
+        connect(settings_renderer_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+            save_persisted_settings();
+        });
 #endif
+        connect(settings_audio_out_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+            apply_audio_output_from_settings();
+            save_persisted_settings();
+        });
+        connect(refresh_audio, &QPushButton::clicked, this, [this] {
+            refresh_settings_audio_outputs();
+            if (settings_log_ != nullptr) {
+                append_log(settings_log_, "Refreshed audio output device list.");
+            }
+        });
         connect(refresh_art, &QPushButton::clicked, this, [this] {
             refresh_art_from_steam();
         });
@@ -826,6 +1048,64 @@ private:
         return id.isEmpty() ? std::string("auto") : id.toStdString();
     }
 
+    QString selected_graphics_api_id() const {
+        if (settings_renderer_ == nullptr || settings_renderer_->currentData().isNull()) {
+            return QStringLiteral("auto");
+        }
+        const auto id = settings_renderer_->currentData().toString().trimmed();
+        return id.isEmpty() ? QStringLiteral("auto") : id;
+    }
+#endif
+
+    void refresh_settings_audio_outputs(const QString& select_id = {}) {
+        if (settings_audio_out_ == nullptr) {
+            return;
+        }
+        const QSignalBlocker blocker(settings_audio_out_);
+        const auto previous = !select_id.isEmpty()
+            ? select_id
+            : settings_audio_out_->currentData().toString();
+        settings_audio_out_->clear();
+        try {
+            const auto devices = archstreamer::list_audio_output_devices();
+            for (const auto& device : devices) {
+                QString label = QString::fromStdString(device.name);
+                if (device.id != "auto") {
+                    label += QString(" [%1]").arg(QString::fromStdString(device.id));
+                }
+                settings_audio_out_->addItem(label, QString::fromStdString(device.id));
+            }
+        } catch (const std::exception& error) {
+            settings_audio_out_->addItem("Auto (system default)", QStringLiteral("auto"));
+            if (settings_log_ != nullptr) {
+                append_log(
+                    settings_log_,
+                    QString("Audio device scan failed: %1").arg(error.what()),
+                    GuiLogLevel::Quiet);
+            }
+        }
+        if (settings_audio_out_->count() == 0) {
+            settings_audio_out_->addItem("Auto (system default)", QStringLiteral("auto"));
+        }
+        const auto index = settings_audio_out_->findData(
+            previous.isEmpty() ? QStringLiteral("auto") : previous);
+        settings_audio_out_->setCurrentIndex(index >= 0 ? index : 0);
+        apply_audio_output_from_settings();
+    }
+
+    void apply_audio_output_from_settings() {
+        archstreamer::set_preferred_audio_output_device(selected_audio_output_id());
+    }
+
+    std::string selected_audio_output_id() const {
+        if (settings_audio_out_ == nullptr || settings_audio_out_->currentData().isNull()) {
+            return "auto";
+        }
+        const auto id = settings_audio_out_->currentData().toString().trimmed();
+        return id.isEmpty() ? std::string("auto") : id.toStdString();
+    }
+
+#ifdef ARCHSTREAMER_HAS_HOST
     void refresh_host_controllers() {
         const auto previous = host_bridge_controller_->currentData().toInt();
         host_bridge_controller_->clear();
@@ -935,8 +1215,13 @@ private:
                 host_meta_root_->text().toStdString());
             const auto list = catalog.list();
             host_game_picker_->setCatalog(list);
-            if (!list.games.empty() && !host_game_picker_->hasSelection()) {
-                host_game_picker_->setSelectedGameId(list.games.front().id);
+            if (!list.games.empty()) {
+                if (!persisted_host_game_id_.isEmpty()) {
+                    host_game_picker_->setSelectedGameId(persisted_host_game_id_.toStdString());
+                }
+                if (!host_game_picker_->hasSelection()) {
+                    host_game_picker_->setSelectedGameId(list.games.front().id);
+                }
             }
             host_status_->setText(QString("Host stopped; %1 game(s) loaded").arg(list.games.size()));
             append_log(host_log_, QString("Loaded %1 host game(s).").arg(list.games.size()));
@@ -949,6 +1234,7 @@ private:
 #endif // ARCHSTREAMER_HAS_HOST
 
     void load_persisted_settings() {
+        restoring_settings_ = true;
         QSettings settings("ArchStreamer", "ArchStreamer");
         const auto art_root = settings.value("paths/artRoot", archstreamer::DefaultArtRoot).toString();
         const auto account = settings.value("steam/accountId").toString().trimmed();
@@ -982,7 +1268,6 @@ private:
         }
         if (settings_log_level_ != nullptr) {
             const auto index = settings_log_level_->findData(qBound(log_level, 0, 2));
-            // Block signals so loading doesn't rewrite settings before apply completes.
             const QSignalBlocker blocker(settings_log_level_);
             settings_log_level_->setCurrentIndex(index >= 0 ? index : 1);
         }
@@ -992,13 +1277,129 @@ private:
             const QSignalBlocker blocker(settings_gpu_);
             const auto index = settings_gpu_->findData(gpu_id);
             settings_gpu_->setCurrentIndex(index >= 0 ? index : 0);
+            if (index < 0 && gpu_id != "auto" && settings_log_ != nullptr) {
+                append_log(
+                    settings_log_,
+                    QString("Saved GPU '%1' is unavailable; using Auto.").arg(gpu_id));
+            }
+        }
+        if (settings_renderer_ != nullptr) {
+            const auto renderer = settings.value("graphics/renderer", "auto").toString();
+            const QSignalBlocker blocker(settings_renderer_);
+            const auto index = settings_renderer_->findData(renderer);
+            settings_renderer_->setCurrentIndex(index >= 0 ? index : 0);
         }
 #endif
+        if (settings_audio_out_ != nullptr) {
+            const auto audio_id = settings.value("audio/outputDevice", "auto").toString();
+            refresh_settings_audio_outputs(audio_id);
+            if (settings_audio_out_->currentData().toString() != audio_id &&
+                audio_id != "auto" &&
+                settings_log_ != nullptr) {
+                append_log(
+                    settings_log_,
+                    QString("Saved audio output '%1' is unavailable; using Auto/default.")
+                        .arg(audio_id));
+            }
+        }
+
+        if (client_host_ != nullptr) {
+            const auto address = settings.value("client/hostAddress").toString().trimmed();
+            client_host_label_ = settings.value("client/hostLabel").toString().trimmed();
+            if (client_port_ != nullptr) {
+                client_port_->setValue(qBound(settings.value("client/controlPort", 45555).toInt(), 1, 65535));
+            }
+            if (client_input_port_ != nullptr) {
+                client_input_port_->setValue(
+                    qBound(settings.value("client/inputPort", DefaultInputPort).toInt(), 1, 65535));
+            }
+            client_host_->setText(address);
+            update_client_host_summary(client_host_label_);
+        }
+        if (client_role_ != nullptr) {
+            const auto role = settings.value("client/role", "Player").toString();
+            const auto index = client_role_->findText(role);
+            client_role_->setCurrentIndex(index >= 0 ? index : 0);
+        }
+        if (client_mode_ != nullptr) {
+            const auto mode = settings.value("client/mode", "Singleplayer").toString();
+            const auto index = client_mode_->findText(mode);
+            client_mode_->setCurrentIndex(index >= 0 ? index : 0);
+        }
+        if (client_players_ != nullptr) {
+            client_players_->setValue(qBound(settings.value("client/players", 1).toInt(), 0, 2));
+        }
+        if (client_video_ != nullptr) {
+            client_video_->setChecked(settings.value("client/receiveVideo", true).toBool());
+        }
+        if (client_audio_ != nullptr) {
+            client_audio_->setChecked(settings.value("client/receiveAudio", true).toBool());
+        }
+        if (client_synced_av_ != nullptr) {
+            client_synced_av_->setChecked(settings.value("client/syncedAv", false).toBool());
+        }
+
+#ifdef ARCHSTREAMER_HAS_HOST
+        if (host_rom_root_ != nullptr) {
+            host_rom_root_->setText(
+                settings.value("host/romRoot", archstreamer::DefaultRomRoot).toString());
+        }
+        if (host_meta_root_ != nullptr) {
+            host_meta_root_->setText(
+                settings.value("host/metaRoot", archstreamer::DefaultMetaRoot).toString());
+        }
+        if (host_control_port_ != nullptr) {
+            host_control_port_->setValue(
+                qBound(settings.value("host/controlPort", 45555).toInt(), 1, 65535));
+        }
+        if (host_input_port_ != nullptr) {
+            host_input_port_->setValue(
+                qBound(settings.value("host/inputPort", DefaultInputPort).toInt(), 1, 65535));
+        }
+        if (host_video_port_ != nullptr) {
+            host_video_port_->setValue(
+                qBound(settings.value("host/videoPort", DefaultVideoPort).toInt(), 1, 65535));
+        }
+        if (host_audio_port_ != nullptr) {
+            host_audio_port_->setValue(
+                qBound(settings.value("host/audioPort", DefaultAudioPort).toInt(), 1, 65535));
+        }
+        if (host_clients_ != nullptr) {
+            host_clients_->setValue(qBound(settings.value("host/maxClients", 1).toInt(), 1, 2));
+        }
+        if (host_role_ != nullptr) {
+            const auto role = settings.value("host/role", "viewer").toString().toLower();
+            const auto index = host_role_->findData(role);
+            host_role_->setCurrentIndex(index >= 0 ? index : 0);
+            sync_host_role_and_bridge();
+        }
+        if (host_mode_ != nullptr) {
+            const auto mode = settings.value("host/mode", "Singleplayer").toString();
+            const auto index = host_mode_->findText(mode);
+            host_mode_->setCurrentIndex(index >= 0 ? index : 0);
+        }
+        if (host_video_ != nullptr) {
+            host_video_->setChecked(settings.value("host/streamVideo", true).toBool());
+        }
+        if (host_audio_ != nullptr) {
+            host_audio_->setChecked(settings.value("host/streamAudio", true).toBool());
+        }
+        if (host_local_media_ != nullptr) {
+            host_local_media_->setChecked(settings.value("host/watchLocally", false).toBool());
+        }
+        if (host_advertise_ != nullptr) {
+            host_advertise_->setChecked(settings.value("host/advertiseLan", true).toBool());
+        }
+        persisted_host_game_id_ = settings.value("host/lastGameId").toString().trimmed();
+#endif
+        persisted_client_game_id_ = settings.value("client/lastGameId").toString().trimmed();
+
         apply_log_level_from_settings();
         apply_art_root_to_pickers();
         if (!account.isEmpty() && profile_log_ != nullptr) {
             append_log(profile_log_, QString("Loaded Steam account ID %1").arg(account));
         }
+        restoring_settings_ = false;
     }
 
     void save_persisted_settings() {
@@ -1011,7 +1412,127 @@ private:
         settings.setValue("ui/logLevel", static_cast<int>(current_log_level()));
 #ifdef ARCHSTREAMER_HAS_HOST
         settings.setValue("graphics/gpuId", QString::fromStdString(selected_render_gpu_id()));
+        settings.setValue("graphics/renderer", selected_graphics_api_id());
 #endif
+        settings.setValue("audio/outputDevice", QString::fromStdString(selected_audio_output_id()));
+
+        if (client_host_ != nullptr) {
+            settings.setValue("client/hostAddress", client_host_->text().trimmed());
+        }
+        settings.setValue("client/hostLabel", client_host_label_);
+        if (client_port_ != nullptr) {
+            settings.setValue("client/controlPort", client_port_->value());
+        }
+        if (client_input_port_ != nullptr) {
+            settings.setValue("client/inputPort", client_input_port_->value());
+        }
+        if (client_role_ != nullptr) {
+            settings.setValue("client/role", client_role_->currentText());
+        }
+        if (client_mode_ != nullptr) {
+            settings.setValue("client/mode", client_mode_->currentText());
+        }
+        if (client_players_ != nullptr) {
+            settings.setValue("client/players", client_players_->value());
+        }
+        if (client_video_ != nullptr) {
+            settings.setValue("client/receiveVideo", client_video_->isChecked());
+        }
+        if (client_audio_ != nullptr) {
+            settings.setValue("client/receiveAudio", client_audio_->isChecked());
+        }
+        if (client_synced_av_ != nullptr) {
+            settings.setValue("client/syncedAv", client_synced_av_->isChecked());
+        }
+        if (client_game_picker_ != nullptr && client_game_picker_->hasSelection()) {
+            settings.setValue(
+                "client/lastGameId",
+                QString::fromStdString(*client_game_picker_->selectedGameId()));
+        } else if (!persisted_client_game_id_.isEmpty()) {
+            settings.setValue("client/lastGameId", persisted_client_game_id_);
+        }
+
+#ifdef ARCHSTREAMER_HAS_HOST
+        if (host_rom_root_ != nullptr) {
+            settings.setValue("host/romRoot", host_rom_root_->text().trimmed());
+        }
+        if (host_meta_root_ != nullptr) {
+            settings.setValue("host/metaRoot", host_meta_root_->text().trimmed());
+        }
+        if (host_control_port_ != nullptr) {
+            settings.setValue("host/controlPort", host_control_port_->value());
+        }
+        if (host_input_port_ != nullptr) {
+            settings.setValue("host/inputPort", host_input_port_->value());
+        }
+        if (host_video_port_ != nullptr) {
+            settings.setValue("host/videoPort", host_video_port_->value());
+        }
+        if (host_audio_port_ != nullptr) {
+            settings.setValue("host/audioPort", host_audio_port_->value());
+        }
+        if (host_clients_ != nullptr) {
+            settings.setValue("host/maxClients", host_clients_->value());
+        }
+        if (host_role_ != nullptr) {
+            settings.setValue("host/role", host_role_->currentData().toString());
+        }
+        if (host_mode_ != nullptr) {
+            settings.setValue("host/mode", host_mode_->currentText());
+        }
+        if (host_video_ != nullptr) {
+            settings.setValue("host/streamVideo", host_video_->isChecked());
+        }
+        if (host_audio_ != nullptr) {
+            settings.setValue("host/streamAudio", host_audio_->isChecked());
+        }
+        if (host_local_media_ != nullptr) {
+            settings.setValue("host/watchLocally", host_local_media_->isChecked());
+        }
+        if (host_advertise_ != nullptr) {
+            settings.setValue("host/advertiseLan", host_advertise_->isChecked());
+        }
+        if (host_game_picker_ != nullptr && host_game_picker_->hasSelection()) {
+            settings.setValue(
+                "host/lastGameId",
+                QString::fromStdString(*host_game_picker_->selectedGameId()));
+        } else if (!persisted_host_game_id_.isEmpty()) {
+            settings.setValue("host/lastGameId", persisted_host_game_id_);
+        }
+#endif
+    }
+
+    void persist_settings_if_idle() {
+        if (restoring_settings_) {
+            return;
+        }
+        save_persisted_settings();
+    }
+
+    void remember_session_tab(const QString& tab) {
+        if (tab != QStringLiteral("client") && tab != QStringLiteral("host")) {
+            return;
+        }
+        QSettings settings("ArchStreamer", "ArchStreamer");
+        settings.setValue("ui/lastSessionTab", tab);
+        persist_settings_if_idle();
+    }
+
+    void restore_last_session_tab() {
+        if (tabs_ == nullptr) {
+            return;
+        }
+        QSettings settings("ArchStreamer", "ArchStreamer");
+        const auto tab = settings.value("ui/lastSessionTab", "client").toString().trimmed().toLower();
+        const QString want = (tab == QStringLiteral("host"))
+            ? QStringLiteral("Host")
+            : QStringLiteral("Client");
+        for (int i = 0; i < tabs_->count(); ++i) {
+            if (tabs_->tabText(i) == want) {
+                tabs_->setCurrentIndex(i);
+                return;
+            }
+        }
     }
 
     void apply_log_level_from_settings() {
@@ -1200,6 +1721,9 @@ private:
         const auto filter = client_filter_from_fields();
         client_game_picker_->setSessionFilter(filter);
         client_game_picker_->setCatalog(client_full_catalog_);
+        if (!persisted_client_game_id_.isEmpty()) {
+            client_game_picker_->setSelectedGameId(persisted_client_game_id_.toStdString());
+        }
         const auto filtered = archstreamer::filter_games(client_full_catalog_, filter);
         client_catalog_status_->setText(QString("%1 game(s) from host, %2 match mode/players")
             .arg(client_full_catalog_.games.size())
@@ -1230,16 +1754,19 @@ private:
         const auto changed =
             client_host_->text() != address ||
             client_port_->value() != control_port ||
-            client_input_port_->value() != input_port;
+            client_input_port_->value() != input_port ||
+            client_host_label_ != label;
         client_host_->setText(address);
         client_port_->setValue(control_port);
         client_input_port_->setValue(input_port);
+        client_host_label_ = label;
         update_client_host_summary(label);
         if (changed) {
             append_log(client_log_, QString("Selected host %1 (control %2, input %3)")
                 .arg(address)
                 .arg(control_port)
                 .arg(input_port));
+            persist_settings_if_idle();
         }
     }
 
@@ -1473,10 +2000,12 @@ private:
                 .arg(QString::fromStdString(*config.game_selector)));
 
         client_stop_requested_ = false;
+        disc_control_ = std::make_shared<archstreamer::DiscControlBridge>();
         client_thread_ = std::thread([this, config = std::move(config)]() mutable {
             try {
                 auto connected_client_id = std::optional<archstreamer::ClientId>{};
                 archstreamer::ClientAppCallbacks callbacks;
+                callbacks.disc_control = disc_control_;
                 callbacks.on_catalog = [this](const archstreamer::GameList& full, const archstreamer::GameList& filtered) {
                     append_log(client_log_, QString("Received %1 games; %2 after filters.")
                         .arg(full.games.size())
@@ -1574,6 +2103,7 @@ private:
                 client_catalog_status_,
                 [this] {
                     client_catalog_status_->setText("Client stopped");
+                    refresh_game_options_ui();
                 },
                 Qt::QueuedConnection);
             append_log(client_log_, "Client worker stopped.", GuiLogLevel::Quiet);
@@ -1584,6 +2114,10 @@ private:
         client_stop_requested_ = true;
         if (client_thread_.joinable()) {
             client_thread_.join();
+        }
+        if (disc_control_) {
+            std::lock_guard lock(disc_control_->mutex);
+            disc_control_->session_active = false;
         }
     }
 
@@ -1639,7 +2173,8 @@ private:
             << "--session-timeout" << QString::number(session_timeout_seconds())
             << "--host-role" << host_role_text(host_role_)
             << "--mode" << mode_name(selected_mode(host_mode_))
-            << "--gpu" << QString::fromStdString(selected_render_gpu_id());
+            << "--gpu" << QString::fromStdString(selected_render_gpu_id())
+            << "--renderer" << selected_graphics_api_id();
         if (current_log_level() == GuiLogLevel::Verbose) {
             args << "--verbose";
         }
@@ -1786,7 +2321,7 @@ private:
             host_local_receiver_->connect(endpoint);
             if (host_local_media_poll_timer_ == nullptr) {
                 host_local_media_poll_timer_ = new QTimer(this);
-                host_local_media_poll_timer_->setInterval(2000);
+                host_local_media_poll_timer_->setInterval(500);
                 connect(host_local_media_poll_timer_, &QTimer::timeout, this, [this] {
                     if (!host_local_receiver_) {
                         return;
@@ -1820,7 +2355,12 @@ private:
     archstreamer::ClientApp client_app_;
     archstreamer::GameList client_full_catalog_;
     bool client_catalog_loaded_ = false;
+    bool restoring_settings_ = false;
+    QTabWidget* tabs_ = nullptr;
+    QString client_host_label_;
+    QString persisted_client_game_id_;
 #ifdef ARCHSTREAMER_HAS_HOST
+    QString persisted_host_game_id_;
     bool syncing_host_role_ = false;
 #endif
     std::atomic_bool client_stop_requested_ = false;
@@ -1852,6 +2392,13 @@ private:
     archstreamer::gui::GamePickerWidget* client_game_picker_ = nullptr;
     QListWidget* client_controllers_ = nullptr;
     QPlainTextEdit* client_log_ = nullptr;
+    std::shared_ptr<archstreamer::DiscControlBridge> disc_control_;
+    QLabel* game_options_status_ = nullptr;
+    QComboBox* game_options_disc_ = nullptr;
+    QPushButton* game_options_swap_ = nullptr;
+    QPushButton* game_options_prev_ = nullptr;
+    QPushButton* game_options_next_ = nullptr;
+    QTimer* game_options_poll_timer_ = nullptr;
     std::unique_ptr<archstreamer::HostDiscoveryBrowser> client_auto_browser_;
     QTimer* client_auto_pick_timer_ = nullptr;
     int client_auto_pick_attempts_ = 0;
@@ -1886,7 +2433,9 @@ private:
     QComboBox* settings_log_level_ = nullptr;
 #ifdef ARCHSTREAMER_HAS_HOST
     QComboBox* settings_gpu_ = nullptr;
+    QComboBox* settings_renderer_ = nullptr;
 #endif
+    QComboBox* settings_audio_out_ = nullptr;
     QPlainTextEdit* settings_log_ = nullptr;
 };
 

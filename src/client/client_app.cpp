@@ -434,6 +434,8 @@ ClientRunResult ClientApp::join_session(
     auto media_watch_armed = static_cast<bool>(media_receiver);
     std::array<ControllerState, MaxPlayersPerClient> last_sent{};
     std::array<bool, MaxPlayersPerClient> have_last_sent{};
+    std::array<std::chrono::steady_clock::time_point, MaxPlayersPerClient> last_input_send_at{};
+    constexpr auto kInputResendInterval = std::chrono::milliseconds(16);
     while (!should_stop()) {
         if (!handle_control_message(joined_session.stream, callbacks, result)) {
             break;
@@ -529,14 +531,26 @@ ClientRunResult ClientApp::join_session(
                 if (!state.has_value()) {
                     continue;
                 }
-                // Send only on change so we can poll faster without flooding UDP / host.
-                if (have_last_sent[player] && same_controls(last_sent[player], *state)) {
+                // UDP drops button edges under video load if we only send on change.
+                // Resend the current pad state at ~60 Hz so held buttons and missed
+                // edges recover; duplicate immediate change packets for short taps.
+                const bool changed =
+                    !have_last_sent[player] || !same_controls(last_sent[player], *state);
+                const bool resend_due =
+                    !have_last_sent[player] ||
+                    (now - last_input_send_at[player]) >= kInputResendInterval;
+                if (!changed && !resend_due) {
                     continue;
                 }
                 const auto packet = input_sender->make_input(player, *state);
-                input_socket->send_to(serialize_packet(packet), config.host, *config.input_port);
+                const auto bytes = serialize_packet(packet);
+                input_socket->send_to(bytes, config.host, *config.input_port);
+                if (changed) {
+                    input_socket->send_to(bytes, config.host, *config.input_port);
+                }
                 last_sent[player] = *state;
                 have_last_sent[player] = true;
+                last_input_send_at[player] = now;
             }
             std::this_thread::sleep_for(std::chrono::microseconds(500));
         } else {

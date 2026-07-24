@@ -31,6 +31,8 @@ public:
     virtual void stop() = 0;
     virtual bool running() const = 0;
     virtual std::optional<int> last_exit_code() const { return std::nullopt; }
+    // Tail of child stderr when quiet_stdio captured it (empty if unavailable).
+    virtual std::string last_stderr_tail() const { return {}; }
 };
 
 } // namespace archstreamer

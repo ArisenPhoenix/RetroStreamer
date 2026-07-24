@@ -119,7 +119,17 @@ int HostApp::run(const std::function<bool()>& should_stop) {
 
         auto launch_plan = HostLaunchPlan{};
         auto session_plan = std::optional<SessionPlan>{};
-        if (config.control_port.has_value()) {
+        const auto initial_ignore_controller = config.ignore_controller;
+        const bool session_lobby_mode = config.control_port.has_value();
+        std::optional<std::string> session_end_reason;
+
+        // Session hosts return to the lobby after a game ends so clients can pick a new title
+        // without the GUI/host_runner process exiting.
+        for (;;) {
+        if (session_lobby_mode) {
+            if (should_stop()) {
+                return 0;
+            }
             if (!config.input_port.has_value()) {
                 config.input_port = 45454;
             }
@@ -157,9 +167,13 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                     ? (config.rom_root.parent_path() / "Art")
                     : config.art_root);
             session_plan = session_service.wait_for_ready_session();
+            if (should_stop()) {
+                return 0;
+            }
             if (config.retroarch_joypad_driver == "udev" && !config.ignore_controller.has_value()) {
                 config.retroarch_joypad_driver = "sdl2";
             }
+            config.ignore_controller = initial_ignore_controller;
             if (!config.ignore_controller.has_value()) {
                 config.ignore_controller = sdl_ignore_list_for_session(*session_plan);
             }
@@ -661,16 +675,25 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         }
         if (!retroarch.running()) {
             const auto code = retroarch.last_exit_code().value_or(127);
+            const auto stderr_tail = retroarch.last_stderr_tail();
             if (launch_config.standalone) {
-                throw std::runtime_error(
+                std::string message =
                     "Standalone emulator exited immediately (code " + std::to_string(code) + "). "
                     "Check Yuzu AppImage/keys under ~/.local/share/archstreamer/yuzu and "
-                    "per-user data under the save profile yuzu/ directory.");
+                    "per-user data under the save profile yuzu/ directory.";
+                if (!stderr_tail.empty()) {
+                    message += "\n\n" + stderr_tail;
+                }
+                throw std::runtime_error(message);
             }
-            throw std::runtime_error(
+            std::string message =
                 "RetroArch exited immediately (code " + std::to_string(code) + "). "
-                "On Bazzite, install Flatpak RetroArch (org.libretro.RetroArch) or ensure "
-                "the RetroArch binary is runnable.");
+                "Common causes: missing BIOS/firmware under ~/.config/retroarch/system "
+                "(PS2 needs files in system/pcsx2/bios), a broken core, or RetroArch not runnable.";
+            if (!stderr_tail.empty()) {
+                message += "\n\n" + stderr_tail;
+            }
+            throw std::runtime_error(message);
         }
         if (auto* gst = dynamic_cast<GStreamerMediaServer*>(media_server.get());
             gst != nullptr && gst->video_deferred()) {
@@ -733,6 +756,7 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             if (session_monitor.has_value()) {
                 if (const auto reason = session_monitor->poll(); reason.has_value()) {
                     std::cerr << "Stopping session: " << *reason << '\n';
+                    session_end_reason = *reason;
                     break;
                 }
             }
@@ -767,14 +791,30 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         }
         if (media_server) {
             media_server->stop();
+            media_server.reset();
         }
         if (config.audio) {
             restore_default_sink_after_streaming();
         }
         if (session_plan.has_value()) {
-            send_session_ended_to_clients(*session_plan, should_stop() ? "host stopped" : "retroarch exited");
+            const std::string end_reason = should_stop()
+                ? "host stopped"
+                : session_end_reason.value_or("session ended");
+            send_session_ended_to_clients(*session_plan, end_reason);
+            session_plan.reset();
         }
-        return 0;
+
+        if (!session_lobby_mode || should_stop()) {
+            return 0;
+        }
+
+        std::cout
+            << "Session ended"
+            << (session_end_reason.has_value() ? (": " + *session_end_reason) : "")
+            << ". Returning to lobby — join again with any game.\n";
+        session_end_reason.reset();
+        config.ignore_controller = initial_ignore_controller;
+        } // for (;;) session lobby
     } catch (const std::exception& error) {
         restore_default_sink_after_streaming();
         if (should_stop()) {

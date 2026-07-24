@@ -120,9 +120,13 @@ Notes:
   - Restart ArchStreamer host to rescan the catalog (N64/PS2/PSP/etc. need these cores).
   - BIOS / firmware still required for some systems under ${SYSTEM_DIR}:
       PS1:  scph5501.bin / scph1001.bin
-      PS2:  PS2 BIOS dumps (SCPH-*.bin)
-      3DS:  Citra sysdata / AES keys as required by the core
+      PS2:  SCPH-*.bin under ${SYSTEM_DIR}/pcsx2/bios  (PCSX2 libretro)
+      NDS:  bios7.bin + bios9.bin + firmware.bin (optional; melonDS freeBIOS works)
+      PSP:  no real BIOS (PPSSPP HLE); assets under ${SYSTEM_DIR}/PPSSPP
+      3DS:  aes_keys.txt + seeddb.bin (Citra; also copied into saves/Citra/.../sysdata)
+            melonDS cannot run 3DS — it is Nintendo DS only
       Switch: not shipped as a libretro core here (use standalone / ra.py Yuzu fallback)
-  - Optional BIOS helper:
+  - Wire dumps from your BIOS library:
+      ./scripts/link-system-bios.sh
       ARCHSTREAMER_PS1_BIOS=/path/to/SCPH1001.BIN ./scripts/fetch-ps1-cores.sh
 EOF

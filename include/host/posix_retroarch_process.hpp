@@ -2,6 +2,8 @@
 
 #include "host/retroarch_process.hpp"
 
+#include <filesystem>
+#include <string>
 #include <sys/types.h>
 
 namespace archstreamer {
@@ -14,12 +16,17 @@ public:
     void stop() override;
     bool running() const override;
     std::optional<int> last_exit_code() const override;
+    std::string last_stderr_tail() const override;
 
 private:
     void record_status(int status) const;
+    void capture_stderr_tail() const;
+    void clear_stderr_log() const;
 
     mutable pid_t pid_ = -1;
     mutable std::optional<int> last_exit_code_;
+    mutable std::filesystem::path stderr_log_path_;
+    mutable std::string last_stderr_tail_;
 };
 
 } // namespace archstreamer

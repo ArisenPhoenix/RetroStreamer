@@ -3,8 +3,10 @@
 #include <cerrno>
 #include <chrono>
 #include <cstring>
+#include <fstream>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -38,10 +40,79 @@ void close_inherited_fds() {
     }
 }
 
+std::string read_file_tail(const std::filesystem::path& path, std::size_t max_bytes) {
+    std::ifstream in(path, std::ios::binary | std::ios::ate);
+    if (!in) {
+        return {};
+    }
+    const auto size = static_cast<std::size_t>(in.tellg());
+    if (size == 0) {
+        return {};
+    }
+    const auto start = size > max_bytes ? size - max_bytes : 0;
+    in.seekg(static_cast<std::streamoff>(start));
+    std::string data(size - start, '\0');
+    in.read(data.data(), static_cast<std::streamsize>(data.size()));
+    data.resize(static_cast<std::size_t>(in.gcount()));
+
+    // Drop a partial first line when we seeked mid-file.
+    if (start > 0) {
+        const auto nl = data.find('\n');
+        if (nl != std::string::npos && nl + 1 < data.size()) {
+            data.erase(0, nl + 1);
+        }
+    }
+
+    // Prefer the most useful diagnostic lines for GUI errors.
+    std::string filtered;
+    std::size_t line_start = 0;
+    while (line_start < data.size()) {
+        auto line_end = data.find('\n', line_start);
+        if (line_end == std::string::npos) {
+            line_end = data.size();
+        }
+        const auto line = data.substr(line_start, line_end - line_start);
+        const bool interesting =
+            line.find("ERROR") != std::string::npos ||
+            line.find("Failed") != std::string::npos ||
+            line.find("BIOS") != std::string::npos ||
+            line.find("Fatal") != std::string::npos ||
+            line.find("Could not") != std::string::npos;
+        if (interesting) {
+            if (!filtered.empty()) {
+                filtered.push_back('\n');
+            }
+            filtered += line;
+        }
+        line_start = line_end + 1;
+    }
+    if (!filtered.empty()) {
+        return filtered;
+    }
+    return data;
+}
+
 } // namespace
 
 PosixRetroArchProcess::~PosixRetroArchProcess() {
     stop();
+    clear_stderr_log();
+}
+
+void PosixRetroArchProcess::clear_stderr_log() const {
+    if (!stderr_log_path_.empty()) {
+        std::error_code ec;
+        std::filesystem::remove(stderr_log_path_, ec);
+        stderr_log_path_.clear();
+    }
+}
+
+void PosixRetroArchProcess::capture_stderr_tail() const {
+    if (stderr_log_path_.empty()) {
+        return;
+    }
+    last_stderr_tail_ = read_file_tail(stderr_log_path_, 4096);
+    clear_stderr_log();
 }
 
 void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
@@ -50,6 +121,8 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
     }
 
     last_exit_code_.reset();
+    last_stderr_tail_.clear();
+    clear_stderr_log();
 
     std::vector<std::string> args;
     if (config.standalone) {
@@ -90,8 +163,22 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
             "Launch prefix executable is missing or not executable: " + args.front());
     }
 
+    // Quiet mode: keep stdout silent, but capture stderr so early exits (missing BIOS, etc.)
+    // can be surfaced in the host error dialog.
+    std::string stderr_path;
+    if (config.quiet_stdio) {
+        char tmpl[] = "/tmp/archstreamer-emu-XXXXXX";
+        const int fd = mkstemp(tmpl);
+        if (fd >= 0) {
+            close(fd);
+            stderr_path = tmpl;
+            stderr_log_path_ = tmpl;
+        }
+    }
+
     pid_t child = fork();
     if (child < 0) {
+        clear_stderr_log();
         throw std::runtime_error(std::string("fork failed: ") + std::strerror(errno));
     }
 
@@ -101,10 +188,21 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
             const int null_fd = open("/dev/null", O_RDWR);
             if (null_fd >= 0) {
                 dup2(null_fd, STDOUT_FILENO);
-                dup2(null_fd, STDERR_FILENO);
-                if (null_fd > STDERR_FILENO) {
-                    close(null_fd);
+            }
+            int err_fd = -1;
+            if (!stderr_path.empty()) {
+                err_fd = open(stderr_path.c_str(), O_WRONLY | O_APPEND);
+            }
+            if (err_fd >= 0) {
+                dup2(err_fd, STDERR_FILENO);
+                if (err_fd > STDERR_FILENO) {
+                    close(err_fd);
                 }
+            } else if (null_fd >= 0) {
+                dup2(null_fd, STDERR_FILENO);
+            }
+            if (null_fd > STDERR_FILENO) {
+                close(null_fd);
             }
         }
         for (const auto& [key, value] : config.environment) {
@@ -180,6 +278,10 @@ std::optional<int> PosixRetroArchProcess::last_exit_code() const {
     return last_exit_code_;
 }
 
+std::string PosixRetroArchProcess::last_stderr_tail() const {
+    return last_stderr_tail_;
+}
+
 void PosixRetroArchProcess::record_status(int status) const {
     if (WIFEXITED(status)) {
         last_exit_code_ = WEXITSTATUS(status);
@@ -188,6 +290,7 @@ void PosixRetroArchProcess::record_status(int status) const {
     } else {
         last_exit_code_ = -1;
     }
+    capture_stderr_tail();
 }
 
 } // namespace archstreamer

@@ -29,6 +29,8 @@ struct SessionClientConnection {
     SessionConnectionState connection_state = SessionConnectionState::Connected;
     std::chrono::steady_clock::time_point last_seen = std::chrono::steady_clock::now();
     std::chrono::steady_clock::time_point disconnected_at = {};
+    // "disconnected" (clean TCP close) vs "heartbeat timed out" (drop); affects reconnect grace.
+    std::string disconnect_reason;
     MediaQualityTier wanted_tier = MediaQualityTier::Auto;
     MediaQualityTier applied_tier = MediaQualityTier::Medium;
     std::uint16_t max_bitrate_kbps = 0;

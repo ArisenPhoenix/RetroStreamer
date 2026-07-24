@@ -2,6 +2,7 @@
 
 #include "common/serialization.hpp"
 
+#include <algorithm>
 #include <iostream>
 #include <sstream>
 #include <variant>
@@ -11,9 +12,34 @@ namespace {
 
 constexpr auto kStartupHeartbeatGrace = std::chrono::seconds(15);
 constexpr auto kMinReconfigureInterval = std::chrono::seconds(5);
+// Clean leave (closed window / Stop Client): don't hold the whole host for a full minute.
+constexpr auto kCleanDisconnectGrace = std::chrono::seconds(15);
 constexpr std::uint8_t kBadHealthThreshold = 3;
 constexpr std::uint8_t kGoodHealthThreshold = 10;
 constexpr std::uint16_t kHighLossPermille = 100;
+
+bool client_is_seated_player(const SessionClientConnection& client) {
+    return client.hello.requested_players > 0;
+}
+
+bool any_connected_seated_player(const SessionPlan& plan) {
+    for (const auto& client : plan.clients) {
+        if (client_is_seated_player(client) &&
+            client.connection_state == SessionConnectionState::Connected) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::chrono::seconds reconnect_grace_for(const SessionClientConnection& client, std::chrono::seconds full) {
+    // Intentional leave → short grace so the host can return to lobby for a new game.
+    // Heartbeat loss → keep the full reconnect window for flaky links.
+    if (client.disconnect_reason == "disconnected") {
+        return std::min(full, kCleanDisconnectGrace);
+    }
+    return full;
+}
 
 } // namespace
 
@@ -45,7 +71,12 @@ std::optional<std::string> SessionControlMonitor::poll() {
     for (std::size_t i = 0; i < plan_.clients.size();) {
         auto& client = plan_.clients[i];
         if (client.connection_state == SessionConnectionState::Disconnected) {
-            if (now - client.disconnected_at > reconnect_timeout_) {
+            const auto grace = reconnect_grace_for(client, reconnect_timeout_);
+            if (now - client.disconnected_at > grace) {
+                // Last seated player gave up reconnecting → end session (host returns to lobby).
+                if (!any_connected_seated_player(plan_)) {
+                    return client_label(client) + " left; ending session for a new lobby";
+                }
                 return client_label(client) + " reconnect timed out";
             }
             ++i;
@@ -61,6 +92,12 @@ std::optional<std::string> SessionControlMonitor::poll() {
                     break;
                 }
                 mark_player_disconnected(client, "disconnected");
+                if (!any_connected_seated_player(plan_)) {
+                    // Still honor short grace inside the Disconnected branch next poll.
+                    ++i;
+                    removed_current = true;
+                    break;
+                }
                 ++i;
                 removed_current = true;
                 break;
@@ -213,12 +250,14 @@ void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& cl
     media_server_.remove_client(client.client_id);
     client.connection_state = SessionConnectionState::Disconnected;
     client.disconnected_at = std::chrono::steady_clock::now();
+    client.disconnect_reason = std::string(reason);
     input_router_.neutralize_client(client.client_id);
+    const auto grace = reconnect_grace_for(client, reconnect_timeout_);
     std::cerr
         << "Player " << static_cast<int>(client.client_id)
         << " (" << client.hello.username << ") disconnected: "
         << reason << "; reserving seats for "
-        << reconnect_timeout_.count() << "s\n";
+        << grace.count() << "s\n";
 }
 
 std::string SessionControlMonitor::client_label(const SessionClientConnection& client) {

@@ -200,12 +200,24 @@ inline VideoEncodeSettings video_encode_settings_for_tier(MediaQualityTier tier)
     case MediaQualityTier::Low:
         return VideoEncodeSettings{800, 20, 10};
     case MediaQualityTier::High:
-        return VideoEncodeSettings{3500, 30, 15};
+        // Ladder master: 12 Mbps @ 60 fps; Med/Low derive via tee + videorate drop.
+        return VideoEncodeSettings{12000, 60, 30};
     case MediaQualityTier::Medium:
     case MediaQualityTier::Auto:
     default:
-        return VideoEncodeSettings{1500, 30, 15};
+        return VideoEncodeSettings{3500, 30, 15};
     }
+}
+
+// Map encode settings back to a ladder tier (used when clients reconfigure by settings).
+inline MediaQualityTier media_quality_tier_for_settings(const VideoEncodeSettings& settings) {
+    if (settings.framerate >= 50 || settings.bitrate_kbps >= 8000) {
+        return MediaQualityTier::High;
+    }
+    if (settings.framerate <= 20 || settings.bitrate_kbps <= 1000) {
+        return MediaQualityTier::Low;
+    }
+    return MediaQualityTier::Medium;
 }
 
 inline MediaQualityTier step_quality_tier_down(MediaQualityTier tier) {
@@ -232,6 +244,27 @@ inline MediaQualityTier step_quality_tier_up(MediaQualityTier tier) {
     default:
         return MediaQualityTier::High;
     }
+}
+
+// Host-side selector: resolve the tier a client should receive on the encode ladder.
+// - wanted == Auto → use auto_tier (adaptation state)
+// - otherwise → wanted, optionally capped by max_bitrate_kbps
+inline MediaQualityTier select_video_tier(
+    MediaQualityTier wanted,
+    MediaQualityTier auto_tier,
+    std::uint16_t max_bitrate_kbps = 0) {
+    MediaQualityTier tier = wanted == MediaQualityTier::Auto ? auto_tier : wanted;
+    if (tier == MediaQualityTier::Auto) {
+        tier = MediaQualityTier::High;
+    }
+    if (max_bitrate_kbps == 0) {
+        return tier;
+    }
+    while (tier != MediaQualityTier::Low &&
+           video_encode_settings_for_tier(tier).bitrate_kbps > max_bitrate_kbps) {
+        tier = step_quality_tier_down(tier);
+    }
+    return tier;
 }
 
 inline const char* media_quality_tier_name(MediaQualityTier tier) {

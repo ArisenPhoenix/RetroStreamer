@@ -265,7 +265,6 @@ std::vector<MediaClientStream> GStreamerVideoFanout::start(
     source_kind_ = SourceKind::X11;
     display_ = display;
     pipewire_node_.clear();
-    shared_settings_ = video_encode_settings_for_tier(MediaQualityTier::High);
     auto streams = std::vector<MediaClientStream>{};
     streams.reserve(destinations.size());
     for (const auto& destination : destinations) {
@@ -273,7 +272,7 @@ std::vector<MediaClientStream> GStreamerVideoFanout::start(
         slot.client_id = destination.client_id;
         slot.host = destination.destination_host;
         slot.port = destination.port;
-        slot.settings = shared_settings_;
+        slot.tier = MediaQualityTier::High;
         destinations_.push_back(slot);
         streams.push_back(MediaClientStream{
             destination.client_id,
@@ -297,7 +296,6 @@ std::vector<MediaClientStream> GStreamerVideoFanout::start_pipewire(
     source_kind_ = SourceKind::PipeWire;
     display_.clear();
     pipewire_node_ = pipewire_node;
-    shared_settings_ = video_encode_settings_for_tier(MediaQualityTier::High);
     auto streams = std::vector<MediaClientStream>{};
     streams.reserve(destinations.size());
     for (const auto& destination : destinations) {
@@ -305,7 +303,7 @@ std::vector<MediaClientStream> GStreamerVideoFanout::start_pipewire(
         slot.client_id = destination.client_id;
         slot.host = destination.destination_host;
         slot.port = destination.port;
-        slot.settings = shared_settings_;
+        slot.tier = MediaQualityTier::High;
         destinations_.push_back(slot);
         streams.push_back(MediaClientStream{
             destination.client_id,
@@ -330,15 +328,9 @@ MediaClientStream GStreamerVideoFanout::add(
     slot.client_id = destination.client_id;
     slot.host = destination.destination_host;
     slot.port = destination.port;
-    slot.settings = settings.bitrate_kbps == 0
-        ? video_encode_settings_for_tier(MediaQualityTier::High)
-        : settings;
-    // Shared encode: keep the most demanding (lowest bitrate) tier among clients.
-    if (destinations_.empty()) {
-        shared_settings_ = slot.settings;
-    } else if (slot.settings.bitrate_kbps < shared_settings_.bitrate_kbps) {
-        shared_settings_ = slot.settings;
-    }
+    slot.tier = settings.bitrate_kbps == 0
+        ? MediaQualityTier::High
+        : media_quality_tier_for_settings(settings);
     destinations_.push_back(std::move(slot));
     restart_pipeline();
 
@@ -366,25 +358,11 @@ bool GStreamerVideoFanout::reconfigure_client(ClientId client_id, const VideoEnc
     if (source_kind_ == SourceKind::PipeWire && pipewire_node_.empty()) {
         return false;
     }
-    if (slot->settings.bitrate_kbps == settings.bitrate_kbps &&
-        slot->settings.framerate == settings.framerate &&
-        slot->settings.key_int_max == settings.key_int_max) {
+    const auto tier = media_quality_tier_for_settings(settings);
+    if (slot->tier == tier) {
         return false;
     }
-    slot->settings = settings;
-
-    VideoEncodeSettings next = destinations_.front().settings;
-    for (const auto& destination : destinations_) {
-        if (destination.settings.bitrate_kbps < next.bitrate_kbps) {
-            next = destination.settings;
-        }
-    }
-    if (shared_settings_.bitrate_kbps == next.bitrate_kbps &&
-        shared_settings_.framerate == next.framerate &&
-        shared_settings_.key_int_max == next.key_int_max) {
-        return false;
-    }
-    shared_settings_ = next;
+    slot->tier = tier;
     restart_pipeline();
     return true;
 }
@@ -427,27 +405,104 @@ void GStreamerVideoFanout::restart_pipeline() {
         return;
     }
     if (!gst_element_available("multiudpsink")) {
-        throw std::runtime_error("multiudpsink is required for shared video fanout (gst-plugins-good)");
+        throw std::runtime_error("multiudpsink is required for video ladder fanout (gst-plugins-good)");
     }
     if (source_kind_ == SourceKind::PipeWire && !gst_element_available("pipewiresrc")) {
         throw std::runtime_error("pipewiresrc is required for gamescope video capture (gst-plugin-pipewire)");
     }
 
-    const auto bitrate = shared_settings_.bitrate_kbps == 0 ? 1500 : shared_settings_.bitrate_kbps;
-    const auto framerate = shared_settings_.framerate == 0 ? 30 : shared_settings_.framerate;
-    const auto key_int_max =
-        shared_settings_.key_int_max == 0 ? framerate : shared_settings_.key_int_max;
-
-    std::vector<std::pair<std::string, std::uint16_t>> clients;
-    clients.reserve(destinations_.size());
+    std::vector<std::pair<std::string, std::uint16_t>> high_clients;
+    std::vector<std::pair<std::string, std::uint16_t>> medium_clients;
+    std::vector<std::pair<std::string, std::uint16_t>> low_clients;
     for (const auto& destination : destinations_) {
-        clients.emplace_back(destination.host, destination.port);
+        const auto client = std::make_pair(destination.host, destination.port);
+        switch (destination.tier) {
+        case MediaQualityTier::Low:
+            low_clients.push_back(client);
+            break;
+        case MediaQualityTier::Medium:
+        case MediaQualityTier::Auto:
+            medium_clients.push_back(client);
+            break;
+        case MediaQualityTier::High:
+        default:
+            high_clients.push_back(client);
+            break;
+        }
     }
 
+    const int active_tiers =
+        (high_clients.empty() ? 0 : 1) +
+        (medium_clients.empty() ? 0 : 1) +
+        (low_clients.empty() ? 0 : 1);
+    if (active_tiers == 0) {
+        return;
+    }
+
+    auto append_h264_branch = [&](
+        std::vector<std::string>& args,
+        const VideoEncodeSettings& settings,
+        const std::vector<std::pair<std::string, std::uint16_t>>& clients,
+        bool use_nvenc) {
+        const auto bitrate = settings.bitrate_kbps == 0 ? 1500 : settings.bitrate_kbps;
+        const auto framerate = settings.framerate == 0 ? 30 : settings.framerate;
+        const auto key_int_max = settings.key_int_max == 0 ? framerate : settings.key_int_max;
+
+        args.insert(args.end(), {
+            "queue",
+            "max-size-buffers=3",
+            "leaky=downstream",
+            "!",
+            "videorate",
+            "drop-only=true",
+            "!",
+            "video/x-raw,framerate=" + std::to_string(framerate) + "/1",
+            "!",
+        });
+        if (use_nvenc) {
+            args.insert(args.end(), {
+                "nvh264enc",
+                "zerolatency=true",
+                "preset=low-latency-hq",
+                "bitrate=" + std::to_string(bitrate),
+                "gop-size=" + std::to_string(key_int_max),
+                "!",
+                "video/x-h264,profile=baseline,stream-format=byte-stream",
+            });
+        } else {
+            args.insert(args.end(), {
+                "x264enc",
+                "tune=zerolatency",
+                "speed-preset=ultrafast",
+                "bitrate=" + std::to_string(bitrate),
+                "key-int-max=" + std::to_string(key_int_max),
+                "byte-stream=true",
+                "bframes=0",
+                "threads=1",
+                "!",
+                "video/x-h264,profile=constrained-baseline,stream-format=byte-stream",
+            });
+        }
+        if (gst_element_available("h264parse")) {
+            args.insert(args.end(), {"!", "h264parse", "config-interval=-1"});
+        }
+        args.insert(args.end(), {
+            "!",
+            "rtph264pay",
+            "mtu=1200",
+            "config-interval=1",
+            "pt=96",
+            "!",
+            "multiudpsink",
+            "clients=" + multiudp_clients_arg(clients),
+            "sync=false",
+            "async=false",
+        });
+    };
+
+    const bool nvenc = gst_element_available("nvh264enc");
     auto args = std::vector<std::string>{"gst-launch-1.0", "-q"};
     if (source_kind_ == SourceKind::PipeWire) {
-        // gamescope advertises BGRx/NV12 at framerate 0/1. Forcing framerate on the
-        // pipewiresrc link causes "no more input formats" / not-negotiated.
         args.insert(args.end(), {
             "pipewiresrc",
             "path=" + pipewire_node_,
@@ -456,10 +511,6 @@ void GStreamerVideoFanout::restart_pipeline() {
             "video/x-raw,format=BGRx",
             "!",
             "videoconvert",
-            "!",
-            "videorate",
-            "!",
-            "video/x-raw,framerate=" + std::to_string(framerate) + "/1",
         });
     } else {
         args.insert(args.end(), {
@@ -468,54 +519,71 @@ void GStreamerVideoFanout::restart_pipeline() {
             "use-damage=0",
             "show-pointer=false",
             "!",
-            "video/x-raw,framerate=" + std::to_string(framerate) + "/1",
-            "!",
             "videoconvert",
         });
     }
-    args.insert(args.end(), {
-        "!",
-        "queue",
-        "!",
-        "x264enc",
-        "tune=zerolatency",
-        "speed-preset=ultrafast",
-        "bitrate=" + std::to_string(bitrate),
-        "key-int-max=" + std::to_string(key_int_max),
-        "byte-stream=true",
-        "bframes=0",
-        "threads=1",
-        "!",
-        "video/x-h264,profile=constrained-baseline,stream-format=byte-stream",
-    });
-    if (gst_element_available("h264parse")) {
-        args.insert(args.end(), {"!", "h264parse", "config-interval=-1"});
+
+    if (active_tiers == 1) {
+        // Single tier: no tee needed.
+        const auto* clients = !high_clients.empty() ? &high_clients
+            : !medium_clients.empty() ? &medium_clients
+            : &low_clients;
+        const auto tier = !high_clients.empty() ? MediaQualityTier::High
+            : !medium_clients.empty() ? MediaQualityTier::Medium
+            : MediaQualityTier::Low;
+        const auto settings = video_encode_settings_for_tier(tier);
+        args.push_back("!");
+        append_h264_branch(args, settings, *clients, nvenc && tier == MediaQualityTier::High);
+    } else {
+        args.insert(args.end(), {"!", "tee", "name=t"});
+        auto append_tier = [&](
+            const std::vector<std::pair<std::string, std::uint16_t>>& clients,
+            MediaQualityTier tier) {
+            if (clients.empty()) {
+                return;
+            }
+            args.push_back("t.");
+            args.push_back("!");
+            append_h264_branch(
+                args,
+                video_encode_settings_for_tier(tier),
+                clients,
+                nvenc && tier == MediaQualityTier::High);
+        };
+        append_tier(high_clients, MediaQualityTier::High);
+        append_tier(medium_clients, MediaQualityTier::Medium);
+        append_tier(low_clients, MediaQualityTier::Low);
     }
-    args.insert(args.end(), {
-        "!",
-        "rtph264pay",
-        "mtu=1200",
-        "config-interval=1",
-        "pt=96",
-        "!",
-        "multiudpsink",
-        "clients=" + multiudp_clients_arg(clients),
-        "sync=false",
-        "async=false",
-    });
+
     process_.start(std::move(args));
-    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
     if (!process_.running()) {
         throw std::runtime_error(
             source_kind_ == SourceKind::PipeWire
-                ? "video capture pipeline exited immediately (need pipewiresrc, x264enc, multiudpsink)"
+                ? "video capture pipeline exited immediately (need pipewiresrc, x264enc/nvh264enc, multiudpsink)"
                 : "video capture pipeline exited immediately (need Xvfb/Xephyr, ximagesrc, x264enc, multiudpsink)");
     }
-    std::cout
-        << "Video capture (shared): " << destinations_.size() << " destination(s), "
-        << bitrate << " kbps, " << static_cast<int>(framerate) << " fps"
-        << (source_kind_ == SourceKind::PipeWire ? " via pipewire" : " via ximagesrc")
-        << '\n';
+
+    std::cout << "Video ladder ("
+              << (source_kind_ == SourceKind::PipeWire ? "pipewire" : "ximagesrc")
+              << (nvenc ? ", nvenc" : ", x264")
+              << "):";
+    if (!high_clients.empty()) {
+        const auto s = video_encode_settings_for_tier(MediaQualityTier::High);
+        std::cout << " high=" << high_clients.size()
+                  << "@" << s.bitrate_kbps << "kbps/" << static_cast<int>(s.framerate) << "fps";
+    }
+    if (!medium_clients.empty()) {
+        const auto s = video_encode_settings_for_tier(MediaQualityTier::Medium);
+        std::cout << " med=" << medium_clients.size()
+                  << "@" << s.bitrate_kbps << "kbps/" << static_cast<int>(s.framerate) << "fps";
+    }
+    if (!low_clients.empty()) {
+        const auto s = video_encode_settings_for_tier(MediaQualityTier::Low);
+        std::cout << " low=" << low_clients.size()
+                  << "@" << s.bitrate_kbps << "kbps/" << static_cast<int>(s.framerate) << "fps";
+    }
+    std::cout << '\n';
 }
 
 GStreamerAudioFanout::~GStreamerAudioFanout() {

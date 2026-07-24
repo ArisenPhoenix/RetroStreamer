@@ -15,16 +15,6 @@ constexpr std::uint8_t kBadHealthThreshold = 3;
 constexpr std::uint8_t kGoodHealthThreshold = 10;
 constexpr std::uint16_t kHighLossPermille = 100;
 
-VideoEncodeSettings encode_settings_for_client(
-    MediaQualityTier tier,
-    std::uint16_t max_bitrate_kbps) {
-    auto settings = video_encode_settings_for_tier(tier);
-    if (max_bitrate_kbps > 0 && settings.bitrate_kbps > max_bitrate_kbps) {
-        settings.bitrate_kbps = max_bitrate_kbps;
-    }
-    return settings;
-}
-
 } // namespace
 
 SessionControlMonitor::SessionControlMonitor(
@@ -135,8 +125,12 @@ void SessionControlMonitor::handle_heartbeat(
     }
 
     if (heartbeat.wanted_tier != MediaQualityTier::Auto) {
-        if (heartbeat.wanted_tier != client.applied_tier) {
-            apply_video_tier(client, heartbeat.wanted_tier, "client requested tier");
+        const auto resolved = select_video_tier(
+            heartbeat.wanted_tier,
+            client.applied_tier,
+            client.max_bitrate_kbps);
+        if (resolved != client.applied_tier) {
+            apply_video_tier(client, resolved, "client requested tier");
         }
         client.bad_health_streak = 0;
         client.good_health_streak = 0;
@@ -184,16 +178,18 @@ void SessionControlMonitor::apply_video_tier(
         return;
     }
 
-    const auto settings = encode_settings_for_client(tier, client.max_bitrate_kbps);
+    // Selector: map wanted/auto step onto a ladder branch, capped by client max bitrate.
+    const auto resolved = select_video_tier(tier, client.applied_tier, client.max_bitrate_kbps);
+    const auto settings = video_encode_settings_for_tier(resolved);
     if (!media_server_.reconfigure_client_video(client.client_id, settings)) {
         return;
     }
 
-    client.applied_tier = tier;
+    client.applied_tier = resolved;
     client.last_video_reconfigure = now;
     std::cerr
         << "Adapted video for " << client_label(client)
-        << " -> " << media_quality_tier_name(tier)
+        << " -> " << media_quality_tier_name(resolved)
         << " (" << settings.bitrate_kbps << " kbps, "
         << static_cast<int>(settings.framerate) << " fps): "
         << reason << '\n';

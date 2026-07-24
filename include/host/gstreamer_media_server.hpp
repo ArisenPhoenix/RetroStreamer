@@ -25,8 +25,8 @@ void park_streaming_game_audio();
 // If the session default was left on the streaming null sink, point it back at a real device.
 void restore_default_sink_after_streaming();
 
-// One encode shared by Watch-local + all remotes (multiudpsink).
-// Source is either an X11 display (ximagesrc) or a PipeWire node (pipewiresrc).
+// Encode ladder: one capture tee into High/Medium/Low branches; each client is
+// assigned to one tier's multiudpsink (same receive port, different encode).
 class GStreamerVideoFanout {
 public:
     ~GStreamerVideoFanout();
@@ -41,6 +41,7 @@ public:
         const std::string& display,
         const MediaStreamRequest& destination,
         const VideoEncodeSettings& settings = {});
+    // Move client onto the ladder tier matching settings (selector); rebuild sinks.
     bool reconfigure_client(ClientId client_id, const VideoEncodeSettings& settings);
     void stop();
     void stop_client(ClientId client_id);
@@ -50,7 +51,7 @@ private:
         ClientId client_id = 0;
         std::string host;
         std::uint16_t port = 0;
-        VideoEncodeSettings settings;
+        MediaQualityTier tier = MediaQualityTier::High;
     };
 
     void restart_pipeline();
@@ -59,7 +60,6 @@ private:
     SourceKind source_kind_ = SourceKind::X11;
     std::string display_;
     std::string pipewire_node_;
-    VideoEncodeSettings shared_settings_;
     std::vector<Destination> destinations_;
     ChildProcess process_;
 };

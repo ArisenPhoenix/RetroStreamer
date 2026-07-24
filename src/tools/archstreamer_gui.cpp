@@ -235,6 +235,10 @@ QString host_runner_program() {
 class MainWindow final : public QMainWindow {
 public:
     MainWindow() {
+        // Block persistence until widgets exist and load_persisted_settings finishes.
+        // Host/client tab construction refreshes combos and would otherwise save defaults
+        // (e.g. lobby wait = 30) before the Settings controls are created.
+        restoring_settings_ = true;
         setWindowTitle("ArchStreamer");
         resize(1100, 720);
 
@@ -826,10 +830,10 @@ private:
         form->addRow("Steam account ID", steam_row);
 
         connect(profile_username_, &QLineEdit::editingFinished, this, [this] {
-            save_persisted_settings();
+            persist_settings_if_idle();
         });
         connect(profile_host_name_, &QLineEdit::editingFinished, this, [this] {
-            save_persisted_settings();
+            persist_settings_if_idle();
 #ifdef ARCHSTREAMER_HAS_HOST
             if (host_advertise_ != nullptr && host_advertise_->isChecked() &&
                 host_process_ != nullptr && host_process_->state() != QProcess::NotRunning) {
@@ -838,7 +842,7 @@ private:
 #endif
         });
         connect(profile_steam_account_, &QLineEdit::editingFinished, this, [this] {
-            save_persisted_settings();
+            persist_settings_if_idle();
         });
         connect(detect_steam, &QPushButton::clicked, this, [this] {
             detect_steam_account();
@@ -926,29 +930,29 @@ private:
 
         connect(settings_art_root_, &QLineEdit::editingFinished, this, [this] {
             apply_art_root_to_pickers();
-            save_persisted_settings();
+            persist_settings_if_idle();
         });
         connect(settings_art_root_, &QLineEdit::textChanged, this, [this](const QString&) {
             apply_art_root_to_pickers();
         });
         connect(settings_session_timeout_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
-            save_persisted_settings();
+            persist_settings_if_idle();
         });
         connect(settings_log_level_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
             apply_log_level_from_settings();
-            save_persisted_settings();
+            persist_settings_if_idle();
         });
 #ifdef ARCHSTREAMER_HAS_HOST
         connect(settings_gpu_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
-            save_persisted_settings();
+            persist_settings_if_idle();
         });
         connect(settings_renderer_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
-            save_persisted_settings();
+            persist_settings_if_idle();
         });
 #endif
         connect(settings_audio_out_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
             apply_audio_output_from_settings();
-            save_persisted_settings();
+            persist_settings_if_idle();
         });
         connect(refresh_audio, &QPushButton::clicked, this, [this] {
             refresh_settings_audio_outputs();
@@ -1264,6 +1268,7 @@ private:
             profile_steam_account_->setText(account);
         }
         if (settings_session_timeout_ != nullptr) {
+            const QSignalBlocker blocker(settings_session_timeout_);
             settings_session_timeout_->setValue(qBound(session_timeout, 5, 3600));
         }
         if (settings_log_level_ != nullptr) {
@@ -1403,18 +1408,31 @@ private:
     }
 
     void save_persisted_settings() {
+        if (restoring_settings_) {
+            return;
+        }
         QSettings settings("ArchStreamer", "ArchStreamer");
         settings.setValue("paths/artRoot", QString::fromStdString(art_root_path().string()));
         settings.setValue("steam/accountId", QString::fromStdString(steam_account_id_text()));
         settings.setValue("profile/username", QString::fromStdString(profile_client_username()));
         settings.setValue("profile/hostName", QString::fromStdString(profile_host_name()));
-        settings.setValue("host/sessionTimeoutSeconds", session_timeout_seconds());
+        // Only write when the Settings control exists — early construction saves used to
+        // fall back to 30 and wipe a previously persisted lobby wait.
+        if (settings_session_timeout_ != nullptr) {
+            settings.setValue("host/sessionTimeoutSeconds", settings_session_timeout_->value());
+        }
         settings.setValue("ui/logLevel", static_cast<int>(current_log_level()));
 #ifdef ARCHSTREAMER_HAS_HOST
-        settings.setValue("graphics/gpuId", QString::fromStdString(selected_render_gpu_id()));
-        settings.setValue("graphics/renderer", selected_graphics_api_id());
+        if (settings_gpu_ != nullptr) {
+            settings.setValue("graphics/gpuId", QString::fromStdString(selected_render_gpu_id()));
+        }
+        if (settings_renderer_ != nullptr) {
+            settings.setValue("graphics/renderer", selected_graphics_api_id());
+        }
 #endif
-        settings.setValue("audio/outputDevice", QString::fromStdString(selected_audio_output_id()));
+        if (settings_audio_out_ != nullptr) {
+            settings.setValue("audio/outputDevice", QString::fromStdString(selected_audio_output_id()));
+        }
 
         if (client_host_ != nullptr) {
             settings.setValue("client/hostAddress", client_host_->text().trimmed());

@@ -255,7 +255,7 @@ inline MediaQualityTier select_video_tier(
     std::uint16_t max_bitrate_kbps = 0) {
     MediaQualityTier tier = wanted == MediaQualityTier::Auto ? auto_tier : wanted;
     if (tier == MediaQualityTier::Auto) {
-        tier = MediaQualityTier::High;
+        tier = MediaQualityTier::Medium;
     }
     if (max_bitrate_kbps == 0) {
         return tier;

@@ -359,6 +359,16 @@ private:
         client_video_->setChecked(true);
         client_audio_ = new QCheckBox("Receive audio", form_box);
         client_audio_->setChecked(true);
+        client_stream_quality_ = new QComboBox(form_box);
+        client_stream_quality_->addItem("Auto", static_cast<int>(archstreamer::MediaQualityTier::Auto));
+        client_stream_quality_->addItem("Low (800 kbps / 20 fps)", static_cast<int>(archstreamer::MediaQualityTier::Low));
+        client_stream_quality_->addItem("Medium (3.5 Mbps / 30 fps)", static_cast<int>(archstreamer::MediaQualityTier::Medium));
+        client_stream_quality_->addItem("High (12 Mbps / 60 fps)", static_cast<int>(archstreamer::MediaQualityTier::High));
+        client_stream_quality_->setCurrentIndex(0);
+        client_stream_quality_->setToolTip(
+            "Preferred video tier sent to the host each second.\n"
+            "Auto starts at Medium and steps up/down from network health.\n"
+            "Use Medium or Low on Wi‑Fi / weaker laptops; High needs a strong link.");
         client_synced_av_ = new QCheckBox("Synced A/V (experimental)", form_box);
         client_synced_av_->setChecked(false);
         client_synced_av_->setToolTip(
@@ -388,6 +398,9 @@ private:
         connect(client_audio_, &QCheckBox::toggled, this, [this](bool) {
             persist_settings_if_idle();
         });
+        connect(client_stream_quality_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+            persist_settings_if_idle();
+        });
 
         form->addRow("Host", host_row);
         form->addRow("Control port", client_port_);
@@ -395,6 +408,7 @@ private:
         form->addRow("Role", client_role_);
         form->addRow("Mode", client_mode_);
         form->addRow("Players", client_players_);
+        form->addRow("Stream quality", client_stream_quality_);
         form->addRow("", client_video_);
         form->addRow("", client_audio_);
         form->addRow("", client_synced_av_);
@@ -1343,6 +1357,14 @@ private:
         if (client_synced_av_ != nullptr) {
             client_synced_av_->setChecked(settings.value("client/syncedAv", false).toBool());
         }
+        if (client_stream_quality_ != nullptr) {
+            const auto tier = settings.value(
+                "client/streamQuality",
+                static_cast<int>(archstreamer::MediaQualityTier::Auto)).toInt();
+            const QSignalBlocker blocker(client_stream_quality_);
+            const auto index = client_stream_quality_->findData(tier);
+            client_stream_quality_->setCurrentIndex(index >= 0 ? index : 0);
+        }
 
 #ifdef ARCHSTREAMER_HAS_HOST
         if (host_rom_root_ != nullptr) {
@@ -1461,6 +1483,9 @@ private:
         }
         if (client_synced_av_ != nullptr) {
             settings.setValue("client/syncedAv", client_synced_av_->isChecked());
+        }
+        if (client_stream_quality_ != nullptr) {
+            settings.setValue("client/streamQuality", client_stream_quality_->currentData().toInt());
         }
         if (client_game_picker_ != nullptr && client_game_picker_->hasSelection()) {
             settings.setValue(
@@ -1761,11 +1786,19 @@ private:
         config.wants_video = client_video_->isChecked();
         config.wants_audio = client_audio_->isChecked();
         config.synced_av = client_synced_av_ != nullptr && client_synced_av_->isChecked();
+        config.wanted_tier = selected_stream_quality();
 
         for (const auto* item : client_controllers_->selectedItems()) {
             config.controller_indexes.push_back(static_cast<std::size_t>(client_controllers_->row(item)));
         }
         return config;
+    }
+
+    archstreamer::MediaQualityTier selected_stream_quality() const {
+        if (client_stream_quality_ == nullptr || client_stream_quality_->currentData().isNull()) {
+            return archstreamer::MediaQualityTier::Auto;
+        }
+        return static_cast<archstreamer::MediaQualityTier>(client_stream_quality_->currentData().toInt());
     }
 
     void apply_client_host(const QString& address, int control_port, int input_port, const QString& label = {}) {
@@ -2405,6 +2438,7 @@ private:
     QSpinBox* client_players_ = nullptr;
     QCheckBox* client_video_ = nullptr;
     QCheckBox* client_audio_ = nullptr;
+    QComboBox* client_stream_quality_ = nullptr;
     QCheckBox* client_synced_av_ = nullptr;
     QLabel* client_catalog_status_ = nullptr;
     archstreamer::gui::GamePickerWidget* client_game_picker_ = nullptr;

@@ -32,9 +32,9 @@ SessionControlMonitor::SessionControlMonitor(
     const auto now = started_at_;
     for (auto& client : plan_.clients) {
         client.last_seen = now;
-        // Start at High so Auto does not restart the gst pipeline ~20s in for a step-up
-        // (restart blanks the remote until the next IDR). Auto can still step down.
-        client.applied_tier = MediaQualityTier::High;
+        // Start at Medium: High is 12 Mbps/60 and can overwhelm Wi‑Fi remotes before
+        // the first heartbeat. Auto can still step up when the link is healthy.
+        client.applied_tier = MediaQualityTier::Medium;
         client.wanted_tier = MediaQualityTier::Auto;
     }
 }

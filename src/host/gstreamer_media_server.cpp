@@ -272,7 +272,7 @@ std::vector<MediaClientStream> GStreamerVideoFanout::start(
         slot.client_id = destination.client_id;
         slot.host = destination.destination_host;
         slot.port = destination.port;
-        slot.tier = MediaQualityTier::High;
+        slot.tier = MediaQualityTier::Medium;
         destinations_.push_back(slot);
         streams.push_back(MediaClientStream{
             destination.client_id,
@@ -303,7 +303,7 @@ std::vector<MediaClientStream> GStreamerVideoFanout::start_pipewire(
         slot.client_id = destination.client_id;
         slot.host = destination.destination_host;
         slot.port = destination.port;
-        slot.tier = MediaQualityTier::High;
+        slot.tier = MediaQualityTier::Medium;
         destinations_.push_back(slot);
         streams.push_back(MediaClientStream{
             destination.client_id,
@@ -329,7 +329,7 @@ MediaClientStream GStreamerVideoFanout::add(
     slot.host = destination.destination_host;
     slot.port = destination.port;
     slot.tier = settings.bitrate_kbps == 0
-        ? MediaQualityTier::High
+        ? MediaQualityTier::Medium
         : media_quality_tier_for_settings(settings);
     destinations_.push_back(std::move(slot));
     restart_pipeline();

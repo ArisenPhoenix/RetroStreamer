@@ -51,7 +51,7 @@ private:
         ClientId client_id = 0;
         std::string host;
         std::uint16_t port = 0;
-        MediaQualityTier tier = MediaQualityTier::High;
+        MediaQualityTier tier = MediaQualityTier::Medium;
     };
 
     void restart_pipeline();

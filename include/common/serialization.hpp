@@ -70,6 +70,8 @@ ByteBuffer serialize_payload(const SessionEnded& payload);
 ByteBuffer serialize_payload(const MediaEndpoint& payload);
 ByteBuffer serialize_payload(const ArtAssetRequest& payload);
 ByteBuffer serialize_payload(const ArtAssetResponse& payload);
+ByteBuffer serialize_payload(const DiscControlRequest& payload);
+ByteBuffer serialize_payload(const DiscControlResponse& payload);
 
 PacketType packet_type_for(const ClientHello& payload);
 PacketType packet_type_for(const HostWelcome& payload);
@@ -88,6 +90,8 @@ PacketType packet_type_for(const SessionEnded& payload);
 PacketType packet_type_for(const MediaEndpoint& payload);
 PacketType packet_type_for(const ArtAssetRequest& payload);
 PacketType packet_type_for(const ArtAssetResponse& payload);
+PacketType packet_type_for(const DiscControlRequest& payload);
+PacketType packet_type_for(const DiscControlResponse& payload);
 
 ByteBuffer serialize_packet(const ClientHello& payload);
 ByteBuffer serialize_packet(const HostWelcome& payload);
@@ -106,6 +110,8 @@ ByteBuffer serialize_packet(const SessionEnded& payload);
 ByteBuffer serialize_packet(const MediaEndpoint& payload);
 ByteBuffer serialize_packet(const ArtAssetRequest& payload);
 ByteBuffer serialize_packet(const ArtAssetResponse& payload);
+ByteBuffer serialize_packet(const DiscControlRequest& payload);
+ByteBuffer serialize_packet(const DiscControlResponse& payload);
 
 PacketPayload deserialize_packet(std::span<const std::uint8_t> packet);
 

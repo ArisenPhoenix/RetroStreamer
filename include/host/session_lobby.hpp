@@ -3,6 +3,7 @@
 #include "common/serialization.hpp"
 #include "common/platform/default_platform.hpp"
 #include "host/linux_uinput_gamepad.hpp"
+#include "host/retroarch_netcmd.hpp"
 #include "host/seat_manager.hpp"
 
 #include <chrono>
@@ -43,6 +44,10 @@ struct SessionPlan {
     GameId selected_game_id;
     GameSessionMode session_mode = GameSessionMode::SinglePlayer;
     std::string save_username;
+    // Multi-disc playlist state (from launched .m3u); empty when not applicable.
+    std::vector<std::string> playlist_discs;
+    std::uint8_t current_disc_index = 0;
+    std::uint16_t retroarch_netcmd_port = DefaultRetroArchNetcmdPort;
 };
 
 const char* session_mode_name(GameSessionMode mode);
@@ -62,6 +67,7 @@ void send_session_ready_to_clients(SessionPlan& plan);
 void send_session_starting_to_clients(SessionPlan& plan);
 void send_media_endpoint_to_client(SessionPlan& plan, ClientId client_id, const MediaEndpoint& endpoint);
 void send_session_ended_to_clients(SessionPlan& plan, std::string_view reason);
+DiscControlResponse apply_disc_control(SessionPlan& plan, const DiscControlRequest& request);
 const SessionClientConnection* session_client_for(const SessionPlan& plan, ClientId client_id);
 std::optional<ControllerInfo> controller_for(const ClientHello& hello, LocalPlayerIndex local_player);
 std::string sanitize_virtual_device_text(std::string_view value);

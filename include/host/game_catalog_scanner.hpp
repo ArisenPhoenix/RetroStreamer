@@ -44,6 +44,7 @@ std::uint64_t game_update_time(
     const std::filesystem::path& metadata_path);
 void apply_game_metadata(GameInfo& info, const std::filesystem::path& metadata_path);
 void finalize_game_identity(GameInfo& info);
+std::vector<std::string> parse_m3u_member_basenames(const std::filesystem::path& m3u_path);
 
 GameCatalog scan_game_catalog(
     const std::filesystem::path& content_root,

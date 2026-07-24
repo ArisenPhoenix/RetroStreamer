@@ -15,6 +15,12 @@ struct HostedGame {
     std::filesystem::path core_path;
     std::filesystem::path content_path;
     std::vector<std::string> retroarch_args;
+    // Basenames of .m3u members (multi-disc); empty for single-file games.
+    std::vector<std::string> playlist_members;
+    // When true, launch core_path as a standalone emulator (e.g. Yuzu AppImage)
+    // instead of RetroArch -L <core>.
+    bool standalone_emulator = false;
+    std::vector<std::string> standalone_args_before_content;
 };
 
 class GameCatalog {

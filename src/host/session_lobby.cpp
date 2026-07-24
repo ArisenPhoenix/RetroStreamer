@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -49,16 +50,13 @@ std::optional<GameInfo> game_info_for(const GameList& list, const GameId& game_i
 }
 
 GameList catalog_delta_for_request(const GameList& full_list, const GameListRequest& request) {
-    auto response = GameList{};
-    response.catalog_revision = full_list.catalog_revision;
-    response.full = request.client_catalog_revision == 0;
-
-    for (const auto& game : full_list.games) {
-        if (response.full || game.updated_at > request.client_catalog_revision) {
-            response.games.push_back(game);
-        }
-    }
-
+    // Always send a full replace. Incremental updates never populated deleted_game_ids,
+    // so clients kept stale entries after catalog membership shrank (e.g. .m3u collapsing
+    // multi-disc CHDs into one playlist game). Catalogs are small; full sync is fine.
+    (void)request;
+    auto response = full_list;
+    response.full = true;
+    response.deleted_game_ids.clear();
     return response;
 }
 
@@ -196,6 +194,82 @@ void send_session_ended_to_clients(SessionPlan& plan, std::string_view reason) {
         } catch (const std::exception&) {
         }
     }
+}
+
+DiscControlResponse apply_disc_control(SessionPlan& plan, const DiscControlRequest& request) {
+    DiscControlResponse response;
+    response.disc_count = static_cast<std::uint8_t>(
+        std::min<std::size_t>(plan.playlist_discs.size(), 255));
+    response.disc_index = plan.current_disc_index;
+
+    if (plan.playlist_discs.size() < 2) {
+        response.message = "Active game is not a multi-disc playlist";
+        return response;
+    }
+    if (!request.game_id.empty() && request.game_id != plan.selected_game_id) {
+        response.message = "Disc control game_id does not match the active session";
+        return response;
+    }
+
+    const auto disc_count = static_cast<std::uint8_t>(plan.playlist_discs.size());
+    std::uint8_t target = plan.current_disc_index;
+    switch (request.action) {
+        case DiscControlAction::Next:
+            target = static_cast<std::uint8_t>((plan.current_disc_index + 1) % disc_count);
+            break;
+        case DiscControlAction::Prev:
+            target = static_cast<std::uint8_t>(
+                (plan.current_disc_index + disc_count - 1) % disc_count);
+            break;
+        case DiscControlAction::SetIndex:
+            if (request.disc_index >= disc_count) {
+                response.message = "Disc index out of range";
+                return response;
+            }
+            target = request.disc_index;
+            break;
+    }
+
+    if (target == plan.current_disc_index) {
+        response.ok = true;
+        response.message = "Already on requested disc";
+        return response;
+    }
+
+    const auto port = plan.retroarch_netcmd_port;
+    if (!send_retroarch_netcmd("DISK_EJECT_TOGGLE", port)) {
+        response.message = "Failed to send DISK_EJECT_TOGGLE to RetroArch";
+        return response;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+
+    // Walk forward with DISK_NEXT (wraps) until host-tracked index matches target.
+    const auto steps = static_cast<std::uint8_t>(
+        (target + disc_count - plan.current_disc_index) % disc_count);
+    for (std::uint8_t i = 0; i < steps; ++i) {
+        if (!send_retroarch_netcmd("DISK_NEXT", port)) {
+            response.message = "Failed to send DISK_NEXT to RetroArch";
+            return response;
+        }
+        plan.current_disc_index = static_cast<std::uint8_t>(
+            (plan.current_disc_index + 1) % disc_count);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    if (!send_retroarch_netcmd("DISK_EJECT_TOGGLE", port)) {
+        response.message = "Failed to insert disc (DISK_EJECT_TOGGLE)";
+        return response;
+    }
+
+    response.ok = true;
+    response.disc_index = plan.current_disc_index;
+    response.disc_count = disc_count;
+    if (plan.current_disc_index < plan.playlist_discs.size()) {
+        response.message = "Switched to " + plan.playlist_discs[plan.current_disc_index];
+    } else {
+        response.message = "Disc switched";
+    }
+    return response;
 }
 
 const SessionClientConnection* session_client_for(const SessionPlan& plan, ClientId client_id) {

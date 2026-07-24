@@ -26,18 +26,9 @@ GameList GameCatalog::list() const {
 }
 
 GameList GameCatalog::delta_since(std::uint64_t client_catalog_revision) const {
-    auto result = GameList{};
-    result.catalog_revision = list().catalog_revision;
-    result.full = client_catalog_revision == 0;
-    result.games.reserve(games_.size());
-
-    for (const auto& game : games_) {
-        if (result.full || game.info.updated_at > client_catalog_revision) {
-            result.games.push_back(game.info);
-        }
-    }
-
-    return result;
+    (void)client_catalog_revision;
+    // Same rationale as catalog_delta_for_request: always full replace.
+    return list();
 }
 
 std::optional<GameInfo> GameCatalog::find(const GameId& game_id) const {
@@ -78,6 +69,10 @@ RetroArchLaunchConfig GameCatalog::launch_config_for(
         game->get().core_path,
         game->get().content_path,
         game->get().retroarch_args,
+        {},
+        {},
+        game->get().standalone_emulator,
+        game->get().standalone_args_before_content,
     };
 }
 

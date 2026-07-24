@@ -291,6 +291,13 @@ ByteBuffer serialize_payload(const GameList& payload) {
         writer.write_pod<std::uint8_t>(game.min_players);
         writer.write_pod<std::uint8_t>(game.max_players);
         writer.write_pod<std::uint64_t>(game.updated_at);
+        if (game.playlist_discs.size() > UINT16_MAX) {
+            throw std::runtime_error("too many playlist discs for protocol packet");
+        }
+        writer.write_pod<std::uint16_t>(static_cast<std::uint16_t>(game.playlist_discs.size()));
+        for (const auto& disc : game.playlist_discs) {
+            writer.write_string(disc);
+        }
     }
     writer.write_pod<std::uint16_t>(static_cast<std::uint16_t>(payload.deleted_game_ids.size()));
     for (const auto& game_id : payload.deleted_game_ids) {
@@ -363,6 +370,23 @@ ByteBuffer serialize_payload(const ArtAssetResponse& payload) {
     return writer.take();
 }
 
+ByteBuffer serialize_payload(const DiscControlRequest& payload) {
+    Writer writer;
+    writer.write_string(payload.game_id);
+    writer.write_pod<DiscControlAction>(payload.action);
+    writer.write_pod<std::uint8_t>(payload.disc_index);
+    return writer.take();
+}
+
+ByteBuffer serialize_payload(const DiscControlResponse& payload) {
+    Writer writer;
+    writer.write_bool(payload.ok);
+    writer.write_pod<std::uint8_t>(payload.disc_index);
+    writer.write_pod<std::uint8_t>(payload.disc_count);
+    writer.write_string(payload.message);
+    return writer.take();
+}
+
 PacketType packet_type_for(const ClientHello&) { return PacketType::ClientHello; }
 PacketType packet_type_for(const HostWelcome&) { return PacketType::HostWelcome; }
 PacketType packet_type_for(const ClientConfig&) { return PacketType::ClientConfig; }
@@ -380,6 +404,8 @@ PacketType packet_type_for(const SessionEnded&) { return PacketType::SessionEnde
 PacketType packet_type_for(const MediaEndpoint&) { return PacketType::MediaEndpoint; }
 PacketType packet_type_for(const ArtAssetRequest&) { return PacketType::ArtAssetRequest; }
 PacketType packet_type_for(const ArtAssetResponse&) { return PacketType::ArtAssetResponse; }
+PacketType packet_type_for(const DiscControlRequest&) { return PacketType::DiscControlRequest; }
+PacketType packet_type_for(const DiscControlResponse&) { return PacketType::DiscControlResponse; }
 
 template <typename Payload>
 ByteBuffer serialize_packet_impl(const Payload& payload) {
@@ -461,6 +487,14 @@ ByteBuffer serialize_packet(const ArtAssetRequest& payload) {
 }
 
 ByteBuffer serialize_packet(const ArtAssetResponse& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const DiscControlRequest& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const DiscControlResponse& payload) {
     return serialize_packet_impl(payload);
 }
 
@@ -546,7 +580,7 @@ GameList read_game_list(Reader& reader) {
     const auto count = reader.read_pod<std::uint16_t>();
     payload.games.reserve(count);
     for (std::uint16_t i = 0; i < count; ++i) {
-        payload.games.push_back(GameInfo{
+        GameInfo game{
             reader.read_string(),
             reader.read_string(),
             reader.read_string(),
@@ -563,7 +597,13 @@ GameList read_game_list(Reader& reader) {
             reader.read_pod<std::uint8_t>(),
             reader.read_pod<std::uint8_t>(),
             reader.read_pod<std::uint64_t>(),
-        });
+        };
+        const auto disc_count = reader.read_pod<std::uint16_t>();
+        game.playlist_discs.reserve(disc_count);
+        for (std::uint16_t d = 0; d < disc_count; ++d) {
+            game.playlist_discs.push_back(reader.read_string());
+        }
+        payload.games.push_back(std::move(game));
     }
     const auto deleted_count = reader.read_pod<std::uint16_t>();
     payload.deleted_game_ids.reserve(deleted_count);
@@ -632,6 +672,23 @@ ArtAssetResponse read_art_asset_response(Reader& reader) {
     return payload;
 }
 
+DiscControlRequest read_disc_control_request(Reader& reader) {
+    return DiscControlRequest{
+        reader.read_string(),
+        reader.read_pod<DiscControlAction>(),
+        reader.read_pod<std::uint8_t>(),
+    };
+}
+
+DiscControlResponse read_disc_control_response(Reader& reader) {
+    return DiscControlResponse{
+        reader.read_bool(),
+        reader.read_pod<std::uint8_t>(),
+        reader.read_pod<std::uint8_t>(),
+        reader.read_string(),
+    };
+}
+
 PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
     Reader header_reader(packet);
     const auto magic = header_reader.read_pod<std::uint32_t>();
@@ -687,6 +744,10 @@ PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
             return read_art_asset_request(payload_reader);
         case PacketType::ArtAssetResponse:
             return read_art_asset_response(payload_reader);
+        case PacketType::DiscControlRequest:
+            return read_disc_control_request(payload_reader);
+        case PacketType::DiscControlResponse:
+            return read_disc_control_response(payload_reader);
     }
 
     throw std::runtime_error("unknown packet type");

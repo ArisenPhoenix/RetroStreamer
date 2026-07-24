@@ -81,6 +81,19 @@ std::optional<std::string> SessionControlMonitor::poll() {
                 if (heartbeat->client_id == client.client_id) {
                     handle_heartbeat(client, *heartbeat);
                 }
+            } else if (const auto* disc_request = std::get_if<DiscControlRequest>(&payload);
+                       disc_request != nullptr) {
+                const auto response = apply_disc_control(plan_, *disc_request);
+                try {
+                    client.stream.send_packet(serialize_packet(response));
+                } catch (const std::exception& error) {
+                    std::cerr << "Failed to send DiscControlResponse: " << error.what() << '\n';
+                }
+                if (response.ok) {
+                    std::cout << "Disc control: " << response.message << '\n';
+                } else {
+                    std::cerr << "Disc control failed: " << response.message << '\n';
+                }
             }
         }
         if (removed_current) {

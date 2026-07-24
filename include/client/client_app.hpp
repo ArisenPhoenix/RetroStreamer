@@ -9,6 +9,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -16,6 +18,50 @@
 namespace archstreamer {
 
 using ClientParticipantRole = ParticipantRole;
+
+// Shared between the GUI thread and the client session loop for mid-session disc swaps.
+struct DiscControlBridge {
+    std::mutex mutex;
+    std::optional<DiscControlRequest> pending_request;
+    std::optional<DiscControlResponse> last_response;
+    std::vector<std::string> disc_labels;
+    GameId active_game_id;
+    bool session_active = false;
+
+    void request_set_index(std::uint8_t index) {
+        std::lock_guard lock(mutex);
+        pending_request = DiscControlRequest{active_game_id, DiscControlAction::SetIndex, index};
+    }
+
+    void request_next() {
+        std::lock_guard lock(mutex);
+        pending_request = DiscControlRequest{active_game_id, DiscControlAction::Next, 0};
+    }
+
+    void request_prev() {
+        std::lock_guard lock(mutex);
+        pending_request = DiscControlRequest{active_game_id, DiscControlAction::Prev, 0};
+    }
+
+    std::optional<DiscControlRequest> take_pending() {
+        std::lock_guard lock(mutex);
+        auto request = pending_request;
+        pending_request.reset();
+        return request;
+    }
+
+    void set_response(DiscControlResponse response) {
+        std::lock_guard lock(mutex);
+        last_response = std::move(response);
+    }
+
+    std::optional<DiscControlResponse> take_response() {
+        std::lock_guard lock(mutex);
+        auto response = last_response;
+        last_response.reset();
+        return response;
+    }
+};
 
 struct ClientAppConfig {
     std::string host = "127.0.0.1";
@@ -58,6 +104,7 @@ struct ClientAppCallbacks {
     std::function<void(const std::string& host, std::uint16_t input_port)> on_input_streaming_started;
     std::function<void()> on_waiting_without_input;
     std::function<void(const std::string& message)> on_status;
+    std::shared_ptr<DiscControlBridge> disc_control;
 };
 
 struct ClientRunResult {

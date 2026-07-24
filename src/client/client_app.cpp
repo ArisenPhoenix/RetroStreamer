@@ -146,6 +146,16 @@ bool handle_control_message(TcpStream& stream, const ClientAppCallbacks& callbac
     if (const auto* error = std::get_if<ErrorPacket>(&payload); error != nullptr) {
         throw std::runtime_error("host ended session: " + error->message);
     }
+    if (const auto* disc = std::get_if<DiscControlResponse>(&payload); disc != nullptr) {
+        if (callbacks.disc_control) {
+            callbacks.disc_control->set_response(*disc);
+        }
+        if (callbacks.on_status) {
+            callbacks.on_status(
+                disc->ok ? ("Disc control: " + disc->message)
+                         : ("Disc control failed: " + disc->message));
+        }
+    }
 
     return true;
 }
@@ -388,6 +398,18 @@ ClientRunResult ClientApp::join_session(
     if (callbacks.on_session_starting) {
         callbacks.on_session_starting(result.starting);
     }
+    if (callbacks.disc_control) {
+        std::lock_guard lock(callbacks.disc_control->mutex);
+        callbacks.disc_control->session_active = true;
+        callbacks.disc_control->active_game_id = result.selected_game_id.value_or(GameId{});
+        callbacks.disc_control->disc_labels.clear();
+        for (const auto& game : result.full_catalog.games) {
+            if (result.selected_game_id.has_value() && game.id == *result.selected_game_id) {
+                callbacks.disc_control->disc_labels = game.playlist_discs;
+                break;
+            }
+        }
+    }
 
     auto controller_backend = std::optional<ControllerBackend>{};
     auto input_sender = std::optional<InputSender>{};
@@ -415,6 +437,17 @@ ClientRunResult ClientApp::join_session(
     while (!should_stop()) {
         if (!handle_control_message(joined_session.stream, callbacks, result)) {
             break;
+        }
+        if (callbacks.disc_control) {
+            if (const auto request = callbacks.disc_control->take_pending(); request.has_value()) {
+                try {
+                    joined_session.stream.send_packet(serialize_packet(*request));
+                } catch (const std::exception& error) {
+                    if (callbacks.on_status) {
+                        callbacks.on_status(std::string("Failed to send disc request: ") + error.what());
+                    }
+                }
+            }
         }
         if (joined_session.stream.peer_closed()) {
             result.host_disconnected = true;
@@ -512,6 +545,10 @@ ClientRunResult ClientApp::join_session(
     }
     if (media_receiver) {
         media_receiver.disconnect();
+    }
+    if (callbacks.disc_control) {
+        std::lock_guard lock(callbacks.disc_control->mutex);
+        callbacks.disc_control->session_active = false;
     }
 
     return result;

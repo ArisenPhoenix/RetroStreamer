@@ -20,17 +20,27 @@ LibretroCoreRegistry::LibretroCoreRegistry(std::vector<std::filesystem::path> co
     add_system("gb", "Game Boy", {{"gambatte", "Gambatte"}, {"sameboy", "SameBoy"}});
     add_system("gbc", "Game Boy Color", {{"gambatte", "Gambatte"}, {"sameboy", "SameBoy"}});
     add_system("gb-gbc", "Game Boy / Game Boy Color", {{"gambatte", "Gambatte"}, {"sameboy", "SameBoy"}});
-    add_system("gba", "Game Boy Advance", {{"mgba", "mGBA"}, {"vba_m", "VBA-M"}});
+    add_system("gba", "Game Boy Advance", {{"mgba", "mGBA"}, {"vbam", "VBA-M"}, {"vba_m", "VBA-M"}, {"vba_next", "VBA Next"}});
     add_system("nds", "Nintendo DS", {{"melonds", "melonDS"}, {"desmume", "DeSmuME"}});
     add_system("n64", "Nintendo 64", {{"mupen64plus_next", "Mupen64Plus-Next"}, {"parallel_n64", "ParaLLEl N64"}});
-    add_system("ps1", "PlayStation", {{"pcsx_rearmed", "PCSX ReARMed"}, {"swanstation", "SwanStation"}, {"mednafen_psx_hw", "Beetle PSX HW"}, {"mednafen_psx", "Beetle PSX"}, {"beetle_psx_hw", "Beetle PSX HW"}, {"beetle_psx", "Beetle PSX"}});
+    // Match RetroArchSysBin/ra.py preference: CHD-capable cores before Beetle
+    // (Beetle cannot open .chd / CHD playlists — fails with "Unknown CUE sheet directive MCOMPRHD").
+    add_system("ps1", "PlayStation", {
+        {"pcsx_rearmed", "PCSX ReARMed"},
+        {"swanstation", "SwanStation"},
+        {"duckstation", "DuckStation"},
+        {"mednafen_psx_hw", "Beetle PSX HW"},
+        {"beetle_psx_hw", "Beetle PSX HW"},
+        {"mednafen_psx", "Beetle PSX"},
+        {"beetle_psx", "Beetle PSX"},
+    });
     add_system("ps2", "PlayStation 2", {{"lrps2", "LRPS2"}, {"pcsx2", "PCSX2"}});
     add_system("psp", "PSP", {{"ppsspp", "PPSSPP"}});
     add_system("gamecube", "GameCube", {{"dolphin", "Dolphin"}});
     add_system("wii", "Wii", {{"dolphin", "Dolphin"}});
     add_system("3ds", "Nintendo 3DS", {{"citra", "Citra"}});
     add_system("switch", "Nintendo Switch", {{"yuzu", "Yuzu"}, {"ryujinx", "Ryujinx"}, {"suyu", "Suyu"}});
-    add_system("snes", "SNES / Super Famicom", {{"snes9x", "Snes9x"}, {"bsnes", "bsnes"}, {"bsnes_mercury_balanced", "bsnes-mercury Balanced"}, {"mesen_s", "Mesen-S"}, {"snes9x_2010", "Snes9x 2010"}, {"snes9x_2005", "Snes9x 2005"}});
+    add_system("snes", "SNES / Super Famicom", {{"snes9x", "Snes9x"}, {"bsnes", "bsnes"}, {"bsnes_mercury_balanced", "bsnes-mercury Balanced"}, {"mesen_s", "Mesen-S"}, {"snes9x2010", "Snes9x 2010"}, {"snes9x_2010", "Snes9x 2010"}, {"snes9x_2005", "Snes9x 2005"}});
     add_system("nes", "NES / Famicom", {{"nestopia", "Nestopia"}, {"fceumm", "FCEUmm"}, {"mesen", "Mesen"}, {"quicknes", "QuickNES"}});
     add_system("pce", "PC Engine / TurboGrafx-16", {{"mednafen_pce_fast", "Beetle PCE FAST"}});
     add_system("sega-8-16", "Sega 8/16-bit", {{"genesis_plus_gx", "Genesis Plus GX"}, {"picodrive", "PicoDrive"}});
@@ -40,7 +50,7 @@ LibretroCoreRegistry::LibretroCoreRegistry(std::vector<std::filesystem::path> co
     add_extension_systems({"gba"}, "gba");
     add_extension_systems({"nds", "dsi"}, "nds");
     add_extension_systems({"n64", "z64", "v64"}, "n64");
-    add_extension_systems({"cue", "pbp", "m3u"}, "ps1");
+    add_extension_systems({"cue", "pbp", "m3u", "chd"}, "ps1");
     add_extension_systems({"cso"}, "psp");
     add_extension_systems({"gcm", "gcz", "rvz"}, "gamecube");
     add_extension_systems({"wbfs", "wad"}, "wii");
@@ -119,21 +129,42 @@ void LibretroCoreRegistry::add_extension_systems(
 
 std::optional<std::filesystem::path> LibretroCoreRegistry::find_core_file(const std::string& core_key) const {
     const auto normalized = normalize_token(core_key);
-    const std::vector<std::string> candidates{
-        normalized + "_libretro.so",
-        "lib" + normalized + "_libretro.so",
-        normalized + ".so",
-    };
+    // ra.py / apt naming: beetle_psx <-> mednafen_psx; duckstation often ships as swanstation.
+    std::vector<std::string> keys{normalized};
+    if (normalized == "beetle_psx") {
+        keys.push_back("mednafen_psx");
+    } else if (normalized == "beetle_psx_hw") {
+        keys.push_back("mednafen_psx_hw");
+    } else if (normalized == "duckstation") {
+        keys.push_back("swanstation");
+    } else if (normalized == "mednafen_psx") {
+        keys.push_back("beetle_psx");
+    } else if (normalized == "vba_m") {
+        keys.push_back("vbam");
+        keys.push_back("vba_next");
+    } else if (normalized == "snes9x_2010") {
+        keys.push_back("snes9x2010");
+    } else if (normalized == "snes9x2010") {
+        keys.push_back("snes9x_2010");
+    }
 
-    for (const auto& dir : core_dirs_) {
-        if (!std::filesystem::exists(dir)) {
-            continue;
-        }
+    for (const auto& key : keys) {
+        const std::vector<std::string> candidates{
+            key + "_libretro.so",
+            "lib" + key + "_libretro.so",
+            key + ".so",
+        };
 
-        for (const auto& candidate : candidates) {
-            const auto path = dir / candidate;
-            if (std::filesystem::exists(path)) {
-                return path;
+        for (const auto& dir : core_dirs_) {
+            if (!std::filesystem::exists(dir)) {
+                continue;
+            }
+
+            for (const auto& candidate : candidates) {
+                const auto path = dir / candidate;
+                if (std::filesystem::exists(path)) {
+                    return path;
+                }
             }
         }
     }

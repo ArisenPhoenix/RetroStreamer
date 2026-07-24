@@ -1,6 +1,7 @@
 #include "host/retroarch_config_writer.hpp"
 
 #include "common/platform/paths.hpp"
+#include "host/retroarch_netcmd.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -130,6 +131,12 @@ std::filesystem::path write_retroarch_input_override(
         throw std::runtime_error("failed to write RetroArch input override");
     }
 
+    // Prefer the same BIOS/system tree RetroArch / ra.py use (PS1 SCPH*.bin, etc.).
+    std::filesystem::path system_directory;
+    if (const auto home = user_home_directory(); !home.empty()) {
+        system_directory = std::filesystem::path(home) / ".config/retroarch/system";
+    }
+
     file
         << "config_save_on_exit = \"false\"\n"
         << "input_joypad_driver = \"" << joypad_driver << "\"\n"
@@ -137,6 +144,9 @@ std::filesystem::path write_retroarch_input_override(
         << "input_autodetect_enable = \"true\"\n"
         << "notification_show_autoconfig = \"false\"\n"
         << "joypad_autoconfig_dir = \"" << autoconfig_directory.string() << "\"\n";
+    if (!system_directory.empty()) {
+        file << "system_directory = \"" << system_directory.string() << "\"\n";
+    }
 
     file
         << "savefile_directory = \"" << save_profile.savefile_directory.string() << "\"\n"
@@ -148,7 +158,9 @@ std::filesystem::path write_retroarch_input_override(
         // Input is driven through ArchStreamer virtual pads (host bridge or UDP).
         // RetroArch's default pause_nonactive=true makes Host Player look like a
         // dead controller as soon as the GUI or another window takes focus.
-        << "pause_nonactive = \"false\"\n";
+        << "pause_nonactive = \"false\"\n"
+        << "network_cmd_enable = \"true\"\n"
+        << "network_cmd_port = \"" << DefaultRetroArchNetcmdPort << "\"\n";
 
     if (realtime_pacing) {
         // Known-good streaming pacing (do not over-tune — host Watch-local used to be fine

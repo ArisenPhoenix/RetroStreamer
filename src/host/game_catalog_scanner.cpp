@@ -1,6 +1,7 @@
 #include "host/game_catalog_scanner.hpp"
 
 #include "common/sha256.hpp"
+#include "host/standalone_emulator.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -14,6 +15,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -21,6 +23,36 @@ namespace archstreamer {
 
 std::string display_name_from_path(const std::filesystem::path& content_path) {
     return content_path.stem().string();
+}
+
+std::string trim_copy(std::string value) {
+    while (!value.empty() && (value.back() == '\r' || value.back() == '\n' ||
+        value.back() == ' ' || value.back() == '\t')) {
+        value.pop_back();
+    }
+    std::size_t start = 0;
+    while (start < value.size() && (value[start] == ' ' || value[start] == '\t')) {
+        ++start;
+    }
+    return value.substr(start);
+}
+
+// Basenames of content files listed in an .m3u playlist (comments/blank lines skipped).
+std::vector<std::string> parse_m3u_member_basenames(const std::filesystem::path& m3u_path) {
+    std::vector<std::string> members;
+    std::ifstream file(m3u_path);
+    if (!file) {
+        return members;
+    }
+    std::string line;
+    while (std::getline(file, line)) {
+        line = trim_copy(std::move(line));
+        if (line.empty() || line.front() == '#') {
+            continue;
+        }
+        members.push_back(std::filesystem::path(line).filename().string());
+    }
+    return members;
 }
 
 std::string lower_string(std::string value) {
@@ -354,8 +386,28 @@ GameCatalog scan_game_catalog(
         metadata_root = default_metadata_root_for(content_root);
     }
 
+    // Collect basenames referenced by any .m3u so those disc images are hidden from
+    // the catalog (the playlist entry is the playable game).
+    std::unordered_set<std::string> playlist_member_basenames;
     for (const auto& entry : std::filesystem::recursive_directory_iterator(content_root)) {
         if (!entry.is_regular_file()) {
+            continue;
+        }
+        if (normalized_extension(entry.path()) != "m3u") {
+            continue;
+        }
+        for (const auto& member : parse_m3u_member_basenames(entry.path())) {
+            playlist_member_basenames.insert(lower_string(member));
+        }
+    }
+
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(content_root)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+
+        const auto basename_lower = lower_string(entry.path().filename().string());
+        if (playlist_member_basenames.count(basename_lower) > 0) {
             continue;
         }
 
@@ -365,6 +417,17 @@ GameCatalog scan_game_catalog(
             core = core_registry.system_core(*system_key);
         } else {
             core = core_registry.find_for_content(entry.path());
+        }
+
+        // Switch: no libretro Yuzu on buildbot — use standalone AppImage like ra.py.
+        auto standalone = false;
+        std::vector<std::string> standalone_args;
+        if (!core.has_value() && system_key.has_value() && *system_key == "switch") {
+            if (const auto yuzu = resolve_yuzu(); yuzu.has_value()) {
+                core = CoreChoice{"Nintendo Switch", yuzu->display_name, yuzu->path};
+                standalone = true;
+                standalone_args = yuzu->args_before_content;
+            }
         }
 
         if (!core.has_value()) {
@@ -386,11 +449,32 @@ GameCatalog scan_game_catalog(
         apply_game_metadata(info, metadata_path);
         finalize_game_identity(info);
 
+        std::vector<std::string> playlist_members;
+        if (normalized_extension(entry.path()) == "m3u") {
+            playlist_members = parse_m3u_member_basenames(entry.path());
+            for (const auto& member : playlist_members) {
+                info.playlist_discs.push_back(std::filesystem::path(member).stem().string());
+            }
+            // Prefer first disc art when the playlist itself has no imported assets.
+            if (!playlist_members.empty()) {
+                const auto member_stem = std::filesystem::path(playlist_members.front()).stem().string();
+                info.asset_key = asset_key_for(
+                    info.system_key,
+                    canonical_token(member_stem),
+                    info.language,
+                    info.region,
+                    info.version);
+            }
+        }
+
         catalog.add_game(HostedGame{
             std::move(info),
             core->core_path,
             entry.path(),
             {},
+            std::move(playlist_members),
+            standalone,
+            std::move(standalone_args),
         });
     }
 

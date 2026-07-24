@@ -14,7 +14,7 @@
 namespace archstreamer {
 
 constexpr std::uint32_t ProtocolMagic = 0x41525354; // "ARST"
-constexpr std::uint16_t ProtocolVersion = 9;
+constexpr std::uint16_t ProtocolVersion = 10;
 constexpr std::uint8_t MaxRemoteClients = 2;
 constexpr std::uint8_t MaxPlayersPerClient = 2;
 constexpr std::uint8_t MaxRetroArchPorts = 5; // Ports 0-3 plus a host player if desired.
@@ -43,6 +43,8 @@ enum class PacketType : std::uint8_t {
     ActiveSessionInfo = 15,
     ArtAssetRequest = 16,
     ArtAssetResponse = 17,
+    DiscControlRequest = 18,
+    DiscControlResponse = 19,
 };
 
 enum class ClientRole : std::uint8_t {
@@ -81,6 +83,8 @@ struct GameInfo {
     std::uint8_t min_players = 1;
     std::uint8_t max_players = MaxPlayersPerClient;
     std::uint64_t updated_at = 0;
+    // Multi-disc playlist labels (from .m3u); empty when not a playlist game.
+    std::vector<std::string> playlist_discs;
 };
 
 struct GameListRequest {
@@ -273,6 +277,26 @@ struct ArtAssetResponse {
     std::vector<std::uint8_t> data;
 };
 
+enum class DiscControlAction : std::uint8_t {
+    SetIndex = 0,
+    Next = 1,
+    Prev = 2,
+};
+
+struct DiscControlRequest {
+    GameId game_id;
+    DiscControlAction action = DiscControlAction::SetIndex;
+    // Used when action == SetIndex (0-based playlist index).
+    std::uint8_t disc_index = 0;
+};
+
+struct DiscControlResponse {
+    bool ok = false;
+    std::uint8_t disc_index = 0;
+    std::uint8_t disc_count = 0;
+    std::string message;
+};
+
 using PacketPayload = std::variant<
     ClientHello,
     HostWelcome,
@@ -290,7 +314,9 @@ using PacketPayload = std::variant<
     SessionEnded,
     MediaEndpoint,
     ArtAssetRequest,
-    ArtAssetResponse>;
+    ArtAssetResponse,
+    DiscControlRequest,
+    DiscControlResponse>;
 
 ClientRole role_for_player_count(std::uint8_t requested_players);
 bool valid_player_count(std::uint8_t requested_players);

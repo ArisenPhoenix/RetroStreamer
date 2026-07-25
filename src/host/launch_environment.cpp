@@ -3,6 +3,9 @@
 #include "common/platform/process_utils.hpp"
 #ifndef _WIN32
 #include "host/virtual_display.hpp"
+
+#include <filesystem>
+#include <unistd.h>
 #endif
 
 namespace archstreamer {
@@ -27,7 +30,19 @@ void ProcessEnvironment::set(std::string key, std::string value) {
     upsert(entries, std::move(key), std::move(value));
 }
 
+void ProcessEnvironment::add_unset(std::string key) {
+    for (const auto& existing : unset) {
+        if (existing == key) {
+            return;
+        }
+    }
+    unset.push_back(std::move(key));
+}
+
 void ProcessEnvironment::merge(const ProcessEnvironment& other) {
+    for (const auto& key : other.unset) {
+        add_unset(key);
+    }
     for (const auto& [key, value] : other.entries) {
         upsert(entries, key, value);
     }
@@ -39,6 +54,49 @@ void ProcessEnvironment::merge_pairs(
         upsert(entries, key, value);
     }
 }
+
+#ifndef _WIN32
+namespace {
+
+// Private XDG_RUNTIME_DIR without Wayland sockets. Pulse uses PULSE_SERVER —
+// do not symlink pulse/ here (libpulse rejects that).
+std::string prepare_x11_capture_runtime_dir() {
+    const auto dir =
+        std::filesystem::path{"/tmp"} / ("archstreamer-xdg-" + std::to_string(getpid()));
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (ec) {
+        return {};
+    }
+    std::filesystem::permissions(
+        dir,
+        std::filesystem::perms::owner_all,
+        std::filesystem::perm_options::replace,
+        ec);
+    return dir.string();
+}
+
+std::filesystem::path real_xdg_runtime_dir() {
+    if (const char* env_rt = std::getenv("XDG_RUNTIME_DIR");
+        env_rt != nullptr && env_rt[0] != '\0') {
+        return env_rt;
+    }
+    return std::filesystem::path{"/run/user"} / std::to_string(geteuid());
+}
+
+} // namespace
+
+void cleanup_x11_capture_runtime_dir() {
+    const auto dir =
+        std::filesystem::path{"/tmp"} / ("archstreamer-xdg-" + std::to_string(getpid()));
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+#endif
+
+#ifdef _WIN32
+void cleanup_x11_capture_runtime_dir() {}
+#endif
 
 ProcessEnvironment audio_launch_environment(
     bool stream_media,
@@ -86,15 +144,33 @@ ProcessEnvironment capture_launch_environment(
     // Mutually exclusive capture backends.
     if (gamescope_capture) {
         env.merge_pairs(gamescope_launch_environment());
-    } else if (virtualgl_capture) {
-        // Xvfb/Xephyr/VirtualGL need DISPLAY=:99. Gamescope owns nested Xwayland itself.
+    } else {
+        // Xvfb/Xephyr/VirtualGL: pin the emulator to the capture DISPLAY and strip
+        // Wayland so RetroArch/SDL/Qt cannot attach to the host compositor (visible
+        // game on the host desktop + black ximagesrc for clients).
         if (!capture_display.empty()) {
             env.set("DISPLAY", capture_display);
         }
-        env.merge_pairs(virtual_gl_environment());
-    } else {
-        if (!capture_display.empty()) {
-            env.set("DISPLAY", capture_display);
+        env.add_unset("WAYLAND_DISPLAY");
+        env.add_unset("WAYLAND_SOCKET");
+        env.set("XDG_SESSION_TYPE", "x11");
+        env.set("GDK_BACKEND", "x11");
+        env.set("SDL_VIDEODRIVER", "x11");
+        env.set("QT_QPA_PLATFORM", "xcb");
+        if (const auto runtime = prepare_x11_capture_runtime_dir(); !runtime.empty()) {
+            env.set("XDG_RUNTIME_DIR", runtime);
+            const auto real_rt = real_xdg_runtime_dir();
+            // Keep Pulse/PipeWire on the real session while XDG_RUNTIME_DIR stays
+            // Wayland-free (private dir has no wayland-0 socket).
+            env.set("PIPEWIRE_RUNTIME_DIR", real_rt.string());
+            const auto pulse_native = real_rt / "pulse" / "native";
+            std::error_code ec;
+            if (std::filesystem::exists(pulse_native, ec) && !ec) {
+                env.set("PULSE_SERVER", "unix:" + pulse_native.string());
+            }
+        }
+        if (virtualgl_capture) {
+            env.merge_pairs(virtual_gl_environment());
         }
     }
 #else

@@ -11,11 +11,14 @@
 namespace archstreamer {
 
 // Ordered key/value bag for child-process environments. set/merge replace by key
-// so accidental duplicate pushes cannot leave stale values.
+// so accidental duplicate pushes cannot leave stale values. unset is applied
+// before set when spawning (needed to strip inherited Wayland for Xvfb capture).
 struct ProcessEnvironment {
     std::vector<std::pair<std::string, std::string>> entries;
+    std::vector<std::string> unset;
 
     void set(std::string key, std::string value);
+    void add_unset(std::string key);
     void merge(const ProcessEnvironment& other);
     void merge_pairs(const std::vector<std::pair<std::string, std::string>>& pairs);
 };
@@ -55,5 +58,8 @@ ProcessEnvironment capture_launch_environment(
 
 // Composition order: audio → input → gpu → capture → emulator profile.
 ProcessEnvironment build_emulator_launch_environment(const EmulatorLaunchEnvRequest& request);
+
+// Remove /tmp/archstreamer-xdg-<pid> left by capture_launch_environment (no-op on Windows).
+void cleanup_x11_capture_runtime_dir();
 
 } // namespace archstreamer

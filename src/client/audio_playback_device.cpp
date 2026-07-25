@@ -183,6 +183,10 @@ std::optional<WasapiSinkDevice> choose_preferred_wasapi2_device() {
 }
 #endif
 
+bool is_archstreamer_capture_sink(const std::string& name) {
+    return name == "archstreamer" || name.rfind("archstreamer", 0) == 0;
+}
+
 std::string linux_default_pulse_sink() {
 #ifndef _WIN32
     return trim_copy(read_command_output("pactl get-default-sink 2>/dev/null"));
@@ -254,13 +258,18 @@ std::vector<AudioOutputDevice> list_pulse_output_devices() {
             continue;
         }
         // Hide ArchStreamer capture null sinks (and any leftover park sinks).
-        if (name == "archstreamer" || name.rfind("archstreamer", 0) == 0) {
+        if (is_archstreamer_capture_sink(name)) {
             continue;
         }
         AudioOutputDevice device;
         device.id = name;
         device.name = sink_description_from_pactl_list(details, name);
-        device.is_default = (name == defaults);
+        // Controllers show up as Pulse sinks (DualSense headphone jack) — skip in UI.
+        if (looks_like_controller_audio_device(device.id) ||
+            looks_like_controller_audio_device(device.name)) {
+            continue;
+        }
+        device.is_default = (name == defaults && !is_archstreamer_capture_sink(defaults));
         devices.push_back(std::move(device));
     }
 #endif
@@ -269,10 +278,38 @@ std::vector<AudioOutputDevice> list_pulse_output_devices() {
 
 std::string resolve_preferred_pulse_sink() {
     const auto preferred = preferred_audio_output_device();
-    if (!preferred.empty() && preferred != "auto") {
+    if (!preferred.empty() && preferred != "auto" &&
+        !is_archstreamer_capture_sink(preferred) &&
+        !looks_like_controller_audio_device(preferred)) {
         return preferred;
     }
-    return linux_default_pulse_sink();
+
+    // Auto: never use the silent ArchStreamer null sink or a gamepad headphone jack,
+    // even if PipeWire left one of those as the session default after a host session.
+    const auto devices = list_pulse_output_devices();
+    const auto defaults = linux_default_pulse_sink();
+    if (!defaults.empty() && !is_archstreamer_capture_sink(defaults) &&
+        !looks_like_controller_audio_device(defaults)) {
+        for (const auto& device : devices) {
+            if (device.id == defaults) {
+                return defaults;
+            }
+        }
+        // Default exists but was filtered (controller) — fall through.
+        if (!looks_like_controller_audio_device(defaults) &&
+            !is_archstreamer_capture_sink(defaults)) {
+            return defaults;
+        }
+    }
+    for (const auto& device : devices) {
+        if (device.is_default) {
+            return device.id;
+        }
+    }
+    if (!devices.empty()) {
+        return devices.front().id;
+    }
+    return {};
 }
 
 } // namespace

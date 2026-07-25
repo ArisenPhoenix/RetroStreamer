@@ -39,6 +39,23 @@ flatpak-spawn --host <native-host_runner> …
 
 Configure the native binary in **Settings → Native host_runner**, or set `ARCHSTREAMER_HOST_RUNNER`.
 
+On Bazzite (immutable), build it in a Fedora distrobox and export to the host:
+
+```bash
+distrobox create --name archstreamer-build --image fedora:43 \
+  --volume /var/srv:/var/srv:rw --volume /srv:/srv:ro
+# install cmake/SDL2/GStreamer/X11 devel packages inside the box, then:
+# also: pulseaudio-utils (pactl) so StreamingAudioSink can create the null sink
+# against the host PipeWire socket shared via /run/user/$UID
+cmake -S . -B build-native -G Ninja -DARCHSTREAMER_BUILD_HOST=ON -DARCHSTREAMER_REQUIRE_GUI=OFF
+cmake --build build-native --target host_runner
+distrobox-export --bin "$PWD/build-native/host_runner" --export-path ~/.local/bin
+```
+
+Then point Settings at `~/.local/bin/host_runner` (or rely on auto-detect / `which host_runner`).
+
+Distrobox packages typically needed: `cmake ninja-build gcc-c++ SDL2-devel json-devel gstreamer1-devel gstreamer1-plugins-base-devel pipewire-devel pulseaudio-libs-devel pulseaudio-utils libX11-devel libXtst-devel`.
+
 Build that binary outside the sandbox (native or distrobox) with the usual Linux host deps:
 
 | Need | Why |
@@ -54,7 +71,13 @@ Manifest finish-args already include `--talk-name=org.freedesktop.Flatpak` for s
 
 ### Filesystem notes
 
-- Grant ROM/Art paths outside `$HOME` if needed (manifest allows `home` and `/mnt:ro`).
+- Manifest allows `home`, `/mnt:ro`, `/var/srv:ro`, and `/srv:ro`.
+- If ROMs live elsewhere, grant access without rebuilding:
+
+```bash
+flatpak override --user --filesystem=/path/to/catalog:ro io.github.ArisenPhoenix.ArchStreamer
+```
+
 - Steam art import: Flatpak Steam userdata under `~/.var/app/com.valvesoftware.Steam/`.
 
 ## Updates / reinstall

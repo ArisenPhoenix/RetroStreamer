@@ -737,8 +737,11 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         }
 
         // Single composition point: audio → input → gpu → capture → emulator profile.
-        launch_config.environment =
-            build_emulator_launch_environment(launch_env_request).entries;
+        {
+            const auto launch_env = build_emulator_launch_environment(launch_env_request);
+            launch_config.environment = launch_env.entries;
+            launch_config.unset_environment = launch_env.unset;
+        }
 
         if (capture_fullscreen) {
             std::cout
@@ -1044,6 +1047,7 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         if (config.audio) {
             streaming_audio.restore_default_sink();
         }
+        cleanup_x11_capture_runtime_dir();
         if (session_plan.has_value()) {
             const std::string end_reason = should_stop()
                 ? "host stopped"
@@ -1065,6 +1069,7 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         } // for (;;) session lobby
     } catch (const std::exception& error) {
         StreamingAudioSink{}.restore_default_sink();
+        cleanup_x11_capture_runtime_dir();
         if (should_stop()) {
             std::cout << "Host stopped.\n";
             return 0;

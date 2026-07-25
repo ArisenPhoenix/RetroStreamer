@@ -21,6 +21,8 @@ struct RetroArchLaunchConfig {
     std::vector<std::string> standalone_args_before_content;
     // Drop child stdout/stderr (gamescope/Yuzu chatter) unless --verbose.
     bool quiet_stdio = false;
+    // Cleared in the child before applying environment (e.g. WAYLAND_DISPLAY).
+    std::vector<std::string> unset_environment;
 };
 
 class RetroArchProcess {

@@ -107,7 +107,7 @@ void WindowsRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
         }
     }
 
-    process_.start(args, config.environment, {}, stderr_path);
+    process_.start(args, config.environment, config.unset_environment, stderr_path);
     launched_ = true;
 }
 

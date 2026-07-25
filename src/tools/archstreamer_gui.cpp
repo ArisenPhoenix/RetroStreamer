@@ -258,6 +258,8 @@ QString resolve_native_host_runner(const QString& configured) {
     }
     const QString home = QDir::homePath();
     const QStringList candidates = {
+        home + QStringLiteral("/.local/bin/host_runner"),
+        home + QStringLiteral("/ArchStreamer-src/build-native/host_runner"),
         home + QStringLiteral("/Programming/Mixed/ArchStreamer/build/host_runner"),
         home + QStringLiteral("/src/ArchStreamer/build/host_runner"),
         QStringLiteral("/usr/local/bin/host_runner"),
@@ -1442,10 +1444,25 @@ private:
 
     void load_host_games() {
         try {
+            const auto rom_root = std::filesystem::path{host_rom_root_->text().toStdString()};
+            const auto meta_root = std::filesystem::path{host_meta_root_->text().toStdString()};
+            if (!std::filesystem::exists(rom_root)) {
+                host_game_picker_->setCatalog({});
+                host_status_->setText("Host stopped; ROM root missing");
+                append_log(
+                    host_log_,
+                    QString("Load games failed: ROM root does not exist or is not visible "
+                            "to this app: %1"
+                            " (Flatpak may need: flatpak override --user "
+                            "--filesystem=<parent>:ro io.github.ArisenPhoenix.ArchStreamer)")
+                        .arg(QString::fromStdString(rom_root.string())),
+                    GuiLogLevel::Quiet);
+                return;
+            }
             const auto catalog = archstreamer::scan_game_catalog(
-                host_rom_root_->text().toStdString(),
+                rom_root,
                 archstreamer::LibretroCoreRegistry::ubuntu_defaults(),
-                host_meta_root_->text().toStdString());
+                meta_root);
             const auto list = catalog.list();
             host_game_picker_->setCatalog(list);
             if (!list.games.empty()) {
@@ -1460,6 +1477,14 @@ private:
             }
             host_status_->setText(QString("Host stopped; %1 game(s) loaded").arg(list.games.size()));
             append_log(host_log_, QString("Loaded %1 host game(s).").arg(list.games.size()));
+            if (list.games.empty()) {
+                append_log(
+                    host_log_,
+                    QString("No playable titles under %1 (need matching libretro cores "
+                            "visible to this app, or Yuzu for Switch).")
+                        .arg(QString::fromStdString(rom_root.string())),
+                    GuiLogLevel::Quiet);
+            }
             if (!archstreamer::yuzu_runtime_available()) {
                 append_log(
                     host_log_,
@@ -2532,6 +2557,19 @@ private:
                 }
             });
             connect(host_process_, &QProcess::finished, this, [this](int code, QProcess::ExitStatus status) {
+                // Drain buffered output that often arrives only as the process dies
+                // (flatpak-spawn / distrobox wrappers).
+                const auto flush_text = [this](const QByteArray& bytes) {
+                    const auto text = QString::fromLocal8Bit(bytes).trimmed();
+                    if (text.isEmpty()) {
+                        return;
+                    }
+                    for (const auto& line : text.split('\n')) {
+                        append_host_process_log(host_log_, line);
+                    }
+                };
+                flush_text(host_process_->readAllStandardOutput());
+                flush_text(host_process_->readAllStandardError());
                 stop_host_local_media();
                 sync_host_advertise(false);
                 host_status_->setText("Host stopped");

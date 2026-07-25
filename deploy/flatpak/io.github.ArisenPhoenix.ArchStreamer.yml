@@ -17,6 +17,9 @@ finish-args:
   - --filesystem=home
   - --filesystem=xdg-download
   - --filesystem=/mnt:ro
+  # Common ArchStreamer catalog root on dedicated disks / Bazzite hosts
+  - --filesystem=/var/srv:ro
+  - --filesystem=/srv:ro
   - --talk-name=org.freedesktop.Notifications
   # Allow host RetroArch launch via flatpak-spawn --host when ArchStreamer itself is a Flatpak.
   - --talk-name=org.freedesktop.Flatpak

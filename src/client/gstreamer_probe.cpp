@@ -84,12 +84,16 @@ GstVideoSinkChoice choose_usable_video_sink(bool prefer_d3d11) {
     }
 #else
     (void)prefer_d3d11;
-    // Trial order only — first sink that actually opens wins (ximagesink before
-    // xvimagesink so QXL/SPICE VMs are not stuck on a registered-but-broken Xv sink).
+    // Prefer GTK sinks: normal decorated, movable, closable windows on Wayland/X11.
+    // glimagesink/waylandsink often open as an undecorated "surface" that starts tiny
+    // then jumps to stream size — bad for a client viewer on Plasma/GNOME.
+    // ximagesink before xvimagesink so QXL/SPICE VMs are not stuck on broken Xv.
     static constexpr const char* kCandidates[] = {
+        "gtksink",
+        "gtkglsink",
         "ximagesink",
-        "glimagesink",
         "waylandsink",
+        "glimagesink",
         "xvimagesink",
         "autovideosink",
     };

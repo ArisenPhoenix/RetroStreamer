@@ -4,6 +4,7 @@
 #include "common/platform/paths.hpp"
 
 #include <chrono>
+#include <cstring>
 #include <fstream>
 #include <stdexcept>
 #include <thread>
@@ -118,6 +119,14 @@ void gst_append_progress_video_sink(
         sink.element,
         sync ? "sync=true" : "sync=false",
     });
+    // Keep letterboxing when the user resizes a GTK/X11 window.
+    if (std::strcmp(sink.element, "gtksink") == 0 ||
+        std::strcmp(sink.element, "gtkglsink") == 0 ||
+        std::strcmp(sink.element, "ximagesink") == 0 ||
+        std::strcmp(sink.element, "xvimagesink") == 0 ||
+        std::strcmp(sink.element, "glimagesink") == 0) {
+        args.push_back("force-aspect-ratio=true");
+    }
 }
 
 } // namespace archstreamer

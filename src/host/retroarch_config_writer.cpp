@@ -390,6 +390,10 @@ std::filesystem::path write_retroarch_input_override(
         // and input feel unreliable). Capture still listens on archstreamer.monitor.
         file
             << "video_driver = \"gl\"\n"
+            // Prefer X11 context on the virtual capture display. Without this (and with a
+            // live host Wayland session), RetroArch glcore attaches to the compositor —
+            // game visible on the host, black ximagesrc for clients.
+            << "video_context_driver = \"x11\"\n"
             << "audio_enable = \"true\"\n"
             << "audio_mute = \"false\"\n"
             << "audio_driver = \"pulse\"\n"

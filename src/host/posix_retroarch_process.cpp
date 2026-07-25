@@ -92,6 +92,67 @@ std::string read_file_tail(const std::filesystem::path& path, std::size_t max_by
     return data;
 }
 
+bool looks_like_host_exec_shim(const std::filesystem::path& path) {
+    std::ifstream in(path);
+    if (!in) {
+        return false;
+    }
+    std::string line;
+    for (int i = 0; i < 24 && std::getline(in, line); ++i) {
+        if (line.find("distrobox-host-exec") != std::string::npos ||
+            line.find("host-spawn") != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// distrobox-host-exec / host-spawn often replace the child env with the host session.
+// Expand shim → `distrobox-host-exec env -u … KEY=VAL… /usr/bin/retroarch …` so Pulse
+// (PULSE_SINK), DISPLAY, and the private XDG_RUNTIME_DIR actually reach RetroArch.
+void expand_host_exec_retroarch_shim(
+    std::vector<std::string>& args,
+    const RetroArchLaunchConfig& config) {
+    if (config.standalone || args.empty() || !config.command_prefix.empty()) {
+        return;
+    }
+    if (!looks_like_host_exec_shim(args.front())) {
+        return;
+    }
+
+    std::vector<std::string> rewritten{
+        "/usr/bin/distrobox-host-exec",
+        "env",
+    };
+    auto add_unset = [&](const std::string& key) {
+        rewritten.push_back("-u");
+        rewritten.push_back(key);
+    };
+    bool cleared_wayland = false;
+    bool cleared_wayland_socket = false;
+    for (const auto& key : config.unset_environment) {
+        add_unset(key);
+        if (key == "WAYLAND_DISPLAY") {
+            cleared_wayland = true;
+        }
+        if (key == "WAYLAND_SOCKET") {
+            cleared_wayland_socket = true;
+        }
+    }
+    if (!cleared_wayland) {
+        add_unset("WAYLAND_DISPLAY");
+    }
+    if (!cleared_wayland_socket) {
+        add_unset("WAYLAND_SOCKET");
+    }
+    for (const auto& [key, value] : config.environment) {
+        rewritten.push_back(key + "=" + value);
+    }
+    rewritten.push_back("/usr/bin/retroarch");
+    rewritten.insert(rewritten.end(), args.begin() + 1, args.end());
+    args = std::move(rewritten);
+}
+
 } // namespace
 
 PosixRetroArchProcess::~PosixRetroArchProcess() {
@@ -150,6 +211,8 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
         args.push_back(path_string(config.content_path, "RetroArch content"));
     }
 
+    expand_host_exec_retroarch_shim(args, config);
+
     const auto& executable = config.standalone
         ? path_string(config.core_path, "standalone emulator")
         : args.front();
@@ -204,6 +267,9 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
             if (null_fd > STDERR_FILENO) {
                 close(null_fd);
             }
+        }
+        for (const auto& key : config.unset_environment) {
+            unsetenv(key.c_str());
         }
         for (const auto& [key, value] : config.environment) {
             setenv(key.c_str(), value.c_str(), 1);

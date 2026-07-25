@@ -1,7 +1,9 @@
 #include "host/launch_environment.hpp"
 
 #include "common/platform/process_utils.hpp"
+#ifndef _WIN32
 #include "host/virtual_display.hpp"
+#endif
 
 namespace archstreamer {
 namespace {
@@ -80,6 +82,7 @@ ProcessEnvironment capture_launch_environment(
     if (!use_virtual_capture) {
         return env;
     }
+#ifndef _WIN32
     // Mutually exclusive capture backends.
     if (gamescope_capture) {
         env.merge_pairs(gamescope_launch_environment());
@@ -94,6 +97,11 @@ ProcessEnvironment capture_launch_environment(
             env.set("DISPLAY", capture_display);
         }
     }
+#else
+    (void)gamescope_capture;
+    (void)virtualgl_capture;
+    (void)capture_display;
+#endif
     return env;
 }
 

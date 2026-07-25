@@ -1,3 +1,4 @@
+#ifndef _WIN32
 #include "host/virtual_keyboard.hpp"
 
 #include "host/retroarch_netcmd.hpp"
@@ -224,3 +225,25 @@ void VirtualKeyboard::release_all() {
 }
 
 } // namespace archstreamer
+
+#else
+
+#include "host/virtual_keyboard.hpp"
+
+namespace archstreamer {
+
+const RemotedKeyBinding* default_remoted_key_bindings(std::size_t& count) {
+    count = 0;
+    return nullptr;
+}
+
+VirtualKeyboard::VirtualKeyboard(std::string) {}
+VirtualKeyboard::~VirtualKeyboard() = default;
+void VirtualKeyboard::plug() {}
+void VirtualKeyboard::unplug() {}
+void VirtualKeyboard::apply(const KeyboardState&) {}
+void VirtualKeyboard::release_all() {}
+
+} // namespace archstreamer
+
+#endif

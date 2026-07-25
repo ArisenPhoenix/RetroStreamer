@@ -6,7 +6,10 @@
 #include "client/controller_backend.hpp"
 #include "host/game_catalog_scanner.hpp"
 #include "host/gpu_select.hpp"
+#ifndef _WIN32
 #include "host/gstreamer_media_server.hpp"
+#include "host/virtual_display.hpp"
+#endif
 #include "host/host_app.hpp"
 #include "host/host_app_config.hpp"
 #include "host/streaming_audio_sink.hpp"
@@ -25,7 +28,6 @@
 #include "host/session_control_monitor.hpp"
 #include "host/session_service.hpp"
 #include "host/virtual_joypad_resolve.hpp"
-#include "host/virtual_display.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -307,16 +309,13 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         }
 
         // Host Player keeps the real DISPLAY (and speakers). Streamed RetroArch needs a
-        // virtual capture surface. Switch/Yuzu defaults to headless gamescope.
-        //
-        // Plain Xvfb cannot select among NVIDIA GPUs: it has no RandR PRIME providers, so
-        // __NV_PRIME_RENDER_OFFLOAD_PROVIDER is ignored and GL always lands on nvidia:0.
-        // VirtualGL renders through the real display (where providers work) while we still
-        // capture :99 — that is what makes the Host GPU setting actually apply.
+        // virtual capture surface. Switch/Yuzu defaults to headless gamescope on Linux;
+        // Windows captures the desktop/HWND via d3d11screencapturesrc (no gamescope).
         const bool use_virtual_capture = config.video;
         const bool capture_fullscreen = config.video;
         const std::string capture_display = config.virtual_display;
         auto display_backend = config.display_backend;
+#ifndef _WIN32
         if (launch_config.standalone && use_virtual_capture &&
             display_backend == VirtualDisplayBackend::None) {
             display_backend = VirtualDisplayBackend::Gamescope;
@@ -327,10 +326,19 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             find_vglrun().has_value() && command_available("Xvfb")) {
             display_backend = VirtualDisplayBackend::VirtualGL;
         }
+#endif
         const bool gamescope_capture =
+#ifndef _WIN32
             use_virtual_capture && display_backend == VirtualDisplayBackend::Gamescope;
+#else
+            false;
+#endif
         const bool virtualgl_capture =
+#ifndef _WIN32
             use_virtual_capture && display_backend == VirtualDisplayBackend::VirtualGL;
+#else
+            false;
+#endif
 
         EmulatorLaunchEnvRequest launch_env_request;
         launch_env_request.stream_media = config.audio || config.video;
@@ -456,7 +464,10 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                 }
                 std::cout
                     << " via "
-                    << (config.audio_backend == AudioCaptureBackend::PipeWire ? "pipewire" : "pulse")
+                    << (config.audio_backend == AudioCaptureBackend::PipeWire
+                            ? "pipewire"
+                            : config.audio_backend == AudioCaptureBackend::Wasapi ? "wasapi"
+                                                                                 : "pulse")
                     << '\n';
             }
         }
@@ -536,6 +547,21 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                 << " yet; defaulting RetroArch joypad index to 0.\n";
         }
 
+        if (launch_config.standalone || system_key == "switch") {
+            // Re-verify at launch so a stale catalog / missing install cannot start.
+            const auto yuzu = ensure_yuzu_runtime();
+            if (!yuzu.has_value()) {
+                const auto message = yuzu_unavailable_message();
+                if (session_plan.has_value()) {
+                    send_error_to_session_clients(*session_plan, message);
+                }
+                throw std::runtime_error(message);
+            }
+            launch_config.standalone = true;
+            launch_config.core_path = yuzu->path;
+            launch_config.standalone_args_before_content = yuzu->args_before_content;
+        }
+
         if (launch_config.standalone) {
             // Yuzu bindings need SDL GUIDs even when RetroArch would use udev.
             if (resolved_pads.empty()) {
@@ -598,6 +624,7 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             }
 
             if (gamescope_capture) {
+#ifndef _WIN32
                 const auto x_pos = config.video_resolution.find('x');
                 int width = 1280;
                 int height = 720;
@@ -628,7 +655,9 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                         break;
                     }
                 }
+#endif
             } else if (virtualgl_capture) {
+#ifndef _WIN32
                 auto prefix = virtual_gl_command_prefix();
                 if (prefix.empty()) {
                     throw std::runtime_error(
@@ -639,6 +668,12 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                     << "Yuzu: VirtualGL OpenGL via " << launch_config.command_prefix.front()
                     << " (3D " << default_vgl_display()
                     << ", capture " << capture_display << ")\n";
+#endif
+#ifdef _WIN32
+            } else if (launch_config.standalone && use_virtual_capture) {
+                std::cout
+                    << "Yuzu: Windows desktop capture (d3d11screencapturesrc / WASAPI loopback)\n";
+#endif
             }
             std::cout
                 << "Yuzu user data: " << yuzu_user.xdg_data_home
@@ -660,6 +695,7 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             launch_config.extra_args.push_back("-c");
             launch_config.extra_args.push_back(runtime_override.string());
             if (virtualgl_capture) {
+#ifndef _WIN32
                 auto prefix = virtual_gl_command_prefix();
                 if (prefix.empty()) {
                     throw std::runtime_error(
@@ -679,6 +715,7 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                     std::cout << ", PRIME " << resolved_gpu->prime_provider;
                 }
                 std::cout << ")\n";
+#endif
             }
             std::cout
                 << "RetroArch config: " << runtime_override
@@ -725,7 +762,12 @@ int HostApp::run(const std::function<bool()>& should_stop) {
 
         auto media_server = std::unique_ptr<MediaServer>{};
         auto media_index = media_destinations.size();
-        if (config.video || config.audio) {
+        if (config.audio || config.video) {
+#ifdef _WIN32
+            if (config.audio_backend == AudioCaptureBackend::Pulse) {
+                config.audio_backend = AudioCaptureBackend::Wasapi;
+            }
+#endif
             media_server = make_host_media_server(GStreamerMediaCaptureConfig{
                 config.video,
                 config.audio,
@@ -876,6 +918,7 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             }
             throw std::runtime_error(message);
         }
+#ifndef _WIN32
         if (auto* gst = dynamic_cast<GStreamerMediaServer*>(media_server.get());
             gst != nullptr && gst->video_deferred()) {
             if (config.verbose) {
@@ -904,6 +947,7 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             }
             gst->start_pipewire_video(*node, media_streams);
         }
+#endif
         if (config.audio) {
             // Pulse connects asynchronously; re-park after the sink-input appears.
             std::this_thread::sleep_for(std::chrono::milliseconds(500));

@@ -1,8 +1,8 @@
-#!/usr/bin/env bash
-# Incremental Windows CLIENT build (Git Bash / MSYS). Prefer build_windows.ps1 on PowerShell.
-# No Linux host deps (gamescope/WSI/Yuzu). See deploy/windows/README.md.
+# Incremental Windows build (Git Bash / MSYS). Prefer build_windows.ps1 on PowerShell.
+# See deploy/windows/README.md and deploy/windows/install-deps.ps1.
 # Usage:
-#   ./build_windows.sh              # incremental
+#   ./build_windows.sh              # client
+#   ./build_windows.sh --host       # ARCHSTREAMER_BUILD_HOST=ON
 #   ./build_windows.sh --reconfigure
 #   ./build_windows.sh --clean
 set -euo pipefail
@@ -12,10 +12,12 @@ VCPKG_ROOT="${VCPKG_ROOT:-/c/dev/vcpkg}"
 TOOLCHAIN="${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
 RECONFIGURE=0
 CLEAN=0
+BUILD_HOST=OFF
 for arg in "$@"; do
   case "$arg" in
     --reconfigure) RECONFIGURE=1 ;;
     --clean) CLEAN=1 ;;
+    --host) BUILD_HOST=ON ;;
   esac
 done
 
@@ -31,9 +33,9 @@ if [[ "$CLEAN" -eq 1 && -d build ]]; then
 fi
 
 if [[ "$RECONFIGURE" -eq 1 || "$CLEAN" -eq 1 || ! -f build/CMakeCache.txt ]]; then
-  echo "Configuring CMake..."
+  echo "Configuring CMake (ARCHSTREAMER_BUILD_HOST=$BUILD_HOST)..."
   cmake -S . -B build \
-    -DARCHSTREAMER_BUILD_HOST=OFF \
+    -DARCHSTREAMER_BUILD_HOST="$BUILD_HOST" \
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN"
 else
   echo "Reusing existing build/CMakeCache.txt (pass --reconfigure to refresh)."

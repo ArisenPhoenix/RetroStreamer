@@ -1,3 +1,4 @@
+#ifndef _WIN32
 #include "host/streaming_audio_sink.hpp"
 
 #include "common/platform/process_utils.hpp"
@@ -191,3 +192,19 @@ std::string StreamingAudioSink::default_monitor_source() {
 }
 
 } // namespace archstreamer
+
+#else
+
+#include "host/streaming_audio_sink.hpp"
+
+namespace archstreamer {
+
+std::string StreamingAudioSink::ensure() { return kName; }
+std::string StreamingAudioSink::monitor_source() { return std::string(kName) + ".monitor"; }
+void StreamingAudioSink::park_game_audio() {}
+void StreamingAudioSink::restore_default_sink() {}
+std::string StreamingAudioSink::default_monitor_source() { return {}; }
+
+} // namespace archstreamer
+
+#endif

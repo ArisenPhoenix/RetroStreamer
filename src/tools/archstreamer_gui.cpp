@@ -16,6 +16,7 @@
 #include "host/gpu_select.hpp"
 #include "host/host_app_config.hpp"
 #include "host/media_capture.hpp"
+#include "host/standalone_emulator.hpp"
 #endif
 
 #include <QApplication>
@@ -33,6 +34,8 @@
 #include <QPixmapCache>
 #include <QProcess>
 #include <QCoreApplication>
+#include <QDir>
+#include <QFileInfo>
 #include <QPushButton>
 #include <QSettings>
 #include <QSignalBlocker>
@@ -215,6 +218,12 @@ QString host_role_text(const QComboBox* combo) {
 }
 
 QString host_runner_program() {
+    if (qEnvironmentVariableIsSet("ARCHSTREAMER_HOST_RUNNER")) {
+        const auto env = qEnvironmentVariable("ARCHSTREAMER_HOST_RUNNER");
+        if (!env.isEmpty()) {
+            return env;
+        }
+    }
     const auto app_dir = std::filesystem::path(QCoreApplication::applicationDirPath().toStdString());
     const auto candidates = {
         app_dir / "host_runner",
@@ -229,6 +238,48 @@ QString host_runner_program() {
         }
     }
     return QStringLiteral("./build/host_runner");
+}
+
+bool running_inside_flatpak() {
+    if (qEnvironmentVariableIsSet("FLATPAK_ID")) {
+        return true;
+    }
+    return std::filesystem::exists("/.flatpak-info");
+}
+
+QString resolve_native_host_runner(const QString& configured) {
+    if (!configured.trimmed().isEmpty() && QFileInfo::exists(configured.trimmed())) {
+        return configured.trimmed();
+    }
+    if (const auto env = qEnvironmentVariable("ARCHSTREAMER_HOST_RUNNER"); !env.isEmpty()) {
+        if (QFileInfo::exists(env)) {
+            return env;
+        }
+    }
+    const QString home = QDir::homePath();
+    const QStringList candidates = {
+        home + QStringLiteral("/Programming/Mixed/ArchStreamer/build/host_runner"),
+        home + QStringLiteral("/src/ArchStreamer/build/host_runner"),
+        QStringLiteral("/usr/local/bin/host_runner"),
+        QStringLiteral("/usr/bin/host_runner"),
+    };
+    for (const auto& candidate : candidates) {
+        if (QFileInfo::exists(candidate)) {
+            return candidate;
+        }
+    }
+    // Ask the host OS (works when ArchStreamer itself is a Flatpak).
+    QProcess which;
+    which.start(
+        QStringLiteral("flatpak-spawn"),
+        {QStringLiteral("--host"), QStringLiteral("which"), QStringLiteral("host_runner")});
+    if (which.waitForFinished(2000) && which.exitCode() == 0) {
+        const auto path = QString::fromLocal8Bit(which.readAllStandardOutput()).trimmed();
+        if (!path.isEmpty() && QFileInfo::exists(path)) {
+            return path;
+        }
+    }
+    return {};
 }
 #endif
 
@@ -941,6 +992,18 @@ private:
         form->addRow("Host lobby wait", settings_session_timeout_);
         form->addRow("Log level", settings_log_level_);
 #ifdef ARCHSTREAMER_HAS_HOST
+        settings_native_host_runner_ = new QLineEdit(form_box);
+        settings_native_host_runner_->setPlaceholderText(
+            "auto (ARCHSTREAMER_HOST_RUNNER or common paths)");
+        settings_native_host_runner_->setToolTip(
+            "When running as a Flatpak, Host start uses flatpak-spawn --host on this binary.\n"
+            "Point it at a native host_runner built outside the sandbox (gamescope/uinput/Yuzu).");
+        form->addRow("Native host_runner", settings_native_host_runner_);
+        connect(settings_native_host_runner_, &QLineEdit::editingFinished, this, [this] {
+            persist_settings_if_idle();
+        });
+#endif
+#ifdef ARCHSTREAMER_HAS_HOST
         settings_gpu_ = new QComboBox(form_box);
         settings_gpu_->setToolTip(
             "GPU for game render and H.264 encode (normal single-GPU mode).\n"
@@ -1397,6 +1460,12 @@ private:
             }
             host_status_->setText(QString("Host stopped; %1 game(s) loaded").arg(list.games.size()));
             append_log(host_log_, QString("Loaded %1 host game(s).").arg(list.games.size()));
+            if (!archstreamer::yuzu_runtime_available()) {
+                append_log(
+                    host_log_,
+                    QString::fromStdString(archstreamer::yuzu_unavailable_message()),
+                    GuiLogLevel::Quiet);
+            }
         } catch (const std::exception& error) {
             host_game_picker_->setCatalog({});
             host_status_->setText("Host stopped; game load failed");
@@ -1444,6 +1513,13 @@ private:
             const QSignalBlocker blocker(settings_log_level_);
             settings_log_level_->setCurrentIndex(index >= 0 ? index : 1);
         }
+#ifdef ARCHSTREAMER_HAS_HOST
+        if (settings_native_host_runner_ != nullptr) {
+            const QSignalBlocker blocker(settings_native_host_runner_);
+            settings_native_host_runner_->setText(
+                settings.value("host/nativeHostRunner").toString());
+        }
+#endif
 #ifdef ARCHSTREAMER_HAS_HOST
         if (settings_gpu_ != nullptr) {
             const auto gpu_id = settings.value(
@@ -1633,6 +1709,11 @@ private:
             settings.setValue("host/sessionTimeoutSeconds", settings_session_timeout_->value());
         }
         settings.setValue("ui/logLevel", static_cast<int>(current_log_level()));
+#ifdef ARCHSTREAMER_HAS_HOST
+        if (settings_native_host_runner_ != nullptr) {
+            settings.setValue("host/nativeHostRunner", settings_native_host_runner_->text().trimmed());
+        }
+#endif
 #ifdef ARCHSTREAMER_HAS_HOST
         if (settings_gpu_ != nullptr) {
             const auto encode_id = QString::fromStdString(selected_encode_gpu_id());
@@ -2541,9 +2622,32 @@ private:
         client_input_port_->setValue(host_input_port_->value());
         client_mode_->setCurrentIndex(host_mode_->currentIndex());
 
-        const auto program = host_runner_program();
+        QString program;
+        QStringList launch_args = args;
+        if (running_inside_flatpak()) {
+            const auto native = resolve_native_host_runner(
+                settings_native_host_runner_ != nullptr ? settings_native_host_runner_->text()
+                                                        : QString{});
+            if (native.isEmpty()) {
+                host_status_->setText("Host failed to start");
+                append_log(
+                    host_log_,
+                    "Flatpak Host needs a native host_runner. Set Settings → Native host_runner "
+                    "or ARCHSTREAMER_HOST_RUNNER to a host OS build (gamescope/uinput).",
+                    GuiLogLevel::Quiet);
+                return;
+            }
+            program = QStringLiteral("flatpak-spawn");
+            launch_args.prepend(native);
+            launch_args.prepend(QStringLiteral("--host"));
+            append_log(
+                host_log_,
+                QString("Flatpak: spawning native host via flatpak-spawn --host %1").arg(native));
+        } else {
+            program = host_runner_program();
+        }
         host_status_->setText("Host starting");
-        host_log_->appendPlainText("Starting " + program + " " + args.join(' '));
+        host_log_->appendPlainText("Starting " + program + " " + launch_args.join(' '));
         if (bridge_index >= 0) {
             append_log(
                 host_log_,
@@ -2557,7 +2661,7 @@ private:
                     .arg(mode_name(selected_mode(host_mode_)))
                     .arg(host_clients_->value()));
         }
-        host_process_->start(program, args);
+        host_process_->start(program, launch_args);
         if (!host_process_->waitForStarted(3000)) {
             host_status_->setText("Host failed to start");
             host_log_->appendPlainText("Failed to start host_runner: " + host_process_->errorString());
@@ -2756,6 +2860,9 @@ private:
     QLineEdit* settings_art_root_ = nullptr;
     QSpinBox* settings_session_timeout_ = nullptr;
     QComboBox* settings_log_level_ = nullptr;
+#ifdef ARCHSTREAMER_HAS_HOST
+    QLineEdit* settings_native_host_runner_ = nullptr;
+#endif
 #ifdef ARCHSTREAMER_HAS_HOST
     QComboBox* settings_gpu_ = nullptr;
     QCheckBox* settings_separate_render_gpu_ = nullptr;

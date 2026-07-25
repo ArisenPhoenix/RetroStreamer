@@ -209,23 +209,28 @@ Client-specific Windows work:
 
 ### Windows host (after client)
 
-Host interfaces already exist (`VirtualGamepadBus`, `RetroArchProcess`, `MediaServer` via `default_host_platform.hpp`). Linux fills them with uinput, gamescope/Xvfb/VirtualGL capture, and Pulse/PipeWire. Windows needs alternate backends behind those same interfaces:
+Host interfaces already exist (`VirtualGamepadBus`, `RetroArchProcess`, `MediaServer` via `default_host_platform.hpp`). Linux fills them with uinput, gamescope/Xvfb/VirtualGL capture, and Pulse/PipeWire. Windows implementations:
 
-- **Virtual pads:** ViGEmBus (or equivalent) instead of `/dev/uinput`
-- **Display capture:** DXGI Desktop Duplication / Windows Graphics Capture (or GStreamer `d3d11screencapturesrc`) instead of gamescope PipeWire / Xvfb + `ximagesrc` (do **not** expect a gamescope port)
-- **Audio loopback:** WASAPI loopback instead of Pulse/PipeWire monitors
-- **RetroArch:** Windows install paths and win32/`dinput`/`xinput` joypad binding (same “ignore list vs index” class of bugs as Linux SDL, different enumerator)
+- **Virtual pads:** ViGEmBus (`ViGEmGamepadBus`, loads `ViGEmClient.dll` at runtime)
+- **Display capture:** GStreamer `d3d11screencapturesrc` (desktop) instead of gamescope PipeWire / Xvfb + `ximagesrc`
+- **Audio loopback:** GStreamer `wasapisrc loopback=true` instead of Pulse/PipeWire monitors
+- **Yuzu:** managed `%LOCALAPPDATA%\archstreamer\yuzu\yuzu.exe` (MSVC tree); RetroArch-on-Windows still follow-up
 
-Until those backends exist, `default_host_platform.hpp` may keep a clear `_WIN32` stub/`#error` so a client-only Windows build stays clean.
+Enable with `-DARCHSTREAMER_BUILD_HOST=ON` / `.\build_windows.ps1 -BuildHost`. Deps: `deploy/windows/install-deps.ps1`.
+
+### Flatpak host
+
+Flatpak GUI Host tab launches a **native** `host_runner` via `flatpak-spawn --host` (Settings → Native host_runner / `ARCHSTREAMER_HOST_RUNNER`). Gamescope/uinput/Yuzu stay on the host OS — not inside the KDE sandbox.
 
 ### Near-term blockers
 
 - ~~Add Windows platform objects for `ChildProcess`, `TcpStream`, `TcpListener`, and `UdpSocket`~~
 - ~~Add Windows path helpers and CMake client-capable `WIN32` builds (`ARCHSTREAMER_BUILD_HOST=OFF`)~~
-- Package/copy SDL2 (and document GStreamer) for Windows clients
+- ~~Package/copy SDL2 (and document GStreamer) for Windows clients~~
 - ~~Client-only Qt GUI when `ARCHSTREAMER_BUILD_HOST=OFF`~~
+- ~~Windows host backends (ViGEm, d3d11 capture, WASAPI) + Flatpak native host_runner spawn~~
 - Embedded GUI media later needs platform-specific GStreamer window integration
-- Host backends (ViGEm, capture, WASAPI loopback) after the client milestone
+- RetroArch-on-Windows host parity (paths / joypad drivers) after Yuzu stream proof
 
 ## Save Profiles
 

@@ -1,7 +1,7 @@
 # Flatpak (Bazzite / immutable Linux)
 
 Bazzite and other atomic desktops often lack compile-time packages on the host.
-A Flatpak is the easiest way to run the ArchStreamer **client** GUI there.
+A Flatpak is the easiest way to run the ArchStreamer GUI there.
 
 ## Build a bundle (on a machine with `flatpak-builder`)
 
@@ -20,56 +20,47 @@ flatpak install --user ./ArchStreamer.flatpak
 flatpak run io.github.ArisenPhoenix.ArchStreamer
 ```
 
-## Dependencies
+## Client vs Host
 
-### Bundled in the Flatpak (no extra install for client)
+### Client (in Flatpak)
 
-| Piece | Source |
-|---|---|
-| Qt 6 Widgets | `org.kde.Platform` 6.9 |
-| GStreamer (decode / video window) | KDE Platform |
-| SDL2 | Manifest module |
-| nlohmann_json | Manifest module |
+Bundled: Qt 6 (KDE Platform 6.9), SDL2, nlohmann_json, GStreamer from the runtime.
+Join a LAN host, controllers, video/audio receive — no extra packages.
 
-Recent host features (**Gamescope WSI**, VirtualGL, Yuzu AppImage, dual-GPU / NVENC, RetroArch `.opt` resolution) do **not** add Flatpak modules. They are Linux **host** runtime tools and are not required to join a session as a client.
+### Host (Flatpak GUI → native `host_runner`)
 
-### Host on Bazzite / immutable (native or distrobox — not the Flatpak)
+The Flatpak includes the Host tab and may ship a sandboxed `host_runner`, but **Switch / gamescope / uinput sessions must run on the host OS**.
 
-Run a native/`host_runner` build for Host Viewer / Host Player. Install on the host OS (or distrobox):
+When started inside Flatpak, Host uses:
+
+```text
+flatpak-spawn --host <native-host_runner> …
+```
+
+Configure the native binary in **Settings → Native host_runner**, or set `ARCHSTREAMER_HOST_RUNNER`.
+
+Build that binary outside the sandbox (native or distrobox) with the usual Linux host deps:
 
 | Need | Why |
 |---|---|
-| RetroArch (`org.libretro.RetroArch` or system) | Non-Switch cores |
-| `/dev/uinput` access | Virtual pads |
-| GStreamer tools + plugins (incl. PipeWire / NVENC if used) | Capture + encode — see `scripts/install_gst.sh` |
-| **gamescope** (managed copy under `~/.local/share/archstreamer/gamescope/` preferred) | Switch / Yuzu headless capture |
-| Gamescope WSI layer (`ENABLE_GAMESCOPE_WSI`, layer next to managed gamescope) | Dual-NVIDIA: non-boot GPU can present into nested XWayland |
-| Yuzu AppImage + keys under `~/.local/share/archstreamer/yuzu/` | Switch titles |
-| Optional: VirtualGL (`vglrun`) + Xvfb | RetroArch multi-GPU GL when not using gamescope |
-| Optional: NVIDIA driver / NVENC | Hardware encode; PRIME providers for OpenGL offload |
+| RetroArch | Non-Switch cores |
+| `/dev/uinput` | Virtual pads |
+| GStreamer (+ PipeWire / NVENC as needed) | Capture + encode — `scripts/install_gst.sh` |
+| **gamescope** + Gamescope WSI | Switch / Yuzu headless |
+| Yuzu AppImage + keys | Switch titles |
+| Optional VirtualGL + Xvfb | RetroArch multi-GPU GL |
 
-Host-inside-Flatpak remains limited (sandbox cannot cleanly own gamescope/WSI, uinput, and host RetroArch). Prefer native/distrobox for hosting.
+Manifest finish-args already include `--talk-name=org.freedesktop.Flatpak` for spawn.
 
 ### Filesystem notes
 
-- Grant ROM/Art paths outside `$HOME` if needed (manifest already allows `home` and `/mnt:ro`).
-- Steam art import needs Steam userdata readable; Flatpak Steam uses
-  `~/.var/app/com.valvesoftware.Steam/` (under home).
+- Grant ROM/Art paths outside `$HOME` if needed (manifest allows `home` and `/mnt:ro`).
+- Steam art import: Flatpak Steam userdata under `~/.var/app/com.valvesoftware.Steam/`.
 
 ## Updates / reinstall
 
-There is **no Flathub remote** for this app yet. `flatpak update` will not pull newer ArchStreamer
-builds by itself.
-
-- Same machine you build on: rebuild, then
-  `flatpak install --user --reinstall ./build-flatpak/ArchStreamer.flatpak`
-- Other machine: copy the new `.flatpak` over and install/reinstall that file.
-  Reinstalling an **old** bundle just puts the old version back.
-
-## Rebuild tips
+No Flathub remote yet. Rebuild and:
 
 ```bash
-# after code changes
-./scripts/build-flatpak.sh
 flatpak install --user --reinstall ./build-flatpak/ArchStreamer.flatpak
 ```

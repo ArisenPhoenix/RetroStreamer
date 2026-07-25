@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -401,6 +402,9 @@ GameCatalog scan_game_catalog(
         }
     }
 
+    std::size_t skipped_switch_missing_yuzu = 0;
+    const auto resolved_yuzu = yuzu_runtime_available() ? resolve_yuzu() : std::nullopt;
+
     for (const auto& entry : std::filesystem::recursive_directory_iterator(content_root)) {
         if (!entry.is_regular_file()) {
             continue;
@@ -413,21 +417,33 @@ GameCatalog scan_game_catalog(
 
         auto core = std::optional<CoreChoice>{};
         auto system_key = infer_system_key_from_path(entry.path());
-        if (system_key.has_value()) {
+        // Extension-only Switch dumps (no Switch/ folder in the path).
+        if (!system_key.has_value() &&
+            extension_in(normalized_extension(entry.path()), {"xci", "nsp", "nsz"})) {
+            system_key = "switch";
+        }
+
+        auto standalone = false;
+        std::vector<std::string> standalone_args;
+
+        // Switch streaming is standalone Yuzu only. Never advertise libretro
+        // yuzu/ryujinx/suyu cores — they would list titles when the real runtime
+        // is missing and then fail at launch.
+        if (system_key.has_value() && *system_key == "switch") {
+            if (!resolved_yuzu.has_value()) {
+                ++skipped_switch_missing_yuzu;
+                continue;
+            }
+            core = CoreChoice{
+                "Nintendo Switch",
+                resolved_yuzu->display_name,
+                resolved_yuzu->path};
+            standalone = true;
+            standalone_args = resolved_yuzu->args_before_content;
+        } else if (system_key.has_value()) {
             core = core_registry.system_core(*system_key);
         } else {
             core = core_registry.find_for_content(entry.path());
-        }
-
-        // Switch: no libretro Yuzu on buildbot — use standalone AppImage like ra.py.
-        auto standalone = false;
-        std::vector<std::string> standalone_args;
-        if (!core.has_value() && system_key.has_value() && *system_key == "switch") {
-            if (const auto yuzu = resolve_yuzu(); yuzu.has_value()) {
-                core = CoreChoice{"Nintendo Switch", yuzu->display_name, yuzu->path};
-                standalone = true;
-                standalone_args = yuzu->args_before_content;
-            }
         }
 
         if (!core.has_value()) {
@@ -476,6 +492,12 @@ GameCatalog scan_game_catalog(
             standalone,
             std::move(standalone_args),
         });
+    }
+
+    if (skipped_switch_missing_yuzu > 0) {
+        std::cerr
+            << "host: skipped " << skipped_switch_missing_yuzu
+            << " Nintendo Switch title(s): " << yuzu_unavailable_message() << '\n';
     }
 
     return catalog;

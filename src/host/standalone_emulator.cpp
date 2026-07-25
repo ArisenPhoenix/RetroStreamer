@@ -369,12 +369,41 @@ std::optional<std::filesystem::path> find_source_appimage() {
     }
 
     const auto home = home_dir();
+#ifdef _WIN32
+    const auto local = archstreamer_cache_directory();
     const std::vector<std::filesystem::path> candidates{
-        "/srv/emus/Switch/yuzu-20231111-030c140c0.AppImage",
-        // home / "Apps/Yuzu/yuzu-mainline-20231111-030c140c0.AppImage",
-        // home / "Apps/Yuzu",
-        // "/srv/emus/Switch/Yuzu Files Backup As Nintendo Killed It/yuzu-mainline-20240304-537296095.AppImage",
+        std::filesystem::path{local} / "yuzu" / "yuzu.exe",
+        home / "Downloads" / "Yuzu_WIN" / "yuzu-windows-msvc" / "yuzu.exe",
+        home / "Downloads" / "yuzu-windows-msvc" / "yuzu.exe",
+        home / "AppData" / "Local" / "yuzu" / "yuzu.exe",
+    };
+    for (const auto& candidate : candidates) {
+        if (std::filesystem::is_regular_file(candidate)) {
+            return candidate;
+        }
+        // Directory containing yuzu.exe
+        if (std::filesystem::is_directory(candidate.parent_path())) {
+            const auto exe = candidate.parent_path() / "yuzu.exe";
+            if (std::filesystem::is_regular_file(exe)) {
+                return exe;
+            }
+        }
+    }
+    // If ARCHSTREAMER_YUZU points at a directory of the MSVC build:
+    if (const auto env = path_from_env("ARCHSTREAMER_YUZU"); env.has_value()) {
+        if (std::filesystem::is_directory(*env)) {
+            for (const char* name : {"yuzu.exe", "yuzu-cmd.exe"}) {
+                const auto exe = *env / name;
+                if (std::filesystem::is_regular_file(exe)) {
+                    return exe;
+                }
+            }
+        }
+    }
+#else
+    const std::vector<std::filesystem::path> candidates{
         "/srv/emus/Switch/yuzu.AppImage",
+        "/srv/emus/Switch/yuzu-20231111-030c140c0.AppImage",
         home / "Applications/yuzu.AppImage",
         home / ".local/bin/yuzu",
         "/usr/local/bin/yuzu",
@@ -386,12 +415,8 @@ std::optional<std::filesystem::path> find_source_appimage() {
             continue;
         }
         if (std::filesystem::is_regular_file(candidate)) {
-            // ~/Apps/Yuzu may be a directory in some layouts; prefer files.
             const auto name = candidate.filename().string();
             if (candidate.extension() == ".AppImage" || name == "yuzu" || name.find("yuzu") != std::string::npos) {
-                return candidate;
-            }
-            if (candidate.extension() == ".AppImage") {
                 return candidate;
             }
             return candidate;
@@ -408,6 +433,7 @@ std::optional<std::filesystem::path> find_source_appimage() {
             }
         }
     }
+#endif
     return std::nullopt;
 }
 
@@ -419,10 +445,15 @@ std::optional<std::filesystem::path> find_source_keys_dir() {
     }
     const auto home = home_dir();
     const std::vector<std::filesystem::path> candidates{
+#ifdef _WIN32
+        home / "AppData" / "Roaming" / "yuzu" / "keys",
+        std::filesystem::path{archstreamer_cache_directory()} / "yuzu" / "keys",
+#else
         home / ".local/share/yuzu/keys",
         home / ".config/yuzu/keys",
         "/srv/retroarch/system/yuzu/keys",
         "/srv/retroarch/system/keys",
+#endif
     };
     for (const auto& candidate : candidates) {
         if (std::filesystem::is_regular_file(candidate / "prod.keys")) {
@@ -436,31 +467,92 @@ std::optional<std::filesystem::path> find_source_keys_dir() {
 
 std::filesystem::path default_yuzu_runtime_root() {
     if (const auto home = home_dir(); !home.empty()) {
+#ifdef _WIN32
+        // %LOCALAPPDATA%\archstreamer\yuzu
+        const auto cache = archstreamer_cache_directory();
+        if (!cache.empty()) {
+            return std::filesystem::path{cache} / "yuzu";
+        }
+        return home / "AppData" / "Local" / "archstreamer" / "yuzu";
+#else
         return home / ".local/share/archstreamer/yuzu";
+#endif
     }
     return std::filesystem::current_path() / "archstreamer-yuzu";
 }
 
+bool yuzu_runtime_available() {
+#ifdef _WIN32
+    const auto managed_binary = default_yuzu_runtime_root() / "yuzu.exe";
+#else
+    const auto managed_binary = default_yuzu_runtime_root() / "yuzu.AppImage";
+#endif
+    if (std::filesystem::is_regular_file(managed_binary)) {
+        return true;
+    }
+    return find_source_appimage().has_value();
+}
+
+std::string yuzu_unavailable_message() {
+    const auto root = default_yuzu_runtime_root();
+#ifdef _WIN32
+    return "Yuzu runtime not found. Switch titles require yuzu.exe under " + root.string() +
+           " (or set ARCHSTREAMER_YUZU to a yuzu-windows-msvc build). "
+           "Nintendo Switch games will not be listed until Yuzu is installed.";
+#else
+    return "Yuzu runtime not found. Switch titles require yuzu.AppImage under " + root.string() +
+           " (or set ARCHSTREAMER_YUZU). "
+           "Nintendo Switch games will not be listed until Yuzu is installed.";
+#endif
+}
+
 std::optional<ResolvedStandaloneEmulator> ensure_yuzu_runtime() {
     const auto root = default_yuzu_runtime_root();
-    const auto managed_appimage = root / "yuzu.AppImage";
+#ifdef _WIN32
+    const auto managed_binary = root / "yuzu.exe";
+#else
+    const auto managed_binary = root / "yuzu.AppImage";
+#endif
     const auto managed_keys = root / "keys";
     std::filesystem::create_directories(root);
     std::filesystem::create_directories(managed_keys);
 
-    if (!std::filesystem::exists(managed_appimage)) {
+    if (!std::filesystem::exists(managed_binary)) {
         const auto source = find_source_appimage();
         if (!source.has_value()) {
             return std::nullopt;
         }
-        std::cout << "Installing Yuzu AppImage into " << managed_appimage << " (from " << *source << ")\n";
-        std::filesystem::copy_file(*source, managed_appimage, std::filesystem::copy_options::overwrite_existing);
+#ifdef _WIN32
+        const auto source_dir = source->parent_path();
+        std::cout << "Installing Yuzu Windows build into " << root << " (from " << source_dir << ")\n";
+        for (const auto& entry : std::filesystem::directory_iterator(source_dir)) {
+            const auto name = entry.path().filename();
+            if (name == "plugins" || name == "mediaservice") {
+                std::filesystem::copy(
+                    entry.path(),
+                    root / name,
+                    std::filesystem::copy_options::recursive |
+                        std::filesystem::copy_options::overwrite_existing);
+                continue;
+            }
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            std::filesystem::copy_file(
+                entry.path(),
+                root / name,
+                std::filesystem::copy_options::overwrite_existing);
+        }
+#else
+        std::cout << "Installing Yuzu AppImage into " << managed_binary << " (from " << *source << ")\n";
+        std::filesystem::copy_file(*source, managed_binary, std::filesystem::copy_options::overwrite_existing);
         std::filesystem::permissions(
-            managed_appimage,
+            managed_binary,
             std::filesystem::perms::owner_all | std::filesystem::perms::group_read |
                 std::filesystem::perms::group_exec | std::filesystem::perms::others_read |
                 std::filesystem::perms::others_exec,
             std::filesystem::perm_options::replace);
+#endif
     }
 
     if (!std::filesystem::exists(managed_keys / "prod.keys")) {
@@ -473,18 +565,17 @@ std::optional<ResolvedStandaloneEmulator> ensure_yuzu_runtime() {
                 << " or set ARCHSTREAMER_YUZU_KEYS.\n";
         }
     } else {
-        // Refresh missing optional key files only.
         if (const auto source_keys = find_source_keys_dir(); source_keys.has_value()) {
             copy_key_files(*source_keys, managed_keys);
         }
     }
 
-    if (!std::filesystem::is_regular_file(managed_appimage)) {
+    if (!std::filesystem::is_regular_file(managed_binary)) {
         return std::nullopt;
     }
 
     return ResolvedStandaloneEmulator{
-        managed_appimage,
+        managed_binary,
         {"-f", "-g"},
         "Yuzu",
     };

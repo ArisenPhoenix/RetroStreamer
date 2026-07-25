@@ -17,18 +17,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE BOOL
 set(FETCHCONTENT_BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/_dependencies")
 
 if(WIN32)
-    option(ARCHSTREAMER_BUILD_HOST "Build host runtime (Linux only today)" OFF)
+    option(ARCHSTREAMER_BUILD_HOST "Build host runtime (Windows: Yuzu + DXGI/WASAPI/ViGEm)" OFF)
 else()
-    option(ARCHSTREAMER_BUILD_HOST "Build host runtime (Linux only today)" ON)
+    option(ARCHSTREAMER_BUILD_HOST "Build host runtime (Linux)" ON)
 endif()
 option(ARCHSTREAMER_REQUIRE_GUI "Fail configure if Qt6 Widgets is missing" OFF)
 option(ARCHSTREAMER_BUILD_CONTROLLER_PROBE "Build controller probe tool" ON)
-
-if(ARCHSTREAMER_BUILD_HOST AND WIN32)
-    message(FATAL_ERROR
-        "Host runtime is not available on Windows yet.\n"
-        "Configure with -DARCHSTREAMER_BUILD_HOST=OFF for a client-capable build.")
-endif()
 
 function(archstreamer_require_pkgconfig_module RESULT_PREFIX MODULE_NAME)
     pkg_check_modules(${RESULT_PREFIX} IMPORTED_TARGET ${MODULE_NAME})
@@ -216,11 +210,10 @@ set(ARCHSTREAMER_INSTALL_TARGETS
 )
 
 if(ARCHSTREAMER_BUILD_HOST)
-    add_library(archstreamer_host
+    set(ARCHSTREAMER_HOST_SOURCES
         src/host/game_catalog.cpp
         src/host/game_catalog_scanner.cpp
         src/host/gpu_select.cpp
-        src/host/gstreamer_media_server.cpp
         src/host/host_app.cpp
         src/host/host_app_config.cpp
         src/host/host_launch_planner.cpp
@@ -228,11 +221,9 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/input_router.cpp
         src/host/launch_environment.cpp
         src/host/libretro_core_registry.cpp
-        src/host/linux_uinput_gamepad.cpp
         src/host/virtual_keyboard.cpp
         src/host/local_controller_bridge.cpp
         src/host/network_input_receiver.cpp
-        src/host/posix_retroarch_process.cpp
         src/host/streaming_audio_sink.cpp
         src/host/retroarch_config_writer.cpp
         src/host/retroarch_netcmd.cpp
@@ -243,32 +234,48 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/session_control_monitor.cpp
         src/host/session_lobby.cpp
         src/host/session_service.cpp
-        src/host/virtual_display.cpp
         src/host/virtual_joypad_resolve.cpp
     )
-    target_compile_definitions(archstreamer_host PUBLIC ARCHSTREAMER_HAS_HOST=1)
-    find_package(X11 REQUIRED)
-    if(NOT TARGET X11::Xtst AND NOT X11_Xtst_FOUND)
-        # Older FindX11: X11_Xtst_LIB
-        find_path(X11_Xtst_INCLUDE_PATH NAMES X11/extensions/XTest.h)
-        find_library(X11_Xtst_LIB NAMES Xtst)
+    if(WIN32)
+        list(APPEND ARCHSTREAMER_HOST_SOURCES
+            src/host/windows_retroarch_process.cpp
+            src/host/windows_vigem_gamepad.cpp
+            src/host/windows_media_server.cpp
+        )
+    else()
+        list(APPEND ARCHSTREAMER_HOST_SOURCES
+            src/host/gstreamer_media_server.cpp
+            src/host/linux_uinput_gamepad.cpp
+            src/host/posix_retroarch_process.cpp
+            src/host/virtual_display.cpp
+        )
     endif()
+
+    add_library(archstreamer_host ${ARCHSTREAMER_HOST_SOURCES})
+    target_compile_definitions(archstreamer_host PUBLIC ARCHSTREAMER_HAS_HOST=1)
     target_link_libraries(archstreamer_host
         PUBLIC
             archstreamer_core
         PRIVATE
             archstreamer_controller
-            X11::X11
     )
-    if(TARGET X11::Xtst)
-        target_link_libraries(archstreamer_host PRIVATE X11::Xtst)
-    elseif(X11_Xtst_LIB)
-        target_link_libraries(archstreamer_host PRIVATE ${X11_Xtst_LIB})
-        if(X11_Xtst_INCLUDE_PATH)
-            target_include_directories(archstreamer_host PRIVATE ${X11_Xtst_INCLUDE_PATH})
+    if(NOT WIN32)
+        find_package(X11 REQUIRED)
+        if(NOT TARGET X11::Xtst AND NOT X11_Xtst_FOUND)
+            find_path(X11_Xtst_INCLUDE_PATH NAMES X11/extensions/XTest.h)
+            find_library(X11_Xtst_LIB NAMES Xtst)
         endif()
-    else()
-        message(FATAL_ERROR "libXtst required for host virtual keyboard (apt: libxtst-dev)")
+        target_link_libraries(archstreamer_host PRIVATE X11::X11)
+        if(TARGET X11::Xtst)
+            target_link_libraries(archstreamer_host PRIVATE X11::Xtst)
+        elseif(X11_Xtst_LIB)
+            target_link_libraries(archstreamer_host PRIVATE ${X11_Xtst_LIB})
+            if(X11_Xtst_INCLUDE_PATH)
+                target_include_directories(archstreamer_host PRIVATE ${X11_Xtst_INCLUDE_PATH})
+            endif()
+        else()
+            message(FATAL_ERROR "libXtst required for host virtual keyboard (apt: libxtst-dev)")
+        endif()
     endif()
 
     add_executable(game_catalog_probe
@@ -286,10 +293,13 @@ if(ARCHSTREAMER_BUILD_HOST)
     )
     target_link_libraries(steam_art_import PRIVATE archstreamer_host)
 
-    add_executable(uinput_probe
-        src/tools/uinput_probe.cpp
-    )
-    target_link_libraries(uinput_probe PRIVATE archstreamer_host)
+    if(NOT WIN32)
+        add_executable(uinput_probe
+            src/tools/uinput_probe.cpp
+        )
+        target_link_libraries(uinput_probe PRIVATE archstreamer_host)
+        list(APPEND ARCHSTREAMER_INSTALL_TARGETS uinput_probe)
+    endif()
 
     add_executable(host_runner
         src/tools/cli_host.cpp
@@ -302,7 +312,6 @@ if(ARCHSTREAMER_BUILD_HOST)
         game_catalog_probe
         asset_probe
         steam_art_import
-        uinput_probe
         host_runner
     )
 endif()

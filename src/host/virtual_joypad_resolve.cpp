@@ -2,7 +2,7 @@
 
 #include "common/protocol.hpp"
 #include "host/host_session_helpers.hpp"
-#include "host/linux_uinput_gamepad.hpp"
+#include "host/virtual_gamepad.hpp"
 
 #include <SDL.h>
 

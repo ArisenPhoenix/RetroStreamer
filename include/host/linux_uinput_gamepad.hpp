@@ -3,18 +3,9 @@
 #include "host/virtual_gamepad.hpp"
 
 #include <array>
-#include <cstdint>
-#include <string>
 #include <vector>
 
 namespace archstreamer {
-
-struct VirtualGamepadIdentity {
-    std::string name = "ArchStreamer Virtual Gamepad";
-    std::uint16_t vendor_id = 0x1209;
-    std::uint16_t product_id = 0xa517;
-    std::uint16_t version = 1;
-};
 
 class LinuxUinputGamepadBus final : public VirtualGamepadBus {
 public:

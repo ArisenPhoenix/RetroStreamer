@@ -1,6 +1,6 @@
 #pragma once
 
-#include "host/linux_uinput_gamepad.hpp"
+#include "host/virtual_gamepad.hpp"
 #include "host/save_profile.hpp"
 
 #include <cstdint>

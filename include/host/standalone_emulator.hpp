@@ -27,12 +27,24 @@ struct YuzuUserProfile {
 // Managed tree: ~/.local/share/archstreamer/yuzu/{yuzu.AppImage,keys/...}
 std::filesystem::path default_yuzu_runtime_root();
 
-// Ensure AppImage + shared keys exist under the managed runtime (copy from
-// ~/Apps/Yuzu and ~/.local/share/yuzu/keys when missing).
+// True when a managed binary exists or a discoverable source install is present.
+// Does not copy/install; safe for catalog scans.
+bool yuzu_runtime_available();
+
+// Human-readable reason for clients/host logs when Switch cannot be offered.
+std::string yuzu_unavailable_message();
+
+// Ensure AppImage/exe + shared keys exist under the managed runtime (copy from
+// a discovered source when missing). Returns nullopt if no binary can be found.
 std::optional<ResolvedStandaloneEmulator> ensure_yuzu_runtime();
 
-// Alias used by catalog scan / launch.
+// Catalog/launch resolve: only succeeds when a Yuzu binary is available.
+// Catalog callers should prefer yuzu_runtime_available() first to avoid installs
+// during listing; this still no-ops when nothing is discoverable.
 inline std::optional<ResolvedStandaloneEmulator> resolve_yuzu() {
+    if (!yuzu_runtime_available()) {
+        return std::nullopt;
+    }
     return ensure_yuzu_runtime();
 }
 

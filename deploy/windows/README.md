@@ -1,39 +1,61 @@
-# Windows client
+# Windows client and host
 
-Windows builds are **client-only** today (`-DARCHSTREAMER_BUILD_HOST=OFF`). There is no Windows host, and Linux-only host tools (gamescope, Gamescope WSI, VirtualGL, Yuzu AppImage, uinput, PRIME) do **not** apply.
+## Roles
+
+| Mode | CMake | What you get |
+|---|---|---|
+| **Client** (default) | `-DARCHSTREAMER_BUILD_HOST=OFF` | Join LAN sessions, controllers, GStreamer receive |
+| **Host** | `-DARCHSTREAMER_BUILD_HOST=ON` | Also `host_runner` — Yuzu + ViGEm pads + DXGI/WASAPI capture |
+
+Linux-only tools (gamescope, Gamescope WSI, VirtualGL, uinput) are **not** used on Windows.
+
+## Install deps
+
+```powershell
+# Elevated recommended (ViGEmBus driver)
+.\deploy\windows\install-deps.ps1
+# or
+.\build_windows.ps1 -InstallDeps
+.\build_windows.ps1 -InstallDeps -BuildHost -Reconfigure
+```
+
+[`deploy/windows/install-deps.ps1`](install-deps.ps1) handles:
+
+| Dependency | Notes |
+|---|---|
+| vcpkg Qt6 Widgets + SDL2 | Uses `VCPKG_ROOT` (default `C:\dev\vcpkg`) |
+| GStreamer MSVC 64-bit | winget/search + MSI links; needs `d3d11screencapturesrc`, `wasapisrc`, encoders |
+| ViGEmBus | Driver via winget; place `ViGEmClient.dll` on `PATH` |
+| CMake / Ninja | Optional `-InstallBuildTools` |
+| Firewall | Optional `-OpenFirewall` for control/input/RTP ports |
+| **Yuzu** | Manual — copy `yuzu-windows-msvc` → `%LOCALAPPDATA%\archstreamer\yuzu\` or set `ARCHSTREAMER_YUZU` |
 
 ## Build
 
-Prefer PowerShell:
-
 ```powershell
-.\build_windows.ps1
-# or
-.\build_windows.ps1 -Clean
+.\build_windows.ps1                 # client
+.\build_windows.ps1 -BuildHost      # host + client GUI Host tab
+.\build_windows.ps1 -Clean -BuildHost
 ```
 
-Requires:
+Requires CMake, vcpkg toolchain, VS Build Tools (or Ninja + MSVC).
 
-| Dependency | Role |
-|---|---|
-| CMake | Configure / build |
-| vcpkg (`VCPKG_ROOT`, default `C:\dev\vcpkg`) | Qt6 Widgets, SDL2 |
-| Visual Studio / Build Tools (or Ninja + MSVC) | Compiler |
-| Optional: Ninja | Faster incremental builds |
+## Runtime
 
-`build_windows.ps1` / `build_windows.sh` always pass `-DARCHSTREAMER_BUILD_HOST=OFF`.
-
-## Runtime (client)
-
-| Dependency | Role |
+| Piece | Role |
 |---|---|
 | `SDL2.dll` | Copied next to `archstreamer_gui` on build |
-| GStreamer **MSVC 64-bit** on `PATH` | Video/audio receive (`gst-launch-1.0.exe`) |
+| GStreamer MSVC on `PATH` | Client decode + host capture/encode |
+| ViGEmBus + `ViGEmClient.dll` | Host virtual Xbox 360 pads |
+| Managed Yuzu | `%LOCALAPPDATA%\archstreamer\yuzu\yuzu.exe` (+ DLLs) |
+| Keys | `%APPDATA%\yuzu\keys` or `ARCHSTREAMER_YUZU_KEYS` |
 
-Preferred GStreamer elements on Windows: `d3d11h264dec`, `d3d11videosink`, `autoaudiosink`. Install the official GStreamer MSVC runtime and dev packages and ensure `gst-launch-1.0.exe` is on `PATH`.
+## Host capture (Windows)
 
-## What did *not* change with recent host work
+- Video: `d3d11screencapturesrc` (desktop) → H.264 → RTP
+- Audio: `wasapisrc loopback=true` → Opus → RTP
+- Pads: ViGEmBus X360 targets bound into Yuzu Controls (same GUID flow as Linux)
 
-Gamescope WSI, managed gamescope, VirtualGL, dual-GPU encode/render, and Yuzu launch env are **Linux host** features. They add **no** new Windows client packages, vcpkg ports, or DLLs.
+## Firewall
 
-When a Windows **host** exists later, it will need its own backends (ViGEm, DXGI/WGC capture, WASAPI loopback) — see `ARCHITECTURE.md` § Windows Direction — not a port of gamescope.
+Allow inbound TCP **45555**, UDP **45454**, **5004**, **6004**, **45550** (or `install-deps.ps1 -OpenFirewall`).

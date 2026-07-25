@@ -2,16 +2,16 @@
 <component type="desktop-application">
   <id>io.github.ArisenPhoenix.ArchStreamer</id>
   <name>ArchStreamer</name>
-  <summary>LAN RetroArch / emulator streaming client</summary>
+  <summary>LAN RetroArch / emulator streaming</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>LicenseRef-proprietary</project_license>
   <description>
     <p>
       ArchStreamer joins a LAN host to play streamed RetroArch or Switch (Yuzu)
-      sessions with local controllers. Artwork stays on each machine; the
-      Settings tab configures Steam account detection and art refresh.
-      Hosting (gamescope, RetroArch, virtual pads) is a native Linux build —
-      not this Flatpak.
+      sessions with local controllers. The Host tab can start a native host_runner
+      via flatpak-spawn when this app runs as a Flatpak (gamescope/uinput stay on
+      the host OS). Artwork stays on each machine; Settings configures Steam art
+      and the native host_runner path.
     </p>
   </description>
   <launchable type="desktop-id">io.github.ArisenPhoenix.ArchStreamer.desktop</launchable>

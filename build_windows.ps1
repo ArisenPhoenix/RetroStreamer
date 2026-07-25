@@ -1,16 +1,20 @@
-# Windows CLIENT build only (-DARCHSTREAMER_BUILD_HOST=OFF).
+# Windows build (client by default; pass -BuildHost for Yuzu host + ViGEm/DXGI).
 # Runtime: SDL2.dll (copied on build) + GStreamer MSVC 64-bit on PATH.
-# Linux host tools (gamescope / WSI / VirtualGL / Yuzu) are not used here.
+# Host extras: ViGEmBus + ViGEmClient.dll — see deploy/windows/install-deps.ps1
 # See deploy/windows/README.md.
 #
 # Usage:
-#   .\build_windows.ps1              # incremental build (reconfigure only if needed)
-#   .\build_windows.ps1 -Reconfigure # force cmake reconfigure, then build
-#   .\build_windows.ps1 -Clean       # delete build\ and reconfigure from scratch
+#   .\build_windows.ps1              # incremental client build
+#   .\build_windows.ps1 -InstallDeps # run deploy/windows/install-deps.ps1 then build
+#   .\build_windows.ps1 -BuildHost   # ARCHSTREAMER_BUILD_HOST=ON
+#   .\build_windows.ps1 -Reconfigure
+#   .\build_windows.ps1 -Clean
 
 param(
     [switch]$Reconfigure,
     [switch]$Clean,
+    [switch]$InstallDeps,
+    [switch]$BuildHost,
     [string]$VcpkgRoot = $(if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT } else { "C:\dev\vcpkg" }),
     [string]$Config = "Release",
     [int]$Jobs = 0
@@ -20,6 +24,12 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 Set-Location $PSScriptRoot
+
+if ($InstallDeps) {
+    $deps = Join-Path $PSScriptRoot "deploy\windows\install-deps.ps1"
+    Write-Host "Running $deps ..."
+    & $deps -VcpkgRoot $VcpkgRoot
+}
 
 $buildDir = Join-Path $PSScriptRoot "build"
 $cacheFile = Join-Path $buildDir "CMakeCache.txt"
@@ -34,11 +44,11 @@ if ($Clean -and (Test-Path $buildDir)) {
     Remove-Item -Recurse -Force $buildDir
 }
 
+$hostFlag = if ($BuildHost) { "ON" } else { "OFF" }
 $needsConfigure = $Reconfigure -or $Clean -or -not (Test-Path $cacheFile)
 if ($needsConfigure) {
-    Write-Host "Configuring CMake (this is the slow step; skipped on later incremental builds)..."
+    Write-Host "Configuring CMake (ARCHSTREAMER_BUILD_HOST=$hostFlag)..."
 
-    # Prefer Ninja for fast incremental rebuilds when available.
     $generatorArgs = @()
     if (Get-Command ninja -ErrorAction SilentlyContinue) {
         $generatorArgs = @("-G", "Ninja", "-DCMAKE_BUILD_TYPE=$Config")
@@ -50,7 +60,7 @@ if ($needsConfigure) {
 
     cmake -S . -B $buildDir `
         @generatorArgs `
-        -DARCHSTREAMER_BUILD_HOST=OFF `
+        -DARCHSTREAMER_BUILD_HOST=$hostFlag `
         -DCMAKE_TOOLCHAIN_FILE="$toolchain"
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } else {
@@ -63,6 +73,5 @@ if ($Jobs -le 0) {
 }
 
 Write-Host "Building ($Config, -j$Jobs)..."
-# Multi-config generators (Visual Studio) need --config; Ninja uses CMAKE_BUILD_TYPE.
 cmake --build $buildDir --config $Config --parallel $Jobs
 exit $LASTEXITCODE

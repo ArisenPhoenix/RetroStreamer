@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/protocol.hpp"
+#include "common/platform/default_platform.hpp"
 #include "host/media_capture.hpp"
 #include "host/media_server.hpp"
 #include "host/virtual_display.hpp"
@@ -86,19 +87,6 @@ private:
     std::string source_;
     std::vector<Destination> destinations_;
     ChildProcess process_;
-};
-
-struct GStreamerMediaCaptureConfig {
-    bool video = false;
-    bool audio = false;
-    std::string virtual_display = ":99";
-    std::string video_resolution = "1920x1080";
-    VirtualDisplayBackend display_backend = VirtualDisplayBackend::None;
-    AudioCaptureBackend audio_backend = AudioCaptureBackend::Pulse;
-    std::string audio_source;
-    bool verbose = false;
-    // nvidia-smi index for the gst-launch nvenc process (CUDA_VISIBLE_DEVICES); -1 = default.
-    int nvenc_cuda_device_id = -1;
 };
 
 class GStreamerMediaServer final : public MediaServer {

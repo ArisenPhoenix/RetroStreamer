@@ -2,7 +2,7 @@
 
 #include "common/serialization.hpp"
 #include "common/platform/default_platform.hpp"
-#include "host/linux_uinput_gamepad.hpp"
+#include "host/virtual_gamepad.hpp"
 #include "host/retroarch_netcmd.hpp"
 #include "host/seat_manager.hpp"
 

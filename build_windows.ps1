@@ -1,3 +1,8 @@
+# Windows CLIENT build only (-DARCHSTREAMER_BUILD_HOST=OFF).
+# Runtime: SDL2.dll (copied on build) + GStreamer MSVC 64-bit on PATH.
+# Linux host tools (gamescope / WSI / VirtualGL / Yuzu) are not used here.
+# See deploy/windows/README.md.
+#
 # Usage:
 #   .\build_windows.ps1              # incremental build (reconfigure only if needed)
 #   .\build_windows.ps1 -Reconfigure # force cmake reconfigure, then build

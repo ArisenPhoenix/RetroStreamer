@@ -56,6 +56,9 @@ modules:
     config-opts:
       - -DCMAKE_BUILD_TYPE=Release
       - -DARCHSTREAMER_REQUIRE_GUI=ON
+      # Client-focused Flatpak: Linux host needs gamescope/WSI, uinput, host RetroArch
+      # outside the sandbox (native/distrobox). See deploy/flatpak/README.md.
+      - -DARCHSTREAMER_BUILD_HOST=OFF
       - -DARCHSTREAMER_BUILD_CONTROLLER_PROBE=OFF
       - -DFETCHCONTENT_FULLY_DISCONNECTED=ON
     builddir: true

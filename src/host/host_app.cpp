@@ -13,6 +13,7 @@
 #include "host/host_launch_planner.hpp"
 #include "host/host_session_helpers.hpp"
 #include "host/input_router.hpp"
+#include "host/launch_environment.hpp"
 #include "host/virtual_keyboard.hpp"
 #include "host/local_controller_bridge.hpp"
 #include "host/network_input_receiver.hpp"
@@ -31,6 +32,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -257,24 +259,7 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             launch_config.extra_args.insert(launch_config.extra_args.begin(), "--verbose");
         }
         // Streaming already forced off above for Host Player.
-        if (config.audio || config.video) {
-            launch_config.environment.emplace_back("SDL_AUDIODRIVER", "pulse");
-        }
-        if (config.audio) {
-            if (!config.audio_source.empty() && config.audio_source.ends_with(".monitor")) {
-                launch_config.environment.emplace_back(
-                    "PULSE_SINK",
-                    config.audio_source.substr(0, config.audio_source.size() - std::string(".monitor").size()));
-            }
-        } else if (host_plays_locally) {
-            // Keep Host Player on the real default sink even if a prior stream left
-            // PULSE_SINK=archstreamer in the GUI process environment.
-            launch_config.environment.emplace_back("SDL_AUDIODRIVER", "pulse");
-            const auto default_sink = read_command_output("pactl get-default-sink 2>/dev/null");
-            if (!default_sink.empty() && default_sink != "archstreamer") {
-                launch_config.environment.emplace_back("PULSE_SINK", default_sink);
-            }
-        }
+        // Emulator child env is assembled once later (audio/input/gpu/capture/emulator).
         if (bridge_device.has_value() && !config.ignore_controller.has_value()) {
             if (bridge_device->vendor_id != 0 && bridge_device->product_id != 0) {
                 config.ignore_controller = hex_vid_pid(bridge_device->vendor_id, bridge_device->product_id);
@@ -315,7 +300,6 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             ignore_devices = ignore_devices + "," + steam_input;
         }
         config.ignore_controller = ignore_devices;
-        launch_config.environment.emplace_back("SDL_GAMECONTROLLER_IGNORE_DEVICES", *config.ignore_controller);
         if (config.retroarch_joypad_driver != "sdl2") {
             std::cerr
                 << "Warning: SDL_GAMECONTROLLER_IGNORE_DEVICES only affects RetroArch when "
@@ -347,10 +331,17 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             use_virtual_capture && display_backend == VirtualDisplayBackend::Gamescope;
         const bool virtualgl_capture =
             use_virtual_capture && display_backend == VirtualDisplayBackend::VirtualGL;
-        // Xvfb/Xephyr/VirtualGL need DISPLAY=:99. Gamescope provides nested Xwayland itself.
-        if (use_virtual_capture && !gamescope_capture) {
-            launch_config.environment.emplace_back("DISPLAY", config.virtual_display);
-        }
+
+        EmulatorLaunchEnvRequest launch_env_request;
+        launch_env_request.stream_media = config.audio || config.video;
+        launch_env_request.stream_audio = config.audio;
+        launch_env_request.host_plays_locally = host_plays_locally;
+        launch_env_request.audio_source = config.audio_source;
+        launch_env_request.ignore_devices = *config.ignore_controller;
+        launch_env_request.use_virtual_capture = use_virtual_capture;
+        launch_env_request.gamescope_capture = gamescope_capture;
+        launch_env_request.virtualgl_capture = virtualgl_capture;
+        launch_env_request.capture_display = capture_display;
 
         auto resolved_encode = resolve_render_gpu(config.encode_gpu);
         auto resolved_gpu = resolve_render_gpu(effective_render_gpu_selection(config));
@@ -395,12 +386,8 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             }
             // PRIME offload for NVIDIA. On plain Xvfb the provider name is ignored (no RandR
             // providers); VirtualGL uses the real display's GLX where G0/G1 selection works.
-            const auto gpu_env = render_gpu_environment(*resolved_gpu);
-            if (!gpu_env.empty()) {
-                for (const auto& entry : gpu_env) {
-                    launch_config.environment.push_back(entry);
-                }
-            } else if (resolved_gpu->nvidia_index >= 0) {
+            launch_env_request.render_gpu = *resolved_gpu;
+            if (resolved_gpu->prime_provider.empty() && resolved_gpu->nvidia_index >= 0) {
                 std::cerr
                     << "Warning: NVIDIA GPU selected but no PRIME provider was mapped "
                     << "(is DISPLAY set when scanning GPUs?). Capture GL may use llvmpipe.\n";
@@ -591,9 +578,7 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                 pad_guids.push_back(pad.guid);
             }
             configure_yuzu_archstreamer_controls(yuzu_user, pad_guids);
-            for (const auto& entry : yuzu_launch_environment(yuzu_user)) {
-                launch_config.environment.push_back(entry);
-            }
+            launch_env_request.yuzu_profile = yuzu_user;
             // Always restore fullscreen launch args for standalone.
             launch_config.standalone_args_before_content = {"-f", "-g"};
             launch_config.quiet_stdio = !config.verbose;
@@ -630,11 +615,18 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                         "(managed: ~/.local/share/archstreamer/gamescope/archstreamer-gamescope)");
                 }
                 launch_config.command_prefix = std::move(prefix);
-                if (config.verbose) {
-                    std::cout
-                        << "Yuzu: gamescope headless via " << launch_config.command_prefix.front()
-                        << " (" << width << "x" << height
-                        << ", prefer-vk-device " << gamescope_vk_device << ")\n";
+                // Always log WSI — without it the non-boot NVIDIA (3060 here) dies with
+                // "Device lacks a present queue" under nested XWayland.
+                std::cout
+                    << "Yuzu: gamescope headless via " << launch_config.command_prefix.front()
+                    << " (" << width << "x" << height
+                    << ", prefer-vk-device " << gamescope_vk_device
+                    << ", Gamescope WSI enabled)\n";
+                for (const auto& [key, value] : gamescope_launch_environment()) {
+                    if (key == "VK_ADD_IMPLICIT_LAYER_PATH") {
+                        std::cout << "Gamescope WSI layer path: " << value << '\n';
+                        break;
+                    }
                 }
             } else if (virtualgl_capture) {
                 auto prefix = virtual_gl_command_prefix();
@@ -643,9 +635,6 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                         "VirtualGL (vglrun) not found; install VirtualGL or set ARCHSTREAMER_VGLRUN");
                 }
                 launch_config.command_prefix = std::move(prefix);
-                for (const auto& entry : virtual_gl_environment()) {
-                    launch_config.environment.push_back(entry);
-                }
                 std::cout
                     << "Yuzu: VirtualGL OpenGL via " << launch_config.command_prefix.front()
                     << " (3D " << default_vgl_display()
@@ -682,9 +671,6 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                     launch_config.command_prefix.begin(),
                     launch_config.command_prefix.end());
                 launch_config.command_prefix = std::move(prefix);
-                for (const auto& entry : virtual_gl_environment()) {
-                    launch_config.environment.push_back(entry);
-                }
                 std::cout
                     << "RetroArch: VirtualGL via " << launch_config.command_prefix.front()
                     << " (3D on " << default_vgl_display()
@@ -712,6 +698,11 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                 }
             }
         }
+
+        // Single composition point: audio → input → gpu → capture → emulator profile.
+        launch_config.environment =
+            build_emulator_launch_environment(launch_env_request).entries;
+
         if (capture_fullscreen) {
             std::cout
                 << "Capture fullscreen: " << config.video_resolution
@@ -963,6 +954,23 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             } else {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+        }
+
+        if (!should_stop() && !session_end_reason.has_value() && !retroarch.running()) {
+            const auto code = retroarch.last_exit_code().value_or(-1);
+            const auto stderr_tail = retroarch.last_stderr_tail();
+            std::ostringstream reason;
+            reason << "emulator exited (code " << code << ")";
+            if (launch_config.standalone && gamescope_capture) {
+                reason << " — if Host GPU is the non-boot NVIDIA, check Gamescope WSI "
+                          "(ENABLE_GAMESCOPE_WSI / VK_ADD_IMPLICIT_LAYER_PATH); "
+                          "Yuzu often logs \"Device lacks a present queue\"";
+            }
+            session_end_reason = reason.str();
+            std::cerr << "Stopping session: " << *session_end_reason << '\n';
+            if (!stderr_tail.empty()) {
+                std::cerr << stderr_tail << '\n';
             }
         }
 

@@ -226,6 +226,7 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/host_launch_planner.cpp
         src/host/host_session_helpers.cpp
         src/host/input_router.cpp
+        src/host/launch_environment.cpp
         src/host/libretro_core_registry.cpp
         src/host/linux_uinput_gamepad.cpp
         src/host/virtual_keyboard.cpp

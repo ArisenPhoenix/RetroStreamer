@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
@@ -25,6 +26,13 @@ std::filesystem::path xdg_data_home() {
     }
     const char* home = std::getenv("HOME");
     return std::filesystem::path{home != nullptr ? home : ""} / ".local" / "share";
+}
+
+// Managed tools live under ~/.local/share/archstreamer even when a child profile
+// has redirected XDG_DATA_HOME (Yuzu save profile, Flatpak, etc.).
+std::filesystem::path archstreamer_user_data_root() {
+    const char* home = std::getenv("HOME");
+    return std::filesystem::path{home != nullptr ? home : ""} / ".local" / "share" / "archstreamer";
 }
 
 std::string normalize_pci_sysfs_name(std::string bus) {
@@ -157,9 +165,15 @@ std::optional<std::string> find_gamescope() {
         }
     }
     // Managed 3.12 wrapper (system 3.16 from akdor PPA lacks SDL nested and is flaky headless).
-    const auto managed = xdg_data_home() / "archstreamer" / "gamescope" / "archstreamer-gamescope";
+    // Prefer $HOME/.local/share/archstreamer — never a redirected XDG_DATA_HOME.
+    const auto managed = archstreamer_user_data_root() / "gamescope" / "archstreamer-gamescope";
     if (path_executable(managed)) {
         return managed.string();
+    }
+    // Legacy: older installs under whatever XDG_DATA_HOME pointed at install time.
+    const auto legacy = xdg_data_home() / "archstreamer" / "gamescope" / "archstreamer-gamescope";
+    if (legacy != managed && path_executable(legacy)) {
+        return legacy.string();
     }
     if (path_executable("/opt/gamescope/bin/gamescope")) {
         return std::string{"/opt/gamescope/bin/gamescope"};
@@ -205,9 +219,144 @@ std::vector<std::string> gamescope_command_prefix(
     return args;
 }
 
-std::vector<std::pair<std::string, std::string>> gamescope_launch_environment() {
-    // Child inherits gamescope's nested Xwayland; do not force DISPLAY=:99.
+namespace {
+
+std::optional<std::filesystem::path> gamescope_install_root_for(
+    const std::filesystem::path& gamescope_executable) {
+    std::error_code ec;
+    auto path = std::filesystem::weakly_canonical(gamescope_executable, ec);
+    if (ec) {
+        path = gamescope_executable;
+    }
+    if (path.filename() == "archstreamer-gamescope") {
+        return path.parent_path();
+    }
+    // .../bin/gamescope → install root
+    if (path.filename() == "gamescope" && path.parent_path().filename() == "bin") {
+        return path.parent_path().parent_path();
+    }
+    return std::nullopt;
+}
+
+bool gamescope_executable_is_managed(const std::filesystem::path& gamescope_executable) {
+    std::error_code ec;
+    auto path = std::filesystem::weakly_canonical(gamescope_executable, ec);
+    if (ec) {
+        path = gamescope_executable;
+    }
+    return path.filename() == "archstreamer-gamescope";
+}
+
+std::filesystem::path find_gamescope_wsi_library(const std::filesystem::path& root) {
+    for (const char* name : {
+             "libVkLayer_FROG_gamescope_wsi.so",
+             "libVkLayer_FROG_gamescope_wsi_x86_64.so",
+         }) {
+        const auto candidate = root / "lib" / "x86_64-linux-gnu" / name;
+        if (std::filesystem::exists(candidate)) {
+            return candidate;
+        }
+    }
     return {};
+}
+
+// Managed gamescope is relocated from /opt/gamescope but the WSI layer JSON still
+// points at /opt/... — without a loadable layer, nested X11 only allows present on
+// the "boot VGA" NVIDIA (1660 here), so Yuzu on the 3060 dies with "lacks a present queue".
+void ensure_gamescope_wsi_layer_manifest(const std::filesystem::path& root) {
+    const auto json_path =
+        root / "share" / "vulkan" / "implicit_layer.d" / "VkLayer_FROG_gamescope_wsi.x86_64.json";
+    const auto library = find_gamescope_wsi_library(root);
+    if (!std::filesystem::exists(json_path) || library.empty()) {
+        return;
+    }
+
+    std::ifstream in(json_path);
+    if (!in) {
+        return;
+    }
+    std::string contents(
+        (std::istreambuf_iterator<char>(in)),
+        std::istreambuf_iterator<char>());
+    in.close();
+
+    const auto key = std::string{"\"library_path\""};
+    const auto key_pos = contents.find(key);
+    if (key_pos == std::string::npos) {
+        return;
+    }
+    const auto colon = contents.find(':', key_pos + key.size());
+    if (colon == std::string::npos) {
+        return;
+    }
+    const auto first_quote = contents.find('"', colon + 1);
+    if (first_quote == std::string::npos) {
+        return;
+    }
+    const auto second_quote = contents.find('"', first_quote + 1);
+    if (second_quote == std::string::npos) {
+        return;
+    }
+    const auto current = contents.substr(first_quote + 1, second_quote - first_quote - 1);
+    if (std::filesystem::exists(current)) {
+        return;
+    }
+
+    const auto absolute = std::filesystem::weakly_canonical(library).string();
+    contents.replace(first_quote + 1, second_quote - first_quote - 1, absolute);
+    std::ofstream out(json_path, std::ios::trunc);
+    if (out) {
+        out << contents;
+    }
+}
+
+} // namespace
+
+std::vector<std::pair<std::string, std::string>> gamescope_launch_environment() {
+    // Nested clients must load Gamescope WSI so any preferred GPU can present into
+    // gamescope's XWayland (otherwise dual-NVIDIA present stays stuck on one card).
+    std::vector<std::pair<std::string, std::string>> environment;
+    environment.emplace_back("ENABLE_GAMESCOPE_WSI", "1");
+
+    std::filesystem::path layer_dir;
+    bool using_managed = false;
+    if (const auto gamescope = find_gamescope(); gamescope.has_value()) {
+        if (const auto root = gamescope_install_root_for(*gamescope); root.has_value()) {
+            using_managed = gamescope_executable_is_managed(*gamescope);
+            ensure_gamescope_wsi_layer_manifest(*root);
+            const auto candidate = *root / "share" / "vulkan" / "implicit_layer.d";
+            if (std::filesystem::exists(candidate / "VkLayer_FROG_gamescope_wsi.x86_64.json") &&
+                !find_gamescope_wsi_library(*root).empty()) {
+                layer_dir = candidate;
+            }
+        }
+    }
+    // Never pair managed gamescope with /opt's 3.16 WSI layer — mismatched
+    // layer/compositor versions segfault or skip present on the non-boot GPU.
+    if (layer_dir.empty() && !using_managed &&
+        std::filesystem::exists(
+            "/opt/gamescope/share/vulkan/implicit_layer.d/VkLayer_FROG_gamescope_wsi.x86_64.json")) {
+        layer_dir = "/opt/gamescope/share/vulkan/implicit_layer.d";
+    }
+    if (!layer_dir.empty()) {
+        environment.emplace_back("VK_ADD_IMPLICIT_LAYER_PATH", layer_dir.string());
+        // Older loaders also honor XDG_DATA_DIRS for share/vulkan/implicit_layer.d.
+        const auto share = layer_dir.parent_path().parent_path(); // .../share
+        std::string xdg = share.string();
+        if (const char* existing = std::getenv("XDG_DATA_DIRS");
+            existing != nullptr && existing[0] != '\0') {
+            xdg.push_back(':');
+            xdg += existing;
+        } else {
+            xdg += ":/usr/local/share:/usr/share";
+        }
+        // Keep NVIDIA ICD discoverable even if a later merge truncates dirs.
+        if (xdg.find("/usr/share") == std::string::npos) {
+            xdg += ":/usr/local/share:/usr/share";
+        }
+        environment.emplace_back("XDG_DATA_DIRS", std::move(xdg));
+    }
+    return environment;
 }
 
 std::optional<std::string> pci_vendor_device_id(const std::string& pci_bus) {

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Incremental Windows client build (Git Bash / MSYS). Prefer build_windows.ps1 on PowerShell.
+# Incremental Windows CLIENT build (Git Bash / MSYS). Prefer build_windows.ps1 on PowerShell.
+# No Linux host deps (gamescope/WSI/Yuzu). See deploy/windows/README.md.
 # Usage:
 #   ./build_windows.sh              # incremental
 #   ./build_windows.sh --reconfigure

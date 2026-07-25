@@ -209,10 +209,10 @@ Client-specific Windows work:
 
 ### Windows host (after client)
 
-Host interfaces already exist (`VirtualGamepadBus`, `RetroArchProcess`, `MediaServer` via `default_host_platform.hpp`). Linux fills them with uinput, Xvfb/`ximagesrc`, and Pulse/PipeWire. Windows needs alternate backends behind those same interfaces:
+Host interfaces already exist (`VirtualGamepadBus`, `RetroArchProcess`, `MediaServer` via `default_host_platform.hpp`). Linux fills them with uinput, gamescope/Xvfb/VirtualGL capture, and Pulse/PipeWire. Windows needs alternate backends behind those same interfaces:
 
 - **Virtual pads:** ViGEmBus (or equivalent) instead of `/dev/uinput`
-- **Display capture:** DXGI Desktop Duplication / Windows Graphics Capture (or GStreamer `d3d11screencapturesrc`) instead of Xvfb + `ximagesrc`
+- **Display capture:** DXGI Desktop Duplication / Windows Graphics Capture (or GStreamer `d3d11screencapturesrc`) instead of gamescope PipeWire / Xvfb + `ximagesrc` (do **not** expect a gamescope port)
 - **Audio loopback:** WASAPI loopback instead of Pulse/PipeWire monitors
 - **RetroArch:** Windows install paths and win32/`dinput`/`xinput` joypad binding (same “ignore list vs index” class of bugs as Linux SDL, different enumerator)
 
@@ -278,7 +278,12 @@ The first implemented video path is opt-in on the host:
 host_runner --video --video-dest <client-ip> --video-port <udp-port>
 ```
 
-When video is enabled, the host starts RetroArch on a virtual X display, captures that display with `ximagesrc`, encodes H.264 with `x264enc`, packetizes with `rtph264pay`, and fans the same RTP to Watch-local + remotes with `multiudpsink` (one capture/encode). `Xvfb` is preferred for a headless display; `Xephyr` is used as the fallback when `Xvfb` is not installed.
+When video is enabled, capture depends on the emulator:
+
+- **Switch / Yuzu:** headless **gamescope** (managed wrapper under `~/.local/share/archstreamer/gamescope/` preferred). The host captures gamescope’s PipeWire Video/Source (`pipewiresrc`), not `ximagesrc`. Nested clients must load **Gamescope WSI** (`ENABLE_GAMESCOPE_WSI` + `VK_ADD_IMPLICIT_LAYER_PATH`); without it, dual-NVIDIA setups often only allow present on the boot GPU (“Device lacks a present queue” on the other card).
+- **RetroArch:** virtual X display + `ximagesrc` by default. `Xvfb` is preferred; `Xephyr` is the fallback. When a non-default NVIDIA GPU is selected for GL, **VirtualGL** (`vglrun`) renders via the real display’s PRIME providers while capture stays on `:99`.
+
+Encode is H.264 (`nvh264enc` when CUDA/NVENC is available, else `x264enc`), packetized with `rtph264pay`, and fanned to Watch-local + remotes with `multiudpsink` (one capture/encode).
 
 Clients request video by default and can opt out with `session_client --no-video`. If a `MediaEndpoint` is received, the client starts a GStreamer RTP/H.264 receiver and displays it through `autovideosink`.
 

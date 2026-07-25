@@ -2,14 +2,16 @@
 <component type="desktop-application">
   <id>io.github.ArisenPhoenix.ArchStreamer</id>
   <name>ArchStreamer</name>
-  <summary>Local and LAN RetroArch streaming</summary>
+  <summary>LAN RetroArch / emulator streaming client</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>LicenseRef-proprietary</project_license>
   <description>
     <p>
-      ArchStreamer is a host/client tool for playing RetroArch games locally or
-      over a LAN. Artwork stays on each machine; the Settings tab configures
-      Steam account detection and art refresh.
+      ArchStreamer joins a LAN host to play streamed RetroArch or Switch (Yuzu)
+      sessions with local controllers. Artwork stays on each machine; the
+      Settings tab configures Steam account detection and art refresh.
+      Hosting (gamescope, RetroArch, virtual pads) is a native Linux build —
+      not this Flatpak.
     </p>
   </description>
   <launchable type="desktop-id">io.github.ArisenPhoenix.ArchStreamer.desktop</launchable>

@@ -24,6 +24,9 @@ std::filesystem::path write_retroarch_input_override(
     bool realtime_pacing,
     bool capture_fullscreen = false,
     std::string_view capture_resolution = {},
-    int vulkan_gpu_index = -1);
+    int vulkan_gpu_index = -1,
+    std::string_view system_key = {},
+    const std::filesystem::path& core_path = {},
+    int resolution_scale = 1);
 
 } // namespace archstreamer

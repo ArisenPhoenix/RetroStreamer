@@ -190,12 +190,12 @@ std::vector<std::string> gamescope_command_prefix(
         "-H",
         std::to_string(height),
         "--force-windows-fullscreen",
-        // Keep compositing so PipeWire keeps emitting on static menus (language select, etc.).
-        // Without this, videorate/x264 only see one frame and the stream freezes.
+        // -r = nested refresh. -o = refresh when unfocused (headless counts as
+        // unfocused) — not "output fps". Keep them equal so 60fps games aren't capped.
         "-r",
         "60",
         "-o",
-        "30",
+        "60",
     };
     if (!prefer_vk_device.empty()) {
         args.push_back("--prefer-vk-device");
@@ -413,8 +413,8 @@ void GamescopeDisplay::start(const std::string& display, const std::string& reso
             width_ = std::stoi(resolution.substr(0, x));
             height_ = std::stoi(resolution.substr(x + 1));
         } catch (const std::exception&) {
-            width_ = 1280;
-            height_ = 720;
+            width_ = 1920;
+            height_ = 1080;
         }
     }
     if (!find_gamescope().has_value()) {

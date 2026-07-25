@@ -1,11 +1,9 @@
 #include "common/catalog_paths.hpp"
 #include "common/catalog_presenter.hpp"
 #include "client/client_app.hpp"
+#include "client/client_media_playback.hpp"
 #include "client/game_filter.hpp"
-#include "client/gstreamer_media_receiver.hpp"
-#include "client/gstreamer_synced_media_session.hpp"
 #include "client/audio_playback_device.hpp"
-#include "client/media_receiver.hpp"
 #include "game_picker_widget.hpp"
 #include "host_search_dialog.hpp"
 #include "common/addresses.hpp"
@@ -16,6 +14,8 @@
 #ifdef ARCHSTREAMER_HAS_HOST
 #include "host/game_catalog_scanner.hpp"
 #include "host/gpu_select.hpp"
+#include "host/host_app_config.hpp"
+#include "host/media_capture.hpp"
 #endif
 
 #include <QApplication>
@@ -252,6 +252,10 @@ public:
         tabs_->addTab(build_settings_tab(), "Settings");
         setCentralWidget(tabs_);
         load_persisted_settings();
+#ifdef ARCHSTREAMER_HAS_HOST
+        // Host tab construction happens before settings load; apply last game now.
+        load_host_games();
+#endif
         restore_last_session_tab();
         start_client_host_auto_pick();
         refresh_game_options_ui();
@@ -359,16 +363,25 @@ private:
         client_video_->setChecked(true);
         client_audio_ = new QCheckBox("Receive audio", form_box);
         client_audio_->setChecked(true);
+        client_send_keyboard_ = new QCheckBox("Send keyboard (Space=FF, P=pause)", form_box);
+        client_send_keyboard_->setChecked(true);
+        client_send_keyboard_->setToolTip(
+            "Forwards Space, P, arrows, Enter, Esc, Tab, Backspace, and F1 to the host.\n"
+            "Space = fast-forward (hold), P = pause, F1 = RetroArch menu.\n"
+            "Works even when the video window has focus (not only this GUI).");
         client_stream_quality_ = new QComboBox(form_box);
         client_stream_quality_->addItem("Auto", static_cast<int>(archstreamer::MediaQualityTier::Auto));
-        client_stream_quality_->addItem("Low (800 kbps / 20 fps)", static_cast<int>(archstreamer::MediaQualityTier::Low));
-        client_stream_quality_->addItem("Medium (3.5 Mbps / 30 fps)", static_cast<int>(archstreamer::MediaQualityTier::Medium));
-        client_stream_quality_->addItem("High (12 Mbps / 60 fps)", static_cast<int>(archstreamer::MediaQualityTier::High));
+        client_stream_quality_->addItem("Low (800 kbps / 20 fps / 540p)", static_cast<int>(archstreamer::MediaQualityTier::Low));
+        client_stream_quality_->addItem("Medium (3.5 Mbps / 30 fps / 720p)", static_cast<int>(archstreamer::MediaQualityTier::Medium));
+        client_stream_quality_->addItem("Med-High (8 Mbps / 60 fps / 720p)", static_cast<int>(archstreamer::MediaQualityTier::MediumHigh));
+        client_stream_quality_->addItem("High (12 Mbps / 60 fps / 1080p)", static_cast<int>(archstreamer::MediaQualityTier::High));
+        client_stream_quality_->addItem("Very-High (25 Mbps / 60 fps / 1080p)", static_cast<int>(archstreamer::MediaQualityTier::VeryHigh));
         client_stream_quality_->setCurrentIndex(0);
         client_stream_quality_->setToolTip(
             "Preferred video tier sent to the host each second.\n"
-            "Auto starts at Medium and steps up/down from network health.\n"
-            "Use Medium or Low on Wi‑Fi / weaker laptops; High needs a strong link.");
+            "Auto starts at Medium and steps up/down from decode health (~1 Hz heartbeats).\n"
+            "Host captures at 1080p; lower tiers downscale. 60fps only if the game renders that fast.\n"
+            "Use Medium or Low on Wi‑Fi / weaker laptops; High/Very-High need a strong link.");
         client_synced_av_ = new QCheckBox("Synced A/V (experimental)", form_box);
         client_synced_av_->setChecked(false);
         client_synced_av_->setToolTip(
@@ -398,6 +411,9 @@ private:
         connect(client_audio_, &QCheckBox::toggled, this, [this](bool) {
             persist_settings_if_idle();
         });
+        connect(client_send_keyboard_, &QCheckBox::toggled, this, [this](bool) {
+            persist_settings_if_idle();
+        });
         connect(client_stream_quality_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
             persist_settings_if_idle();
         });
@@ -411,10 +427,18 @@ private:
         form->addRow("Stream quality", client_stream_quality_);
         form->addRow("", client_video_);
         form->addRow("", client_audio_);
+        form->addRow("", client_send_keyboard_);
         form->addRow("", client_synced_av_);
 
         client_game_picker_ = new archstreamer::gui::GamePickerWidget(page);
         client_game_picker_->setArtRoot(art_root_path());
+        connect(client_game_picker_, &archstreamer::gui::GamePickerWidget::selectionChanged, this, [this] {
+            if (client_game_picker_->hasSelection()) {
+                persisted_client_game_id_ =
+                    QString::fromStdString(*client_game_picker_->selectedGameId());
+            }
+            persist_settings_if_idle();
+        });
         client_catalog_status_ = new QLabel("Not connected", page);
         client_controllers_ = new QListWidget(page);
         client_controllers_->setSelectionMode(QAbstractItemView::MultiSelection);
@@ -691,6 +715,13 @@ private:
         host_status_ = new QLabel("Host stopped", page);
         host_game_picker_ = new archstreamer::gui::GamePickerWidget(page);
         host_game_picker_->setArtRoot(art_root_path());
+        connect(host_game_picker_, &archstreamer::gui::GamePickerWidget::selectionChanged, this, [this] {
+            if (host_game_picker_->hasSelection()) {
+                persisted_host_game_id_ =
+                    QString::fromStdString(*host_game_picker_->selectedGameId());
+            }
+            persist_settings_if_idle();
+        });
         connect(start, &QPushButton::clicked, this, [this] {
             remember_session_tab(QStringLiteral("host"));
             start_host();
@@ -807,7 +838,7 @@ private:
         root->addLayout(left, 1);
         root->addWidget(host_log_, 2);
         refresh_host_controllers();
-        load_host_games();
+        // load_host_games() runs after load_persisted_settings() so lastGameId applies.
         return page;
     }
 #endif // ARCHSTREAMER_HAS_HOST
@@ -912,11 +943,25 @@ private:
 #ifdef ARCHSTREAMER_HAS_HOST
         settings_gpu_ = new QComboBox(form_box);
         settings_gpu_->setToolTip(
-            "GPU for Host Player RetroArch and streamed standalone (Yuzu/gamescope).\n"
+            "GPU for game render and H.264 encode (normal single-GPU mode).\n"
             "Auto picks the highest-scoring discrete card.\n"
-            "Sets PRIME/GLX offload and gamescope --prefer-vk-device.");
+            "Optional: enable Separate render GPU only if you want encode on one card and render on another.");
+        form->addRow("Host GPU", settings_gpu_);
+
+        settings_separate_render_gpu_ = new QCheckBox("Separate render GPU", form_box);
+        settings_separate_render_gpu_->setChecked(false);
+        settings_separate_render_gpu_->setToolTip(
+            "Advanced: encode stays on Host GPU above; render uses the second dropdown.\n"
+            "Leave unchecked for normal single-GPU setups.");
+        form->addRow("", settings_separate_render_gpu_);
+
+        settings_render_gpu_ = new QComboBox(form_box);
+        settings_render_gpu_->setToolTip(
+            "Render-only GPU when Separate render GPU is checked.\n"
+            "Ignored in normal single-GPU mode.");
+        settings_render_gpu_->setEnabled(false);
+        form->addRow("Render GPU", settings_render_gpu_);
         refresh_settings_gpus();
-        form->addRow("Host render GPU", settings_gpu_);
 
         settings_renderer_ = new QComboBox(form_box);
         settings_renderer_->addItem("Auto", QStringLiteral("auto"));
@@ -928,6 +973,34 @@ private:
             "Auto: Vulkan on gamescope, OpenGL on VirtualGL.\n"
             "Ignored for RetroArch cores.");
         form->addRow("Standalone renderer", settings_renderer_);
+
+        settings_yuzu_scale_ = new QComboBox(form_box);
+        settings_yuzu_scale_->addItem("1x native", 1);
+        settings_yuzu_scale_->addItem("2x native", 2);
+        settings_yuzu_scale_->addItem("3x native", 3);
+        settings_yuzu_scale_->addItem("4x native", 4);
+        settings_yuzu_scale_->addItem("5x native", 5);
+        settings_yuzu_scale_->addItem("6x native", 6);
+        settings_yuzu_scale_->setCurrentIndex(0);
+        settings_yuzu_scale_->setToolTip(
+            "Yuzu internal resolution scale (docked native ≈ 1080p).\n"
+            "2x/3x supersamples into the stream capture — sharper image, more GPU load.\n"
+            "Applied to the per-user Yuzu profile on Host start. Ignored for RetroArch.");
+        form->addRow("Yuzu resolution", settings_yuzu_scale_);
+
+        settings_retroarch_scale_ = new QComboBox(form_box);
+        settings_retroarch_scale_->addItem("1x native", 1);
+        settings_retroarch_scale_->addItem("2x native", 2);
+        settings_retroarch_scale_->addItem("3x native", 3);
+        settings_retroarch_scale_->addItem("4x native", 4);
+        settings_retroarch_scale_->addItem("5x native", 5);
+        settings_retroarch_scale_->addItem("6x native", 6);
+        settings_retroarch_scale_->setCurrentIndex(0);
+        settings_retroarch_scale_->setToolTip(
+            "RetroArch internal resolution scale for cores that support it\n"
+            "(LRPS2, SwanStation, PPSSPP, Dolphin, Citra, Mupen64Plus-Next, Beetle PSX HW).\n"
+            "Written to that core's .opt on Host start. Ignored for Yuzu / other cores.");
+        form->addRow("RetroArch resolution", settings_retroarch_scale_);
 #endif
         settings_audio_out_ = new QComboBox(form_box);
         settings_audio_out_->setToolTip(
@@ -960,7 +1033,21 @@ private:
         connect(settings_gpu_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
             persist_settings_if_idle();
         });
+        connect(settings_separate_render_gpu_, &QCheckBox::toggled, this, [this](bool checked) {
+            update_separate_render_gpu_visibility();
+            (void)checked;
+            persist_settings_if_idle();
+        });
+        connect(settings_render_gpu_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+            persist_settings_if_idle();
+        });
         connect(settings_renderer_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+            persist_settings_if_idle();
+        });
+        connect(settings_yuzu_scale_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+            persist_settings_if_idle();
+        });
+        connect(settings_retroarch_scale_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
             persist_settings_if_idle();
         });
 #endif
@@ -1020,14 +1107,13 @@ private:
     }
 
 #ifdef ARCHSTREAMER_HAS_HOST
-    void refresh_settings_gpus() {
-        if (settings_gpu_ == nullptr) {
+    void populate_gpu_combo(QComboBox* combo, const QString& previous) {
+        if (combo == nullptr) {
             return;
         }
-        const QSignalBlocker blocker(settings_gpu_);
-        const auto previous = settings_gpu_->currentData().toString();
-        settings_gpu_->clear();
-        settings_gpu_->addItem("Auto (most performant)", QStringLiteral("auto"));
+        const QSignalBlocker blocker(combo);
+        combo->clear();
+        combo->addItem("Auto (most performant)", QStringLiteral("auto"));
         try {
             const auto devices = archstreamer::list_render_gpus();
             for (const auto& device : devices) {
@@ -1036,11 +1122,11 @@ private:
                     label += QString(" (%1 MiB)").arg(device.memory_mib);
                 }
                 label += QString(" [%1]").arg(QString::fromStdString(device.id));
-                settings_gpu_->addItem(label, QString::fromStdString(device.id));
+                combo->addItem(label, QString::fromStdString(device.id));
             }
             if (!devices.empty()) {
                 const auto& preferred = archstreamer::preferred_render_gpu(devices);
-                settings_gpu_->setItemText(
+                combo->setItemText(
                     0,
                     QString("Auto → %1 [%2]")
                         .arg(QString::fromStdString(preferred.name))
@@ -1054,15 +1140,67 @@ private:
                     GuiLogLevel::Quiet);
             }
         }
-        const auto index = settings_gpu_->findData(previous.isEmpty() ? QStringLiteral("auto") : previous);
-        settings_gpu_->setCurrentIndex(index >= 0 ? index : 0);
+        const auto index = combo->findData(previous.isEmpty() ? QStringLiteral("auto") : previous);
+        combo->setCurrentIndex(index >= 0 ? index : 0);
     }
 
-    std::string selected_render_gpu_id() const {
+    void refresh_settings_gpus() {
+        const auto encode_prev =
+            settings_gpu_ != nullptr ? settings_gpu_->currentData().toString() : QStringLiteral("auto");
+        const auto render_prev = settings_render_gpu_ != nullptr
+            ? settings_render_gpu_->currentData().toString()
+            : QStringLiteral("auto");
+        populate_gpu_combo(settings_gpu_, encode_prev);
+        populate_gpu_combo(settings_render_gpu_, render_prev);
+        update_separate_render_gpu_visibility();
+    }
+
+    void update_separate_render_gpu_visibility() {
+        if (settings_separate_render_gpu_ == nullptr) {
+            return;
+        }
+        int discrete = 0;
+        try {
+            for (const auto& device : archstreamer::list_render_gpus()) {
+                if (device.nvidia_index >= 0 || device.id.rfind("mesa:", 0) == 0) {
+                    ++discrete;
+                }
+            }
+        } catch (...) {
+            discrete = 0;
+        }
+        const bool can_split = discrete >= 2;
+        settings_separate_render_gpu_->setVisible(can_split);
+        if (!can_split && settings_separate_render_gpu_->isChecked()) {
+            const QSignalBlocker blocker(settings_separate_render_gpu_);
+            settings_separate_render_gpu_->setChecked(false);
+        }
+        const bool show_render =
+            can_split && settings_separate_render_gpu_->isChecked();
+        if (settings_render_gpu_ != nullptr) {
+            settings_render_gpu_->setVisible(show_render);
+            settings_render_gpu_->setEnabled(show_render);
+            if (auto* form = qobject_cast<QFormLayout*>(settings_render_gpu_->parentWidget()->layout())) {
+                if (QWidget* label = form->labelForField(settings_render_gpu_)) {
+                    label->setVisible(show_render);
+                }
+            }
+        }
+    }
+
+    std::string selected_encode_gpu_id() const {
         if (settings_gpu_ == nullptr || settings_gpu_->currentData().isNull()) {
             return "auto";
         }
         const auto id = settings_gpu_->currentData().toString().trimmed();
+        return id.isEmpty() ? std::string("auto") : id.toStdString();
+    }
+
+    std::string selected_render_gpu_id() const {
+        if (settings_render_gpu_ == nullptr || settings_render_gpu_->currentData().isNull()) {
+            return "auto";
+        }
+        const auto id = settings_render_gpu_->currentData().toString().trimmed();
         return id.isEmpty() ? std::string("auto") : id.toStdString();
     }
 
@@ -1072,6 +1210,20 @@ private:
         }
         const auto id = settings_renderer_->currentData().toString().trimmed();
         return id.isEmpty() ? QStringLiteral("auto") : id;
+    }
+
+    int selected_yuzu_resolution_scale() const {
+        if (settings_yuzu_scale_ == nullptr || settings_yuzu_scale_->currentData().isNull()) {
+            return 1;
+        }
+        return qBound(settings_yuzu_scale_->currentData().toInt(), 1, 6);
+    }
+
+    int selected_retroarch_resolution_scale() const {
+        if (settings_retroarch_scale_ == nullptr || settings_retroarch_scale_->currentData().isNull()) {
+            return 1;
+        }
+        return qBound(settings_retroarch_scale_->currentData().toInt(), 1, 6);
     }
 #endif
 
@@ -1239,6 +1391,8 @@ private:
                 }
                 if (!host_game_picker_->hasSelection()) {
                     host_game_picker_->setSelectedGameId(list.games.front().id);
+                    persisted_host_game_id_ =
+                        QString::fromStdString(list.games.front().id);
                 }
             }
             host_status_->setText(QString("Host stopped; %1 game(s) loaded").arg(list.games.size()));
@@ -1292,21 +1446,53 @@ private:
         }
 #ifdef ARCHSTREAMER_HAS_HOST
         if (settings_gpu_ != nullptr) {
-            const auto gpu_id = settings.value("graphics/gpuId", "auto").toString();
+            const auto gpu_id = settings.value(
+                "graphics/encodeGpuId",
+                settings.value("graphics/gpuId", "auto")).toString();
             const QSignalBlocker blocker(settings_gpu_);
             const auto index = settings_gpu_->findData(gpu_id);
             settings_gpu_->setCurrentIndex(index >= 0 ? index : 0);
             if (index < 0 && gpu_id != "auto" && settings_log_ != nullptr) {
                 append_log(
                     settings_log_,
-                    QString("Saved GPU '%1' is unavailable; using Auto.").arg(gpu_id));
+                    QString("Saved encode GPU '%1' is unavailable; using Auto.").arg(gpu_id));
             }
         }
+        if (settings_separate_render_gpu_ != nullptr) {
+            const QSignalBlocker blocker(settings_separate_render_gpu_);
+            settings_separate_render_gpu_->setChecked(
+                settings.value("graphics/separateRenderGpu", false).toBool());
+        }
+        if (settings_render_gpu_ != nullptr) {
+            const auto gpu_id = settings.value("graphics/renderGpuId", "auto").toString();
+            const QSignalBlocker blocker(settings_render_gpu_);
+            const auto index = settings_render_gpu_->findData(gpu_id);
+            settings_render_gpu_->setCurrentIndex(index >= 0 ? index : 0);
+            if (index < 0 && gpu_id != "auto" && settings_log_ != nullptr) {
+                append_log(
+                    settings_log_,
+                    QString("Saved render GPU '%1' is unavailable; using Auto.").arg(gpu_id));
+            }
+        }
+        update_separate_render_gpu_visibility();
         if (settings_renderer_ != nullptr) {
             const auto renderer = settings.value("graphics/renderer", "auto").toString();
             const QSignalBlocker blocker(settings_renderer_);
             const auto index = settings_renderer_->findData(renderer);
             settings_renderer_->setCurrentIndex(index >= 0 ? index : 0);
+        }
+        if (settings_yuzu_scale_ != nullptr) {
+            const auto scale = qBound(settings.value("graphics/yuzuResolutionScale", 1).toInt(), 1, 6);
+            const QSignalBlocker blocker(settings_yuzu_scale_);
+            const auto index = settings_yuzu_scale_->findData(scale);
+            settings_yuzu_scale_->setCurrentIndex(index >= 0 ? index : 0);
+        }
+        if (settings_retroarch_scale_ != nullptr) {
+            const auto scale =
+                qBound(settings.value("graphics/retroarchResolutionScale", 1).toInt(), 1, 6);
+            const QSignalBlocker blocker(settings_retroarch_scale_);
+            const auto index = settings_retroarch_scale_->findData(scale);
+            settings_retroarch_scale_->setCurrentIndex(index >= 0 ? index : 0);
         }
 #endif
         if (settings_audio_out_ != nullptr) {
@@ -1353,6 +1539,9 @@ private:
         }
         if (client_audio_ != nullptr) {
             client_audio_->setChecked(settings.value("client/receiveAudio", true).toBool());
+        }
+        if (client_send_keyboard_ != nullptr) {
+            client_send_keyboard_->setChecked(settings.value("client/sendKeyboard", true).toBool());
         }
         if (client_synced_av_ != nullptr) {
             client_synced_av_->setChecked(settings.value("client/syncedAv", false).toBool());
@@ -1446,10 +1635,28 @@ private:
         settings.setValue("ui/logLevel", static_cast<int>(current_log_level()));
 #ifdef ARCHSTREAMER_HAS_HOST
         if (settings_gpu_ != nullptr) {
-            settings.setValue("graphics/gpuId", QString::fromStdString(selected_render_gpu_id()));
+            const auto encode_id = QString::fromStdString(selected_encode_gpu_id());
+            settings.setValue("graphics/encodeGpuId", encode_id);
+            settings.setValue("graphics/gpuId", encode_id); // legacy key
+        }
+        if (settings_separate_render_gpu_ != nullptr) {
+            settings.setValue(
+                "graphics/separateRenderGpu",
+                settings_separate_render_gpu_->isChecked());
+        }
+        if (settings_render_gpu_ != nullptr) {
+            settings.setValue("graphics/renderGpuId", QString::fromStdString(selected_render_gpu_id()));
         }
         if (settings_renderer_ != nullptr) {
             settings.setValue("graphics/renderer", selected_graphics_api_id());
+        }
+        if (settings_yuzu_scale_ != nullptr) {
+            settings.setValue("graphics/yuzuResolutionScale", selected_yuzu_resolution_scale());
+        }
+        if (settings_retroarch_scale_ != nullptr) {
+            settings.setValue(
+                "graphics/retroarchResolutionScale",
+                selected_retroarch_resolution_scale());
         }
 #endif
         if (settings_audio_out_ != nullptr) {
@@ -1481,6 +1688,9 @@ private:
         if (client_audio_ != nullptr) {
             settings.setValue("client/receiveAudio", client_audio_->isChecked());
         }
+        if (client_send_keyboard_ != nullptr) {
+            settings.setValue("client/sendKeyboard", client_send_keyboard_->isChecked());
+        }
         if (client_synced_av_ != nullptr) {
             settings.setValue("client/syncedAv", client_synced_av_->isChecked());
         }
@@ -1488,9 +1698,9 @@ private:
             settings.setValue("client/streamQuality", client_stream_quality_->currentData().toInt());
         }
         if (client_game_picker_ != nullptr && client_game_picker_->hasSelection()) {
-            settings.setValue(
-                "client/lastGameId",
-                QString::fromStdString(*client_game_picker_->selectedGameId()));
+            persisted_client_game_id_ =
+                QString::fromStdString(*client_game_picker_->selectedGameId());
+            settings.setValue("client/lastGameId", persisted_client_game_id_);
         } else if (!persisted_client_game_id_.isEmpty()) {
             settings.setValue("client/lastGameId", persisted_client_game_id_);
         }
@@ -1536,9 +1746,9 @@ private:
             settings.setValue("host/advertiseLan", host_advertise_->isChecked());
         }
         if (host_game_picker_ != nullptr && host_game_picker_->hasSelection()) {
-            settings.setValue(
-                "host/lastGameId",
-                QString::fromStdString(*host_game_picker_->selectedGameId()));
+            persisted_host_game_id_ =
+                QString::fromStdString(*host_game_picker_->selectedGameId());
+            settings.setValue("host/lastGameId", persisted_host_game_id_);
         } else if (!persisted_host_game_id_.isEmpty()) {
             settings.setValue("host/lastGameId", persisted_host_game_id_);
         }
@@ -1762,11 +1972,47 @@ private:
             return;
         }
         const auto filter = client_filter_from_fields();
+        // Prefer the picker's current choice over a stale client/lastGameId (Connect used to
+        // force Kingdom Hearts back every time). Fall back to host selection for local runs.
+        std::optional<std::string> previous;
+        if (client_game_picker_->hasSelection()) {
+            previous = client_game_picker_->selectedGameId();
+        }
+
         client_game_picker_->setSessionFilter(filter);
         client_game_picker_->setCatalog(client_full_catalog_);
-        if (!persisted_client_game_id_.isEmpty()) {
-            client_game_picker_->setSelectedGameId(persisted_client_game_id_.toStdString());
+
+        auto try_select = [this](const std::string& game_id) -> bool {
+            if (game_id.empty()) {
+                return false;
+            }
+            if (archstreamer::find_game_by_id(client_full_catalog_, game_id) == nullptr) {
+                return false;
+            }
+            client_game_picker_->setSelectedGameId(game_id);
+            return true;
+        };
+
+        bool restored = false;
+        if (previous.has_value()) {
+            restored = try_select(*previous);
         }
+        if (!restored && !persisted_client_game_id_.isEmpty()) {
+            restored = try_select(persisted_client_game_id_.toStdString());
+        }
+#ifdef ARCHSTREAMER_HAS_HOST
+        if (!restored && host_game_picker_ != nullptr && host_game_picker_->hasSelection()) {
+            restored = try_select(*host_game_picker_->selectedGameId());
+        }
+        if (!restored && !persisted_host_game_id_.isEmpty()) {
+            restored = try_select(persisted_host_game_id_.toStdString());
+        }
+#endif
+        if (restored && client_game_picker_->hasSelection()) {
+            persisted_client_game_id_ =
+                QString::fromStdString(*client_game_picker_->selectedGameId());
+        }
+
         const auto filtered = archstreamer::filter_games(client_full_catalog_, filter);
         client_catalog_status_->setText(QString("%1 game(s) from host, %2 match mode/players")
             .arg(client_full_catalog_.games.size())
@@ -1785,6 +2031,7 @@ private:
         config.filter = client_filter_from_fields();
         config.wants_video = client_video_->isChecked();
         config.wants_audio = client_audio_->isChecked();
+        config.send_keyboard = client_send_keyboard_ != nullptr && client_send_keyboard_->isChecked();
         config.synced_av = client_synced_av_ != nullptr && client_synced_av_->isChecked();
         config.wanted_tier = selected_stream_quality();
 
@@ -2213,22 +2460,6 @@ private:
             });
         }
 
-        QStringList args;
-        args
-            << "--rom-root" << host_rom_root_->text()
-            << "--meta-root" << host_meta_root_->text()
-            << "--art-root" << QString::fromStdString(art_root_path().string())
-            << "--control-port" << QString::number(host_control_port_->value())
-            << "--input-port" << QString::number(host_input_port_->value())
-            << "--clients" << QString::number(host_clients_->value())
-            << "--session-timeout" << QString::number(session_timeout_seconds())
-            << "--host-role" << host_role_text(host_role_)
-            << "--mode" << mode_name(selected_mode(host_mode_))
-            << "--gpu" << QString::fromStdString(selected_render_gpu_id())
-            << "--renderer" << selected_graphics_api_id();
-        if (current_log_level() == GuiLogLevel::Verbose) {
-            args << "--verbose";
-        }
         const auto bridge_index = host_bridge_controller_->currentData().toInt();
         if (!host_role_is_viewer(host_role_) && bridge_index < 0) {
             host_status_->setText("Host not started");
@@ -2242,29 +2473,69 @@ private:
             append_log(host_log_, "Select None for bridge controller or change Host role to Player.");
             return;
         }
-        if (bridge_index >= 0) {
-            args << "--bridge-controller" << QString::number(bridge_index);
-        }
-        if (host_video_->isChecked()) {
-            args << "--video" << "--video-port" << QString::number(host_video_port_->value());
-        } else {
-            args << "--no-video";
-        }
-        if (host_audio_->isChecked()) {
-            args << "--audio" << "--audio-port" << QString::number(host_audio_port_->value());
-            append_log(
-                host_log_,
-                QString("Audio streaming enabled on base UDP port %1 (captures default output monitor).")
-                    .arg(host_audio_port_->value()));
-        } else {
-            args << "--no-audio";
-        }
-        args << host_debug_args_;
         if (!host_game_picker_->hasSelection()) {
             append_log(host_log_, "Choose a host game before starting.");
             return;
         }
-        args << QString::fromStdString(*host_game_picker_->selectedGameId());
+
+        QStringList args;
+        {
+            archstreamer::HostAppConfig host_cfg;
+            host_cfg.rom_root = host_rom_root_->text().toStdString();
+            host_cfg.meta_root = host_meta_root_->text().toStdString();
+            host_cfg.art_root = art_root_path();
+            host_cfg.control_port = static_cast<std::uint16_t>(host_control_port_->value());
+            host_cfg.input_port = static_cast<std::uint16_t>(host_input_port_->value());
+            host_cfg.clients = static_cast<std::uint8_t>(host_clients_->value());
+            host_cfg.session_timeout_seconds = static_cast<std::uint16_t>(session_timeout_seconds());
+            host_cfg.host_role = host_role_is_viewer(host_role_)
+                ? archstreamer::ParticipantRole::Viewer
+                : archstreamer::ParticipantRole::Player;
+            host_cfg.session_mode = selected_mode(host_mode_);
+            host_cfg.encode_gpu = selected_encode_gpu_id();
+            host_cfg.separate_render_gpu =
+                settings_separate_render_gpu_ != nullptr &&
+                settings_separate_render_gpu_->isChecked();
+            host_cfg.render_gpu = selected_render_gpu_id();
+            const auto renderer = selected_graphics_api_id();
+            if (renderer == QLatin1String("opengl")) {
+                host_cfg.graphics_api = archstreamer::GraphicsApiPreference::OpenGL;
+            } else if (renderer == QLatin1String("vulkan")) {
+                host_cfg.graphics_api = archstreamer::GraphicsApiPreference::Vulkan;
+            } else {
+                host_cfg.graphics_api = archstreamer::GraphicsApiPreference::Auto;
+            }
+            host_cfg.yuzu_resolution_scale = selected_yuzu_resolution_scale();
+            host_cfg.retroarch_resolution_scale = selected_retroarch_resolution_scale();
+            host_cfg.verbose = current_log_level() == GuiLogLevel::Verbose;
+            host_cfg.video = host_video_->isChecked();
+            host_cfg.video_port = static_cast<std::uint16_t>(host_video_port_->value());
+            host_cfg.audio = host_audio_->isChecked();
+            host_cfg.audio_port = static_cast<std::uint16_t>(host_audio_port_->value());
+            if (bridge_index >= 0) {
+                host_cfg.bridge_controller_index = static_cast<std::size_t>(bridge_index);
+            }
+            host_cfg.selector = *host_game_picker_->selectedGameId();
+            const auto selected_id = *host_cfg.selector;
+            persisted_host_game_id_ = QString::fromStdString(selected_id);
+            // Keep Client Join in sync for local host+client testing.
+            persisted_client_game_id_ = persisted_host_game_id_;
+            if (client_game_picker_ != nullptr) {
+                client_game_picker_->setSelectedGameId(selected_id);
+            }
+            persist_settings_if_idle();
+
+            for (const auto& arg : archstreamer::host_app_config_to_argv(host_cfg)) {
+                args << QString::fromStdString(arg);
+            }
+        }
+        if (host_audio_->isChecked()) {
+            append_log(
+                host_log_,
+                QString("Audio streaming enabled on base UDP port %1 (captures default output monitor).")
+                    .arg(host_audio_port_->value()));
+        }
+        args << host_debug_args_;
 
         client_port_->setValue(host_control_port_->value());
         client_input_port_->setValue(host_input_port_->value());
@@ -2364,12 +2635,13 @@ private:
             stop_host_local_media();
             const bool use_synced =
                 client_synced_av_ != nullptr && client_synced_av_->isChecked();
-            if (use_synced) {
-                host_local_receiver_ = std::make_unique<archstreamer::GStreamerSyncedMediaReceiver>();
-            } else {
-                host_local_receiver_ = std::make_unique<archstreamer::GStreamerMediaReceiver>();
-            }
-            host_local_receiver_->connect(endpoint);
+            auto playback = std::make_unique<archstreamer::ClientMediaPlayback>();
+            playback->connect(
+                endpoint,
+                use_synced
+                    ? archstreamer::ClientMediaPlayback::Strategy::Synced
+                    : archstreamer::ClientMediaPlayback::Strategy::Legacy);
+            host_local_receiver_ = std::move(playback);
             if (host_local_media_poll_timer_ == nullptr) {
                 host_local_media_poll_timer_ = new QTimer(this);
                 host_local_media_poll_timer_->setInterval(500);
@@ -2424,7 +2696,7 @@ private:
     QProcess* host_process_ = nullptr;
     QStringList host_debug_args_;
     std::unique_ptr<archstreamer::HostDiscoveryAnnouncer> host_announcer_;
-    std::unique_ptr<archstreamer::MediaReceiver> host_local_receiver_;
+    std::unique_ptr<archstreamer::ClientMediaPlayback> host_local_receiver_;
     QTimer* host_local_media_poll_timer_ = nullptr;
     QTimer* host_advertise_timer_ = nullptr;
 #endif
@@ -2438,6 +2710,7 @@ private:
     QSpinBox* client_players_ = nullptr;
     QCheckBox* client_video_ = nullptr;
     QCheckBox* client_audio_ = nullptr;
+    QCheckBox* client_send_keyboard_ = nullptr;
     QComboBox* client_stream_quality_ = nullptr;
     QCheckBox* client_synced_av_ = nullptr;
     QLabel* client_catalog_status_ = nullptr;
@@ -2485,7 +2758,11 @@ private:
     QComboBox* settings_log_level_ = nullptr;
 #ifdef ARCHSTREAMER_HAS_HOST
     QComboBox* settings_gpu_ = nullptr;
+    QCheckBox* settings_separate_render_gpu_ = nullptr;
+    QComboBox* settings_render_gpu_ = nullptr;
     QComboBox* settings_renderer_ = nullptr;
+    QComboBox* settings_yuzu_scale_ = nullptr;
+    QComboBox* settings_retroarch_scale_ = nullptr;
 #endif
     QComboBox* settings_audio_out_ = nullptr;
     QPlainTextEdit* settings_log_ = nullptr;

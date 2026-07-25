@@ -9,6 +9,7 @@
 
 #include <signal.h>
 #include <stdlib.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -66,6 +67,12 @@ void PosixChildProcess::start(
     }
 
     if (child == 0) {
+        // Own process group so stop() can reap helpers; die if host_runner is killed.
+        setpgid(0, 0);
+        prctl(PR_SET_PDEATHSIG, SIGTERM);
+        if (getppid() == 1) {
+            _exit(128);
+        }
         close_inherited_fds();
         for (const auto& key : unset_environment) {
             unsetenv(key.c_str());
@@ -100,6 +107,8 @@ void PosixChildProcess::start(
         _exit(127);
     }
 
+    // Ensure the child is the leader of its process group even if the child raced.
+    setpgid(child, child);
     pid_ = child;
 }
 
@@ -109,7 +118,8 @@ void PosixChildProcess::stop() {
         return;
     }
 
-    kill(pid_, SIGTERM);
+    // Negative pid = process group (gst/Xvfb helpers should not outlive the host).
+    kill(-pid_, SIGTERM);
     for (int i = 0; i < 20; ++i) {
         int status = 0;
         const pid_t result = waitpid(pid_, &status, WNOHANG);
@@ -121,7 +131,7 @@ void PosixChildProcess::stop() {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
-    kill(pid_, SIGKILL);
+    kill(-pid_, SIGKILL);
     waitpid(pid_, nullptr, 0);
     pid_ = -1;
 }

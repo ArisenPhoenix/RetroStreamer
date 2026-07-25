@@ -181,6 +181,7 @@ endif()
 add_library(archstreamer_client
     src/client/catalog_cache.cpp
     src/client/client_app.cpp
+    src/client/client_media_playback.cpp
     src/client/controller_manager.cpp
     src/client/game_filter.cpp
     src/client/gstreamer_probe.cpp
@@ -189,6 +190,7 @@ add_library(archstreamer_client
     src/client/gstreamer_media_receiver.cpp
     src/client/gstreamer_synced_media_session.cpp
     src/client/input_sender.cpp
+    src/client/keyboard_poller.cpp
     src/client/session_client.cpp
     src/client/session_service.cpp
 )
@@ -200,6 +202,8 @@ else()
     target_sources(archstreamer_client PRIVATE
         src/client/posix_gstreamer_media_platform.cpp
     )
+    find_package(X11 REQUIRED)
+    target_link_libraries(archstreamer_client PUBLIC X11::X11)
 endif()
 target_link_libraries(archstreamer_client
     PUBLIC
@@ -224,9 +228,11 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/input_router.cpp
         src/host/libretro_core_registry.cpp
         src/host/linux_uinput_gamepad.cpp
+        src/host/virtual_keyboard.cpp
         src/host/local_controller_bridge.cpp
         src/host/network_input_receiver.cpp
         src/host/posix_retroarch_process.cpp
+        src/host/streaming_audio_sink.cpp
         src/host/retroarch_config_writer.cpp
         src/host/retroarch_netcmd.cpp
         src/host/retroarch_resolve.cpp
@@ -240,12 +246,29 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/virtual_joypad_resolve.cpp
     )
     target_compile_definitions(archstreamer_host PUBLIC ARCHSTREAMER_HAS_HOST=1)
+    find_package(X11 REQUIRED)
+    if(NOT TARGET X11::Xtst AND NOT X11_Xtst_FOUND)
+        # Older FindX11: X11_Xtst_LIB
+        find_path(X11_Xtst_INCLUDE_PATH NAMES X11/extensions/XTest.h)
+        find_library(X11_Xtst_LIB NAMES Xtst)
+    endif()
     target_link_libraries(archstreamer_host
         PUBLIC
             archstreamer_core
         PRIVATE
             archstreamer_controller
+            X11::X11
     )
+    if(TARGET X11::Xtst)
+        target_link_libraries(archstreamer_host PRIVATE X11::Xtst)
+    elseif(X11_Xtst_LIB)
+        target_link_libraries(archstreamer_host PRIVATE ${X11_Xtst_LIB})
+        if(X11_Xtst_INCLUDE_PATH)
+            target_include_directories(archstreamer_host PRIVATE ${X11_Xtst_INCLUDE_PATH})
+        endif()
+    else()
+        message(FATAL_ERROR "libXtst required for host virtual keyboard (apt: libxtst-dev)")
+    endif()
 
     add_executable(game_catalog_probe
         src/tools/game_catalog_probe.cpp

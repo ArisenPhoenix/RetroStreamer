@@ -18,213 +18,6 @@
 #include <unistd.h>
 
 namespace archstreamer {
-
-std::string trim_command_output(std::string value) {
-    return trim_ascii_whitespace(std::move(value));
-}
-
-AudioCaptureBackend choose_audio_capture_backend(AudioCaptureBackend requested) {
-    // Keep Pulse as the auto default. We resolve monitors via pactl (…sink.monitor), which
-    // pulsesrc understands on PipeWire-with-Pulse. Auto-picking pipewiresrc with that name
-    // fails with "target not found".
-    return requested;
-}
-
-std::string default_audio_monitor_source() {
-    const auto sink = archstreamer::read_command_output("pactl get-default-sink 2>/dev/null");
-    if (sink.empty()) {
-        return {};
-    }
-
-    return sink + ".monitor";
-}
-
-namespace {
-
-constexpr const char* kStreamingAudioSinkName = "archstreamer";
-
-bool sink_exists(const std::string& sink_name) {
-    const auto sinks = archstreamer::read_command_output("pactl list short sinks 2>/dev/null");
-    if (sinks.empty()) {
-        return false;
-    }
-    // Match a whole sink name column (name is the second whitespace-separated field).
-    std::string::size_type line_start = 0;
-    while (line_start < sinks.size()) {
-        const auto line_end = sinks.find('\n', line_start);
-        const auto line = sinks.substr(
-            line_start,
-            line_end == std::string::npos ? std::string::npos : line_end - line_start);
-        line_start = line_end == std::string::npos ? sinks.size() : line_end + 1;
-
-        std::string::size_type field = 0;
-        std::string::size_type pos = 0;
-        while (pos < line.size()) {
-            while (pos < line.size() && (line[pos] == ' ' || line[pos] == '\t')) {
-                ++pos;
-            }
-            if (pos >= line.size()) {
-                break;
-            }
-            const auto end = line.find_first_of(" \t", pos);
-            const auto token = line.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
-            if (field == 1 && token == sink_name) {
-                return true;
-            }
-            ++field;
-            if (end == std::string::npos) {
-                break;
-            }
-            pos = end;
-        }
-    }
-    return false;
-}
-
-} // namespace
-
-std::string ensure_named_null_sink(const char* sink_name, const char* description) {
-    if (!sink_exists(sink_name)) {
-        const auto module = archstreamer::read_command_output(
-            (std::string("pactl load-module module-null-sink sink_name=") + sink_name +
-             " sink_properties=device.description=\"" + description +
-             "\",session.suspend-timeout.seconds=0 2>/dev/null")
-                .c_str());
-        if (module.empty() || !sink_exists(sink_name)) {
-            throw std::runtime_error(
-                std::string("failed to create null sink '") + sink_name +
-                "' (need pactl / module-null-sink)");
-        }
-    }
-    (void)archstreamer::read_command_output(
-        (std::string("pactl suspend-sink ") + sink_name + " 0 2>/dev/null").c_str());
-    return sink_name;
-}
-
-std::string ensure_streaming_audio_sink() {
-    return ensure_named_null_sink(
-        kStreamingAudioSinkName,
-        "ArchStreamer");
-}
-
-std::string streaming_audio_monitor_source() {
-    return ensure_streaming_audio_sink() + ".monitor";
-}
-
-namespace {
-
-using SinkInputMatchFn = bool (*)(const std::string&);
-
-int move_matching_sink_inputs_to(const char* destination_sink, SinkInputMatchFn matches) {
-    const auto dump = archstreamer::read_command_output("pactl list sink-inputs 2>/dev/null");
-    if (dump.empty()) {
-        return 0;
-    }
-
-    int moved = 0;
-    std::string::size_type pos = 0;
-    while (pos < dump.size()) {
-        const auto next = dump.find("Sink Input #", pos + 1);
-        const auto block = dump.substr(
-            pos,
-            next == std::string::npos ? std::string::npos : next - pos);
-        pos = next == std::string::npos ? dump.size() : next;
-
-        if (!matches(block)) {
-            continue;
-        }
-
-        const auto hash = block.find('#');
-        if (hash == std::string::npos) {
-            continue;
-        }
-        const auto id_end = block.find_first_not_of("0123456789", hash + 1);
-        const auto id = block.substr(
-            hash + 1,
-            (id_end == std::string::npos ? block.size() : id_end) - (hash + 1));
-        if (id.empty()) {
-            continue;
-        }
-
-        const auto result = archstreamer::read_command_output(
-            (std::string("pactl move-sink-input ") + id + " " + destination_sink +
-             " 2>/dev/null && echo ok")
-                .c_str());
-        if (result.find("ok") != std::string::npos) {
-            ++moved;
-        }
-    }
-    return moved;
-}
-
-bool block_looks_like_retroarch(const std::string& block) {
-    return block.find("application.process.binary = \"retroarch\"") != std::string::npos ||
-        block.find("application.name = \"RetroArch\"") != std::string::npos ||
-        block.find("node.name = \"RetroArch\"") != std::string::npos;
-}
-
-} // namespace
-
-void park_streaming_game_audio() {
-    // Viewer RetroArch must stay on the silent null sink. PipeWire stream-restore can
-    // reattach it to HDMI/USB after a prior move, which leaks game audio to speakers
-    // even when Watch-local is off (Watch is the only intentional local listen path).
-    try {
-        ensure_streaming_audio_sink();
-    } catch (const std::exception& error) {
-        std::cerr << "Warning: could not ensure streaming audio sink: " << error.what() << '\n';
-        return;
-    }
-
-    const auto moved = move_matching_sink_inputs_to(
-        kStreamingAudioSinkName,
-        block_looks_like_retroarch);
-    if (moved > 0) {
-        std::cout
-            << "Parked " << moved
-            << " RetroArch stream(s) on '" << kStreamingAudioSinkName
-            << "' (speakers stay quiet unless Watch stream locally).\n";
-    }
-}
-
-void restore_default_sink_after_streaming() {
-    // Never leave the session default on the silent capture sink — that mutes desktop
-    // audio until the user notices.
-    const auto current = archstreamer::read_command_output("pactl get-default-sink 2>/dev/null");
-    if (current != kStreamingAudioSinkName) {
-        return;
-    }
-
-    const auto sinks = archstreamer::read_command_output("pactl list short sinks 2>/dev/null");
-    std::string::size_type pos = 0;
-    while (pos < sinks.size()) {
-        const auto end = sinks.find('\n', pos);
-        const auto line = sinks.substr(
-            pos,
-            end == std::string::npos ? std::string::npos : end - pos);
-        pos = end == std::string::npos ? sinks.size() : end + 1;
-        if (line.empty()) {
-            continue;
-        }
-        const auto first_tab = line.find('\t');
-        if (first_tab == std::string::npos) {
-            continue;
-        }
-        auto rest = line.substr(first_tab + 1);
-        const auto second_tab = rest.find('\t');
-        const auto name = second_tab == std::string::npos ? rest : rest.substr(0, second_tab);
-        if (name.empty() || name == kStreamingAudioSinkName) {
-            continue;
-        }
-        const auto result = archstreamer::read_command_output(
-            (std::string("pactl set-default-sink ") + name + " 2>/dev/null && echo ok").c_str());
-        if (result.find("ok") != std::string::npos) {
-            std::cout << "Restored default sink to '" << name << "' after streaming session.\n";
-            return;
-        }
-    }
-}
-
 namespace {
 
 std::string multiudp_clients_arg(
@@ -398,6 +191,10 @@ void GStreamerVideoFanout::restart_pipeline() {
     if (destinations_.empty()) {
         return;
     }
+    // Crash leftovers (e.g. black ximagesrc) can keep publishing on the same RTP ports.
+    for (const auto& destination : destinations_) {
+        terminate_gst_multiudpsink_on_port(destination.port);
+    }
     if (source_kind_ == SourceKind::X11 && display_.empty()) {
         return;
     }
@@ -411,7 +208,9 @@ void GStreamerVideoFanout::restart_pipeline() {
         throw std::runtime_error("pipewiresrc is required for gamescope video capture (gst-plugin-pipewire)");
     }
 
+    std::vector<std::pair<std::string, std::uint16_t>> very_high_clients;
     std::vector<std::pair<std::string, std::uint16_t>> high_clients;
+    std::vector<std::pair<std::string, std::uint16_t>> medium_high_clients;
     std::vector<std::pair<std::string, std::uint16_t>> medium_clients;
     std::vector<std::pair<std::string, std::uint16_t>> low_clients;
     for (const auto& destination : destinations_) {
@@ -424,6 +223,12 @@ void GStreamerVideoFanout::restart_pipeline() {
         case MediaQualityTier::Auto:
             medium_clients.push_back(client);
             break;
+        case MediaQualityTier::MediumHigh:
+            medium_high_clients.push_back(client);
+            break;
+        case MediaQualityTier::VeryHigh:
+            very_high_clients.push_back(client);
+            break;
         case MediaQualityTier::High:
         default:
             high_clients.push_back(client);
@@ -432,7 +237,9 @@ void GStreamerVideoFanout::restart_pipeline() {
     }
 
     const int active_tiers =
+        (very_high_clients.empty() ? 0 : 1) +
         (high_clients.empty() ? 0 : 1) +
+        (medium_high_clients.empty() ? 0 : 1) +
         (medium_clients.empty() ? 0 : 1) +
         (low_clients.empty() ? 0 : 1);
     if (active_tiers == 0) {
@@ -453,6 +260,18 @@ void GStreamerVideoFanout::restart_pipeline() {
             "max-size-buffers=3",
             "leaky=downstream",
             "!",
+        });
+        if (settings.width > 0 && settings.height > 0) {
+            args.insert(args.end(), {
+                "videoscale",
+                "method=0",
+                "!",
+                "video/x-raw,width=" + std::to_string(settings.width) +
+                    ",height=" + std::to_string(settings.height),
+                "!",
+            });
+        }
+        args.insert(args.end(), {
             "videorate",
             "drop-only=true",
             "!",
@@ -525,15 +344,21 @@ void GStreamerVideoFanout::restart_pipeline() {
 
     if (active_tiers == 1) {
         // Single tier: no tee needed.
-        const auto* clients = !high_clients.empty() ? &high_clients
+        const auto* clients = !very_high_clients.empty() ? &very_high_clients
+            : !high_clients.empty() ? &high_clients
+            : !medium_high_clients.empty() ? &medium_high_clients
             : !medium_clients.empty() ? &medium_clients
             : &low_clients;
-        const auto tier = !high_clients.empty() ? MediaQualityTier::High
+        const auto tier = !very_high_clients.empty() ? MediaQualityTier::VeryHigh
+            : !high_clients.empty() ? MediaQualityTier::High
+            : !medium_high_clients.empty() ? MediaQualityTier::MediumHigh
             : !medium_clients.empty() ? MediaQualityTier::Medium
             : MediaQualityTier::Low;
         const auto settings = video_encode_settings_for_tier(tier);
         args.push_back("!");
-        append_h264_branch(args, settings, *clients, nvenc && tier == MediaQualityTier::High);
+        // Prefer nvenc for any tier when available — switching encoders mid-session
+        // forced full pipeline rebuilds and visible freezes.
+        append_h264_branch(args, settings, *clients, nvenc);
     } else {
         args.insert(args.end(), {"!", "tee", "name=t"});
         auto append_tier = [&](
@@ -548,14 +373,34 @@ void GStreamerVideoFanout::restart_pipeline() {
                 args,
                 video_encode_settings_for_tier(tier),
                 clients,
-                nvenc && tier == MediaQualityTier::High);
+                nvenc);
         };
+        append_tier(very_high_clients, MediaQualityTier::VeryHigh);
         append_tier(high_clients, MediaQualityTier::High);
+        append_tier(medium_high_clients, MediaQualityTier::MediumHigh);
         append_tier(medium_clients, MediaQualityTier::Medium);
         append_tier(low_clients, MediaQualityTier::Low);
     }
 
-    process_.start(std::move(args));
+    // nvidia-smi / Host GPU indices use PCI order. CUDA defaults to
+    // FASTEST_FIRST, so CUDA_VISIBLE_DEVICES=0 would pick the 3060 on a
+    // 1660+3060 box unless PCI_BUS_ID order is forced.
+    process_.start(
+        std::move(args),
+        nvenc_cuda_device_id_ >= 0
+            ? std::vector<std::pair<std::string, std::string>>{
+                  {"CUDA_DEVICE_ORDER", "PCI_BUS_ID"},
+                  {"CUDA_VISIBLE_DEVICES", std::to_string(nvenc_cuda_device_id_)},
+              }
+            : std::vector<std::pair<std::string, std::string>>{},
+        nvenc_cuda_device_id_ >= 0
+            ? std::vector<std::string>{
+                  "__NV_PRIME_RENDER_OFFLOAD",
+                  "__NV_PRIME_RENDER_OFFLOAD_PROVIDER",
+                  "__GLX_VENDOR_LIBRARY_NAME",
+                  "DRI_PRIME",
+              }
+            : std::vector<std::string>{});
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     if (!process_.running()) {
         throw std::runtime_error(
@@ -566,23 +411,27 @@ void GStreamerVideoFanout::restart_pipeline() {
 
     std::cout << "Video ladder ("
               << (source_kind_ == SourceKind::PipeWire ? "pipewire" : "ximagesrc")
-              << (nvenc ? ", nvenc" : ", x264")
-              << "):";
-    if (!high_clients.empty()) {
-        const auto s = video_encode_settings_for_tier(MediaQualityTier::High);
-        std::cout << " high=" << high_clients.size()
-                  << "@" << s.bitrate_kbps << "kbps/" << static_cast<int>(s.framerate) << "fps";
+              << (nvenc ? ", nvenc" : ", x264");
+    if (nvenc && nvenc_cuda_device_id_ >= 0) {
+        std::cout << " cuda=" << nvenc_cuda_device_id_;
     }
-    if (!medium_clients.empty()) {
-        const auto s = video_encode_settings_for_tier(MediaQualityTier::Medium);
-        std::cout << " med=" << medium_clients.size()
+    std::cout << "):";
+    auto log_tier = [](const char* label, const std::vector<std::pair<std::string, std::uint16_t>>& clients, MediaQualityTier tier) {
+        if (clients.empty()) {
+            return;
+        }
+        const auto s = video_encode_settings_for_tier(tier);
+        std::cout << " " << label << "=" << clients.size()
                   << "@" << s.bitrate_kbps << "kbps/" << static_cast<int>(s.framerate) << "fps";
-    }
-    if (!low_clients.empty()) {
-        const auto s = video_encode_settings_for_tier(MediaQualityTier::Low);
-        std::cout << " low=" << low_clients.size()
-                  << "@" << s.bitrate_kbps << "kbps/" << static_cast<int>(s.framerate) << "fps";
-    }
+        if (s.width > 0 && s.height > 0) {
+            std::cout << "/" << s.width << "x" << s.height;
+        }
+    };
+    log_tier("vhigh", very_high_clients, MediaQualityTier::VeryHigh);
+    log_tier("high", high_clients, MediaQualityTier::High);
+    log_tier("mhigh", medium_high_clients, MediaQualityTier::MediumHigh);
+    log_tier("med", medium_clients, MediaQualityTier::Medium);
+    log_tier("low", low_clients, MediaQualityTier::Low);
     std::cout << '\n';
 }
 
@@ -671,6 +520,9 @@ void GStreamerAudioFanout::restart_pipeline() {
     process_.stop();
     if (destinations_.empty()) {
         return;
+    }
+    for (const auto& destination : destinations_) {
+        terminate_gst_multiudpsink_on_port(destination.port);
     }
     if (!gst_element_available("multiudpsink")) {
         throw std::runtime_error("multiudpsink is required for shared audio fanout (gst-plugins-good)");
@@ -792,6 +644,7 @@ void GStreamerMediaServer::start(
             }
         } else {
             video_fanout_.emplace();
+            video_fanout_->set_nvenc_cuda_device_id(capture_.nvenc_cuda_device_id);
             const auto video_streams = video_fanout_->start(
                 capture_.virtual_display,
                 video_requests_from_media_destinations(plan, destinations));
@@ -841,6 +694,7 @@ void GStreamerMediaServer::start_pipewire_video(
         video_fanout_.reset();
     }
     video_fanout_.emplace();
+    video_fanout_->set_nvenc_cuda_device_id(capture_.nvenc_cuda_device_id);
     const auto video_streams = video_fanout_->start_pipewire(
         pipewire_node,
         video_requests_from_media_destinations(plan_, destinations_));

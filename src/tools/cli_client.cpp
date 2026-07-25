@@ -108,7 +108,7 @@ void SessionClientCli::print_usage() const {
         << "                      [--active-session]\n"
         << "                      [--controller index] [--controller index] [--game index-or-id]\n"
         << "                      [--input-port port] [--no-video] [--no-audio] [--synced-av]\n"
-        << "                      [--stream-quality auto|low|medium|high] [--list-games]\n";
+        << "                      [--stream-quality auto|low|medium|med-high|high|very-high] [--list-games]\n";
 }
 
 SessionClientCliArgs SessionClientCli::parse(int argc, char** argv) const {
@@ -197,7 +197,7 @@ SessionClientCliArgs SessionClientCli::parse(int argc, char** argv) const {
             args.synced_av = true;
         } else if (arg == "--stream-quality") {
             if (++i >= argc) {
-                throw std::runtime_error("--stream-quality requires auto|low|medium|high");
+                throw std::runtime_error("--stream-quality requires auto|low|medium|med-high|high|very-high");
             }
             const std::string value = argv[i];
             if (value == "auto") {
@@ -206,10 +206,14 @@ SessionClientCliArgs SessionClientCli::parse(int argc, char** argv) const {
                 args.wanted_tier = MediaQualityTier::Low;
             } else if (value == "medium") {
                 args.wanted_tier = MediaQualityTier::Medium;
+            } else if (value == "med-high" || value == "medium-high") {
+                args.wanted_tier = MediaQualityTier::MediumHigh;
             } else if (value == "high") {
                 args.wanted_tier = MediaQualityTier::High;
+            } else if (value == "very-high" || value == "veryhigh") {
+                args.wanted_tier = MediaQualityTier::VeryHigh;
             } else {
-                throw std::runtime_error("--stream-quality requires auto|low|medium|high");
+                throw std::runtime_error("--stream-quality requires auto|low|medium|med-high|high|very-high");
             }
         } else if (arg == "--help" || arg == "-h") {
             print_usage();

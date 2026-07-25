@@ -5,13 +5,23 @@
 
 namespace archstreamer {
 
-InputRouter::InputRouter(VirtualGamepadBus& gamepads) : gamepads_(gamepads) {
+InputRouter::InputRouter(VirtualGamepadBus& gamepads, VirtualKeyboard* keyboard)
+    : gamepads_(gamepads), keyboard_(keyboard) {
 }
 
 void InputRouter::set_seat_assignment(SeatAssignment assignment) {
     std::lock_guard lock(mutex_);
     assignment_ = std::move(assignment);
     last_input_timestamp_by_player_.clear();
+}
+
+bool InputRouter::client_has_seat(ClientId client_id) const {
+    for (const auto& seat : assignment_.seats) {
+        if (seat.client_id == client_id) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool InputRouter::route(const ControllerInput& input) {
@@ -42,6 +52,37 @@ bool InputRouter::route(const ControllerInput& input) {
     return true;
 }
 
+bool InputRouter::route(const KeyboardInput& input) {
+    std::lock_guard lock(mutex_);
+    if (keyboard_ == nullptr || !client_has_seat(input.client_id)) {
+        return false;
+    }
+
+    const auto last_timestamp = last_keyboard_timestamp_by_client_.find(input.client_id);
+    if (last_timestamp != last_keyboard_timestamp_by_client_.end() &&
+        input.state.timestamp_us < last_timestamp->second) {
+        return false;
+    }
+    last_keyboard_timestamp_by_client_[input.client_id] = input.state.timestamp_us;
+    last_keyboard_client_ = input.client_id;
+    keyboard_->apply(input.state);
+    if (!first_keyboard_logged_) {
+        first_keyboard_logged_ = true;
+        std::cout
+            << "First keyboard input applied: client " << static_cast<int>(input.client_id)
+            << " keys=0x" << std::hex << input.state.keys << std::dec << '\n';
+    }
+    if (!first_nonzero_keyboard_logged_ && input.state.keys != 0) {
+        first_nonzero_keyboard_logged_ = true;
+        std::cout
+            << "First non-zero keyboard keys from client "
+            << static_cast<int>(input.client_id)
+            << ": 0x" << std::hex << input.state.keys << std::dec
+            << " (space=0x1 … f1=0x200 p=0x400)\n";
+    }
+    return true;
+}
+
 void InputRouter::neutralize_client(ClientId client_id) {
     std::lock_guard lock(mutex_);
     for (const auto& seat : assignment_.seats) {
@@ -57,6 +98,12 @@ void InputRouter::neutralize_client(ClientId client_id) {
             last_timestamp->second = neutral.timestamp_us;
         }
         gamepads_.update(seat.retroarch_port, neutral);
+    }
+
+    if (keyboard_ != nullptr && last_keyboard_client_.has_value() &&
+        *last_keyboard_client_ == client_id) {
+        keyboard_->release_all();
+        last_keyboard_client_.reset();
     }
 }
 

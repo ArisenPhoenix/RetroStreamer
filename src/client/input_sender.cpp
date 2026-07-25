@@ -25,4 +25,20 @@ ControllerInput InputSender::make_input(LocalPlayerIndex local_player, Controlle
     };
 }
 
+KeyboardInput InputSender::make_keyboard(LocalPlayerIndex local_player, KeyboardState state) const {
+    if (local_player >= MaxPlayersPerClient) {
+        throw std::runtime_error("invalid local player index");
+    }
+
+    if (state.timestamp_us == 0) {
+        state.timestamp_us = steady_timestamp_us();
+    }
+
+    return KeyboardInput{
+        client_id_,
+        local_player,
+        state,
+    };
+}
+
 } // namespace archstreamer

@@ -1,10 +1,9 @@
 #include "client/client_app.hpp"
 
+#include "client/client_media_playback.hpp"
 #include "client/controller_backend.hpp"
-#include "client/gstreamer_media_receiver.hpp"
-#include "client/gstreamer_synced_media_session.hpp"
-#include "client/media_receiver.hpp"
 #include "client/input_sender.hpp"
+#include "client/keyboard_poller.hpp"
 #include "client/session_service.hpp"
 #include "common/addresses.hpp"
 #include "common/platform/default_platform.hpp"
@@ -45,92 +44,6 @@ bool same_controls(const ControllerState& a, const ControllerState& b) {
         a.left_trigger == b.left_trigger &&
         a.right_trigger == b.right_trigger;
 }
-
-// Thin facade so the session loop can use either legacy or synced receivers.
-class ActiveMediaPlayback {
-public:
-    void connect_legacy(const MediaEndpoint& endpoint) {
-        synced_.reset();
-        legacy_ = std::make_unique<GStreamerMediaReceiver>();
-        legacy_->connect(endpoint);
-    }
-
-    void connect_synced(const MediaEndpoint& endpoint) {
-        legacy_.reset();
-        synced_ = std::make_unique<GStreamerSyncedMediaReceiver>();
-        synced_->connect(endpoint);
-    }
-
-    void disconnect() {
-        if (legacy_) {
-            legacy_->disconnect();
-        }
-        if (synced_) {
-            synced_->disconnect();
-        }
-        legacy_.reset();
-        synced_.reset();
-    }
-
-    bool video_running() const {
-        if (synced_) {
-            return synced_->video_running();
-        }
-        return legacy_ && legacy_->video_running();
-    }
-
-    bool audio_running() const {
-        if (synced_) {
-            return synced_->audio_running();
-        }
-        return legacy_ && legacy_->audio_running();
-    }
-
-    bool video_frames_seen() const {
-        if (synced_) {
-            return synced_->video_frames_seen();
-        }
-        return legacy_ && legacy_->video_frames_seen();
-    }
-
-    std::uint64_t decoded_frame_count() const {
-        if (synced_) {
-            return synced_->decoded_frame_count();
-        }
-        return legacy_ ? legacy_->decoded_frame_count() : 0;
-    }
-
-    const std::string& video_pipeline_info() const {
-        if (synced_) {
-            return synced_->video_pipeline_info();
-        }
-        static const std::string empty;
-        return legacy_ ? legacy_->video_pipeline_info() : empty;
-    }
-
-    const std::string& audio_pipeline_info() const {
-        if (synced_) {
-            return synced_->audio_pipeline_info();
-        }
-        static const std::string empty;
-        return legacy_ ? legacy_->audio_pipeline_info() : empty;
-    }
-
-    bool poll() {
-        if (synced_) {
-            return synced_->poll();
-        }
-        return legacy_ && legacy_->poll();
-    }
-
-    explicit operator bool() const {
-        return legacy_ != nullptr || synced_ != nullptr;
-    }
-
-private:
-    std::unique_ptr<GStreamerMediaReceiver> legacy_;
-    std::unique_ptr<GStreamerSyncedMediaReceiver> synced_;
-};
 
 bool handle_control_message(TcpStream& stream, const ClientAppCallbacks& callbacks, ClientRunResult& result) {
     if (!stream.readable()) {
@@ -357,7 +270,7 @@ ClientRunResult ClientApp::join_session(
     result.starting = start.starting;
     result.media_endpoint = start.media_endpoint;
 
-    auto media_receiver = ActiveMediaPlayback{};
+    auto media_receiver = ClientMediaPlayback{};
     const bool expect_video =
         config.wants_video &&
         result.media_endpoint.has_value() &&
@@ -374,13 +287,12 @@ ClientRunResult ClientApp::join_session(
             expect_video ? result.media_endpoint->video_uri : "",
             expect_audio ? result.media_endpoint->audio_uri : "",
         };
-        if (config.synced_av) {
-            media_receiver.connect_synced(endpoint);
-            if (callbacks.on_status) {
-                callbacks.on_status("Using synced A/V pipeline (shared GStreamer clock).");
-            }
-        } else {
-            media_receiver.connect_legacy(endpoint);
+        const auto strategy = config.synced_av
+            ? ClientMediaPlayback::Strategy::Synced
+            : ClientMediaPlayback::Strategy::Legacy;
+        media_receiver.connect(endpoint, strategy);
+        if (config.synced_av && callbacks.on_status) {
+            callbacks.on_status("Using synced A/V pipeline (shared GStreamer clock).");
         }
         if (callbacks.on_status) {
             if (!media_receiver.video_pipeline_info().empty()) {
@@ -438,6 +350,9 @@ ClientRunResult ClientApp::join_session(
         ] {
             std::array<ControllerState, MaxPlayersPerClient> last_sent{};
             std::array<bool, MaxPlayersPerClient> have_last_sent{};
+            KeyboardPoller keyboard_poller;
+            KeyboardState last_keys{};
+            bool have_last_keys = false;
             constexpr auto kInputTick = std::chrono::milliseconds(8);
             constexpr int kChangeCopies = 3;
             while (!input_stop.load(std::memory_order_relaxed)) {
@@ -472,6 +387,32 @@ ClientRunResult ClientApp::join_session(
                     last_sent[player] = *state;
                     have_last_sent[player] = true;
                 }
+
+                if (config.send_keyboard) {
+                    if (const auto keys = keyboard_poller.poll(); keys.has_value()) {
+                        const bool changed = !have_last_keys || !same_keys(last_keys, *keys);
+                        const int copies = changed ? kChangeCopies : 1;
+                        for (int copy = 0; copy < copies; ++copy) {
+                            auto sample = *keys;
+                            sample.timestamp_us =
+                                archstreamer::steady_timestamp_us() + static_cast<std::uint64_t>(copy);
+                            if (copy > 0) {
+                                sample.sequence = keys->sequence + static_cast<std::uint32_t>(copy);
+                            }
+                            const auto packet = input_sender->make_keyboard(0, sample);
+                            try {
+                                input_socket->send_to(
+                                    serialize_packet(packet),
+                                    config.host,
+                                    *config.input_port);
+                            } catch (...) {
+                            }
+                        }
+                        last_keys = *keys;
+                        have_last_keys = true;
+                    }
+                }
+
                 const auto elapsed = std::chrono::steady_clock::now() - tick_start;
                 if (elapsed < kInputTick) {
                     std::this_thread::sleep_for(kInputTick - elapsed);
@@ -559,11 +500,11 @@ ClientRunResult ClientApp::join_session(
                 const auto delta = frames >= last_decoded_frames ? frames - last_decoded_frames : 0;
                 last_decoded_frames = frames;
                 frames_delta = static_cast<std::uint16_t>(std::min<std::uint64_t>(delta, 65535));
+                // Only invent loss when the receiver is actually dead. A zero-frame
+                // second is reported via frames_decoded_delta for host hysteresis;
+                // mapping it to 500‰ made Auto treat every decode hiccup as 50% loss.
                 if (!media_receiver.video_running()) {
                     loss_permille = 1000;
-                } else if (frames_delta == 0) {
-                    // No decoded frames in the last second — treat as heavy loss until RTP stats exist.
-                    loss_permille = 500;
                 }
             }
             joined_session.stream.send_packet(serialize_packet(ViewerHeartbeat{

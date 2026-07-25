@@ -14,22 +14,13 @@
 
 namespace archstreamer {
 
-AudioCaptureBackend choose_audio_capture_backend(AudioCaptureBackend requested);
-std::string default_audio_monitor_source();
-// Dedicated null sink for RetroArch while streaming so the host speakers stay silent
-// unless "Watch stream locally" (or a remote) plays the RTP feed.
-std::string ensure_streaming_audio_sink();
-std::string streaming_audio_monitor_source();
-// Keep Viewer RetroArch on the streaming null sink (defeats PipeWire stream-restore leaks).
-void park_streaming_game_audio();
-// If the session default was left on the streaming null sink, point it back at a real device.
-void restore_default_sink_after_streaming();
-
-// Encode ladder: one capture tee into High/Medium/Low branches; each client is
+// Encode ladder: one capture tee into quality-tier branches; each client is
 // assigned to one tier's multiudpsink (same receive port, different encode).
 class GStreamerVideoFanout {
 public:
     ~GStreamerVideoFanout();
+
+    void set_nvenc_cuda_device_id(int nvidia_index) { nvenc_cuda_device_id_ = nvidia_index; }
 
     std::vector<MediaClientStream> start(
         const std::string& display,
@@ -60,6 +51,8 @@ private:
     SourceKind source_kind_ = SourceKind::X11;
     std::string display_;
     std::string pipewire_node_;
+    // nvidia-smi index for nvenc via CUDA_VISIBLE_DEVICES; -1 = leave unset.
+    int nvenc_cuda_device_id_ = -1;
     std::vector<Destination> destinations_;
     ChildProcess process_;
 };
@@ -99,11 +92,13 @@ struct GStreamerMediaCaptureConfig {
     bool video = false;
     bool audio = false;
     std::string virtual_display = ":99";
-    std::string video_resolution = "1280x720";
+    std::string video_resolution = "1920x1080";
     VirtualDisplayBackend display_backend = VirtualDisplayBackend::None;
     AudioCaptureBackend audio_backend = AudioCaptureBackend::Pulse;
     std::string audio_source;
     bool verbose = false;
+    // nvidia-smi index for the gst-launch nvenc process (CUDA_VISIBLE_DEVICES); -1 = default.
+    int nvenc_cuda_device_id = -1;
 };
 
 class GStreamerMediaServer final : public MediaServer {

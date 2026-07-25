@@ -3,11 +3,17 @@
 #include "common/platform/paths.hpp"
 #include "host/retroarch_netcmd.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace archstreamer {
 
@@ -33,11 +39,33 @@ std::string sanitize_device_name(std::string_view value) {
     return result;
 }
 
+// RetroPad uses SNES-oriented names (B=south, A=east, Y=west, X=north).
+// uinput emits SDL-order indices: 0=SOUTH, 1=EAST, 2=WEST, 3=NORTH.
+//
+// Nintendo / default: map by Xbox/SDL *letter* (A→A) so a physical A presses
+// the face button games label "A".
+// PlayStation: map by *position* so DualShock Cross (south) hits RetroPad B →
+// PS Cross, not Circle.
+struct FaceButtonIndices {
+    const char* b = "1";
+    const char* a = "0";
+    const char* y = "3";
+    const char* x = "2";
+};
+
+FaceButtonIndices face_button_indices_for_system(std::string_view system_key) {
+    if (system_key == "ps1" || system_key == "ps2" || system_key == "psp") {
+        return FaceButtonIndices{"0", "1", "2", "3"};
+    }
+    return FaceButtonIndices{};
+}
+
 void write_virtual_pad_autoconfig(
     const std::filesystem::path& autoconfig_root,
     const VirtualGamepadIdentity& identity,
     const std::string& joypad_driver,
-    RetroArchPort port) {
+    RetroArchPort port,
+    const FaceButtonIndices& face) {
     const auto directory = autoconfig_root / joypad_driver;
     std::filesystem::create_directories(directory);
 
@@ -57,10 +85,10 @@ void write_virtual_pad_autoconfig(
         << "input_device = \"" << device_name << "\"\n"
         << "input_vendor_id = \"" << port_identity.vendor_id << "\"\n"
         << "input_product_id = \"" << port_identity.product_id << "\"\n"
-        << "input_b_btn = \"1\"\n"
-        << "input_a_btn = \"0\"\n"
-        << "input_y_btn = \"3\"\n"
-        << "input_x_btn = \"2\"\n"
+        << "input_b_btn = \"" << face.b << "\"\n"
+        << "input_a_btn = \"" << face.a << "\"\n"
+        << "input_y_btn = \"" << face.y << "\"\n"
+        << "input_x_btn = \"" << face.x << "\"\n"
         << "input_l_btn = \"4\"\n"
         << "input_r_btn = \"5\"\n"
         << "input_select_btn = \"6\"\n"
@@ -81,6 +109,183 @@ void write_virtual_pad_autoconfig(
         << "input_down_btn = \"12\"\n"
         << "input_left_btn = \"13\"\n"
         << "input_right_btn = \"14\"\n";
+}
+
+void upsert_core_opt_file(
+    const std::filesystem::path& path,
+    const std::vector<std::pair<std::string, std::string>>& options) {
+    if (options.empty()) {
+        return;
+    }
+    std::filesystem::create_directories(path.parent_path());
+
+    std::unordered_map<std::string, std::string> values;
+    std::vector<std::string> order;
+    if (std::ifstream in(path); in) {
+        std::string line;
+        while (std::getline(in, line)) {
+            if (line.empty() || line[0] == '#') {
+                continue;
+            }
+            const auto eq = line.find('=');
+            if (eq == std::string::npos) {
+                continue;
+            }
+            auto key = line.substr(0, eq);
+            while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) {
+                key.pop_back();
+            }
+            if (values.emplace(key, line).second) {
+                order.push_back(key);
+            } else {
+                values[key] = line;
+            }
+        }
+    }
+
+    for (const auto& [key, value] : options) {
+        const auto line = key + " = \"" + value + "\"";
+        if (values.emplace(key, line).second) {
+            order.push_back(key);
+        } else {
+            values[key] = line;
+        }
+    }
+
+    std::ofstream out(path, std::ios::trunc);
+    if (!out) {
+        return;
+    }
+    for (const auto& key : order) {
+        out << values[key] << '\n';
+    }
+}
+
+std::filesystem::path retroarch_core_opt_path(std::string_view core_dir_name) {
+    const auto home = user_home_directory();
+    if (home.empty()) {
+        return {};
+    }
+    const auto dir = std::filesystem::path(home) / ".config/retroarch/config" / std::string(core_dir_name);
+    return dir / (std::string(core_dir_name) + ".opt");
+}
+
+std::string core_file_key(const std::filesystem::path& core_path) {
+    auto stem = core_path.stem().string();
+    // libpcsx2_libretro / pcsx2_libretro / pcsx2.libretro → pcsx2
+    if (stem.rfind("lib", 0) == 0) {
+        stem = stem.substr(3);
+    }
+    constexpr std::string_view suffix = "_libretro";
+    if (stem.size() > suffix.size() &&
+        stem.compare(stem.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        stem.resize(stem.size() - suffix.size());
+    }
+    // Some distros use "name.libretro" as the stem when the file is name.libretro.so
+    constexpr std::string_view dotted = ".libretro";
+    if (stem.size() > dotted.size() &&
+        stem.compare(stem.size() - dotted.size(), dotted.size(), dotted) == 0) {
+        stem.resize(stem.size() - dotted.size());
+    }
+    std::string key;
+    key.reserve(stem.size());
+    for (char character : stem) {
+        key.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(character))));
+    }
+    return key;
+}
+
+std::string lrps2_upscale_value(int scale) {
+    static constexpr const char* kValues[] = {
+        "1x Native (PS2)",
+        "2x Native (~720p)",
+        "3x Native (~1080p)",
+        "4x Native (~1440p/2K)",
+        "5x Native (~1800p/3K)",
+        "6x Native (~2160p/4K)",
+    };
+    const auto index = std::clamp(scale, 1, 6) - 1;
+    return kValues[index];
+}
+
+std::string ppsspp_resolution_value(int scale) {
+    const auto n = std::clamp(scale, 1, 6);
+    return std::to_string(480 * n) + "x" + std::to_string(272 * n);
+}
+
+std::string citra_resolution_value(int scale) {
+    const auto n = std::clamp(scale, 1, 6);
+    if (n == 1) {
+        return "1x (Native)";
+    }
+    return std::to_string(n) + "x";
+}
+
+std::string beetle_hw_resolution_value(int scale) {
+    // Beetle PSX HW only exposes 1x / 2x / 4x / 8x / 16x.
+    const auto n = std::clamp(scale, 1, 6);
+    if (n <= 1) {
+        return "1x(native)";
+    }
+    if (n == 2) {
+        return "2x";
+    }
+    if (n <= 4) {
+        return "4x";
+    }
+    return "8x";
+}
+
+// LRPS2 defaults to Auto/Vulkan which often paints black under Xvfb.
+void ensure_lrps2_virtual_display_options() {
+    const auto path = retroarch_core_opt_path("LRPS2");
+    if (path.empty()) {
+        return;
+    }
+    upsert_core_opt_file(path, {
+        {"pcsx2_renderer", "OpenGL"},
+        {"pcsx2_fastboot", "enabled"},
+    });
+}
+
+void apply_retroarch_resolution_scale(
+    const std::filesystem::path& core_path,
+    int resolution_scale) {
+    if (core_path.empty()) {
+        return;
+    }
+    const auto scale = std::clamp(resolution_scale, 1, 6);
+    const auto key = core_file_key(core_path);
+    const auto scale_str = std::to_string(scale);
+
+    auto write = [&](std::string_view dir, std::vector<std::pair<std::string, std::string>> opts) {
+        const auto path = retroarch_core_opt_path(dir);
+        if (!path.empty()) {
+            upsert_core_opt_file(path, opts);
+        }
+    };
+
+    if (key == "pcsx2" || key == "lrps2") {
+        write("LRPS2", {{"pcsx2_upscale_multiplier", lrps2_upscale_value(scale)}});
+    } else if (key == "swanstation" || key == "duckstation") {
+        write("SwanStation", {{"swanstation_GPU_ResolutionScale", scale_str}});
+    } else if (key == "ppsspp") {
+        write("PPSSPP", {{"ppsspp_internal_resolution", ppsspp_resolution_value(scale)}});
+    } else if (key == "dolphin") {
+        // Distros disagree on corename ("Dolphin" vs "dolphin-emu"); update both.
+        write("dolphin-emu", {{"dolphin_efb_scale", scale_str}});
+        write("Dolphin", {{"dolphin_efb_scale", scale_str}});
+    } else if (key == "citra" || key == "citra_canary" || key == "citra2018") {
+        write("Citra", {{"citra_resolution_factor", citra_resolution_value(scale)}});
+    } else if (key == "mupen64plus_next" || key == "mupen64plus-next") {
+        write("Mupen64Plus-Next", {
+            {"mupen64plus-EnableNativeResFactor", scale_str},
+        });
+    } else if (key == "mednafen_psx_hw" || key == "beetle_psx_hw") {
+        write("Beetle PSX HW", {
+            {"beetle_psx_hw_internal_resolution", beetle_hw_resolution_value(scale)},
+        });
+    }
 }
 
 } // namespace
@@ -108,7 +313,10 @@ std::filesystem::path write_retroarch_input_override(
     bool realtime_pacing,
     bool capture_fullscreen,
     std::string_view capture_resolution,
-    int vulkan_gpu_index) {
+    int vulkan_gpu_index,
+    std::string_view system_key,
+    const std::filesystem::path& core_path,
+    int resolution_scale) {
     // Home path so Flatpak ArchStreamer + flatpak-spawn --host retroarch share the same files.
     const auto root = retroarch_runtime_root();
     const auto directory = root / "config";
@@ -118,12 +326,14 @@ std::filesystem::path write_retroarch_input_override(
     std::filesystem::remove_all(autoconfig_directory);
     std::filesystem::create_directories(autoconfig_directory / joypad_driver);
 
+    const auto face = face_button_indices_for_system(system_key);
     for (RetroArchPort port = 0; port < players; ++port) {
         write_virtual_pad_autoconfig(
             autoconfig_directory,
             identity_for_port(identities, port),
             joypad_driver,
-            port);
+            port,
+            face);
     }
     const auto path = directory / "input_override.cfg";
     std::ofstream file(path, std::ios::trunc);
@@ -160,12 +370,26 @@ std::filesystem::path write_retroarch_input_override(
         // dead controller as soon as the GUI or another window takes focus.
         << "pause_nonactive = \"false\"\n"
         << "network_cmd_enable = \"true\"\n"
-        << "network_cmd_port = \"" << DefaultRetroArchNetcmdPort << "\"\n";
+        << "network_cmd_port = \"" << DefaultRetroArchNetcmdPort << "\"\n"
+        // Virtual keyboard from clients: Space holds fast-forward; F1 opens menu.
+        // Disable the enable-hotkey chord so kids do not need a modifier.
+        // Note: official key is input_toggle_fast_forward (underscore), not …fastforward.
+        << "input_enable_hotkey = \"nul\"\n"
+        << "input_hold_fast_forward = \"space\"\n"
+        << "input_toggle_fast_forward = \"nul\"\n"
+        << "input_menu_toggle = \"f1\"\n"
+        << "fastforward_ratio = \"3.0\"\n"
+        << "fastforward_frameskip = \"true\"\n";
 
     if (realtime_pacing) {
         // Known-good streaming pacing (do not over-tune — host Watch-local used to be fine
         // with just these knobs feeding the null-sink → Opus path).
+        // Force GL on the virtual X display: Vulkan/Auto HW cores (LRPS2/PCSX2) often
+        // present a black framebuffer to ximagesrc under Xvfb.
+        // Keep audio_sync on so RetroArch paces the core (audio_sync=false made PS2 run fast
+        // and input feel unreliable). Capture still listens on archstreamer.monitor.
         file
+            << "video_driver = \"gl\"\n"
             << "audio_enable = \"true\"\n"
             << "audio_mute = \"false\"\n"
             << "audio_driver = \"pulse\"\n"
@@ -213,10 +437,10 @@ std::filesystem::path write_retroarch_input_override(
         const auto joypad_index = first_virtual_joypad_index + port;
         file
             << "input_player" << player << "_joypad_index = \"" << joypad_index << "\"\n"
-            << "input_player" << player << "_b_btn = \"1\"\n"
-            << "input_player" << player << "_a_btn = \"0\"\n"
-            << "input_player" << player << "_y_btn = \"3\"\n"
-            << "input_player" << player << "_x_btn = \"2\"\n"
+            << "input_player" << player << "_b_btn = \"" << face.b << "\"\n"
+            << "input_player" << player << "_a_btn = \"" << face.a << "\"\n"
+            << "input_player" << player << "_y_btn = \"" << face.y << "\"\n"
+            << "input_player" << player << "_x_btn = \"" << face.x << "\"\n"
             << "input_player" << player << "_l_btn = \"4\"\n"
             << "input_player" << player << "_r_btn = \"5\"\n"
             << "input_player" << player << "_select_btn = \"6\"\n"
@@ -238,6 +462,11 @@ std::filesystem::path write_retroarch_input_override(
             << "input_player" << player << "_left_btn = \"13\"\n"
             << "input_player" << player << "_right_btn = \"14\"\n";
     }
+
+    if (realtime_pacing || capture_fullscreen) {
+        ensure_lrps2_virtual_display_options();
+    }
+    apply_retroarch_resolution_scale(core_path, resolution_scale);
 
     return path;
 }

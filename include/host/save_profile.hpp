@@ -23,4 +23,11 @@ SaveProfile prepare_save_profile(
     const std::filesystem::path& root_directory,
     const std::string& username);
 
+// Per-user LRPS2 memory cards live at <user>/pcsx2/memcards/*.ps2.
+// Stage into ~/.config/retroarch/system/pcsx2/memcards before launch; harvest after.
+std::filesystem::path user_ps2_memcard_directory(const SaveProfile& profile);
+std::filesystem::path shared_ps2_memcard_directory();
+void stage_user_ps2_memcards(const SaveProfile& profile);
+void harvest_user_ps2_memcards(const SaveProfile& profile);
+
 } // namespace archstreamer

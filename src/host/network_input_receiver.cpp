@@ -73,6 +73,8 @@ void NetworkInputReceiver::poll() {
                         << " local P" << static_cast<int>(input->local_player) + 1
                         << " has no seat assignment; ignored\n";
                 }
+            } else if (auto* keys = std::get_if<KeyboardInput>(&payload); keys != nullptr) {
+                input_router_.route(*keys);
             }
         } catch (const std::exception& error) {
             std::cerr << "Ignoring bad input packet: " << error.what() << '\n';

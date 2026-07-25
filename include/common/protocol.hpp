@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/controller_state.hpp"
+#include "common/keyboard_state.hpp"
 #include "common/media.hpp"
 
 #include <array>
@@ -14,7 +15,7 @@
 namespace archstreamer {
 
 constexpr std::uint32_t ProtocolMagic = 0x41525354; // "ARST"
-constexpr std::uint16_t ProtocolVersion = 10;
+constexpr std::uint16_t ProtocolVersion = 11;
 constexpr std::uint8_t MaxRemoteClients = 2;
 constexpr std::uint8_t MaxPlayersPerClient = 2;
 constexpr std::uint8_t MaxRetroArchPorts = 5; // Ports 0-3 plus a host player if desired.
@@ -45,6 +46,7 @@ enum class PacketType : std::uint8_t {
     ArtAssetResponse = 17,
     DiscControlRequest = 18,
     DiscControlResponse = 19,
+    KeyboardInput = 20,
 };
 
 enum class ClientRole : std::uint8_t {
@@ -181,38 +183,62 @@ struct ControllerInput {
     ControllerState state;
 };
 
+struct KeyboardInput {
+    ClientId client_id = 0;
+    LocalPlayerIndex local_player = 0;
+    KeyboardState state;
+};
+
 enum class MediaQualityTier : std::uint8_t {
     Auto = 0,
     Low = 1,
     Medium = 2,
     High = 3,
+    MediumHigh = 4,
+    VeryHigh = 5,
 };
 
 struct VideoEncodeSettings {
     std::uint16_t bitrate_kbps = 1500;
     std::uint8_t framerate = 30;
     std::uint16_t key_int_max = 30;
+    // 0 = encode at capture resolution (no videoscale).
+    std::uint16_t width = 0;
+    std::uint16_t height = 0;
 };
 
 inline VideoEncodeSettings video_encode_settings_for_tier(MediaQualityTier tier) {
     // key_int_max ~0.5s so remotes get an IDR quickly after join / pipeline restart.
+    // Capture defaults to 1080p; lower tiers downscale in the encode branch.
     switch (tier) {
     case MediaQualityTier::Low:
-        return VideoEncodeSettings{800, 20, 10};
+        return VideoEncodeSettings{800, 20, 10, 960, 540};
+    case MediaQualityTier::MediumHigh:
+        return VideoEncodeSettings{8000, 60, 30, 1280, 720};
     case MediaQualityTier::High:
-        // Ladder master: 12 Mbps @ 60 fps; Med/Low derive via tee + videorate drop.
-        return VideoEncodeSettings{12000, 60, 30};
+        return VideoEncodeSettings{12000, 60, 30, 1920, 1080};
+    case MediaQualityTier::VeryHigh:
+        return VideoEncodeSettings{25000, 60, 30, 1920, 1080};
     case MediaQualityTier::Medium:
     case MediaQualityTier::Auto:
     default:
-        return VideoEncodeSettings{3500, 30, 15};
+        return VideoEncodeSettings{3500, 30, 15, 1280, 720};
     }
 }
 
 // Map encode settings back to a ladder tier (used when clients reconfigure by settings).
 inline MediaQualityTier media_quality_tier_for_settings(const VideoEncodeSettings& settings) {
-    if (settings.framerate >= 50 || settings.bitrate_kbps >= 8000) {
+    if (settings.bitrate_kbps >= 18000 || settings.width >= 1920) {
+        if (settings.bitrate_kbps >= 18000) {
+            return MediaQualityTier::VeryHigh;
+        }
         return MediaQualityTier::High;
+    }
+    if (settings.bitrate_kbps >= 10000) {
+        return MediaQualityTier::High;
+    }
+    if (settings.bitrate_kbps >= 6000 || settings.framerate >= 50) {
+        return MediaQualityTier::MediumHigh;
     }
     if (settings.framerate <= 20 || settings.bitrate_kbps <= 1000) {
         return MediaQualityTier::Low;
@@ -222,7 +248,11 @@ inline MediaQualityTier media_quality_tier_for_settings(const VideoEncodeSetting
 
 inline MediaQualityTier step_quality_tier_down(MediaQualityTier tier) {
     switch (tier) {
+    case MediaQualityTier::VeryHigh:
+        return MediaQualityTier::High;
     case MediaQualityTier::High:
+        return MediaQualityTier::MediumHigh;
+    case MediaQualityTier::MediumHigh:
         return MediaQualityTier::Medium;
     case MediaQualityTier::Medium:
     case MediaQualityTier::Auto:
@@ -239,10 +269,14 @@ inline MediaQualityTier step_quality_tier_up(MediaQualityTier tier) {
         return MediaQualityTier::Medium;
     case MediaQualityTier::Medium:
     case MediaQualityTier::Auto:
+        return MediaQualityTier::MediumHigh;
+    case MediaQualityTier::MediumHigh:
         return MediaQualityTier::High;
     case MediaQualityTier::High:
+        return MediaQualityTier::VeryHigh;
+    case MediaQualityTier::VeryHigh:
     default:
-        return MediaQualityTier::High;
+        return MediaQualityTier::VeryHigh;
     }
 }
 
@@ -275,8 +309,12 @@ inline const char* media_quality_tier_name(MediaQualityTier tier) {
         return "low";
     case MediaQualityTier::Medium:
         return "medium";
+    case MediaQualityTier::MediumHigh:
+        return "med-high";
     case MediaQualityTier::High:
         return "high";
+    case MediaQualityTier::VeryHigh:
+        return "very-high";
     }
     return "unknown";
 }
@@ -349,7 +387,8 @@ using PacketPayload = std::variant<
     ArtAssetRequest,
     ArtAssetResponse,
     DiscControlRequest,
-    DiscControlResponse>;
+    DiscControlResponse,
+    KeyboardInput>;
 
 ClientRole role_for_player_count(std::uint8_t requested_players);
 bool valid_player_count(std::uint8_t requested_players);

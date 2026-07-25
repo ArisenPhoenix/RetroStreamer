@@ -2,6 +2,14 @@
 
 #include <array>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <string>
+
+#ifndef _WIN32
+#include <signal.h>
+#include <unistd.h>
+#endif
 
 #ifdef _WIN32
 #define archstreamer_popen _popen
@@ -40,6 +48,55 @@ std::string read_command_output(const char* command) {
     }
     archstreamer_pclose(pipe);
     return trim_ascii_whitespace(std::move(output));
+}
+
+void terminate_gst_multiudpsink_on_port(std::uint16_t port) {
+#ifndef _WIN32
+    if (port == 0) {
+        return;
+    }
+    const auto port_token = ":" + std::to_string(port);
+    const auto self = getpid();
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    for (const auto& entry : fs::directory_iterator("/proc", ec)) {
+        if (ec || !entry.is_directory(ec)) {
+            continue;
+        }
+        const auto name = entry.path().filename().string();
+        if (name.empty() || name.find_first_not_of("0123456789") != std::string::npos) {
+            continue;
+        }
+        int pid = 0;
+        try {
+            pid = std::stoi(name);
+        } catch (...) {
+            continue;
+        }
+        if (pid <= 1 || pid == self) {
+            continue;
+        }
+        std::ifstream cmdline_file(entry.path() / "cmdline", std::ios::binary);
+        if (!cmdline_file) {
+            continue;
+        }
+        std::string cmdline((std::istreambuf_iterator<char>(cmdline_file)),
+                            std::istreambuf_iterator<char>());
+        for (char& c : cmdline) {
+            if (c == '\0') {
+                c = ' ';
+            }
+        }
+        if (cmdline.find("gst-launch") == std::string::npos ||
+            cmdline.find("multiudpsink") == std::string::npos ||
+            cmdline.find(port_token) == std::string::npos) {
+            continue;
+        }
+        kill(pid, SIGTERM);
+    }
+#else
+    (void)port;
+#endif
 }
 
 } // namespace archstreamer

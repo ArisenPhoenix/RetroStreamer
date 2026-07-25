@@ -68,7 +68,72 @@ SaveProfile prepare_save_profile(
 
     std::filesystem::create_directories(profile.savefile_directory);
     std::filesystem::create_directories(profile.savestate_directory);
+    std::filesystem::create_directories(user_ps2_memcard_directory(profile));
     return profile;
+}
+
+std::filesystem::path user_ps2_memcard_directory(const SaveProfile& profile) {
+    return profile.user_directory / "pcsx2" / "memcards";
+}
+
+std::filesystem::path shared_ps2_memcard_directory() {
+    if (const char* home = std::getenv("HOME"); home != nullptr && *home != '\0') {
+        return std::filesystem::path(home) / ".config/retroarch/system/pcsx2/memcards";
+    }
+    return std::filesystem::path(".config/retroarch/system/pcsx2/memcards");
+}
+
+namespace {
+
+void copy_ps2_memcards(
+    const std::filesystem::path& source_dir,
+    const std::filesystem::path& dest_dir) {
+    if (!std::filesystem::exists(source_dir)) {
+        return;
+    }
+    std::filesystem::create_directories(dest_dir);
+    for (const auto& entry : std::filesystem::directory_iterator(source_dir)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        const auto name = entry.path().filename().string();
+        if (name.size() < 4 || name.substr(name.size() - 4) != ".ps2") {
+            continue;
+        }
+        const auto target = dest_dir / entry.path().filename();
+        std::filesystem::copy_file(
+            entry.path(),
+            target,
+            std::filesystem::copy_options::overwrite_existing);
+    }
+}
+
+} // namespace
+
+void stage_user_ps2_memcards(const SaveProfile& profile) {
+    const auto user_cards = user_ps2_memcard_directory(profile);
+    const auto shared_cards = shared_ps2_memcard_directory();
+    std::filesystem::create_directories(user_cards);
+    std::filesystem::create_directories(shared_cards);
+
+    // First PS2 session for this user: seed from the shared RetroArch cards if empty.
+    bool user_has_card = false;
+    if (std::filesystem::exists(user_cards)) {
+        for (const auto& entry : std::filesystem::directory_iterator(user_cards)) {
+            if (entry.is_regular_file() && entry.path().extension() == ".ps2") {
+                user_has_card = true;
+                break;
+            }
+        }
+    }
+    if (!user_has_card) {
+        copy_ps2_memcards(shared_cards, user_cards);
+    }
+    copy_ps2_memcards(user_cards, shared_cards);
+}
+
+void harvest_user_ps2_memcards(const SaveProfile& profile) {
+    copy_ps2_memcards(shared_ps2_memcard_directory(), user_ps2_memcard_directory(profile));
 }
 
 } // namespace archstreamer

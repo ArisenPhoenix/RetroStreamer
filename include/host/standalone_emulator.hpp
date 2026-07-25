@@ -39,10 +39,14 @@ inline std::optional<ResolvedStandaloneEmulator> resolve_yuzu() {
 // Create per-user Yuzu data/config under the save profile and seed keys.
 // force_opengl: VirtualGL/Xvfb path (Vulkan often lacks a present queue there).
 // force_vulkan: gamescope path (OpenGL left over from VGL sessions presents poorly).
+// vulkan_device: Yuzu qt-config vulkan_device index (-1 = leave unchanged).
+// resolution_scale: internal render multiplier 1–6 (1x…6x native); 0 or negative = leave unchanged.
 YuzuUserProfile prepare_yuzu_user_profile(
     const SaveProfile& save_profile,
     bool force_opengl = false,
-    bool force_vulkan = false);
+    bool force_vulkan = false,
+    int vulkan_device = -1,
+    int resolution_scale = 1);
 
 // Bind player_N Controls to ArchStreamer uinput pads (engine:sdl + GUID).
 // Call after pads are plugged so GUIDs match what Yuzu's SDL will see.

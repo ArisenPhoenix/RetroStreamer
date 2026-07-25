@@ -12,11 +12,22 @@ namespace {
 
 constexpr auto kStartupHeartbeatGrace = std::chrono::seconds(15);
 constexpr auto kMinReconfigureInterval = std::chrono::seconds(5);
+// After a pipeline restart the remote often reports 0 decoded frames until the next IDR.
+// Without this grace, Auto flaps High↔Medium every few seconds and freezes the stream.
+constexpr auto kPostReconfigureGrace = std::chrono::seconds(12);
+// After a failed High stay, wait before retrying — High restarts the shared capture tee.
+constexpr auto kHighTierFailureCooldown = std::chrono::seconds(180);
 // Clean leave (closed window / Stop Client): don't hold the whole host for a full minute.
 constexpr auto kCleanDisconnectGrace = std::chrono::seconds(15);
 constexpr std::uint8_t kBadHealthThreshold = 3;
-constexpr std::uint8_t kGoodHealthThreshold = 10;
+// Demote from High only after a longer bad streak; brief decode stalls are common at 60fps.
+constexpr std::uint8_t kBadHealthThresholdFromHigh = 6;
+constexpr std::uint8_t kGoodHealthThreshold = 10;           // Low → Medium (~10s)
+constexpr std::uint8_t kGoodHealthThresholdForHigh = 45;    // Medium → High (~45s stable)
 constexpr std::uint16_t kHighLossPermille = 100;
+// Require sustained decode rate before climbing (heartbeats are ~1 Hz).
+constexpr std::uint16_t kMinFramesForStepUp = 8;
+constexpr std::uint16_t kMinFramesForHighStepUp = 20;
 
 bool client_is_seated_player(const SessionClientConnection& client) {
     return client.hello.requested_players > 0;
@@ -58,8 +69,8 @@ SessionControlMonitor::SessionControlMonitor(
     const auto now = started_at_;
     for (auto& client : plan_.clients) {
         client.last_seen = now;
-        // Start at Medium: High is 12 Mbps/60 and can overwhelm Wi‑Fi remotes before
-        // the first heartbeat. Auto can still step up when the link is healthy.
+        // Start at Medium: High is 12 Mbps/60 and restarts the shared pipeline.
+        // Auto can still step up after a long healthy streak (see kGoodHealthThresholdForHigh).
         client.applied_tier = MediaQualityTier::Medium;
         client.wanted_tier = MediaQualityTier::Auto;
     }
@@ -178,29 +189,71 @@ void SessionControlMonitor::handle_heartbeat(
     if (now - started_at_ < kStartupHeartbeatGrace) {
         return;
     }
+    if (client.last_video_reconfigure.time_since_epoch().count() != 0 &&
+        now - client.last_video_reconfigure < kPostReconfigureGrace) {
+        return;
+    }
 
-    const bool unhealthy =
-        heartbeat.loss_permille >= kHighLossPermille || heartbeat.frames_decoded_delta == 0;
+    // Client Auto mode only reports health; the host decides ladder steps.
+    // Prefer real loss over a single zero-frame second (decode hiccups / IDR gaps).
+    const bool hard_loss = heartbeat.loss_permille >= kHighLossPermille;
+    const bool no_frames = heartbeat.frames_decoded_delta == 0;
+    const bool unhealthy = hard_loss || no_frames;
     if (unhealthy) {
         ++client.bad_health_streak;
         client.good_health_streak = 0;
-        if (client.bad_health_streak >= kBadHealthThreshold) {
+        const auto bad_needed =
+            (client.applied_tier == MediaQualityTier::High ||
+             client.applied_tier == MediaQualityTier::MediumHigh ||
+             client.applied_tier == MediaQualityTier::VeryHigh)
+                ? kBadHealthThresholdFromHigh
+                : kBadHealthThreshold;
+        if (client.bad_health_streak >= bad_needed) {
+            const auto previous = client.applied_tier;
             const auto next = step_quality_tier_down(client.applied_tier);
             if (next != client.applied_tier) {
                 apply_video_tier(client, next, "auto step-down (loss/no frames)");
+                if (previous == MediaQualityTier::High ||
+                    previous == MediaQualityTier::VeryHigh ||
+                    previous == MediaQualityTier::MediumHigh) {
+                    client.high_tier_cooldown_until = now + kHighTierFailureCooldown;
+                }
             }
             client.bad_health_streak = 0;
         }
         return;
     }
 
-    ++client.good_health_streak;
     client.bad_health_streak = 0;
-    if (client.good_health_streak >= kGoodHealthThreshold) {
-        const auto next = step_quality_tier_up(client.applied_tier);
-        if (next != client.applied_tier) {
-            apply_video_tier(client, next, "auto step-up (healthy)");
-        }
+    const auto next = step_quality_tier_up(client.applied_tier);
+    if (next == client.applied_tier) {
+        client.good_health_streak = 0;
+        return;
+    }
+
+    const bool promoting_to_60fps =
+        next == MediaQualityTier::MediumHigh ||
+        next == MediaQualityTier::High ||
+        next == MediaQualityTier::VeryHigh;
+    const auto good_needed =
+        promoting_to_60fps ? kGoodHealthThresholdForHigh : kGoodHealthThreshold;
+    const auto min_frames =
+        promoting_to_60fps ? kMinFramesForHighStepUp : kMinFramesForStepUp;
+    // Barely-alive decode must not accumulate toward a climb.
+    if (heartbeat.frames_decoded_delta < min_frames) {
+        client.good_health_streak = 0;
+        return;
+    }
+    if (promoting_to_60fps &&
+        client.high_tier_cooldown_until.time_since_epoch().count() != 0 &&
+        now < client.high_tier_cooldown_until) {
+        client.good_health_streak = 0;
+        return;
+    }
+
+    ++client.good_health_streak;
+    if (client.good_health_streak >= good_needed) {
+        apply_video_tier(client, next, "auto step-up (healthy)");
         client.good_health_streak = 0;
     }
 }
@@ -224,12 +277,17 @@ void SessionControlMonitor::apply_video_tier(
 
     client.applied_tier = resolved;
     client.last_video_reconfigure = now;
+    client.bad_health_streak = 0;
+    client.good_health_streak = 0;
     std::cerr
         << "Adapted video for " << client_label(client)
         << " -> " << media_quality_tier_name(resolved)
         << " (" << settings.bitrate_kbps << " kbps, "
-        << static_cast<int>(settings.framerate) << " fps): "
-        << reason << '\n';
+        << static_cast<int>(settings.framerate) << " fps";
+    if (settings.width > 0 && settings.height > 0) {
+        std::cerr << ", " << settings.width << "x" << settings.height;
+    }
+    std::cerr << "): " << reason << '\n';
 }
 
 bool SessionControlMonitor::remove_viewer(std::size_t index, std::string_view reason) {

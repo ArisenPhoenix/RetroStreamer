@@ -29,4 +29,10 @@ std::vector<ArchStreamerSdlPad> find_archstreamer_sdl_pads(
     const std::string& ignore_devices = {},
     bool verbose = false);
 
+// RetroArch `udev` joypad indices for ArchStreamer uinput pads (from /proc/bus/input/devices).
+// Prefer this over SDL indices when input_joypad_driver=udev — the two enumerations differ.
+std::vector<std::size_t> find_archstreamer_udev_joypad_indices(
+    std::size_t players,
+    bool verbose = false);
+
 } // namespace archstreamer

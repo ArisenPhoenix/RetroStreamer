@@ -39,7 +39,21 @@ int score_gpu(const GpuDevice& gpu) {
 }
 
 std::vector<std::string> nvidia_prime_providers() {
-    const auto dump = read_command_output("xrandr --listproviders 2>/dev/null");
+    // Prefer the real desktop display for PRIME providers. ArchStreamer GUI may run on
+    // a nested/offscreen DISPLAY where xrandr reports zero providers.
+    auto list_for_display = [](const char* display) {
+        std::string command = "xrandr --listproviders 2>/dev/null";
+        if (display != nullptr && display[0] != '\0') {
+            command = std::string("env DISPLAY=") + display + " xrandr --listproviders 2>/dev/null";
+        }
+        return read_command_output(command.c_str());
+    };
+
+    std::string dump = list_for_display(nullptr);
+    if (dump.find("name:NVIDIA-G") == std::string::npos) {
+        dump = list_for_display(":0");
+    }
+
     std::vector<std::string> providers;
     std::string::size_type pos = 0;
     while (pos < dump.size()) {
@@ -64,12 +78,25 @@ std::vector<std::string> nvidia_prime_providers() {
 }
 
 std::string gl_renderer_for_provider(const std::string& provider) {
+    // Probe on :0 when possible — nested DISPLAYs often lack NVIDIA providers.
     const auto command =
-        "timeout 3 env __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia "
+        "timeout 3 env DISPLAY=${ARCHSTREAMER_PRIME_DISPLAY:-${DISPLAY:-:0}} "
+        "__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia "
         "__NV_PRIME_RENDER_OFFLOAD_PROVIDER=" +
         provider +
         " glxinfo -B 2>/dev/null | awk -F': ' '/OpenGL renderer string/ {print $2; exit}'";
-    return read_command_output(command.c_str());
+    auto result = read_command_output(command.c_str());
+    if (!result.empty()) {
+        return result;
+    }
+    // Fallback: force :0 explicitly.
+    const auto fallback =
+        "timeout 3 env DISPLAY=:0 "
+        "__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia "
+        "__NV_PRIME_RENDER_OFFLOAD_PROVIDER=" +
+        provider +
+        " glxinfo -B 2>/dev/null | awk -F': ' '/OpenGL renderer string/ {print $2; exit}'";
+    return read_command_output(fallback.c_str());
 }
 
 std::vector<std::pair<std::string, int>> vulkan_device_names() {
@@ -293,6 +320,77 @@ std::vector<std::pair<std::string, std::string>> render_gpu_environment(const Gp
     environment.emplace_back("__NV_PRIME_RENDER_OFFLOAD_PROVIDER", gpu.prime_provider);
     environment.emplace_back("__VK_LAYER_NV_optimus", "NVIDIA_only");
     return environment;
+}
+
+int yuzu_vulkan_device_index(const GpuDevice& gpu) {
+    // Mirror yuzu's SortPhysicalDevices: stable sorts applied in this order —
+    // name descending, discrete over integrated, then vendor NVIDIA > AMD > Intel.
+    struct Entry {
+        std::string name;
+        bool discrete = false;
+        int vendor_rank = 3; // 0=NVIDIA, 1=AMD, 2=Intel, 3=other
+    };
+    std::vector<Entry> entries;
+    for (const auto& [name, index] : vulkan_device_names()) {
+        (void)index;
+        Entry entry;
+        entry.name = name;
+        const auto lower = to_lower(name);
+        if (lower.find("llvmpipe") != std::string::npos ||
+            lower.find("softpipe") != std::string::npos ||
+            lower.find("swiftshader") != std::string::npos) {
+            entry.discrete = false;
+            entry.vendor_rank = 3;
+        } else if (lower.find("nvidia") != std::string::npos) {
+            entry.discrete = true;
+            entry.vendor_rank = 0;
+        } else if (lower.find("amd") != std::string::npos ||
+                   lower.find("radeon") != std::string::npos ||
+                   lower.find("radv") != std::string::npos) {
+            // Host iGPU is integrated; discrete AMD would still sort after NVIDIA.
+            entry.discrete = lower.find("radeon graphics") == std::string::npos;
+            entry.vendor_rank = 1;
+        } else if (lower.find("intel") != std::string::npos) {
+            entry.discrete = false;
+            entry.vendor_rank = 2;
+        } else {
+            entry.discrete = false;
+            entry.vendor_rank = 3;
+        }
+        entries.push_back(std::move(entry));
+    }
+    if (entries.empty()) {
+        return gpu.vulkan_index;
+    }
+
+    std::vector<std::size_t> order(entries.size());
+    for (std::size_t i = 0; i < order.size(); ++i) {
+        order[i] = i;
+    }
+    std::stable_sort(order.begin(), order.end(), [&](std::size_t left, std::size_t right) {
+        return entries[left].name > entries[right].name;
+    });
+    std::stable_sort(order.begin(), order.end(), [&](std::size_t left, std::size_t right) {
+        return entries[left].discrete && !entries[right].discrete;
+    });
+    std::stable_sort(order.begin(), order.end(), [&](std::size_t left, std::size_t right) {
+        return entries[left].vendor_rank < entries[right].vendor_rank;
+    });
+
+    const auto needle = to_lower(gpu.name);
+    for (int yuzu_index = 0; yuzu_index < static_cast<int>(order.size()); ++yuzu_index) {
+        const auto& name = entries[order[static_cast<std::size_t>(yuzu_index)]].name;
+        const auto lower = to_lower(name);
+        if (lower.find(needle) != std::string::npos || needle.find(lower) != std::string::npos) {
+            return yuzu_index;
+        }
+        for (const auto& token : {"3060", "1660", "4070", "4080", "4090", "3080", "3070"}) {
+            if (needle.find(token) != std::string::npos && lower.find(token) != std::string::npos) {
+                return yuzu_index;
+            }
+        }
+    }
+    return gpu.vulkan_index;
 }
 
 } // namespace archstreamer

@@ -33,4 +33,9 @@ std::optional<GpuDevice> resolve_render_gpu(const std::string& selection);
 // Environment entries for RetroArch child (PRIME offload when NVIDIA).
 std::vector<std::pair<std::string, std::string>> render_gpu_environment(const GpuDevice& gpu);
 
+// Index into Yuzu's Vulkan device list for qt-config `vulkan_device`.
+// Yuzu re-sorts physical devices (discrete first, NVIDIA before AMD, name descending),
+// so this is NOT the same as GpuDevice::vulkan_index / vulkaninfo order.
+int yuzu_vulkan_device_index(const GpuDevice& gpu);
+
 } // namespace archstreamer

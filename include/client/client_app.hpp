@@ -76,6 +76,9 @@ struct ClientAppConfig {
     std::vector<std::size_t> controller_indexes;
     bool wants_video = true;
     bool wants_audio = true;
+    // Remotes Space/arrows/Enter/Esc/Tab/Backspace/F1 to a host virtual keyboard.
+    // Default on so kids get hold-to-fast-forward (Space) without extra setup.
+    bool send_keyboard = true;
     // Experimental: one shared-clock GStreamer pipeline for A/V lip-sync.
     // Default false keeps the working dual gst-launch receivers.
     bool synced_av = false;

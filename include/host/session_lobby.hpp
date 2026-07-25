@@ -36,6 +36,8 @@ struct SessionClientConnection {
     std::uint16_t max_bitrate_kbps = 0;
     std::uint8_t bad_health_streak = 0;
     std::uint8_t good_health_streak = 0;
+    // After Auto steps down from High due to loss/no frames, hold off retrying High.
+    std::chrono::steady_clock::time_point high_tier_cooldown_until = {};
     std::chrono::steady_clock::time_point last_video_reconfigure = {};
 };
 

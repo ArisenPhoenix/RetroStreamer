@@ -3,6 +3,7 @@
 #include "common/cli_common.hpp"
 #include "host/save_profile.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <stdexcept>
 #include <string_view>
@@ -102,7 +103,7 @@ void HostRunnerCli::print_usage() const {
         << "  --virtual-display <display>\n"
         << "                      X display for virtual RetroArch output. Default: :99\n"
         << "  --video-resolution <WxH>\n"
-        << "                      Virtual display resolution. Default: 1280x720\n"
+        << "                      Virtual display resolution. Default: 1920x1080\n"
         << "  --display-backend <auto|xvfb|xephyr|virtualgl|gamescope>\n"
         << "                      Virtual display backend. Default: auto\n"
         << "                      (Switch/standalone defaults to gamescope when streaming).\n"
@@ -114,14 +115,26 @@ void HostRunnerCli::print_usage() const {
         << "  --ignore-controller <vid/pid>\n"
         << "                      Hide a physical controller from RetroArch SDL2, for example 0x054c/0x09cc.\n"
         << "  --retroarch-joypad-driver <driver>\n"
-        << "                      RetroArch joypad driver for generated input config. Default: udev.\n"
+        << "                      RetroArch joypad driver (udev|sdl2). Default: udev (preferred;\n"
+        << "                      sdl2 can stall heavy cores like LRPS2).\n"
         << "  --save-root <path>  Base save profile directory. Default: ~/.local/share/archstreamer/saves\n"
         << "  --username <name>   Save profile username. Default: $USER or local.\n"
         << "  --virtual-joypad-index <index>\n"
         << "                      RetroArch joypad index for the virtual pad. Default: 1 with bridge.\n"
         << "  --gpu <auto|id|name>\n"
-        << "                      Render GPU for Host Player and streamed standalone (Yuzu/gamescope).\n"
-        << "                      Auto = most performant. Ids from nvidia-smi as nvidia:0, nvidia:1, …\n";
+        << "                      Encode GPU (nvenc). Also used for game render unless\n"
+        << "                      --separate-render-gpu is set. Auto = most performant.\n"
+        << "                      Ids from nvidia-smi as nvidia:0, nvidia:1, …\n"
+        << "  --separate-render-gpu\n"
+        << "                      Use --render-gpu for RetroArch/Yuzu (PRIME); --gpu stays encode.\n"
+        << "  --render-gpu <auto|id|name>\n"
+        << "                      Game render GPU when --separate-render-gpu is set.\n"
+        << "  --yuzu-resolution <1-6>\n"
+        << "                      Yuzu internal resolution multiplier (1x…6x native).\n"
+        << "                      Default: 1. Ignored for RetroArch.\n"
+        << "  --retroarch-resolution <1-6>\n"
+        << "                      RetroArch internal resolution multiplier (1x…6x).\n"
+        << "                      Applied to known cores' .opt on launch. Default: 1.\n";
 }
 
 HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
@@ -236,6 +249,12 @@ HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
         } else if (arg == "--renderer") {
             if_throw(i, "--renderer requires auto, opengl, or vulkan");
             args.graphics_api = parse_graphics_api(argv[i]);
+        } else if (arg == "--yuzu-resolution") {
+            if_throw(i, "--yuzu-resolution requires an integer 1-6");
+            args.yuzu_resolution_scale = std::clamp(std::stoi(argv[i]), 1, 6);
+        } else if (arg == "--retroarch-resolution") {
+            if_throw(i, "--retroarch-resolution requires an integer 1-6");
+            args.retroarch_resolution_scale = std::clamp(std::stoi(argv[i]), 1, 6);
         } else if (arg == "--bridge-controller") {
             if_throw(i, "--bridge-controller requires a controller index");
             args.bridge_controller_index = static_cast<std::size_t>(std::stoul(argv[i]));
@@ -256,7 +275,13 @@ HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
             args.virtual_joypad_index = static_cast<std::size_t>(std::stoul(argv[i]));
         } else if (arg == "--gpu") {
             if_throw(i, "--gpu requires auto, a device id (nvidia:0), or a name substring");
+            args.encode_gpu = argv[i];
+        } else if (arg == "--separate-render-gpu") {
+            args.separate_render_gpu = true;
+        } else if (arg == "--render-gpu") {
+            if_throw(i, "--render-gpu requires auto, a device id (nvidia:0), or a name substring");
             args.render_gpu = argv[i];
+            args.separate_render_gpu = true;
         } else if (arg == "--help" || arg == "-h") {
             print_usage();
             std::exit(0);

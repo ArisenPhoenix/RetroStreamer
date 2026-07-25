@@ -50,9 +50,8 @@ std::optional<GameInfo> game_info_for(const GameList& list, const GameId& game_i
 }
 
 GameList catalog_delta_for_request(const GameList& full_list, const GameListRequest& request) {
-    // Always send a full replace. Incremental updates never populated deleted_game_ids,
-    // so clients kept stale entries after catalog membership shrank (e.g. .m3u collapsing
-    // multi-disc CHDs into one playlist game). Catalogs are small; full sync is fine.
+    // Catalogs are small; always full-replace. Incremental deleted_game_ids were never
+    // populated and left clients with stale entries after membership shrank.
     (void)request;
     auto response = full_list;
     response.full = true;

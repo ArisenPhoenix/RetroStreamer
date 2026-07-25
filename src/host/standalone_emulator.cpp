@@ -2,6 +2,7 @@
 
 #include "common/platform/paths.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -221,7 +222,12 @@ void write_yuzu_input_profile(const std::filesystem::path& path, const std::stri
     out << contents;
 }
 
-void ensure_yuzu_qt_config(const YuzuUserProfile& profile, bool force_opengl, bool force_vulkan) {
+void ensure_yuzu_qt_config(
+    const YuzuUserProfile& profile,
+    bool force_opengl,
+    bool force_vulkan,
+    int vulkan_device,
+    int resolution_scale) {
     const auto config_dir = profile.xdg_config_home / "yuzu";
     const auto config_path = config_dir / "qt-config.ini";
     std::filesystem::create_directories(config_dir);
@@ -304,23 +310,37 @@ void ensure_yuzu_qt_config(const YuzuUserProfile& profile, bool force_opengl, bo
     set_qt_ini_value(contents, "confirmStop", "0");
     if (force_opengl) {
         // 0 = OpenGL, 1 = Vulkan. Virtual capture displays often cannot present Vulkan.
-        set_qt_ini_value(contents, "backend", "0");
-        set_qt_ini_value(contents, "backend\\default", "false");
-        set_qt_ini_value(contents, "shader_backend", "0");
-        set_qt_ini_value(contents, "shader_backend\\default", "false");
-        set_qt_ini_value(contents, "perform_vulkan_check", "false");
-        set_qt_ini_value(contents, "perform_vulkan_check\\default", "false");
+        set_qt_ini_group_value(contents, "Renderer", "backend", "0");
+        set_qt_ini_group_value(contents, "Renderer", "backend\\default", "false");
+        set_qt_ini_group_value(contents, "Renderer", "shader_backend", "0");
+        set_qt_ini_group_value(contents, "Renderer", "shader_backend\\default", "false");
+        set_qt_ini_group_value(contents, "Renderer", "perform_vulkan_check", "false");
+        set_qt_ini_group_value(contents, "Renderer", "perform_vulkan_check\\default", "false");
         // Exclusive fullscreen is unreliable on Xvfb (tiny/centered black window).
         // Host launches with -geometry WxH+0+0 to fill the capture surface instead.
-        set_qt_ini_value(contents, "fullscreen", "false");
-        set_qt_ini_value(contents, "fullscreen\\default", "false");
+        set_qt_ini_group_value(contents, "UI", "fullscreen", "false");
+        set_qt_ini_group_value(contents, "UI", "fullscreen\\default", "false");
     } else if (force_vulkan) {
         // Gamescope presents Vulkan cleanly; a leftover OpenGL backend from VirtualGL
         // sessions can leave the PipeWire stream blank.
-        set_qt_ini_value(contents, "backend", "1");
-        set_qt_ini_value(contents, "backend\\default", "false");
-        set_qt_ini_value(contents, "perform_vulkan_check", "false");
-        set_qt_ini_value(contents, "perform_vulkan_check\\default", "false");
+        set_qt_ini_group_value(contents, "Renderer", "backend", "1");
+        set_qt_ini_group_value(contents, "Renderer", "backend\\default", "false");
+        set_qt_ini_group_value(contents, "Renderer", "perform_vulkan_check", "false");
+        set_qt_ini_group_value(contents, "Renderer", "perform_vulkan_check\\default", "false");
+    }
+    if (vulkan_device >= 0) {
+        // Yuzu sorts devices (discrete NVIDIA first, name descending) — not vulkaninfo order.
+        set_qt_ini_group_value(
+            contents, "Renderer", "vulkan_device", std::to_string(vulkan_device));
+        set_qt_ini_group_value(contents, "Renderer", "vulkan_device\\default", "false");
+    }
+    if (resolution_scale > 0) {
+        // ResolutionSetup: Res1X=2, Res2X=3, … Res6X=7
+        const int scale = std::clamp(resolution_scale, 1, 6);
+        const int setup = scale + 1;
+        set_qt_ini_group_value(
+            contents, "Renderer", "resolution_setup", std::to_string(setup));
+        set_qt_ini_group_value(contents, "Renderer", "resolution_setup\\default", "false");
     }
 
     std::ofstream out(config_path, std::ios::trunc);
@@ -473,7 +493,9 @@ std::optional<ResolvedStandaloneEmulator> ensure_yuzu_runtime() {
 YuzuUserProfile prepare_yuzu_user_profile(
     const SaveProfile& save_profile,
     bool force_opengl,
-    bool force_vulkan) {
+    bool force_vulkan,
+    int vulkan_device,
+    int resolution_scale) {
     YuzuUserProfile profile;
     // Isolate Qt/Yuzu paths per ArchStreamer save user.
     profile.xdg_data_home = save_profile.user_directory / "yuzu" / "xdg-data";
@@ -500,7 +522,7 @@ YuzuUserProfile prepare_yuzu_user_profile(
         }
     }
 
-    ensure_yuzu_qt_config(profile, force_opengl, force_vulkan);
+    ensure_yuzu_qt_config(profile, force_opengl, force_vulkan, vulkan_device, resolution_scale);
     return profile;
 }
 
@@ -523,7 +545,7 @@ void configure_yuzu_archstreamer_controls(
         contents.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
     }
     if (contents.empty()) {
-        ensure_yuzu_qt_config(profile, false, false);
+        ensure_yuzu_qt_config(profile, false, false, -1, 0);
         std::ifstream in(config_path);
         contents.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
     }

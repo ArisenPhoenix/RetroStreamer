@@ -66,8 +66,8 @@ void NetworkInputReceiver::poll() {
                 }
                 if (input_router_.route(*input)) {
                     ++packets_applied_;
-                } else if (packets_applied_ == 0 && packets_received_ <= 5) {
-                    std::cerr
+                } else if (packets_applied_ == 0 && packets_received_ <= 20) {
+                    std::cout
                         << "Controller input from client "
                         << static_cast<int>(input->client_id)
                         << " local P" << static_cast<int>(input->local_player) + 1

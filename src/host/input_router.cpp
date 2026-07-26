@@ -54,9 +54,12 @@ bool InputRouter::route(const ControllerInput& input) {
 
 bool InputRouter::route(const KeyboardInput& input) {
     std::lock_guard lock(mutex_);
-    if (keyboard_ == nullptr || !client_has_seat(input.client_id)) {
+    if (keyboard_ == nullptr) {
         return false;
     }
+    // Fast-forward / pause / menu are session-wide. Viewers have no pad seat, so do
+    // not require client_has_seat() — that made remoted keyboard a no-op for Viewer
+    // joins (and any client briefly without a seat map).
 
     const auto last_timestamp = last_keyboard_timestamp_by_client_.find(input.client_id);
     if (last_timestamp != last_keyboard_timestamp_by_client_.end() &&

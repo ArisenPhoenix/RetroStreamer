@@ -185,6 +185,7 @@ add_library(archstreamer_client
     src/client/gstreamer_synced_media_session.cpp
     src/client/input_sender.cpp
     src/client/keyboard_poller.cpp
+    src/client/remoted_keyboard_bridge.cpp
     src/client/session_client.cpp
     src/client/session_service.cpp
 )

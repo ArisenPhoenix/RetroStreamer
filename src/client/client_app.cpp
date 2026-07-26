@@ -330,13 +330,37 @@ ClientRunResult ClientApp::join_session(
     auto input_socket = std::optional<UdpSocket>{};
     std::atomic<bool> input_stop{false};
     std::thread input_thread;
-    if (config.input_port.has_value() && config.filter.requested_players > 0 && result.client_id.has_value()) {
-        controller_backend.emplace();
-        controller_backend->open_selected(controller_device_ids);
+    const bool want_pads =
+        config.input_port.has_value() &&
+        config.filter.requested_players > 0 &&
+        result.client_id.has_value();
+    // Viewers request 0 pads but still need remoted keyboard (Space=FF, P=pause).
+    const bool want_keyboard =
+        config.input_port.has_value() &&
+        config.send_keyboard &&
+        result.client_id.has_value();
+    if (want_pads || want_keyboard) {
+        if (want_pads) {
+            controller_backend.emplace();
+            controller_backend->open_selected(controller_device_ids);
+        }
         input_sender.emplace(*result.client_id);
         input_socket.emplace();
-        if (callbacks.on_input_streaming_started) {
+        // Build the poller on the session worker thread so status lands in the GUI log
+        // (the input thread must not touch Qt widgets).
+        std::unique_ptr<KeyboardPoller> keyboard_poller;
+        if (config.send_keyboard) {
+            keyboard_poller = std::make_unique<KeyboardPoller>();
+            if (callbacks.on_status) {
+                callbacks.on_status(keyboard_poller->backend_status());
+            }
+        }
+        if (want_pads && callbacks.on_input_streaming_started) {
             callbacks.on_input_streaming_started(config.host, *config.input_port);
+        } else if (want_keyboard && callbacks.on_status) {
+            callbacks.on_status(
+                "Sending remoted keyboard to " + config.host + ":" +
+                std::to_string(*config.input_port));
         }
 
         // Dedicated thread: media/TCP work on the session loop must not stall pads.
@@ -346,50 +370,53 @@ ClientRunResult ClientApp::join_session(
             &controller_backend,
             &input_sender,
             &input_socket,
-            &config
-        ] {
+            &config,
+            want_pads,
+            keyboard_poller = std::move(keyboard_poller)
+        ]() mutable {
             std::array<ControllerState, MaxPlayersPerClient> last_sent{};
             std::array<bool, MaxPlayersPerClient> have_last_sent{};
-            KeyboardPoller keyboard_poller;
             KeyboardState last_keys{};
             bool have_last_keys = false;
             constexpr auto kInputTick = std::chrono::milliseconds(8);
             constexpr int kChangeCopies = 3;
             while (!input_stop.load(std::memory_order_relaxed)) {
                 const auto tick_start = std::chrono::steady_clock::now();
-                for (LocalPlayerIndex player = 0; player < config.filter.requested_players; ++player) {
-                    const auto state = controller_backend->poll(player);
-                    if (!state.has_value()) {
-                        continue;
-                    }
-                    const bool changed =
-                        !have_last_sent[player] || !same_controls(last_sent[player], *state);
-                    // Always send each tick so lost button-down edges recover quickly.
-                    const int copies = changed ? kChangeCopies : 1;
-                    for (int copy = 0; copy < copies; ++copy) {
-                        auto sample = *state;
-                        // Distinct timestamps so host ordering accepts each UDP copy.
-                        sample.timestamp_us =
-                            archstreamer::steady_timestamp_us() + static_cast<std::uint64_t>(copy);
-                        if (copy > 0) {
-                            sample.sequence = state->sequence + static_cast<std::uint32_t>(copy);
+                if (want_pads && controller_backend.has_value()) {
+                    for (LocalPlayerIndex player = 0; player < config.filter.requested_players; ++player) {
+                        const auto state = controller_backend->poll(player);
+                        if (!state.has_value()) {
+                            continue;
                         }
-                        const auto packet = input_sender->make_input(player, sample);
-                        try {
-                            input_socket->send_to(
-                                serialize_packet(packet),
-                                config.host,
-                                *config.input_port);
-                        } catch (...) {
-                            // Transient send failures should not kill the session loop.
+                        const bool changed =
+                            !have_last_sent[player] || !same_controls(last_sent[player], *state);
+                        // Always send each tick so lost button-down edges recover quickly.
+                        const int copies = changed ? kChangeCopies : 1;
+                        for (int copy = 0; copy < copies; ++copy) {
+                            auto sample = *state;
+                            // Distinct timestamps so host ordering accepts each UDP copy.
+                            sample.timestamp_us =
+                                archstreamer::steady_timestamp_us() + static_cast<std::uint64_t>(copy);
+                            if (copy > 0) {
+                                sample.sequence = state->sequence + static_cast<std::uint32_t>(copy);
+                            }
+                            const auto packet = input_sender->make_input(player, sample);
+                            try {
+                                input_socket->send_to(
+                                    serialize_packet(packet),
+                                    config.host,
+                                    *config.input_port);
+                            } catch (...) {
+                                // Transient send failures should not kill the session loop.
+                            }
                         }
+                        last_sent[player] = *state;
+                        have_last_sent[player] = true;
                     }
-                    last_sent[player] = *state;
-                    have_last_sent[player] = true;
                 }
 
-                if (config.send_keyboard) {
-                    if (const auto keys = keyboard_poller.poll(); keys.has_value()) {
+                if (config.send_keyboard && keyboard_poller) {
+                    if (const auto keys = keyboard_poller->poll(); keys.has_value()) {
                         const bool changed = !have_last_keys || !same_keys(last_keys, *keys);
                         const int copies = changed ? kChangeCopies : 1;
                         for (int copy = 0; copy < copies; ++copy) {

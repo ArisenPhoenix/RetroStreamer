@@ -1,16 +1,22 @@
 #include "client/keyboard_poller.hpp"
 
+#include "client/remoted_keyboard_bridge.hpp"
 #include "common/time.hpp"
 
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
+#include <fstream>
+#include <iostream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include <dirent.h>
+#include <limits.h>
 #include <linux/input.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #if defined(_WIN32)
@@ -21,6 +27,7 @@
 #else
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
+#include <cstdlib>
 #endif
 
 namespace archstreamer {
@@ -91,46 +98,168 @@ bool device_has_key(int fd, int key) {
 }
 
 bool looks_like_keyboard(int fd) {
-    // Prefer real keyboards; skip pure mice/joysticks.
-    return device_has_key(fd, KEY_SPACE) && device_has_key(fd, KEY_ENTER) &&
-        device_has_key(fd, KEY_P);
+    return device_has_key(fd, KEY_SPACE) &&
+        (device_has_key(fd, KEY_ENTER) || device_has_key(fd, KEY_KPENTER)) &&
+        (device_has_key(fd, KEY_P) || device_has_key(fd, KEY_A));
+}
+
+void ensure_log_dir() {
+    ::mkdir("/tmp/archstreamer-logs", 0755);
+}
+
+void append_keyboard_log(const std::string& line) {
+    ensure_log_dir();
+    std::ofstream out("/tmp/archstreamer-logs/keyboard.log", std::ios::app);
+    if (!out) {
+        return;
+    }
+    out << line << '\n';
+}
+
+Display* open_x11_display() {
+    if (Display* display = XOpenDisplay(nullptr); display != nullptr) {
+        return display;
+    }
+    if (const char* existing = std::getenv("DISPLAY");
+        existing == nullptr || existing[0] == '\0') {
+        if (::access("/tmp/.X11-unix/X0", F_OK) == 0) {
+            return XOpenDisplay(":0");
+        }
+    }
+    return nullptr;
+}
+
+void warn_keyboard_unavailable(int opened_nodes, int keyboard_nodes) {
+    static bool warned = false;
+    if (warned) {
+        return;
+    }
+    warned = true;
+    std::cerr
+        << "Warning: remoted keyboard unavailable (opened " << opened_nodes
+        << " /dev/input node(s), " << keyboard_nodes << " keyboard-like). "
+        << "On Flatpak/Wayland add the user to the 'input' group and ensure the "
+        << "app has --device=all and --socket=x11.\n";
+    append_keyboard_log(
+        "unavailable opened=" + std::to_string(opened_nodes) +
+        " keyboards=" + std::to_string(keyboard_nodes));
+}
+
+std::uint32_t bit_for_evdev_code(int code) {
+    switch (code) {
+    case KEY_SPACE:
+        return KeySpace;
+    case KEY_UP:
+        return KeyUp;
+    case KEY_DOWN:
+        return KeyDown;
+    case KEY_LEFT:
+        return KeyLeft;
+    case KEY_RIGHT:
+        return KeyRight;
+    case KEY_ENTER:
+    case KEY_KPENTER:
+        return KeyEnter;
+    case KEY_ESC:
+        return KeyEscape;
+    case KEY_TAB:
+        return KeyTab;
+    case KEY_BACKSPACE:
+        return KeyBackspace;
+    case KEY_F1:
+        return KeyF1;
+    case KEY_P:
+        return KeyP;
+    default:
+        return 0;
+    }
 }
 #endif
 
 } // namespace
 
 struct KeyboardPoller::Impl {
-#if defined(_WIN32)
-#else
+#if !defined(_WIN32)
     Display* display = nullptr;
     std::vector<int> evdev_fds;
+    std::unordered_set<std::string> evdev_paths;
+    std::uint32_t event_keys = 0;
+    int opened_nodes = 0;
+    int keyboard_nodes = 0;
+    int rescan_ticks = 0;
+
+    bool try_open_path(const std::string& path) {
+        char resolved[PATH_MAX] = {};
+        const char* canonical = realpath(path.c_str(), resolved);
+        const std::string key = canonical != nullptr ? canonical : path;
+        if (evdev_paths.count(key) != 0) {
+            return false;
+        }
+        const int fd = open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+        if (fd < 0) {
+            append_keyboard_log("open_fail " + path + " errno=" + std::to_string(errno));
+            return false;
+        }
+        ++opened_nodes;
+        if (!looks_like_keyboard(fd)) {
+            close(fd);
+            return false;
+        }
+        char name[256] = {};
+        ioctl(fd, EVIOCGNAME(sizeof(name)), name);
+        evdev_fds.push_back(fd);
+        evdev_paths.insert(key);
+        ++keyboard_nodes;
+        append_keyboard_log(
+            std::string("open_ok ") + path + " -> " + key + " name='" + name + "'");
+        return true;
+    }
+
+    void scan() {
+        if (DIR* dir = opendir("/dev/input/by-id")) {
+            while (dirent* entry = readdir(dir)) {
+                const char* name = entry->d_name;
+                if (std::strstr(name, "event-kbd") == nullptr &&
+                    std::strstr(name, "-kbd") == nullptr) {
+                    continue;
+                }
+                try_open_path(std::string("/dev/input/by-id/") + name);
+            }
+            closedir(dir);
+        }
+        if (DIR* dir = opendir("/dev/input")) {
+            while (dirent* entry = readdir(dir)) {
+                if (std::strncmp(entry->d_name, "event", 5) != 0) {
+                    continue;
+                }
+                try_open_path(std::string("/dev/input/") + entry->d_name);
+            }
+            closedir(dir);
+        }
+    }
 #endif
 };
 
 KeyboardPoller::KeyboardPoller() {
     impl_ = new Impl();
 #if !defined(_WIN32)
-    impl_->display = XOpenDisplay(nullptr);
-
-    // Evdev is focus-independent: Space works while the gst video window is focused.
-    // User must be in the `input` group (archstreamer VM client already is).
-    if (DIR* dir = opendir("/dev/input")) {
-        while (dirent* entry = readdir(dir)) {
-            if (std::strncmp(entry->d_name, "event", 5) != 0) {
-                continue;
-            }
-            const std::string path = std::string("/dev/input/") + entry->d_name;
-            const int fd = open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-            if (fd < 0) {
-                continue;
-            }
-            if (!looks_like_keyboard(fd)) {
-                close(fd);
-                continue;
-            }
-            impl_->evdev_fds.push_back(fd);
-        }
-        closedir(dir);
+    append_keyboard_log("ctor begin");
+    impl_->display = open_x11_display();
+    append_keyboard_log(
+        std::string("x11=") + (impl_->display != nullptr ? "yes" : "no") +
+        " DISPLAY=" + (std::getenv("DISPLAY") ? std::getenv("DISPLAY") : "(null)") +
+        " WAYLAND=" +
+            (std::getenv("WAYLAND_DISPLAY") ? std::getenv("WAYLAND_DISPLAY") : "(null)"));
+    impl_->scan();
+    if (impl_->evdev_fds.empty()) {
+        warn_keyboard_unavailable(impl_->opened_nodes, impl_->keyboard_nodes);
+    } else {
+        append_keyboard_log(
+            "ready keyboards=" + std::to_string(impl_->evdev_fds.size()) +
+            " opened_nodes=" + std::to_string(impl_->opened_nodes));
+        std::cerr
+            << "Remoted keyboard: watching " << impl_->evdev_fds.size()
+            << " /dev/input keyboard(s)\n";
     }
 #endif
 }
@@ -150,6 +279,20 @@ KeyboardPoller::~KeyboardPoller() {
 #endif
     delete impl_;
     impl_ = nullptr;
+}
+
+std::string KeyboardPoller::backend_status() const {
+#if defined(_WIN32)
+    return "Remoted keyboard: Win32 GetAsyncKeyState";
+#else
+    if (impl_ == nullptr) {
+        return "Remoted keyboard: unavailable";
+    }
+    std::string status = "Remoted keyboard: evdev=" + std::to_string(impl_->evdev_fds.size());
+    status += impl_->display != nullptr ? " x11=yes" : " x11=no";
+    status += " qt_bridge=yes";
+    return status;
+#endif
 }
 
 std::optional<KeyboardState> KeyboardPoller::poll() {
@@ -193,20 +336,39 @@ std::optional<KeyboardState> KeyboardPoller::poll() {
         keys |= KeyP;
     }
 #else
-    // Evdev: drain the queue then sample EVIOCGKEY so we never miss a tap
-    // (Space/F1 worked via events; letter keys were easy to miss under SPICE).
+    if (impl_->evdev_fds.empty()) {
+        if (++impl_->rescan_ticks >= 125) {
+            impl_->rescan_ticks = 0;
+            const int before = static_cast<int>(impl_->evdev_fds.size());
+            impl_->scan();
+            if (static_cast<int>(impl_->evdev_fds.size()) > before) {
+                append_keyboard_log(
+                    "rescan found keyboards=" + std::to_string(impl_->evdev_fds.size()));
+            }
+        }
+    }
+
     for (int fd : impl_->evdev_fds) {
         input_event event{};
         while (true) {
             const ssize_t n = read(fd, &event, sizeof(event));
             if (n < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    break;
-                }
                 break;
             }
             if (n != static_cast<ssize_t>(sizeof(event))) {
                 break;
+            }
+            if (event.type != EV_KEY) {
+                continue;
+            }
+            const std::uint32_t bit = bit_for_evdev_code(event.code);
+            if (bit == 0) {
+                continue;
+            }
+            if (event.value == 0) {
+                impl_->event_keys &= ~bit;
+            } else {
+                impl_->event_keys |= bit;
             }
         }
         unsigned char key_state[(KEY_MAX + 7) / 8] = {};
@@ -214,8 +376,8 @@ std::optional<KeyboardState> KeyboardPoller::poll() {
             keys |= remoted_keys_from_evdev_state(key_state);
         }
     }
+    keys |= impl_->event_keys;
 
-    // X11 keymap as a fallback (helps when evdev open failed).
     if (impl_->display != nullptr) {
         char keymap[32] = {};
         XQueryKeymap(impl_->display, keymap);
@@ -255,9 +417,7 @@ std::optional<KeyboardState> KeyboardPoller::poll() {
         }
     }
 
-    if (impl_->evdev_fds.empty() && impl_->display == nullptr) {
-        return std::nullopt;
-    }
+    keys |= remoted_keyboard_qt_keys();
 #endif
 
     KeyboardState state;

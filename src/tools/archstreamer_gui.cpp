@@ -4,6 +4,7 @@
 #include "client/client_media_playback.hpp"
 #include "client/game_filter.hpp"
 #include "client/audio_playback_device.hpp"
+#include "client/remoted_keyboard_bridge.hpp"
 #include "game_picker_widget.hpp"
 #include "host_search_dialog.hpp"
 #include "common/addresses.hpp"
@@ -25,6 +26,7 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -65,6 +67,37 @@ namespace {
 constexpr int DefaultInputPort = 45454;
 constexpr int DefaultVideoPort = 5004;
 constexpr int DefaultAudioPort = 6004;
+
+// Forwards lobby-window key holds into the remoted-keyboard UDP path (evdev may
+// be unavailable in Flatpak without the input group; video sinks often steal focus).
+class RemotedKeyboardEventFilter final : public QObject {
+public:
+    using QObject::QObject;
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        (void)watched;
+        if (event->type() != QEvent::KeyPress && event->type() != QEvent::KeyRelease) {
+            return false;
+        }
+        const auto* key_event = static_cast<const QKeyEvent*>(event);
+        if (key_event->isAutoRepeat()) {
+            return false;
+        }
+        const auto bit = archstreamer::remoted_key_bit_from_qt_key(key_event->key());
+        if (bit == 0) {
+            return false;
+        }
+        auto keys = archstreamer::remoted_keyboard_qt_keys();
+        if (event->type() == QEvent::KeyPress) {
+            keys |= bit;
+        } else {
+            keys &= ~bit;
+        }
+        archstreamer::remoted_keyboard_set_qt_keys(keys);
+        return false;
+    }
+};
 
 std::atomic_bool mirror_gui_logs_to_stdout = false;
 
@@ -2923,6 +2956,8 @@ int main(int argc, char** argv) {
     write_to_log_file("[" + log_timestamp().toStdString() + "] Log file: " + gui_log_path().string());
 
     QApplication app(argc, argv);
+    RemotedKeyboardEventFilter keyboard_filter;
+    app.installEventFilter(&keyboard_filter);
     MainWindow window;
     window.show();
 

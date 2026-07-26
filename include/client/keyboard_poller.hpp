@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 
 namespace archstreamer {
 
@@ -20,6 +21,9 @@ public:
 
     // Returns nullopt when the platform poller could not start (still safe to ignore).
     std::optional<KeyboardState> poll();
+
+    // Human-readable backend summary for the client log (evdev / X11 / Qt bridge).
+    std::string backend_status() const;
 
 private:
     struct Impl;

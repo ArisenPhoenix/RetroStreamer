@@ -27,6 +27,29 @@ flatpak run io.github.ArisenPhoenix.ArchStreamer
 Bundled: Qt 6 (KDE Platform 6.9), SDL2, nlohmann_json, GStreamer from the runtime.
 Join a LAN host, controllers, video/audio receive — no extra packages.
 
+Remoted keyboard (Space = fast-forward, etc.) reads `/dev/input` and, on Wayland,
+also uses XWayland (`--socket=x11`) plus a Qt key bridge when the lobby has focus.
+Add the user to the `input` group, then log out and back in:
+
+```bash
+# Bazzite/ostree: ensure the group exists in /etc/group first
+grep -q '^input:' /etc/group || sudo bash -c 'grep ^input: /usr/lib/group >> /etc/group'
+sudo usermod -aG input "$USER"
+# then log out and back in
+```
+
+Flatpak already uses `--device=all`; without the group only gamepad nodes are
+readable, and the X11 keymap fallback does not see Wayland video-window focus.
+
+Always install the app with `--user` (not system-wide). A system install asks for
+a password on every update and can shadow the user copy:
+
+```bash
+flatpak install --user ./ArchStreamer.flatpak
+# if you previously installed system-wide:
+# flatpak uninstall --system io.github.ArisenPhoenix.ArchStreamer
+```
+
 ### Host (Flatpak GUI → native `host_runner`)
 
 The Flatpak includes the Host tab and may ship a sandboxed `host_runner`, but **Switch / gamescope / uinput sessions must run on the host OS**.

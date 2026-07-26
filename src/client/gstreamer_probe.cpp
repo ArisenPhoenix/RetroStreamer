@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <cstddef>
 
 namespace archstreamer {
 namespace {
@@ -84,22 +85,68 @@ GstVideoSinkChoice choose_usable_video_sink(bool prefer_d3d11) {
     }
 #else
     (void)prefer_d3d11;
-    // Prefer GTK sinks: normal decorated, movable, closable windows on Wayland/X11.
-    // glimagesink/waylandsink often open as an undecorated "surface" that starts tiny
-    // then jumps to stream size — bad for a client viewer on Plasma/GNOME.
-    // ximagesink before xvimagesink so QXL/SPICE VMs are not stuck on broken Xv.
-    static constexpr const char* kCandidates[] = {
+    // Wayland: prefer GTK (decorated, reliable on Bazzite). Avoid glimagesink as a
+    // high-priority choice — it often opens a tiny centered window. Prefer X11 sinks
+    // when DISPLAY is set so remoted-keyboard XQueryKeymap works with video focus.
+    const bool wayland_session = [] {
+        if (const char* wayland = std::getenv("WAYLAND_DISPLAY");
+            wayland != nullptr && wayland[0] != '\0') {
+            return true;
+        }
+        if (const char* session = std::getenv("XDG_SESSION_TYPE");
+            session != nullptr && std::strcmp(session, "wayland") == 0) {
+            return true;
+        }
+        return false;
+    }();
+    const bool have_x11 = [] {
+        if (const char* display = std::getenv("DISPLAY");
+            display != nullptr && display[0] != '\0') {
+            return true;
+        }
+        return false;
+    }();
+    static constexpr const char* kWaylandWithX11[] = {
         "gtksink",
-        "gtkglsink",
         "ximagesink",
+        "gtkglsink",
+        "xvimagesink",
         "waylandsink",
         "glimagesink",
+        "autovideosink",
+    };
+    static constexpr const char* kWaylandOnly[] = {
+        "gtksink",
+        "gtkglsink",
+        "waylandsink",
+        "glimagesink",
+        "ximagesink",
         "xvimagesink",
         "autovideosink",
     };
-    for (const char* candidate : kCandidates) {
-        if (gst_video_sink_usable(candidate)) {
-            return {candidate, kind_for_sink(candidate)};
+    static constexpr const char* kX11First[] = {
+        "ximagesink",
+        "gtksink",
+        "gtkglsink",
+        "xvimagesink",
+        "glimagesink",
+        "waylandsink",
+        "autovideosink",
+    };
+    const char* const* candidates = kX11First;
+    std::size_t count = sizeof(kX11First) / sizeof(kX11First[0]);
+    if (wayland_session) {
+        if (have_x11) {
+            candidates = kWaylandWithX11;
+            count = sizeof(kWaylandWithX11) / sizeof(kWaylandWithX11[0]);
+        } else {
+            candidates = kWaylandOnly;
+            count = sizeof(kWaylandOnly) / sizeof(kWaylandOnly[0]);
+        }
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+        if (gst_video_sink_usable(candidates[i])) {
+            return {candidates[i], kind_for_sink(candidates[i])};
         }
     }
 #endif

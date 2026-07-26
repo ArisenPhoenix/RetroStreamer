@@ -7,11 +7,13 @@ finish-args:
   # Network: discovery, session control, input, media
   - --share=network
   - --share=ipc
-  - --socket=fallback-x11
+  # Need real X11 (XWayland) for remoted-keyboard keymap fallback while Wayland
+  # is active. fallback-x11 alone leaves DISPLAY unset on Plasma/Bazzite.
+  - --socket=x11
   - --socket=wayland
   - --socket=pulseaudio
   - --device=dri
-  # Controllers / joysticks
+  # Controllers / keyboards (/dev/input)
   - --device=all
   # Local ROM / art / Steam grid import (read-write for art cache)
   - --filesystem=home

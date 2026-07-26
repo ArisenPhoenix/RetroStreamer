@@ -757,6 +757,13 @@ int HostApp::run(const std::function<bool()>& should_stop) {
 
         InputRouter input_router(gamepads, &keyboard);
         input_router.set_seat_assignment(launch_plan.seats);
+        std::cout << "Input seats: " << launch_plan.seats.seats.size() << '\n';
+        for (const auto& seat : launch_plan.seats.seats) {
+            std::cout
+                << "  client " << static_cast<int>(seat.client_id)
+                << " local P" << static_cast<int>(seat.local_player) + 1
+                << " -> RetroArch P" << static_cast<int>(seat.retroarch_port) + 1 << '\n';
+        }
 
         auto network_receiver = std::optional<NetworkInputReceiver>{};
         if (config.input_port.has_value()) {

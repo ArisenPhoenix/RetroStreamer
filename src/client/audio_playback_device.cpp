@@ -381,6 +381,11 @@ AudioPlaybackSink choose_audio_playback_sink(bool sync) {
             {
                 "wasapi2sink",
                 "device=" + device->id,
+                // Shared mode + roomier buffers; exclusive/low-latency underruns as choppy audio.
+                "exclusive=false",
+                "low-latency=false",
+                "buffer-time=200000",
+                "latency-time=40000",
                 std::string("sync=") + sync_flag,
             },
             "wasapi2sink:" + device->name,
@@ -389,7 +394,15 @@ AudioPlaybackSink choose_audio_playback_sink(bool sync) {
     }
     if (gst_element_available("wasapisink")) {
         return {
-            {"wasapisink", "role=multimedia", std::string("sync=") + sync_flag},
+            {
+                "wasapisink",
+                "role=multimedia",
+                "exclusive=false",
+                "low-latency=false",
+                "buffer-time=200000",
+                "latency-time=40000",
+                std::string("sync=") + sync_flag,
+            },
             "wasapisink role=multimedia",
             "wasapi-default",
         };

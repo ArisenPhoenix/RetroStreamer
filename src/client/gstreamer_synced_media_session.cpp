@@ -15,7 +15,8 @@
 namespace archstreamer {
 namespace {
 
-constexpr auto kAudioDevicePollInterval = std::chrono::seconds(2);
+constexpr auto kAudioDevicePollInterval = std::chrono::seconds(5);
+constexpr int kAudioDeviceChangeConfirmPolls = 2;
 
 void append_audio_branch(
     std::vector<std::string>& args,
@@ -126,6 +127,8 @@ void GStreamerSyncedMediaReceiver::connect(const MediaEndpoint& endpoint) {
         ? std::string{}
         : current_audio_playback_device_key();
     bound_audio_epoch_ = audio_output_preference_epoch();
+    pending_audio_device_.clear();
+    pending_audio_device_streak_ = 0;
     next_audio_device_check_ = std::chrono::steady_clock::now() + kAudioDevicePollInterval;
     session_.connect(endpoint_);
 }
@@ -134,6 +137,8 @@ void GStreamerSyncedMediaReceiver::disconnect() {
     session_.disconnect();
     endpoint_ = {};
     bound_audio_device_.clear();
+    pending_audio_device_.clear();
+    pending_audio_device_streak_ = 0;
 }
 
 bool GStreamerSyncedMediaReceiver::poll() {
@@ -149,8 +154,20 @@ bool GStreamerSyncedMediaReceiver::poll() {
     next_audio_device_check_ = now + kAudioDevicePollInterval;
 
     const auto device = current_audio_playback_device_key();
-    const bool device_changed = !device.empty() && device != bound_audio_device_;
     const bool died = !session_.running();
+    bool device_changed = false;
+    if (!preference_changed && !died && !device.empty() && device != bound_audio_device_) {
+        if (device == pending_audio_device_) {
+            ++pending_audio_device_streak_;
+        } else {
+            pending_audio_device_ = device;
+            pending_audio_device_streak_ = 1;
+        }
+        device_changed = pending_audio_device_streak_ >= kAudioDeviceChangeConfirmPolls;
+    } else if (!device.empty() && device == bound_audio_device_) {
+        pending_audio_device_.clear();
+        pending_audio_device_streak_ = 0;
+    }
     if (!preference_changed && !device_changed && !died) {
         return false;
     }
@@ -158,6 +175,8 @@ bool GStreamerSyncedMediaReceiver::poll() {
     session_.disconnect();
     bound_audio_device_ = device;
     bound_audio_epoch_ = epoch;
+    pending_audio_device_.clear();
+    pending_audio_device_streak_ = 0;
     session_.connect(endpoint_);
     return true;
 }

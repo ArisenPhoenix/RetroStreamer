@@ -149,6 +149,8 @@ std::vector<std::string> gst_opus_rtp_decode_args(std::uint16_t port, int jitter
         "!",
         "rtpjitterbuffer",
         "latency=" + std::to_string(latency),
+        // Match video: late Opus packets are better late than dropped (Wi‑Fi / WASAPI hiccups).
+        "drop-on-latency=false",
         "!",
         "rtpopusdepay",
         "!",

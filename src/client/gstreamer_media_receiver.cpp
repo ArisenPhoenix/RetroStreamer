@@ -13,7 +13,10 @@
 namespace archstreamer {
 namespace {
 
-constexpr auto kAudioDevicePollInterval = std::chrono::seconds(2);
+constexpr auto kAudioDevicePollInterval = std::chrono::seconds(5);
+// gst-device-monitor on Windows often returns a different "best" id for a frame or two;
+// require a stable new key before tearing down the Opus pipeline.
+constexpr int kAudioDeviceChangeConfirmPolls = 2;
 
 } // namespace
 
@@ -29,6 +32,8 @@ void GStreamerMediaReceiver::start_audio_pipeline(bool wait_for_ready) {
     const auto sink = choose_audio_playback_sink(false);
     bound_audio_device_ = sink.device_key.empty() ? current_audio_playback_device_key() : sink.device_key;
     bound_audio_epoch_ = audio_output_preference_epoch();
+    pending_audio_device_.clear();
+    pending_audio_device_streak_ = 0;
     audio_pipeline_info_ = sink.description;
     audio_args.insert(audio_args.end(), sink.gst_args.begin(), sink.gst_args.end());
     audio_process_.start(audio_args);
@@ -43,6 +48,8 @@ void GStreamerMediaReceiver::connect(const MediaEndpoint& endpoint) {
     video_pipeline_info_.clear();
     audio_pipeline_info_.clear();
     bound_audio_device_.clear();
+    pending_audio_device_.clear();
+    pending_audio_device_streak_ = 0;
     next_audio_device_check_ = std::chrono::steady_clock::now() + kAudioDevicePollInterval;
 
     // Start audio before video so the Opus path is bound before the first
@@ -77,6 +84,8 @@ void GStreamerMediaReceiver::disconnect() {
     video_process_.stop();
     endpoint_ = {};
     bound_audio_device_.clear();
+    pending_audio_device_.clear();
+    pending_audio_device_streak_ = 0;
     audio_pipeline_info_.clear();
     video_pipeline_info_.clear();
 }
@@ -94,8 +103,20 @@ bool GStreamerMediaReceiver::poll() {
     next_audio_device_check_ = now + kAudioDevicePollInterval;
 
     const auto device = current_audio_playback_device_key();
-    const bool device_changed = !device.empty() && device != bound_audio_device_;
     const bool died = !audio_process_.running();
+    bool device_changed = false;
+    if (!preference_changed && !died && !device.empty() && device != bound_audio_device_) {
+        if (device == pending_audio_device_) {
+            ++pending_audio_device_streak_;
+        } else {
+            pending_audio_device_ = device;
+            pending_audio_device_streak_ = 1;
+        }
+        device_changed = pending_audio_device_streak_ >= kAudioDeviceChangeConfirmPolls;
+    } else if (!device.empty() && device == bound_audio_device_) {
+        pending_audio_device_.clear();
+        pending_audio_device_streak_ = 0;
+    }
     if (!preference_changed && !device_changed && !died) {
         return false;
     }

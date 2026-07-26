@@ -23,7 +23,7 @@ void GStreamerMediaReceiver::start_audio_pipeline(bool wait_for_ready) {
     }
     const auto port = audio_port_from_endpoint(endpoint_);
     std::vector<std::string> audio_args{GStreamerMediaPlatform::gst_launch_bin(), "-q"};
-    const auto decode = gst_opus_rtp_decode_args(port, 100);
+    const auto decode = gst_opus_rtp_decode_args(port, 150);
     audio_args.insert(audio_args.end(), decode.begin(), decode.end());
 
     const auto sink = choose_audio_playback_sink(false);
@@ -45,6 +45,12 @@ void GStreamerMediaReceiver::connect(const MediaEndpoint& endpoint) {
     bound_audio_device_.clear();
     next_audio_device_check_ = std::chrono::steady_clock::now() + kAudioDevicePollInterval;
 
+    // Start audio before video so the Opus path is bound before the first
+    // video frames appear (reduces the common "picture first, sound later" skew).
+    if (!endpoint_.audio_uri.empty()) {
+        start_audio_pipeline(true);
+    }
+
     if (!endpoint_.video_uri.empty()) {
         const auto port = video_port_from_endpoint(endpoint_);
         const auto decoder = GStreamerMediaPlatform::choose_h264_decoder();
@@ -63,10 +69,6 @@ void GStreamerMediaReceiver::connect(const MediaEndpoint& endpoint) {
             unset,
             log_path.string());
         ensure_gst_child_stayed_up(video_process_, "Video", log_path);
-    }
-
-    if (!endpoint_.audio_uri.empty()) {
-        start_audio_pipeline(true);
     }
 }
 

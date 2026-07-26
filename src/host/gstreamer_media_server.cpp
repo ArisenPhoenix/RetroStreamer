@@ -251,14 +251,25 @@ void GStreamerVideoFanout::restart_pipeline() {
         const VideoEncodeSettings& settings,
         const std::vector<std::pair<std::string, std::uint16_t>>& clients,
         bool use_nvenc) {
-        const auto bitrate = settings.bitrate_kbps == 0 ? 1500 : settings.bitrate_kbps;
-        const auto framerate = settings.framerate == 0 ? 30 : settings.framerate;
-        const auto key_int_max = settings.key_int_max == 0 ? framerate : settings.key_int_max;
+        const int bitrate = settings.bitrate_kbps == 0 ? 1500 : settings.bitrate_kbps;
+        const int framerate = settings.framerate == 0 ? 30 : static_cast<int>(settings.framerate);
+        // Keep IDRs very frequent on Wi‑Fi: a lost scene-cut (credits→title) must
+        // recover within a few hundred ms, not when continuous animation starts.
+        const int configured_key_int =
+            settings.key_int_max == 0 ? framerate : static_cast<int>(settings.key_int_max);
+        const int sixth_sec = std::max(5, framerate / 6);
+        const int key_int_max = std::min(configured_key_int, sixth_sec);
 
+        // Live capture must drop OLD frames under backpressure, never NEW ones.
+        // leaky=downstream previously discarded scene cuts (credits → title) while the
+        // encoder was busy, so remotes stayed on the last static screen until Pokemon
+        // animation produced a steady stream of unique frames.
         args.insert(args.end(), {
             "queue",
-            "max-size-buffers=3",
-            "leaky=downstream",
+            "max-size-buffers=4",
+            "max-size-time=0",
+            "max-size-bytes=0",
+            "leaky=upstream",
             "!",
         });
         if (settings.width > 0 && settings.height > 0) {
@@ -273,7 +284,6 @@ void GStreamerVideoFanout::restart_pipeline() {
         }
         args.insert(args.end(), {
             "videorate",
-            "drop-only=true",
             "!",
             "video/x-raw,framerate=" + std::to_string(framerate) + "/1",
             "!",
@@ -283,6 +293,7 @@ void GStreamerVideoFanout::restart_pipeline() {
                 "nvh264enc",
                 "zerolatency=true",
                 "preset=low-latency-hq",
+                "strict-gop=true",
                 "bitrate=" + std::to_string(bitrate),
                 "gop-size=" + std::to_string(key_int_max),
                 "!",
@@ -298,6 +309,7 @@ void GStreamerVideoFanout::restart_pipeline() {
                 "byte-stream=true",
                 "bframes=0",
                 "threads=1",
+                "option-string=scenecut=40",
                 "!",
                 "video/x-h264,profile=constrained-baseline,stream-format=byte-stream",
             });
@@ -309,7 +321,8 @@ void GStreamerVideoFanout::restart_pipeline() {
             "!",
             "rtph264pay",
             "mtu=1200",
-            "config-interval=1",
+            "config-interval=-1",
+            "aggregate-mode=zero-latency",
             "pt=96",
             "!",
             "multiudpsink",
@@ -335,8 +348,11 @@ void GStreamerVideoFanout::restart_pipeline() {
         args.insert(args.end(), {
             "ximagesrc",
             "display-name=" + display_,
-            "use-damage=0",
+            // Poll continuously — XDamage often misses GL swaps on Xvfb for mostly-static
+            // GB screens (credits/title), which froze remotes until animation started.
+            "use-damage=false",
             "show-pointer=false",
+            "do-timestamp=true",
             "!",
             "videoconvert",
         });
@@ -538,10 +554,23 @@ void GStreamerAudioFanout::restart_pipeline() {
         "gst-launch-1.0",
         "-q",
     };
-    if (backend_ == AudioCaptureBackend::Pulse) {
+    // Pulse-style "*.monitor" names (e.g. archstreamer.monitor) must use pulsesrc.
+    // pipewiresrc used to fall through to @DEFAULT_MONITOR@ whenever the name
+    // contained ".monitor", which captured the wrong sink (HDMI/etc.) while
+    // RetroArch played into the silent null sink — late/missing client audio and
+    // audio_sync pacing stalls on the host (Space=FF looked like a "video unstick").
+    const bool pulse_monitor =
+        !source_.empty() && source_.size() > 8 &&
+        source_.compare(source_.size() - 8, 8, ".monitor") == 0;
+    if (backend_ == AudioCaptureBackend::Pulse || pulse_monitor) {
         args.push_back("pulsesrc");
         args.push_back("client-name=ArchStreamer");
         args.push_back("do-timestamp=true");
+        // Keep capture latency tight so the null-sink monitor stays awake and
+        // RetroArch's audio_sync clock does not build a multi-second backlog.
+        args.push_back("buffer-time=80000");
+        args.push_back("latency-time=20000");
+        args.push_back("provide-clock=false");
         if (!source_.empty()) {
             args.push_back("device=" + source_);
         }
@@ -549,7 +578,7 @@ void GStreamerAudioFanout::restart_pipeline() {
         args.push_back("pipewiresrc");
         args.push_back("client-name=ArchStreamer");
         args.push_back("do-timestamp=true");
-        if (!source_.empty() && source_.find(".monitor") == std::string::npos) {
+        if (!source_.empty()) {
             args.push_back("target-object=" + source_);
         } else {
             args.push_back("target-object=@DEFAULT_MONITOR@");

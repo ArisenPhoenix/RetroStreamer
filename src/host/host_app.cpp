@@ -323,8 +323,39 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         if (!launch_config.standalone && use_virtual_capture &&
             (display_backend == VirtualDisplayBackend::None ||
              display_backend == VirtualDisplayBackend::Xvfb) &&
+            core_needs_gl_on_virtual_display(launch_config.core_path) &&
             find_vglrun().has_value() && command_available("Xvfb")) {
+            // Only wrap HW GL cores. Software cores (gambatte/…) use plain Xvfb +
+            // sdl2 — vglrun left ximagesrc stuck on static GB credits/title frames.
             display_backend = VirtualDisplayBackend::VirtualGL;
+        } else if (!launch_config.standalone && use_virtual_capture &&
+                   display_backend == VirtualDisplayBackend::VirtualGL &&
+                   !core_needs_gl_on_virtual_display(launch_config.core_path)) {
+            std::cout
+                << "Display: plain Xvfb for software core (skipping VirtualGL)\n";
+            display_backend = VirtualDisplayBackend::Xvfb;
+        }
+        // Software cores (GB, etc.): keep the virtual framebuffer modest so scene-cut
+        // IDRs fit in fewer UDP datagrams. 1080p captures of a 160×144 game were
+        // freezing Wi‑Fi Flatpak clients (tiny SO_RCVBUF) until title animation.
+        if (!launch_config.standalone && use_virtual_capture &&
+            !core_needs_gl_on_virtual_display(launch_config.core_path)) {
+            int width = 0;
+            int height = 0;
+            const auto x_pos = config.video_resolution.find('x');
+            if (x_pos != std::string::npos) {
+                try {
+                    width = std::stoi(config.video_resolution.substr(0, x_pos));
+                    height = std::stoi(config.video_resolution.substr(x_pos + 1));
+                } catch (const std::exception&) {
+                }
+            }
+            if (width > 1280 || height > 720) {
+                std::cout
+                    << "Capture resolution capped to 1280x720 for software core "
+                    << "(was " << config.video_resolution << ")\n";
+                config.video_resolution = "1280x720";
+            }
         }
 #endif
         const bool gamescope_capture =

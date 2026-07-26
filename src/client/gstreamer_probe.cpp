@@ -107,10 +107,14 @@ GstVideoSinkChoice choose_usable_video_sink(bool prefer_d3d11) {
         return false;
     }();
     static constexpr const char* kWaylandWithX11[] = {
-        "gtksink",
+        // Prefer X11 sinks whenever DISPLAY exists (incl. XWayland on Bazzite):
+        // - Closing the window EOSes gst-launch (gtksink often leaves audio running).
+        // - X PutImage paints every buffer; gtksink can skip redraws on static GB
+        //   screens until continuous animation starts (Pokemon title idle → bob).
         "ximagesink",
-        "gtkglsink",
         "xvimagesink",
+        "gtksink",
+        "gtkglsink",
         "waylandsink",
         "glimagesink",
         "autovideosink",
@@ -120,17 +124,14 @@ GstVideoSinkChoice choose_usable_video_sink(bool prefer_d3d11) {
         "gtkglsink",
         "waylandsink",
         "glimagesink",
-        "ximagesink",
-        "xvimagesink",
         "autovideosink",
     };
     static constexpr const char* kX11First[] = {
         "ximagesink",
+        "xvimagesink",
         "gtksink",
         "gtkglsink",
-        "xvimagesink",
         "glimagesink",
-        "waylandsink",
         "autovideosink",
     };
     const char* const* candidates = kX11First;

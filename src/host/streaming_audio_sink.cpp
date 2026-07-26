@@ -81,7 +81,7 @@ std::string ensure_named_null_sink(const char* sink_name, const char* descriptio
         const auto module = read_command_output(
             (std::string("pactl load-module module-null-sink sink_name=") + sink_name +
              " sink_properties=device.description=\"" + description +
-             "\" 2>/dev/null")
+             "\" rate=48000 channels=2 2>/dev/null")
                 .c_str());
         if (module.empty() || !sink_exists(sink_name)) {
             throw std::runtime_error(

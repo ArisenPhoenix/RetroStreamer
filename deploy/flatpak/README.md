@@ -43,6 +43,30 @@ sudo usermod -aG input "$USER"
 Flatpak already uses `--device=all`; without the group only gamepad nodes are
 readable, and the X11 keymap fallback does not see Wayland video-window focus.
 
+### Larger UDP receive buffers (optional, Wi‑Fi)
+
+Flatpak cannot grant real `CAP_NET_ADMIN`. GStreamer’s `udpsrc buffer-size=…`
+needs `SO_RCVBUF` above `net.core.rmem_max`, which fails with
+“Need net.admin privilege?” and drops large H.264 keyframe bursts on Wi‑Fi.
+
+On the **client** machine, a one-time sudo script raises kernel `rmem_*` limits
+and sets Flatpak env `ARCHSTREAMER_UDP_RCVBUF` so ArchStreamer can request a
+larger buffer safely:
+
+```bash
+# from a checkout of this repo, or copy the script alone
+sudo ./scripts/grant-flatpak-udp-buffers.sh
+# then restart the Flatpak
+flatpak run io.github.ArisenPhoenix.ArchStreamer
+
+# undo later:
+sudo ./scripts/grant-flatpak-udp-buffers.sh --revoke
+```
+
+Defaults are ~8 MiB `rmem_max` and a 2 MiB app request. Override with
+`ARCHSTREAMER_RMEM_MAX` / `ARCHSTREAMER_UDP_RCVBUF` when invoking the script.
+Without this script the client still works (kernel-default buffers).
+
 Always install the app with `--user` (not system-wide). A system install asks for
 a password on every update and can shadow the user copy:
 

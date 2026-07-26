@@ -484,6 +484,8 @@ ClientRunResult ClientApp::join_session(
                 video_was_running = true;
             } else if (video_was_running) {
                 // Closing the sink window (or a mid-session pipeline crash) stops gst-launch.
+                // Tear media down immediately so a leftover audio process cannot keep playing.
+                media_receiver.disconnect();
                 result.ended_reason = "video window closed";
                 if (callbacks.on_session_ended) {
                     callbacks.on_session_ended(*result.ended_reason);

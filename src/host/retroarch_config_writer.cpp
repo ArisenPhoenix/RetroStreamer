@@ -236,6 +236,24 @@ std::string beetle_hw_resolution_value(int scale) {
     return "8x";
 }
 
+// HW-rendered libretro cores draw into an FBO; RetroArch's gl driver must present
+// that to X11. Software cores (GB, etc.) only upload CPU frames — gl/Xvfb often
+// leaves ximagesrc on a stale still until continuous animation, so remotes freeze
+// on title/credits until something starts moving. sdl2 PutImage's every present.
+bool core_needs_gl_on_virtual_display_impl(const std::filesystem::path& core_path) {
+    if (core_path.empty()) {
+        return false;
+    }
+    const auto key = core_file_key(core_path);
+    return key == "pcsx2" || key == "lrps2" || key == "dolphin" || key == "ppsspp" ||
+        key == "citra" || key == "citra_canary" || key == "citra2018" ||
+        key == "mupen64plus_next" || key == "mupen64plus-next" ||
+        key == "mednafen_psx_hw" || key == "beetle_psx_hw" ||
+        key == "flycast" || key == "parallel_n64" || key == "yabause" ||
+        key == "kronos" || key == "desmume" || key == "melonds" ||
+        key == "melondsds";
+}
+
 // LRPS2 defaults to Auto/Vulkan which often paints black under Xvfb.
 void ensure_lrps2_virtual_display_options() {
     const auto path = retroarch_core_opt_path("LRPS2");
@@ -289,6 +307,10 @@ void apply_retroarch_resolution_scale(
 }
 
 } // namespace
+
+bool core_needs_gl_on_virtual_display(const std::filesystem::path& core_path) {
+    return core_needs_gl_on_virtual_display_impl(core_path);
+}
 
 VirtualGamepadIdentity identity_for_port(
     const std::vector<VirtualGamepadIdentity>& identities,
@@ -384,22 +406,41 @@ std::filesystem::path write_retroarch_input_override(
     if (realtime_pacing) {
         // Known-good streaming pacing (do not over-tune — host Watch-local used to be fine
         // with just these knobs feeding the null-sink → Opus path).
-        // Force GL on the virtual X display: Vulkan/Auto HW cores (LRPS2/PCSX2) often
-        // present a black framebuffer to ximagesrc under Xvfb.
+        // HW cores need gl + x11 context on the virtual display (Vulkan paints black to
+        // ximagesrc under Xvfb). Software cores use sdl2 so every present hits X11 via
+        // PutImage — gl/Xvfb was leaving remotes on a stale still through GB credits
+        // until the title Pokemon started animating.
         // Keep audio_sync on so RetroArch paces the core (audio_sync=false made PS2 run fast
         // and input feel unreliable). Capture still listens on archstreamer.monitor.
+        const bool need_gl = core_needs_gl_on_virtual_display_impl(core_path);
+        if (need_gl) {
+            file
+                << "video_driver = \"gl\"\n"
+                << "video_context_driver = \"x11\"\n";
+        } else {
+            file << "video_driver = \"sdl2\"\n";
+        }
         file
-            << "video_driver = \"gl\"\n"
-            // Prefer X11 context on the virtual capture display. Without this (and with a
-            // live host Wayland session), RetroArch glcore attaches to the compositor —
-            // game visible on the host, black ximagesrc for clients.
-            << "video_context_driver = \"x11\"\n"
             << "audio_enable = \"true\"\n"
             << "audio_mute = \"false\"\n"
             << "audio_driver = \"pulse\"\n"
             << "audio_sync = \"true\"\n"
+            // Low Pulse latency keeps GB/intro timers moving; a large default
+            // buffer made timed credits crawl until clients held Space (FF).
+            << "audio_latency = \"64\"\n"
             << "video_vsync = \"false\"\n"
             << "runahead_enabled = \"false\"\n";
+        if (need_gl) {
+            // Force a unique on-screen pixel every frame so gl/Xvfb presents change
+            // even when the core sends CAN_DUPE NULL frames (static menus). Tiny
+            // corner counter; disable fonts again would hide it — keep size minimal.
+            file
+                << "video_font_enable = \"true\"\n"
+                << "framecount_show = \"true\"\n"
+                << "video_font_size = \"8\"\n"
+                << "video_message_pos_x = \"0.01\"\n"
+                << "video_message_pos_y = \"0.02\"\n";
+        }
     } else {
         // Host Player on the real display. Prefer Vulkan with an explicit GPU index when
         // known (multi-GPU). Streaming (:99) keeps the gl path via realtime_pacing.
@@ -432,8 +473,12 @@ std::filesystem::path write_retroarch_input_override(
             << "video_fullscreen_x = \"" << width << "\"\n"
             << "video_fullscreen_y = \"" << height << "\"\n"
             << "video_window_show_decor = \"false\"\n"
-            << "video_font_enable = \"false\"\n"
             << "menu_enable = \"false\"\n";
+        // Keep fonts on when the GL streaming path needs framecount_show (set above).
+        // Software/sdl2 streaming leaves fonts off for a clean capture.
+        if (!(realtime_pacing && core_needs_gl_on_virtual_display_impl(core_path))) {
+            file << "video_font_enable = \"false\"\n";
+        }
     }
 
     for (RetroArchPort port = 0; port < players; ++port) {

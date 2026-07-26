@@ -111,6 +111,8 @@ ProcessEnvironment audio_launch_environment(
         if (!audio_source.empty() && audio_source.ends_with(".monitor")) {
             env.set("PULSE_SINK", audio_source.substr(0, audio_source.size() - 8));
         }
+        // Prefer a small Pulse quantum so audio_sync pacing stays near realtime.
+        env.set("PULSE_LATENCY_MSEC", "40");
     } else if (host_plays_locally) {
         // Keep Host Player on the real default sink even if a prior stream left
         // PULSE_SINK=archstreamer in the GUI process environment.

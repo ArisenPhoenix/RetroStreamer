@@ -29,4 +29,9 @@ std::filesystem::path write_retroarch_input_override(
     const std::filesystem::path& core_path = {},
     int resolution_scale = 1);
 
+// True for HW-rendered libretro cores that need gl + (usually) VirtualGL on Xvfb.
+// Software cores (gambatte, etc.) should use plain Xvfb + sdl2 — vglrun left remotes
+// stuck on static GB credits/title until continuous animation.
+bool core_needs_gl_on_virtual_display(const std::filesystem::path& core_path);
+
 } // namespace archstreamer

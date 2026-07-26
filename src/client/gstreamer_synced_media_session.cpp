@@ -21,7 +21,7 @@ void append_audio_branch(
     std::vector<std::string>& args,
     std::uint16_t port,
     const AudioPlaybackSink& sink) {
-    const auto decode = gst_opus_rtp_decode_args(port, 80);
+    const auto decode = gst_opus_rtp_decode_args(port, 150);
     args.insert(args.end(), decode.begin(), decode.end());
     args.insert(args.end(), sink.gst_args.begin(), sink.gst_args.end());
 }

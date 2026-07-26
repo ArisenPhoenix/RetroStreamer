@@ -5,10 +5,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <utility>
 
@@ -58,6 +60,23 @@ std::optional<std::pair<int, int>> detect_view_max_size() {
 #endif
 }
 
+// Flatpak cannot set SO_RCVBUF above net.core.rmem_max without CAP_NET_ADMIN.
+// Default 0 = kernel default (safe everywhere). scripts/grant-flatpak-udp-buffers.sh
+// raises rmem_* and sets ARCHSTREAMER_UDP_RCVBUF for a larger Wi‑Fi-friendly buffer.
+int udp_receive_buffer_bytes() {
+    if (const char* env = std::getenv("ARCHSTREAMER_UDP_RCVBUF");
+        env != nullptr && env[0] != '\0') {
+        try {
+            const auto value = std::stoll(env);
+            if (value >= 0 && value <= 64LL * 1024 * 1024) {
+                return static_cast<int>(value);
+            }
+        } catch (const std::exception&) {
+        }
+    }
+    return 0;
+}
+
 } // namespace
 
 std::filesystem::path gst_video_receiver_log_path() {
@@ -100,15 +119,19 @@ void ensure_gst_child_stayed_up(
 }
 
 std::vector<std::string> gst_h264_rtp_source_args(std::uint16_t port) {
+    // Default buffer-size=0 (kernel default) is safe in Flatpak. After
+    // scripts/grant-flatpak-udp-buffers.sh raises rmem_max and sets
+    // ARCHSTREAMER_UDP_RCVBUF, use that larger SO_RCVBUF for Wi‑Fi IDR bursts.
     return {
         "udpsrc",
         "port=" + std::to_string(port),
-        // 512 KiB: Flatpak often cannot raise SO_RCVBUF to 2 MiB (needs CAP_NET_ADMIN).
-        "buffer-size=524288",
+        "buffer-size=" + std::to_string(udp_receive_buffer_bytes()),
         "caps=application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000",
         "!",
         "rtpjitterbuffer",
-        "latency=80",
+        // Slightly roomier than LAN-ethernet defaults — Bazzite clients are often Wi‑Fi.
+        "latency=150",
+        "drop-on-latency=false",
         "!",
         "rtph264depay",
         "!",
@@ -116,13 +139,16 @@ std::vector<std::string> gst_h264_rtp_source_args(std::uint16_t port) {
 }
 
 std::vector<std::string> gst_opus_rtp_decode_args(std::uint16_t port, int jitter_latency_ms) {
+    // Match the video jitterbuffer (80 ms) by default so the legacy dual-process
+    // path does not start audio a full frame-buffer behind video.
+    const int latency = jitter_latency_ms > 0 ? jitter_latency_ms : 80;
     return {
         "udpsrc",
         "port=" + std::to_string(port),
         "caps=application/x-rtp,media=audio,encoding-name=OPUS,payload=97,clock-rate=48000,encoding-params=2",
         "!",
         "rtpjitterbuffer",
-        "latency=" + std::to_string(jitter_latency_ms),
+        "latency=" + std::to_string(latency),
         "!",
         "rtpopusdepay",
         "!",
@@ -170,6 +196,10 @@ void gst_append_progress_video_sink(
         "!",
         sink.element,
         sync ? "sync=true" : "sync=false",
+        // Never drop late decoded frames — static intro scene-cuts are infrequent and
+        // must still paint even if jitter pushes them slightly past the clock.
+        "qos=false",
+        "max-lateness=-1",
     });
     // Keep letterboxing when the user resizes a GTK/X11 window.
     if (std::strcmp(sink.element, "gtksink") == 0 ||
@@ -178,6 +208,18 @@ void gst_append_progress_video_sink(
         std::strcmp(sink.element, "xvimagesink") == 0 ||
         std::strcmp(sink.element, "glimagesink") == 0) {
         args.push_back("force-aspect-ratio=true");
+    }
+    // Window close → EOS → gst-launch exits → ClientApp stops audio + session.
+    // gtksink lacks this; that is why it is deprioritized when an X11 sink works.
+    if (std::strcmp(sink.element, "ximagesink") == 0 ||
+        std::strcmp(sink.element, "xvimagesink") == 0 ||
+        std::strcmp(sink.element, "glimagesink") == 0) {
+        args.push_back("handle-events=true");
+    }
+    if (std::strcmp(sink.element, "ximagesink") == 0 ||
+        std::strcmp(sink.element, "xvimagesink") == 0) {
+        // Repaint on expose so a covered/uncovered window still shows the last frame.
+        args.push_back("handle-expose=true");
     }
 }
 

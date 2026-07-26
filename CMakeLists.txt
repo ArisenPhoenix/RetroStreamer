@@ -185,17 +185,20 @@ add_library(archstreamer_client
     src/client/gstreamer_synced_media_session.cpp
     src/client/input_sender.cpp
     src/client/keyboard_poller.cpp
-    src/client/remoted_keyboard_bridge.cpp
+    src/client/remoted_keyboard_source.cpp
     src/client/session_client.cpp
     src/client/session_service.cpp
 )
 if(WIN32)
     target_sources(archstreamer_client PRIVATE
         src/client/windows_gstreamer_media_platform.cpp
+        src/client/win32_remoted_keyboard_source.cpp
     )
 else()
     target_sources(archstreamer_client PRIVATE
         src/client/posix_gstreamer_media_platform.cpp
+        src/client/evdev_remoted_keyboard_source.cpp
+        src/client/x11_keymap_remoted_keyboard_source.cpp
     )
     find_package(X11 REQUIRED)
     target_link_libraries(archstreamer_client PUBLIC X11::X11)

@@ -27,9 +27,11 @@ flatpak run io.github.ArisenPhoenix.ArchStreamer
 Bundled: Qt 6 (KDE Platform 6.9), SDL2, nlohmann_json, GStreamer from the runtime.
 Join a LAN host, controllers, video/audio receive — no extra packages.
 
-Remoted keyboard (Space = fast-forward, etc.) reads `/dev/input` and, on Wayland,
-also uses XWayland (`--socket=x11`) plus a Qt key bridge when the lobby has focus.
-Add the user to the `input` group, then log out and back in:
+Remoted keyboard (Space = fast-forward, etc.) uses the `RemotedKeyboardSource`
+stack: **evdev** (`/dev/input`) is primary and focus-independent; the Qt lobby
+feeds **gui-focus** when the ArchStreamer window is focused; X11 keymap is a
+last resort for pure X11 VMs. Flatpak needs `--device=all` and `--socket=x11`
+(alongside Wayland). Add the user to the `input` group, then log out and back in:
 
 ```bash
 # Bazzite/ostree: ensure the group exists in /etc/group first

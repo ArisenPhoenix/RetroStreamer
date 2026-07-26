@@ -328,6 +328,23 @@ For local development, a udev rule like this can expose `/dev/uinput` to the `in
 KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"
 ```
 
+### Remoted keyboard (session-wide)
+
+Clients may also send `KeyboardInput` on the same UDP input port (Space = hold fast-forward, P = pause, F1 = menu, arrows/Enter/Esc for simple navigation). These keys are **session-wide**: the host `InputRouter` applies them without requiring a pad seat, so Viewers (0 players) can still fast-forward.
+
+Do not conflate two different DISPLAY concepts:
+
+- **Host capture display** (e.g. Xvfb `:99`) — where RetroArch runs and where `VirtualKeyboard` injects XTest. Private to the host.
+- **Client present display** (Wayland and/or XWayland) — only where GStreamer paints the video window.
+
+Client key capture uses `RemotedKeyboardSource`:
+
+1. **Evdev** (`/dev/input`) — primary on Linux/Flatpak; focus-independent (works while the video window has focus). Needs `--device=all`; prefer the user in the `input` group.
+2. **Gui-focus** — lobby/Qt (or other GUI) pushes held remoted keys while the ArchStreamer window has focus.
+3. **X11 keymap** — last resort for pure X11 clients (SPICE VMs); not useful for native Wayland `gtksink` focus.
+
+`KeyboardPoller` is a thin helper that owns `make_default_remoted_keyboard_source()` and stamps sequence/timestamps for the wire. Flatpak clients should use `--socket=wayland` plus `--socket=x11` (XWayland available) and `--device=all`; see `deploy/flatpak/README.md`.
+
 ## RetroArch Direction
 
 The host launches RetroArch with an executable path, a libretro core path, and the selected content path. The current POSIX process implementation starts RetroArch as a child process and can terminate it when the session ends.

@@ -4,7 +4,7 @@
 #include "client/client_media_playback.hpp"
 #include "client/game_filter.hpp"
 #include "client/audio_playback_device.hpp"
-#include "client/remoted_keyboard_bridge.hpp"
+#include "client/remoted_keyboard_source.hpp"
 #include "game_picker_widget.hpp"
 #include "host_search_dialog.hpp"
 #include "common/addresses.hpp"
@@ -68,8 +68,8 @@ constexpr int DefaultInputPort = 45454;
 constexpr int DefaultVideoPort = 5004;
 constexpr int DefaultAudioPort = 6004;
 
-// Forwards lobby-window key holds into the remoted-keyboard UDP path (evdev may
-// be unavailable in Flatpak without the input group; video sinks often steal focus).
+// Forwards lobby-window key holds into GuiFocusRemotedKeyboardSource (evdev is
+// primary while the video window has focus; this covers lobby focus).
 class RemotedKeyboardEventFilter final : public QObject {
 public:
     using QObject::QObject;
@@ -88,13 +88,14 @@ protected:
         if (bit == 0) {
             return false;
         }
-        auto keys = archstreamer::remoted_keyboard_qt_keys();
+        auto& gui_keys = archstreamer::GuiFocusRemotedKeyboardSource::instance();
+        auto keys = gui_keys.poll_keys();
         if (event->type() == QEvent::KeyPress) {
             keys |= bit;
         } else {
             keys &= ~bit;
         }
-        archstreamer::remoted_keyboard_set_qt_keys(keys);
+        gui_keys.set_keys(keys);
         return false;
     }
 };

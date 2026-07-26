@@ -9,8 +9,9 @@
 
 namespace archstreamer {
 
-// Poll a small fixed key set without requiring the video window to have focus
-// (kids watch gst sinks; lobby Qt windows often do not own keyboard focus).
+// Thin session helper: owns make_default_remoted_keyboard_source() and stamps
+// sequence/timestamp onto KeyboardState for UDP. Capture backends live behind
+// RemotedKeyboardSource (evdev primary, gui-focus, optional X11 keymap).
 class KeyboardPoller {
 public:
     KeyboardPoller();
@@ -19,10 +20,7 @@ public:
     KeyboardPoller(const KeyboardPoller&) = delete;
     KeyboardPoller& operator=(const KeyboardPoller&) = delete;
 
-    // Returns nullopt when the platform poller could not start (still safe to ignore).
     std::optional<KeyboardState> poll();
-
-    // Human-readable backend summary for the client log (evdev / X11 / Qt bridge).
     std::string backend_status() const;
 
 private:

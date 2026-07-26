@@ -430,16 +430,10 @@ std::filesystem::path write_retroarch_input_override(
             << "audio_latency = \"64\"\n"
             << "video_vsync = \"false\"\n"
             << "runahead_enabled = \"false\"\n";
+        // framecount_show stays off by default. Clients can request a ticking
+        // Frames OSD mid-session via ViewerHeartbeat.show_framecount (SHOW_MSG).
         if (need_gl) {
-            // Force a unique on-screen pixel every frame so gl/Xvfb presents change
-            // even when the core sends CAN_DUPE NULL frames (static menus). Tiny
-            // corner counter; disable fonts again would hide it — keep size minimal.
-            file
-                << "video_font_enable = \"true\"\n"
-                << "framecount_show = \"true\"\n"
-                << "video_font_size = \"8\"\n"
-                << "video_message_pos_x = \"0.01\"\n"
-                << "video_message_pos_y = \"0.02\"\n";
+            file << "video_font_enable = \"true\"\n";
         }
     } else {
         // Host Player on the real display. Prefer Vulkan with an explicit GPU index when
@@ -474,8 +468,8 @@ std::filesystem::path write_retroarch_input_override(
             << "video_fullscreen_y = \"" << height << "\"\n"
             << "video_window_show_decor = \"false\"\n"
             << "menu_enable = \"false\"\n";
-        // Keep fonts on when the GL streaming path needs framecount_show (set above).
-        // Software/sdl2 streaming leaves fonts off for a clean capture.
+        // Keep fonts available for optional client-requested Frames OSD (SHOW_MSG).
+        // Software/sdl2 streaming still prefers a clean capture when fonts stay off.
         if (!(realtime_pacing && core_needs_gl_on_virtual_display_impl(core_path))) {
             file << "video_font_enable = \"false\"\n";
         }

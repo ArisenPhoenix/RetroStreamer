@@ -536,13 +536,20 @@ ClientRunResult ClientApp::join_session(
                     loss_permille = 1000;
                 }
             }
+            auto wanted_tier = config.wanted_tier;
+            auto max_bitrate_kbps = config.max_bitrate_kbps;
+            auto show_framecount = config.show_framecount;
+            if (callbacks.heartbeat_prefs) {
+                callbacks.heartbeat_prefs->snapshot(wanted_tier, max_bitrate_kbps, show_framecount);
+            }
             joined_session.stream.send_packet(serialize_packet(ViewerHeartbeat{
                 *result.client_id,
                 heartbeat_sequence++,
                 loss_permille,
                 frames_delta,
-                config.wanted_tier,
-                config.max_bitrate_kbps,
+                wanted_tier,
+                max_bitrate_kbps,
+                show_framecount,
             }));
             next_heartbeat = now + std::chrono::seconds(1);
         }

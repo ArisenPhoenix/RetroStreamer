@@ -1,6 +1,7 @@
 #include "host/session_control_monitor.hpp"
 
 #include "common/serialization.hpp"
+#include "host/retroarch_netcmd.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -28,6 +29,7 @@ constexpr std::uint16_t kHighLossPermille = 100;
 // Require sustained decode rate before climbing (heartbeats are ~1 Hz).
 constexpr std::uint16_t kMinFramesForStepUp = 8;
 constexpr std::uint16_t kMinFramesForHighStepUp = 20;
+constexpr auto kFramecountOsdInterval = std::chrono::milliseconds(500);
 
 bool client_is_seated_player(const SessionClientConnection& client) {
     return client.hello.requested_players > 0;
@@ -157,6 +159,36 @@ std::optional<std::string> SessionControlMonitor::poll() {
         ++i;
     }
 
+    bool want_framecount = false;
+    for (const auto& client : plan_.clients) {
+        if (client.connection_state == SessionConnectionState::Connected && client.show_framecount) {
+            want_framecount = true;
+            break;
+        }
+    }
+    if (want_framecount != plan_.framecount_osd_enabled) {
+        plan_.framecount_osd_enabled = want_framecount;
+        std::cout
+            << "RetroArch Frames OSD "
+            << (want_framecount ? "enabled" : "disabled")
+            << " (client request)\n";
+        if (!want_framecount) {
+            plan_.framecount_osd_tick = 0;
+        }
+    }
+    if (plan_.framecount_osd_enabled &&
+        (plan_.framecount_osd_last_sent.time_since_epoch().count() == 0 ||
+         now - plan_.framecount_osd_last_sent >= kFramecountOsdInterval)) {
+        // RetroArch has no netcmd for framecount_show; SHOW_MSG is the live toggle path.
+        // Changing text each tick also forces GL/Xvfb presents on static menus.
+        const auto message = "Frames: " + std::to_string(plan_.framecount_osd_tick++);
+        if (send_retroarch_netcmd(
+                std::string("SHOW_MSG ") + message,
+                plan_.retroarch_netcmd_port)) {
+            plan_.framecount_osd_last_sent = now;
+        }
+    }
+
     return std::nullopt;
 }
 
@@ -167,6 +199,7 @@ void SessionControlMonitor::handle_heartbeat(
     client.last_seen = now;
     client.wanted_tier = heartbeat.wanted_tier;
     client.max_bitrate_kbps = heartbeat.max_bitrate_kbps;
+    client.show_framecount = heartbeat.show_framecount;
 
     if (!client.hello.wants_video) {
         return;

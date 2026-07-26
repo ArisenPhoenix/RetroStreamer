@@ -34,6 +34,7 @@ struct SessionClientConnection {
     MediaQualityTier wanted_tier = MediaQualityTier::Auto;
     MediaQualityTier applied_tier = MediaQualityTier::Medium;
     std::uint16_t max_bitrate_kbps = 0;
+    bool show_framecount = false;
     std::uint8_t bad_health_streak = 0;
     std::uint8_t good_health_streak = 0;
     // After Auto steps down from High due to loss/no frames, hold off retrying High.
@@ -52,6 +53,10 @@ struct SessionPlan {
     std::vector<std::string> playlist_discs;
     std::uint8_t current_disc_index = 0;
     std::uint16_t retroarch_netcmd_port = DefaultRetroArchNetcmdPort;
+    // Client-requested RetroArch Frames OSD (OR of heartbeats); driven via SHOW_MSG.
+    bool framecount_osd_enabled = false;
+    std::uint32_t framecount_osd_tick = 0;
+    std::chrono::steady_clock::time_point framecount_osd_last_sent = {};
 };
 
 const char* session_mode_name(GameSessionMode mode);

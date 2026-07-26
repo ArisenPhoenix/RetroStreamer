@@ -257,6 +257,7 @@ ByteBuffer serialize_payload(const ViewerHeartbeat& payload) {
     writer.write_pod<std::uint16_t>(payload.frames_decoded_delta);
     writer.write_pod<std::uint8_t>(static_cast<std::uint8_t>(payload.wanted_tier));
     writer.write_pod<std::uint16_t>(payload.max_bitrate_kbps);
+    writer.write_bool(payload.show_framecount);
     return writer.take();
 }
 
@@ -587,6 +588,10 @@ ViewerHeartbeat read_viewer_heartbeat(Reader& reader) {
     payload.frames_decoded_delta = reader.read_pod<std::uint16_t>();
     payload.wanted_tier = static_cast<MediaQualityTier>(reader.read_pod<std::uint8_t>());
     payload.max_bitrate_kbps = reader.read_pod<std::uint16_t>();
+    // Optional trailing flag for older clients / hosts.
+    if (reader.remaining() >= 1) {
+        payload.show_framecount = reader.read_bool();
+    }
     return payload;
 }
 

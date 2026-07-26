@@ -35,6 +35,7 @@ public:
     std::string read_string();
     std::optional<std::string> read_optional_string();
     std::vector<std::uint8_t> read_bytes();
+    std::size_t remaining() const { return bytes_.size() - offset_; }
 
 private:
     template <typename T, bool IsEnum = std::is_enum_v<T>>

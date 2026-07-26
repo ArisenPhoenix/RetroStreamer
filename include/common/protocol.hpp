@@ -329,6 +329,9 @@ struct ViewerHeartbeat {
     MediaQualityTier wanted_tier = MediaQualityTier::Auto;
     // 0 = use tier default bitrate cap.
     std::uint16_t max_bitrate_kbps = 0;
+    // Ask host to overlay a ticking RetroArch "Frames:" counter (debug; default off).
+    // Trailing field — older peers omit it and it stays false.
+    bool show_framecount = false;
 };
 
 struct ErrorPacket {

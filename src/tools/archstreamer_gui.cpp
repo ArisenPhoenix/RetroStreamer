@@ -502,6 +502,9 @@ private:
             persist_settings_if_idle();
         });
         connect(client_stream_quality_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+            if (heartbeat_prefs_) {
+                heartbeat_prefs_->set_wanted_tier(selected_stream_quality());
+            }
             persist_settings_if_idle();
         });
 
@@ -1027,6 +1030,22 @@ private:
         form->addRow("Art root (host / local import)", settings_art_root_);
         form->addRow("Host lobby wait", settings_session_timeout_);
         form->addRow("Log level", settings_log_level_);
+
+        settings_show_framecount_ = new QCheckBox(
+            "Show host Frames counter (debug)",
+            form_box);
+        settings_show_framecount_->setChecked(false);
+        settings_show_framecount_->setToolTip(
+            "Asks the host to overlay a ticking Frames: counter on the RetroArch stream.\n"
+            "Default off. Can be toggled while connected (sent via session heartbeats).\n"
+            "Useful when diagnosing stuck static menus on GL/Xvfb capture.");
+        form->addRow("", settings_show_framecount_);
+        connect(settings_show_framecount_, &QCheckBox::toggled, this, [this](bool checked) {
+            if (heartbeat_prefs_) {
+                heartbeat_prefs_->set_show_framecount(checked);
+            }
+            persist_settings_if_idle();
+        });
 #ifdef ARCHSTREAMER_HAS_HOST
         settings_native_host_runner_ = new QLineEdit(form_box);
         settings_native_host_runner_->setPlaceholderText(
@@ -1689,6 +1708,11 @@ private:
             const auto index = client_stream_quality_->findData(tier);
             client_stream_quality_->setCurrentIndex(index >= 0 ? index : 0);
         }
+        if (settings_show_framecount_ != nullptr) {
+            const QSignalBlocker blocker(settings_show_framecount_);
+            settings_show_framecount_->setChecked(
+                settings.value("client/showFramecount", false).toBool());
+        }
 
 #ifdef ARCHSTREAMER_HAS_HOST
         if (host_rom_root_ != nullptr) {
@@ -1836,6 +1860,9 @@ private:
         }
         if (client_stream_quality_ != nullptr) {
             settings.setValue("client/streamQuality", client_stream_quality_->currentData().toInt());
+        }
+        if (settings_show_framecount_ != nullptr) {
+            settings.setValue("client/showFramecount", settings_show_framecount_->isChecked());
         }
         if (client_game_picker_ != nullptr && client_game_picker_->hasSelection()) {
             persisted_client_game_id_ =
@@ -2174,6 +2201,8 @@ private:
         config.send_keyboard = client_send_keyboard_ != nullptr && client_send_keyboard_->isChecked();
         config.synced_av = client_synced_av_ != nullptr && client_synced_av_->isChecked();
         config.wanted_tier = selected_stream_quality();
+        config.show_framecount =
+            settings_show_framecount_ != nullptr && settings_show_framecount_->isChecked();
 
         for (const auto* item : client_controllers_->selectedItems()) {
             config.controller_indexes.push_back(static_cast<std::size_t>(client_controllers_->row(item)));
@@ -2439,11 +2468,19 @@ private:
 
         client_stop_requested_ = false;
         disc_control_ = std::make_shared<archstreamer::DiscControlBridge>();
+        heartbeat_prefs_ = std::make_shared<archstreamer::ClientHeartbeatPrefs>();
+        {
+            std::lock_guard lock(heartbeat_prefs_->mutex);
+            heartbeat_prefs_->wanted_tier = config.wanted_tier;
+            heartbeat_prefs_->max_bitrate_kbps = config.max_bitrate_kbps;
+            heartbeat_prefs_->show_framecount = config.show_framecount;
+        }
         client_thread_ = std::thread([this, config = std::move(config)]() mutable {
             try {
                 auto connected_client_id = std::optional<archstreamer::ClientId>{};
                 archstreamer::ClientAppCallbacks callbacks;
                 callbacks.disc_control = disc_control_;
+                callbacks.heartbeat_prefs = heartbeat_prefs_;
                 callbacks.on_catalog = [this](const archstreamer::GameList& full, const archstreamer::GameList& filtered) {
                     append_log(client_log_, QString("Received %1 games; %2 after filters.")
                         .arg(full.games.size())
@@ -2557,6 +2594,7 @@ private:
             std::lock_guard lock(disc_control_->mutex);
             disc_control_->session_active = false;
         }
+        heartbeat_prefs_.reset();
     }
 
     void stop_client_connect() {
@@ -2894,6 +2932,7 @@ private:
     QListWidget* client_controllers_ = nullptr;
     QPlainTextEdit* client_log_ = nullptr;
     std::shared_ptr<archstreamer::DiscControlBridge> disc_control_;
+    std::shared_ptr<archstreamer::ClientHeartbeatPrefs> heartbeat_prefs_;
     QLabel* game_options_status_ = nullptr;
     QComboBox* game_options_disc_ = nullptr;
     QPushButton* game_options_swap_ = nullptr;
@@ -2932,6 +2971,7 @@ private:
     QLineEdit* settings_art_root_ = nullptr;
     QSpinBox* settings_session_timeout_ = nullptr;
     QComboBox* settings_log_level_ = nullptr;
+    QCheckBox* settings_show_framecount_ = nullptr;
 #ifdef ARCHSTREAMER_HAS_HOST
     QLineEdit* settings_native_host_runner_ = nullptr;
 #endif

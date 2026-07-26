@@ -19,6 +19,32 @@ namespace archstreamer {
 
 using ClientParticipantRole = ParticipantRole;
 
+// Shared between the GUI thread and the client session loop so Settings can change
+// heartbeat fields (quality / debug overlay) while a stream is already running.
+struct ClientHeartbeatPrefs {
+    std::mutex mutex;
+    MediaQualityTier wanted_tier = MediaQualityTier::Auto;
+    std::uint16_t max_bitrate_kbps = 0;
+    bool show_framecount = false;
+
+    void set_wanted_tier(MediaQualityTier tier) {
+        std::lock_guard lock(mutex);
+        wanted_tier = tier;
+    }
+
+    void set_show_framecount(bool enabled) {
+        std::lock_guard lock(mutex);
+        show_framecount = enabled;
+    }
+
+    void snapshot(MediaQualityTier& tier, std::uint16_t& max_bitrate, bool& framecount) {
+        std::lock_guard lock(mutex);
+        tier = wanted_tier;
+        max_bitrate = max_bitrate_kbps;
+        framecount = show_framecount;
+    }
+};
+
 // Shared between the GUI thread and the client session loop for mid-session disc swaps.
 struct DiscControlBridge {
     std::mutex mutex;
@@ -85,6 +111,8 @@ struct ClientAppConfig {
     MediaQualityTier wanted_tier = MediaQualityTier::Auto;
     // 0 = use tier default bitrate cap on the host.
     std::uint16_t max_bitrate_kbps = 0;
+    // Request host RetroArch "Frames:" OSD (default off). Prefer heartbeat_prefs for live updates.
+    bool show_framecount = false;
 };
 
 struct ClientConnectionInfo {
@@ -108,6 +136,7 @@ struct ClientAppCallbacks {
     std::function<void()> on_waiting_without_input;
     std::function<void(const std::string& message)> on_status;
     std::shared_ptr<DiscControlBridge> disc_control;
+    std::shared_ptr<ClientHeartbeatPrefs> heartbeat_prefs;
 };
 
 struct ClientRunResult {

@@ -139,9 +139,13 @@ std::vector<std::string> gst_h264_rtp_source_args(std::uint16_t port) {
 }
 
 std::vector<std::string> gst_opus_rtp_decode_args(std::uint16_t port, int jitter_latency_ms) {
-    // Match the video jitterbuffer (80 ms) by default so the legacy dual-process
-    // path does not start audio a full frame-buffer behind video.
-    const int latency = jitter_latency_ms > 0 ? jitter_latency_ms : 80;
+    // Default ~150 ms; Windows/Wi‑Fi clients benefit from a roomier buffer.
+    int latency = jitter_latency_ms > 0 ? jitter_latency_ms : 150;
+#ifdef _WIN32
+    if (jitter_latency_ms <= 0) {
+        latency = 250;
+    }
+#endif
     return {
         "udpsrc",
         "port=" + std::to_string(port),

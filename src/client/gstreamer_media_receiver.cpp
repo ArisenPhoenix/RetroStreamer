@@ -26,7 +26,7 @@ void GStreamerMediaReceiver::start_audio_pipeline(bool wait_for_ready) {
     }
     const auto port = audio_port_from_endpoint(endpoint_);
     std::vector<std::string> audio_args{GStreamerMediaPlatform::gst_launch_bin(), "-q"};
-    const auto decode = gst_opus_rtp_decode_args(port, 150);
+    const auto decode = gst_opus_rtp_decode_args(port, 0);
     audio_args.insert(audio_args.end(), decode.begin(), decode.end());
 
     const auto sink = choose_audio_playback_sink(false);
@@ -102,22 +102,11 @@ bool GStreamerMediaReceiver::poll() {
     }
     next_audio_device_check_ = now + kAudioDevicePollInterval;
 
-    const auto device = current_audio_playback_device_key();
+    // Do not rebind on gst-device-monitor "best device" churn — on Windows that
+    // intermittently restarts Opus and sounds like dropouts. Only follow an
+    // explicit Settings preference change, or recover if the process died.
     const bool died = !audio_process_.running();
-    bool device_changed = false;
-    if (!preference_changed && !died && !device.empty() && device != bound_audio_device_) {
-        if (device == pending_audio_device_) {
-            ++pending_audio_device_streak_;
-        } else {
-            pending_audio_device_ = device;
-            pending_audio_device_streak_ = 1;
-        }
-        device_changed = pending_audio_device_streak_ >= kAudioDeviceChangeConfirmPolls;
-    } else if (!device.empty() && device == bound_audio_device_) {
-        pending_audio_device_.clear();
-        pending_audio_device_streak_ = 0;
-    }
-    if (!preference_changed && !device_changed && !died) {
+    if (!preference_changed && !died) {
         return false;
     }
 

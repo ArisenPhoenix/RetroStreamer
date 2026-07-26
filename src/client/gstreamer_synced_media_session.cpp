@@ -22,7 +22,7 @@ void append_audio_branch(
     std::vector<std::string>& args,
     std::uint16_t port,
     const AudioPlaybackSink& sink) {
-    const auto decode = gst_opus_rtp_decode_args(port, 150);
+    const auto decode = gst_opus_rtp_decode_args(port, 0);
     args.insert(args.end(), decode.begin(), decode.end());
     args.insert(args.end(), sink.gst_args.begin(), sink.gst_args.end());
 }
@@ -153,27 +153,12 @@ bool GStreamerSyncedMediaReceiver::poll() {
     }
     next_audio_device_check_ = now + kAudioDevicePollInterval;
 
-    const auto device = current_audio_playback_device_key();
     const bool died = !session_.running();
-    bool device_changed = false;
-    if (!preference_changed && !died && !device.empty() && device != bound_audio_device_) {
-        if (device == pending_audio_device_) {
-            ++pending_audio_device_streak_;
-        } else {
-            pending_audio_device_ = device;
-            pending_audio_device_streak_ = 1;
-        }
-        device_changed = pending_audio_device_streak_ >= kAudioDeviceChangeConfirmPolls;
-    } else if (!device.empty() && device == bound_audio_device_) {
-        pending_audio_device_.clear();
-        pending_audio_device_streak_ = 0;
-    }
-    if (!preference_changed && !device_changed && !died) {
+    if (!preference_changed && !died) {
         return false;
     }
 
     session_.disconnect();
-    bound_audio_device_ = device;
     bound_audio_epoch_ = epoch;
     pending_audio_device_.clear();
     pending_audio_device_streak_ = 0;

@@ -8,3 +8,4 @@ build-client-only/
 scripts/.flatpak-builder/
 *.flatpak
 logs
+windows_log_ssh.sh

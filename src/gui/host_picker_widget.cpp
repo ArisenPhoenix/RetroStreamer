@@ -102,6 +102,7 @@ void HostPickerWidget::setBrowsing(bool enabled) {
     } else {
         timer_->stop();
         browser_.reset();
+        last_list_fingerprint_.clear();
         status_->setText("Discovery idle");
     }
 }
@@ -149,7 +150,17 @@ void HostPickerWidget::refreshUi() {
     const auto previous = selectedHost();
     const auto hosts = ranked_hosts(browser_ ? browser_->hosts() : std::vector<DiscoveredHost>{});
 
-    {
+    QString fingerprint;
+    for (const auto& host : hosts) {
+        fingerprint += QString("%1\n%2\n%3\n%4\n")
+            .arg(QString::fromStdString(host.username))
+            .arg(QString::fromStdString(host.address))
+            .arg(host.control_port)
+            .arg(host.input_port);
+    }
+
+    if (fingerprint != last_list_fingerprint_) {
+        last_list_fingerprint_ = fingerprint;
         const QSignalBlocker blocker(list_);
         list_->clear();
         QListWidgetItem* preferred_item = nullptr;

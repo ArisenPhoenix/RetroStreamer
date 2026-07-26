@@ -2,6 +2,7 @@
 
 #include "common/discovery.hpp"
 
+#include <QString>
 #include <QWidget>
 #include <memory>
 #include <optional>
@@ -41,6 +42,8 @@ private:
     QLabel* status_ = nullptr;
     QPushButton* refresh_ = nullptr;
     std::optional<DiscoveredHost> last_emitted_;
+    /** Fingerprint of last painted host rows; skip clear/rebuild when unchanged. */
+    QString last_list_fingerprint_;
 };
 
 } // namespace archstreamer::gui

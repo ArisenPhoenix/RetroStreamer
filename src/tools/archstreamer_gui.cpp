@@ -43,6 +43,7 @@
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QTabWidget>
+#include <QTextCursor>
 #include <QThread>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -207,16 +208,26 @@ void append_log(QPlainTextEdit* log, QString message, GuiLogLevel level = GuiLog
     if (log == nullptr) {
         return;
     }
-    if (QThread::currentThread() == log->thread()) {
+    auto append = [log, message = std::move(message)] {
         log->appendPlainText(message);
+        // Unbounded QPlainTextEdit growth on Windows can exhaust USER objects over long sessions.
+        constexpr int kMaxLogBlocks = 2000;
+        auto* doc = log->document();
+        if (doc != nullptr && doc->blockCount() > kMaxLogBlocks) {
+            QTextCursor cursor(doc);
+            cursor.movePosition(QTextCursor::Start);
+            cursor.movePosition(
+                QTextCursor::Down,
+                QTextCursor::KeepAnchor,
+                doc->blockCount() - kMaxLogBlocks);
+            cursor.removeSelectedText();
+        }
+    };
+    if (QThread::currentThread() == log->thread()) {
+        append();
         return;
     }
-    QMetaObject::invokeMethod(
-        log,
-        [log, message = std::move(message)] {
-            log->appendPlainText(message);
-        },
-        Qt::QueuedConnection);
+    QMetaObject::invokeMethod(log, append, Qt::QueuedConnection);
 }
 
 void append_host_process_log(QPlainTextEdit* log, const QString& line) {
@@ -679,56 +690,70 @@ private:
     }
 
     void refresh_game_options_ui() {
-        const bool active = disc_control_ != nullptr && [&] {
+        const bool session_active = disc_control_ != nullptr && [&] {
             std::lock_guard lock(disc_control_->mutex);
-            return disc_control_->session_active && disc_control_->disc_labels.size() >= 2;
+            return disc_control_->session_active;
         }();
+        std::vector<std::string> labels;
+        if (session_active && disc_control_) {
+            std::lock_guard lock(disc_control_->mutex);
+            labels = disc_control_->disc_labels;
+        }
+        const bool active = session_active && labels.size() >= 2;
+        const QString status_text = !session_active
+            ? QStringLiteral("Join a multi-disc session (.m3u) to swap discs.")
+            : (!active
+                   ? QStringLiteral("Active session has no multi-disc playlist.")
+                   : QString("Multi-disc session active (%1 discs). Swap when the game asks.")
+                         .arg(labels.size()));
 
-        if (game_options_status_ != nullptr) {
-            if (!disc_control_ || ![&] {
-                    std::lock_guard lock(disc_control_->mutex);
-                    return disc_control_->session_active;
-                }()) {
-                game_options_status_->setText("Join a multi-disc session (.m3u) to swap discs.");
-            } else if (!active) {
-                game_options_status_->setText("Active session has no multi-disc playlist.");
-            } else {
-                std::size_t count = 0;
-                {
-                    std::lock_guard lock(disc_control_->mutex);
-                    count = disc_control_->disc_labels.size();
-                }
-                game_options_status_->setText(
-                    QString("Multi-disc session active (%1 discs). Swap when the game asks.")
-                        .arg(count));
-            }
+        if (game_options_status_ != nullptr && game_options_status_->text() != status_text) {
+            game_options_status_->setText(status_text);
         }
 
         if (game_options_disc_ != nullptr) {
-            const QSignalBlocker blocker(game_options_disc_);
-            const auto previous = game_options_disc_->currentData().toInt();
-            game_options_disc_->clear();
-            if (active && disc_control_) {
-                std::lock_guard lock(disc_control_->mutex);
-                for (std::size_t i = 0; i < disc_control_->disc_labels.size(); ++i) {
-                    game_options_disc_->addItem(
-                        QString("%1: %2")
-                            .arg(i + 1)
-                            .arg(QString::fromStdString(disc_control_->disc_labels[i])),
-                        static_cast<int>(i));
-                }
-                const auto index = game_options_disc_->findData(previous);
-                game_options_disc_->setCurrentIndex(index >= 0 ? index : 0);
+            // Avoid clear()/addItem every 500ms — on Windows that churns USER objects.
+            QStringList wanted_labels;
+            wanted_labels.reserve(static_cast<int>(labels.size()));
+            for (std::size_t i = 0; i < labels.size(); ++i) {
+                wanted_labels.push_back(
+                    QString("%1: %2").arg(i + 1).arg(QString::fromStdString(labels[i])));
             }
-            game_options_disc_->setEnabled(active);
+            bool list_matches = active && game_options_disc_->count() == wanted_labels.size();
+            if (list_matches) {
+                for (int i = 0; i < wanted_labels.size(); ++i) {
+                    if (game_options_disc_->itemText(i) != wanted_labels[i] ||
+                        game_options_disc_->itemData(i).toInt() != i) {
+                        list_matches = false;
+                        break;
+                    }
+                }
+            } else if (!active && game_options_disc_->count() == 0) {
+                list_matches = true;
+            }
+            if (!list_matches) {
+                const QSignalBlocker blocker(game_options_disc_);
+                const auto previous = game_options_disc_->currentData().toInt();
+                game_options_disc_->clear();
+                if (active) {
+                    for (int i = 0; i < wanted_labels.size(); ++i) {
+                        game_options_disc_->addItem(wanted_labels[i], i);
+                    }
+                    const auto index = game_options_disc_->findData(previous);
+                    game_options_disc_->setCurrentIndex(index >= 0 ? index : 0);
+                }
+            }
+            if (game_options_disc_->isEnabled() != active) {
+                game_options_disc_->setEnabled(active);
+            }
         }
-        if (game_options_swap_ != nullptr) {
+        if (game_options_swap_ != nullptr && game_options_swap_->isEnabled() != active) {
             game_options_swap_->setEnabled(active);
         }
-        if (game_options_prev_ != nullptr) {
+        if (game_options_prev_ != nullptr && game_options_prev_->isEnabled() != active) {
             game_options_prev_->setEnabled(active);
         }
-        if (game_options_next_ != nullptr) {
+        if (game_options_next_ != nullptr && game_options_next_->isEnabled() != active) {
             game_options_next_->setEnabled(active);
         }
     }
@@ -2279,6 +2304,7 @@ private:
         if (client_host_ == nullptr || !client_host_->text().trimmed().isEmpty()) {
             return;
         }
+        stop_client_host_auto_pick();
         try {
             client_auto_browser_ = std::make_unique<archstreamer::HostDiscoveryBrowser>();
         } catch (const std::exception& error) {

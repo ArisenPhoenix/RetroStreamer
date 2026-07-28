@@ -465,6 +465,56 @@ std::optional<std::filesystem::path> find_source_keys_dir() {
     return std::nullopt;
 }
 
+std::optional<std::filesystem::path> find_source_ryujinx() {
+    if (const auto env = path_from_env("ARCHSTREAMER_RYUJINX"); env.has_value()) {
+        if (std::filesystem::is_regular_file(*env)) {
+            return env;
+        }
+        if (std::filesystem::is_directory(*env)) {
+#ifdef _WIN32
+            for (const char* name : {"Ryujinx.exe", "ryujinx.exe"}) {
+#else
+            for (const char* name : {"Ryujinx", "ryujinx", "Ryujinx.AppImage", "ryujinx.AppImage"}) {
+#endif
+                const auto exe = *env / name;
+                if (std::filesystem::is_regular_file(exe)) {
+                    return exe;
+                }
+            }
+        }
+    }
+
+    const auto home = home_dir();
+#ifdef _WIN32
+    const auto local = archstreamer_cache_directory();
+    const std::vector<std::filesystem::path> candidates{
+        std::filesystem::path{local} / "ryujinx" / "Ryujinx.exe",
+        home / "Downloads" / "Ryujinx" / "Ryujinx.exe",
+        home / "AppData" / "Local" / "Ryujinx" / "Ryujinx.exe",
+    };
+#else
+    const std::vector<std::filesystem::path> candidates{
+        "/srv/emus/Switch/Ryujinx",
+        "/srv/emus/Switch/ryujinx",
+        "/srv/emus/Switch/Ryujinx.AppImage",
+        home / "Applications/Ryujinx.AppImage",
+        home / "Applications/Ryujinx",
+        home / ".local/bin/Ryujinx",
+        home / ".local/bin/ryujinx",
+        "/usr/local/bin/Ryujinx",
+        "/usr/local/bin/ryujinx",
+        "/usr/bin/Ryujinx",
+        "/usr/bin/ryujinx",
+    };
+#endif
+    for (const auto& candidate : candidates) {
+        if (std::filesystem::is_regular_file(candidate)) {
+            return candidate;
+        }
+    }
+    return std::nullopt;
+}
+
 } // namespace
 
 std::filesystem::path default_yuzu_runtime_root() {
@@ -686,6 +736,122 @@ std::vector<std::pair<std::string, std::string>> yuzu_launch_environment(
         // stop delivering joystick updates and Yuzu sees intermittent pad input.
         {"SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1"},
     };
+}
+
+std::filesystem::path default_ryujinx_runtime_root() {
+    if (const auto home = home_dir(); !home.empty()) {
+#ifdef _WIN32
+        const auto cache = archstreamer_cache_directory();
+        if (!cache.empty()) {
+            return std::filesystem::path{cache} / "ryujinx";
+        }
+        return home / "AppData" / "Local" / "archstreamer" / "ryujinx";
+#else
+        return home / ".local/share/archstreamer/ryujinx";
+#endif
+    }
+    return std::filesystem::current_path() / "archstreamer-ryujinx";
+}
+
+bool ryujinx_runtime_available() {
+#ifdef _WIN32
+    const auto managed_binary = default_ryujinx_runtime_root() / "Ryujinx.exe";
+#else
+    const auto managed_binary = default_ryujinx_runtime_root() / "Ryujinx";
+    const auto managed_appimage = default_ryujinx_runtime_root() / "Ryujinx.AppImage";
+    if (std::filesystem::is_regular_file(managed_appimage)) {
+        return true;
+    }
+#endif
+    if (std::filesystem::is_regular_file(managed_binary)) {
+        return true;
+    }
+    return find_source_ryujinx().has_value();
+}
+
+std::string ryujinx_unavailable_message() {
+    const auto root = default_ryujinx_runtime_root();
+#ifdef _WIN32
+    return "Ryujinx runtime not found. Place Ryujinx.exe under " + root.string() +
+           " (or set ARCHSTREAMER_RYUJINX). Link backends that need Ryujinx will stay unavailable.";
+#else
+    return "Ryujinx runtime not found. Place Ryujinx under " + root.string() +
+           " (or set ARCHSTREAMER_RYUJINX). Link backends that need Ryujinx will stay unavailable.";
+#endif
+}
+
+std::optional<ResolvedStandaloneEmulator> ensure_ryujinx_runtime() {
+    const auto root = default_ryujinx_runtime_root();
+#ifdef _WIN32
+    const auto managed_binary = root / "Ryujinx.exe";
+#else
+    auto managed_binary = root / "Ryujinx";
+    const auto managed_appimage = root / "Ryujinx.AppImage";
+#endif
+    std::filesystem::create_directories(root);
+
+#ifdef _WIN32
+    if (!std::filesystem::exists(managed_binary)) {
+#else
+    if (!std::filesystem::exists(managed_binary) && !std::filesystem::exists(managed_appimage)) {
+#endif
+        const auto source = find_source_ryujinx();
+        if (!source.has_value()) {
+            return std::nullopt;
+        }
+#ifdef _WIN32
+        const auto source_dir = source->parent_path();
+        std::cout << "Installing Ryujinx Windows build into " << root << " (from " << source_dir << ")\n";
+        for (const auto& entry : std::filesystem::directory_iterator(source_dir)) {
+            if (!entry.is_regular_file() && !entry.is_directory()) {
+                continue;
+            }
+            const auto name = entry.path().filename();
+            if (entry.is_directory()) {
+                std::filesystem::copy(
+                    entry.path(),
+                    root / name,
+                    std::filesystem::copy_options::recursive |
+                        std::filesystem::copy_options::skip_existing);
+            } else {
+                std::filesystem::copy_file(
+                    entry.path(),
+                    root / name,
+                    std::filesystem::copy_options::skip_existing);
+            }
+        }
+#else
+        const auto destination =
+            (source->extension() == ".AppImage") ? managed_appimage : managed_binary;
+        std::cout << "Installing Ryujinx into " << destination << " (from " << *source << ")\n";
+        std::filesystem::copy_file(*source, destination, std::filesystem::copy_options::overwrite_existing);
+        std::filesystem::permissions(
+            destination,
+            std::filesystem::perms::owner_all | std::filesystem::perms::group_read |
+                std::filesystem::perms::group_exec | std::filesystem::perms::others_read |
+                std::filesystem::perms::others_exec,
+            std::filesystem::perm_options::replace);
+        managed_binary = destination;
+#endif
+    }
+
+#ifdef _WIN32
+    if (!std::filesystem::is_regular_file(managed_binary)) {
+        return std::nullopt;
+    }
+    return ResolvedStandaloneEmulator{managed_binary, {"--fullscreen"}, "Ryujinx"};
+#else
+    if (std::filesystem::is_regular_file(managed_appimage)) {
+        return ResolvedStandaloneEmulator{managed_appimage, {"--fullscreen"}, "Ryujinx"};
+    }
+    if (std::filesystem::is_regular_file(managed_binary)) {
+        return ResolvedStandaloneEmulator{managed_binary, {"--fullscreen"}, "Ryujinx"};
+    }
+    if (const auto source = find_source_ryujinx(); source.has_value()) {
+        return ResolvedStandaloneEmulator{*source, {"--fullscreen"}, "Ryujinx"};
+    }
+    return std::nullopt;
+#endif
 }
 
 } // namespace archstreamer

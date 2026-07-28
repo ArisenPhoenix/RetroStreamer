@@ -89,6 +89,50 @@ struct DiscControlBridge {
     }
 };
 
+// Shared between the GUI thread and the client session loop for mutual link requests.
+struct LinkControlBridge {
+    std::mutex mutex;
+    std::optional<LinkRequest> pending_request;
+    std::optional<LinkResponse> last_response;
+    GameId active_game_id;
+    std::string system_key;
+    bool session_active = false;
+    bool link_capable = false;
+
+    void request_link(std::string target_username) {
+        std::lock_guard lock(mutex);
+        pending_request = LinkRequest{
+            active_game_id,
+            std::move(target_username),
+            LinkAction::Request,
+        };
+    }
+
+    void cancel_link() {
+        std::lock_guard lock(mutex);
+        pending_request = LinkRequest{active_game_id, {}, LinkAction::Cancel};
+    }
+
+    std::optional<LinkRequest> take_pending() {
+        std::lock_guard lock(mutex);
+        auto request = pending_request;
+        pending_request.reset();
+        return request;
+    }
+
+    void set_response(LinkResponse response) {
+        std::lock_guard lock(mutex);
+        last_response = std::move(response);
+    }
+
+    std::optional<LinkResponse> take_response() {
+        std::lock_guard lock(mutex);
+        auto response = last_response;
+        last_response.reset();
+        return response;
+    }
+};
+
 struct ClientAppConfig {
     std::string host = "127.0.0.1";
     std::uint16_t control_port = 45555;
@@ -136,6 +180,7 @@ struct ClientAppCallbacks {
     std::function<void()> on_waiting_without_input;
     std::function<void(const std::string& message)> on_status;
     std::shared_ptr<DiscControlBridge> disc_control;
+    std::shared_ptr<LinkControlBridge> link_control;
     std::shared_ptr<ClientHeartbeatPrefs> heartbeat_prefs;
 };
 

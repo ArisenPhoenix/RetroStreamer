@@ -685,6 +685,70 @@ private:
         game_options_poll_timer_->start();
 
         root->addWidget(form_box);
+
+        auto* link_box = new QGroupBox("Link with player", page);
+        auto* link_form = new QFormLayout(link_box);
+        game_options_link_status_ = new QLabel(
+            "Join a link-capable session (Switch / GB / GBC / GBA) to request a peer.",
+            link_box);
+        game_options_link_status_->setWordWrap(true);
+        game_options_link_user_ = new QLineEdit(link_box);
+        game_options_link_user_->setPlaceholderText("Peer username");
+        game_options_link_user_->setEnabled(false);
+        auto* link_request = new QPushButton("Request link", link_box);
+        link_request->setEnabled(false);
+        game_options_link_request_ = link_request;
+        auto* link_cancel = new QPushButton("Cancel", link_box);
+        link_cancel->setEnabled(false);
+        game_options_link_cancel_ = link_cancel;
+
+        link_form->addRow("Status", game_options_link_status_);
+        link_form->addRow("Username", game_options_link_user_);
+        auto* link_nav = new QHBoxLayout();
+        link_nav->addWidget(link_request);
+        link_nav->addWidget(link_cancel);
+        link_form->addRow("", link_nav);
+
+        connect(link_request, &QPushButton::clicked, this, [this] {
+            if (!link_control_ || game_options_link_user_ == nullptr) {
+                return;
+            }
+            const auto target = game_options_link_user_->text().trimmed().toStdString();
+            if (target.empty()) {
+                append_log(client_log_, "Link username is empty", GuiLogLevel::Quiet);
+                return;
+            }
+            link_control_->request_link(target);
+            append_log(
+                client_log_,
+                QString("Requested link with %1").arg(QString::fromStdString(target)));
+        });
+        connect(link_cancel, &QPushButton::clicked, this, [this] {
+            if (link_control_) {
+                link_control_->cancel_link();
+                append_log(client_log_, "Cancelled link request");
+            }
+        });
+
+        connect(game_options_poll_timer_, &QTimer::timeout, this, [this] {
+            if (!link_control_) {
+                return;
+            }
+            if (const auto response = link_control_->take_response(); response.has_value()) {
+                const QString message = response->ok
+                    ? QString("Link: %1").arg(QString::fromStdString(response->message))
+                    : QString("Link failed: %1").arg(QString::fromStdString(response->message));
+                append_log(
+                    client_log_,
+                    message,
+                    response->ok ? GuiLogLevel::Normal : GuiLogLevel::Quiet);
+                if (game_options_link_status_ != nullptr) {
+                    game_options_link_status_->setText(message);
+                }
+            }
+        });
+
+        root->addWidget(link_box);
         root->addStretch();
         return page;
     }
@@ -755,6 +819,50 @@ private:
         }
         if (game_options_next_ != nullptr && game_options_next_->isEnabled() != active) {
             game_options_next_->setEnabled(active);
+        }
+
+        bool link_capable = false;
+        std::string link_system;
+        const bool link_session = link_control_ != nullptr && [&] {
+            std::lock_guard lock(link_control_->mutex);
+            link_capable = link_control_->link_capable;
+            link_system = link_control_->system_key;
+            return link_control_->session_active;
+        }();
+        const bool link_active = link_session && link_capable;
+        const QString link_status = !link_session
+            ? QStringLiteral(
+                  "Join a link-capable session (Switch / GB / GBC / GBA) to request a peer.")
+            : (!link_capable
+                   ? QString("Active session (%1) does not support link yet.")
+                         .arg(QString::fromStdString(
+                             link_system.empty() ? "unknown system" : link_system))
+                   : QStringLiteral(
+                         "Enter a seated peer's username. Both must request each other. "
+                         "GB/GBC reloads into a dual Game Boy cable (shared screen)."));
+        // Don't overwrite a live host response message every poll tick.
+        if (game_options_link_status_ != nullptr) {
+            const auto current = game_options_link_status_->text();
+            const bool is_live_response =
+                current.startsWith(QStringLiteral("Link:")) ||
+                current.startsWith(QStringLiteral("Link failed:"));
+            if (!is_live_response && current != link_status) {
+                game_options_link_status_->setText(link_status);
+            } else if (!link_session && current != link_status) {
+                game_options_link_status_->setText(link_status);
+            }
+        }
+        if (game_options_link_user_ != nullptr &&
+            game_options_link_user_->isEnabled() != link_active) {
+            game_options_link_user_->setEnabled(link_active);
+        }
+        if (game_options_link_request_ != nullptr &&
+            game_options_link_request_->isEnabled() != link_active) {
+            game_options_link_request_->setEnabled(link_active);
+        }
+        if (game_options_link_cancel_ != nullptr &&
+            game_options_link_cancel_->isEnabled() != link_active) {
+            game_options_link_cancel_->setEnabled(link_active);
         }
     }
 
@@ -1567,6 +1675,19 @@ private:
                 append_log(
                     host_log_,
                     QString::fromStdString(archstreamer::yuzu_unavailable_message()),
+                    GuiLogLevel::Quiet);
+            }
+            if (archstreamer::ryujinx_runtime_available()) {
+                if (const auto ryu = archstreamer::resolve_ryujinx(); ryu.has_value()) {
+                    append_log(
+                        host_log_,
+                        QString("Ryujinx available for future link backends: %1")
+                            .arg(QString::fromStdString(ryu->path.string())));
+                }
+            } else {
+                append_log(
+                    host_log_,
+                    QString::fromStdString(archstreamer::ryujinx_unavailable_message()),
                     GuiLogLevel::Quiet);
             }
         } catch (const std::exception& error) {
@@ -2494,6 +2615,7 @@ private:
 
         client_stop_requested_ = false;
         disc_control_ = std::make_shared<archstreamer::DiscControlBridge>();
+        link_control_ = std::make_shared<archstreamer::LinkControlBridge>();
         heartbeat_prefs_ = std::make_shared<archstreamer::ClientHeartbeatPrefs>();
         {
             std::lock_guard lock(heartbeat_prefs_->mutex);
@@ -2506,6 +2628,7 @@ private:
                 auto connected_client_id = std::optional<archstreamer::ClientId>{};
                 archstreamer::ClientAppCallbacks callbacks;
                 callbacks.disc_control = disc_control_;
+                callbacks.link_control = link_control_;
                 callbacks.heartbeat_prefs = heartbeat_prefs_;
                 callbacks.on_catalog = [this](const archstreamer::GameList& full, const archstreamer::GameList& filtered) {
                     append_log(client_log_, QString("Received %1 games; %2 after filters.")
@@ -2619,6 +2742,11 @@ private:
         if (disc_control_) {
             std::lock_guard lock(disc_control_->mutex);
             disc_control_->session_active = false;
+        }
+        if (link_control_) {
+            std::lock_guard lock(link_control_->mutex);
+            link_control_->session_active = false;
+            link_control_->link_capable = false;
         }
         heartbeat_prefs_.reset();
     }
@@ -2958,12 +3086,17 @@ private:
     QListWidget* client_controllers_ = nullptr;
     QPlainTextEdit* client_log_ = nullptr;
     std::shared_ptr<archstreamer::DiscControlBridge> disc_control_;
+    std::shared_ptr<archstreamer::LinkControlBridge> link_control_;
     std::shared_ptr<archstreamer::ClientHeartbeatPrefs> heartbeat_prefs_;
     QLabel* game_options_status_ = nullptr;
     QComboBox* game_options_disc_ = nullptr;
     QPushButton* game_options_swap_ = nullptr;
     QPushButton* game_options_prev_ = nullptr;
     QPushButton* game_options_next_ = nullptr;
+    QLabel* game_options_link_status_ = nullptr;
+    QLineEdit* game_options_link_user_ = nullptr;
+    QPushButton* game_options_link_request_ = nullptr;
+    QPushButton* game_options_link_cancel_ = nullptr;
     QTimer* game_options_poll_timer_ = nullptr;
     std::unique_ptr<archstreamer::HostDiscoveryBrowser> client_auto_browser_;
     QTimer* client_auto_pick_timer_ = nullptr;

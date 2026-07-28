@@ -69,4 +69,18 @@ void configure_yuzu_archstreamer_controls(
 std::vector<std::pair<std::string, std::string>> yuzu_launch_environment(
     const YuzuUserProfile& profile);
 
+// Managed tree: ~/.local/share/archstreamer/ryujinx/{Ryujinx,keys/...}
+// Discovery only for now — Switch sessions still launch via Yuzu.
+std::filesystem::path default_ryujinx_runtime_root();
+bool ryujinx_runtime_available();
+std::string ryujinx_unavailable_message();
+std::optional<ResolvedStandaloneEmulator> ensure_ryujinx_runtime();
+
+inline std::optional<ResolvedStandaloneEmulator> resolve_ryujinx() {
+    if (!ryujinx_runtime_available()) {
+        return std::nullopt;
+    }
+    return ensure_ryujinx_runtime();
+}
+
 } // namespace archstreamer

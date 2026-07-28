@@ -22,12 +22,14 @@
 #include "host/network_input_receiver.hpp"
 #include "host/platform/default_host_platform.hpp"
 #include "host/retroarch_config_writer.hpp"
+#include "host/retroarch_netcmd.hpp"
 #include "host/retroarch_resolve.hpp"
 #include "host/save_profile.hpp"
 #include "host/standalone_emulator.hpp"
 #include "host/session_control_monitor.hpp"
 #include "host/session_service.hpp"
 #include "host/virtual_joypad_resolve.hpp"
+#include "host/link_cable_backend.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -240,6 +242,10 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             config.retroarch_joypad_driver = "udev";
         }
         if (session_plan.has_value()) {
+            session_plan->system_key = system_key;
+            if (system_key == "gb" || system_key == "gbc" || system_key == "gb-gbc") {
+                LinkCableBackend::write_single_gb_core_options();
+            }
             if (const auto hosted = catalog.find_hosted(launch_plan.game_id); hosted.has_value()) {
                 session_plan->playlist_discs = hosted->get().info.playlist_discs;
                 session_plan->current_disc_index = 0;
@@ -1024,6 +1030,68 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                     std::cerr << "Stopping session: " << *reason << '\n';
                     session_end_reason = *reason;
                     break;
+                }
+            }
+            if (session_plan.has_value() &&
+                !launch_config.standalone &&
+                session_plan->link_cable.consume_relaunch_request()) {
+                const auto link_core = session_plan->link_cable.pending_core_path();
+                if (!link_core.has_value()) {
+                    std::cerr << "Link cable relaunch requested but core path is empty\n";
+                } else {
+                    std::cout
+                        << "Link cable: relaunching RetroArch with "
+                        << link_core->string() << '\n';
+                    retroarch.stop();
+                    launch_config.core_path = *link_core;
+                    LinkCableBackend::write_dual_gb_core_options();
+                    const auto runtime_override = write_retroarch_input_override(
+                        virtual_joypad_index,
+                        launch_plan.virtual_identities,
+                        config.retroarch_joypad_driver,
+                        std::max<RetroArchPort>(launch_plan.players, 2),
+                        save_profile,
+                        config.audio || config.video,
+                        capture_fullscreen && use_virtual_capture,
+                        config.video_resolution,
+                        (!use_virtual_capture && resolved_gpu.has_value())
+                            ? resolved_gpu->vulkan_index
+                            : -1,
+                        system_key,
+                        launch_config.core_path,
+                        config.retroarch_resolution_scale);
+                    // Replace prior -c path if present; otherwise append.
+                    bool replaced_c = false;
+                    for (std::size_t i = 0; i + 1 < launch_config.extra_args.size(); ++i) {
+                        if (launch_config.extra_args[i] == "-c") {
+                            launch_config.extra_args[i + 1] = runtime_override.string();
+                            replaced_c = true;
+                            break;
+                        }
+                    }
+                    if (!replaced_c) {
+                        launch_config.extra_args.push_back("-c");
+                        launch_config.extra_args.push_back(runtime_override.string());
+                    }
+                    {
+                        const auto launch_env = build_emulator_launch_environment(launch_env_request);
+                        launch_config.environment = launch_env.entries;
+                        launch_config.unset_environment = launch_env.unset;
+                    }
+                    retroarch.launch(launch_config);
+                    for (int i = 0; i < 10 && retroarch.running(); ++i) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                    }
+                    if (!retroarch.running()) {
+                        session_end_reason =
+                            "link cable relaunch failed (RetroArch exited immediately)";
+                        std::cerr << "Stopping session: " << *session_end_reason << '\n';
+                        break;
+                    }
+                    send_retroarch_netcmd(
+                        "SHOW_MSG Link cable active — Cable Club",
+                        session_plan->retroarch_netcmd_port);
+                    std::cout << "Link cable: dual-GB RetroArch is running\n";
                 }
             }
             if (config.audio) {

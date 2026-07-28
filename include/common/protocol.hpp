@@ -15,7 +15,7 @@
 namespace archstreamer {
 
 constexpr std::uint32_t ProtocolMagic = 0x41525354; // "ARST"
-constexpr std::uint16_t ProtocolVersion = 12;
+constexpr std::uint16_t ProtocolVersion = 13;
 constexpr std::uint8_t MaxRemoteClients = 2;
 constexpr std::uint8_t MaxPlayersPerClient = 2;
 constexpr std::uint8_t MaxRetroArchPorts = 5; // Ports 0-3 plus a host player if desired.
@@ -49,6 +49,8 @@ enum class PacketType : std::uint8_t {
     KeyboardInput = 20,
     // Client → host: intentional Stop / video-window close (not a link drop).
     ClientSessionLeave = 21,
+    LinkRequest = 22,
+    LinkResponse = 23,
 };
 
 enum class ClientRole : std::uint8_t {
@@ -380,6 +382,32 @@ struct DiscControlResponse {
     std::string message;
 };
 
+enum class LinkAction : std::uint8_t {
+    Request = 0,
+    Cancel = 1,
+};
+
+enum class LinkStatus : std::uint8_t {
+    Pending = 0,
+    Matched = 1,
+    Cancelled = 2,
+    Error = 3,
+};
+
+// Client → host: ask to link with another seated username (mutual handshake).
+struct LinkRequest {
+    GameId game_id;
+    std::string target_username;
+    LinkAction action = LinkAction::Request;
+};
+
+struct LinkResponse {
+    bool ok = false;
+    LinkStatus status = LinkStatus::Error;
+    std::string peer_username;
+    std::string message;
+};
+
 using PacketPayload = std::variant<
     ClientHello,
     HostWelcome,
@@ -401,6 +429,8 @@ using PacketPayload = std::variant<
     ArtAssetResponse,
     DiscControlRequest,
     DiscControlResponse,
+    LinkRequest,
+    LinkResponse,
     KeyboardInput>;
 
 ClientRole role_for_player_count(std::uint8_t requested_players);

@@ -2,6 +2,8 @@
 
 #include "common/serialization.hpp"
 #include "common/platform/default_platform.hpp"
+#include "host/link_cable_backend.hpp"
+#include "host/link_coordinator.hpp"
 #include "host/virtual_gamepad.hpp"
 #include "host/retroarch_netcmd.hpp"
 #include "host/seat_manager.hpp"
@@ -49,6 +51,7 @@ struct SessionPlan {
     GameId selected_game_id;
     GameSessionMode session_mode = GameSessionMode::SinglePlayer;
     std::string save_username;
+    std::string system_key;
     // Multi-disc playlist state (from launched .m3u); empty when not applicable.
     std::vector<std::string> playlist_discs;
     std::uint8_t current_disc_index = 0;
@@ -57,6 +60,9 @@ struct SessionPlan {
     bool framecount_osd_enabled = false;
     std::uint32_t framecount_osd_tick = 0;
     std::chrono::steady_clock::time_point framecount_osd_last_sent = {};
+    // Mid-session mutual link matchmaking (backends wired later).
+    LinkCoordinator link_coordinator;
+    LinkCableBackend link_cable;
 };
 
 const char* session_mode_name(GameSessionMode mode);

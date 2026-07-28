@@ -146,6 +146,89 @@ std::optional<std::string> SessionControlMonitor::poll() {
                 } else {
                     std::cerr << "Disc control failed: " << response.message << '\n';
                 }
+            } else if (const auto* link_request = std::get_if<LinkRequest>(&payload);
+                       link_request != nullptr) {
+                auto outbound = plan_.link_coordinator.handle(
+                    plan_,
+                    client.client_id,
+                    client.hello.username,
+                    *link_request);
+
+                bool started_cable = false;
+                for (auto& item : outbound) {
+                    if (!started_cable && item.response.status == LinkStatus::Matched) {
+                        started_cable = true;
+                        std::string peer_user = item.response.peer_username;
+                        ClientId peer_id = 0;
+                        for (const auto& other : outbound) {
+                            if (other.client_id != item.client_id) {
+                                peer_id = other.client_id;
+                                break;
+                            }
+                        }
+                        if (peer_id == 0) {
+                            // Mutual peer may already be disconnected from TCP; still try.
+                            for (const auto& candidate : plan_.clients) {
+                                if (candidate.client_id != client.client_id &&
+                                    candidate.connection_state == SessionConnectionState::Connected &&
+                                    candidate.hello.username == peer_user) {
+                                    peer_id = candidate.client_id;
+                                    break;
+                                }
+                            }
+                        }
+                        const auto start = plan_.link_cable.begin(
+                            plan_.system_key,
+                            client.client_id,
+                            peer_id,
+                            client.hello.username,
+                            peer_user,
+                            assigned_player_count(plan_.seats));
+                        for (auto& update : outbound) {
+                            update.response.message = start.message;
+                            if (!start.ok) {
+                                update.response.ok = false;
+                                update.response.status = LinkStatus::Error;
+                            }
+                        }
+                        if (start.ok) {
+                            std::cout << "Link cable: " << start.message << '\n';
+                            send_retroarch_netcmd(
+                                std::string("SHOW_MSG ") + "Link cable: dual GB ready",
+                                plan_.retroarch_netcmd_port);
+                        } else {
+                            std::cerr << "Link cable failed: " << start.message << '\n';
+                        }
+                    }
+                }
+
+                for (const auto& item : outbound) {
+                    SessionClientConnection* target = nullptr;
+                    for (auto& candidate : plan_.clients) {
+                        if (candidate.client_id == item.client_id &&
+                            candidate.connection_state == SessionConnectionState::Connected) {
+                            target = &candidate;
+                            break;
+                        }
+                    }
+                    if (target == nullptr) {
+                        continue;
+                    }
+                    try {
+                        target->stream.send_packet(serialize_packet(item.response));
+                    } catch (const std::exception& error) {
+                        std::cerr << "Failed to send LinkResponse: " << error.what() << '\n';
+                    }
+                    if (item.response.ok) {
+                        std::cout
+                            << "Link: client " << static_cast<int>(item.client_id)
+                            << " " << item.response.message << '\n';
+                    } else {
+                        std::cerr
+                            << "Link failed (client " << static_cast<int>(item.client_id)
+                            << "): " << item.response.message << '\n';
+                    }
+                }
             }
         }
         if (removed_current) {
@@ -344,12 +427,22 @@ bool SessionControlMonitor::remove_viewer(std::size_t index, std::string_view re
         << "Removing viewer " << static_cast<int>(plan_.clients[index].client_id)
         << " (" << plan_.clients[index].hello.username << "): "
         << reason << '\n';
+    plan_.link_coordinator.clear_client(plan_.clients[index].client_id);
+    if (plan_.clients[index].client_id == plan_.link_cable.client_a() ||
+        plan_.clients[index].client_id == plan_.link_cable.client_b()) {
+        plan_.link_cable.clear();
+    }
     media_server_.remove_client(plan_.clients[index].client_id);
     plan_.clients.erase(plan_.clients.begin() + static_cast<std::ptrdiff_t>(index));
     return true;
 }
 
 void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& client, std::string_view reason) {
+    plan_.link_coordinator.clear_client(client.client_id);
+    if (client.client_id == plan_.link_cable.client_a() ||
+        client.client_id == plan_.link_cable.client_b()) {
+        plan_.link_cable.clear();
+    }
     media_server_.remove_client(client.client_id);
     client.connection_state = SessionConnectionState::Disconnected;
     client.disconnected_at = std::chrono::steady_clock::now();

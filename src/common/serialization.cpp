@@ -405,6 +405,23 @@ ByteBuffer serialize_payload(const DiscControlResponse& payload) {
     return writer.take();
 }
 
+ByteBuffer serialize_payload(const LinkRequest& payload) {
+    Writer writer;
+    writer.write_string(payload.game_id);
+    writer.write_string(payload.target_username);
+    writer.write_pod<LinkAction>(payload.action);
+    return writer.take();
+}
+
+ByteBuffer serialize_payload(const LinkResponse& payload) {
+    Writer writer;
+    writer.write_bool(payload.ok);
+    writer.write_pod<LinkStatus>(payload.status);
+    writer.write_string(payload.peer_username);
+    writer.write_string(payload.message);
+    return writer.take();
+}
+
 PacketType packet_type_for(const ClientHello&) { return PacketType::ClientHello; }
 PacketType packet_type_for(const HostWelcome&) { return PacketType::HostWelcome; }
 PacketType packet_type_for(const ClientConfig&) { return PacketType::ClientConfig; }
@@ -426,6 +443,8 @@ PacketType packet_type_for(const ArtAssetRequest&) { return PacketType::ArtAsset
 PacketType packet_type_for(const ArtAssetResponse&) { return PacketType::ArtAssetResponse; }
 PacketType packet_type_for(const DiscControlRequest&) { return PacketType::DiscControlRequest; }
 PacketType packet_type_for(const DiscControlResponse&) { return PacketType::DiscControlResponse; }
+PacketType packet_type_for(const LinkRequest&) { return PacketType::LinkRequest; }
+PacketType packet_type_for(const LinkResponse&) { return PacketType::LinkResponse; }
 
 template <typename Payload>
 ByteBuffer serialize_packet_impl(const Payload& payload) {
@@ -523,6 +542,14 @@ ByteBuffer serialize_packet(const DiscControlRequest& payload) {
 }
 
 ByteBuffer serialize_packet(const DiscControlResponse& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const LinkRequest& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const LinkResponse& payload) {
     return serialize_packet_impl(payload);
 }
 
@@ -738,6 +765,23 @@ DiscControlResponse read_disc_control_response(Reader& reader) {
     };
 }
 
+LinkRequest read_link_request(Reader& reader) {
+    return LinkRequest{
+        reader.read_string(),
+        reader.read_string(),
+        reader.read_pod<LinkAction>(),
+    };
+}
+
+LinkResponse read_link_response(Reader& reader) {
+    return LinkResponse{
+        reader.read_bool(),
+        reader.read_pod<LinkStatus>(),
+        reader.read_string(),
+        reader.read_string(),
+    };
+}
+
 PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
     Reader header_reader(packet);
     const auto magic = header_reader.read_pod<std::uint32_t>();
@@ -801,6 +845,10 @@ PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
             return read_disc_control_request(payload_reader);
         case PacketType::DiscControlResponse:
             return read_disc_control_response(payload_reader);
+        case PacketType::LinkRequest:
+            return read_link_request(payload_reader);
+        case PacketType::LinkResponse:
+            return read_link_response(payload_reader);
     }
 
     throw std::runtime_error("unknown packet type");

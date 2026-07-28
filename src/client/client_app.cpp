@@ -6,6 +6,7 @@
 #include "client/keyboard_poller.hpp"
 #include "client/session_service.hpp"
 #include "common/addresses.hpp"
+#include "common/link_capability.hpp"
 #include "common/platform/default_platform.hpp"
 #include "common/serialization.hpp"
 #include "common/time.hpp"
@@ -69,6 +70,16 @@ bool handle_control_message(TcpStream& stream, const ClientAppCallbacks& callbac
             callbacks.on_status(
                 disc->ok ? ("Disc control: " + disc->message)
                          : ("Disc control failed: " + disc->message));
+        }
+    }
+    if (const auto* link = std::get_if<LinkResponse>(&payload); link != nullptr) {
+        if (callbacks.link_control) {
+            callbacks.link_control->set_response(*link);
+        }
+        if (callbacks.on_status) {
+            callbacks.on_status(
+                link->ok ? ("Link: " + link->message)
+                         : ("Link failed: " + link->message));
         }
     }
 
@@ -324,6 +335,20 @@ ClientRunResult ClientApp::join_session(
             }
         }
     }
+    if (callbacks.link_control) {
+        std::lock_guard lock(callbacks.link_control->mutex);
+        callbacks.link_control->session_active = true;
+        callbacks.link_control->active_game_id = result.selected_game_id.value_or(GameId{});
+        callbacks.link_control->system_key.clear();
+        callbacks.link_control->link_capable = false;
+        for (const auto& game : result.full_catalog.games) {
+            if (result.selected_game_id.has_value() && game.id == *result.selected_game_id) {
+                callbacks.link_control->system_key = game.system_key;
+                callbacks.link_control->link_capable = system_supports_link(game.system_key);
+                break;
+            }
+        }
+    }
 
     auto controller_backend = std::optional<ControllerBackend>{};
     auto input_sender = std::optional<InputSender>{};
@@ -471,6 +496,17 @@ ClientRunResult ClientApp::join_session(
                 }
             }
         }
+        if (callbacks.link_control) {
+            if (const auto request = callbacks.link_control->take_pending(); request.has_value()) {
+                try {
+                    joined_session.stream.send_packet(serialize_packet(*request));
+                } catch (const std::exception& error) {
+                    if (callbacks.on_status) {
+                        callbacks.on_status(std::string("Failed to send link request: ") + error.what());
+                    }
+                }
+            }
+        }
         if (joined_session.stream.peer_closed()) {
             result.host_disconnected = true;
             if (callbacks.on_host_disconnected) {
@@ -589,6 +625,11 @@ ClientRunResult ClientApp::join_session(
     if (callbacks.disc_control) {
         std::lock_guard lock(callbacks.disc_control->mutex);
         callbacks.disc_control->session_active = false;
+    }
+    if (callbacks.link_control) {
+        std::lock_guard lock(callbacks.link_control->mutex);
+        callbacks.link_control->session_active = false;
+        callbacks.link_control->link_capable = false;
     }
 
     return result;

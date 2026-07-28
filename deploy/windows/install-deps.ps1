@@ -10,8 +10,18 @@
 param(
     [switch]$OpenFirewall,
     [switch]$InstallBuildTools,
-    [string]$VcpkgRoot = $(if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT } else { "C:\dev\vcpkg" })
+    [string]$VcpkgRoot = ""
 )
+
+# Avoid $(if { } else { }) inside param() — Windows PowerShell can report
+# "Unexpected token '}'" on the param block.
+if ([string]::IsNullOrWhiteSpace($VcpkgRoot)) {
+    if ($env:VCPKG_ROOT) {
+        $VcpkgRoot = $env:VCPKG_ROOT
+    } else {
+        $VcpkgRoot = "C:\dev\vcpkg"
+    }
+}
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Continue"
@@ -79,7 +89,7 @@ if (-not (Test-Path $toolchain)) {
     $vcpkg = Join-Path $VcpkgRoot "vcpkg.exe"
     if (Test-Path $vcpkg) {
         Write-Host "Installing vcpkg packages: qtbase[widgets], sdl2 ..."
-        & $vcpkg install qtbase[widgets]:x64-windows sdl2:x64-windows
+        & $vcpkg install "qtbase[widgets]:x64-windows" "sdl2:x64-windows"
     }
 }
 

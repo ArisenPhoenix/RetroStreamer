@@ -15,10 +15,20 @@ param(
     [switch]$Clean,
     [switch]$InstallDeps,
     [switch]$BuildHost,
-    [string]$VcpkgRoot = $(if ($env:VCPKG_ROOT) { $env:VCPKG_ROOT } else { "C:\dev\vcpkg" }),
+    [string]$VcpkgRoot = "",
     [string]$Config = "Release",
     [int]$Jobs = 0
 )
+
+# Avoid $(if { } else { }) inside param() — Windows PowerShell can report
+# "Unexpected token '}'" on the param block.
+if ([string]::IsNullOrWhiteSpace($VcpkgRoot)) {
+    if ($env:VCPKG_ROOT) {
+        $VcpkgRoot = $env:VCPKG_ROOT
+    } else {
+        $VcpkgRoot = "C:\dev\vcpkg"
+    }
+}
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"

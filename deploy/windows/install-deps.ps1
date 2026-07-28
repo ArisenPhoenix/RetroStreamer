@@ -1,4 +1,4 @@
-# Windows dependency installer for ArchStreamer client + host.
+﻿# Windows dependency installer for ArchStreamer client + host.
 # Run elevated (Administrator) for ViGEmBus driver install.
 #
 # Usage:
@@ -13,7 +13,7 @@ param(
     [string]$VcpkgRoot = ""
 )
 
-# Avoid $(if { } else { }) inside param() — Windows PowerShell can report
+# Avoid $(if { } else { }) inside param()  -  Windows PowerShell can report
 # "Unexpected token '}'" on the param block.
 if ([string]::IsNullOrWhiteSpace($VcpkgRoot)) {
     if ($env:VCPKG_ROOT) {
@@ -53,7 +53,7 @@ function Add-UserPath([string]$Dir) {
 
 Write-Host "=== ArchStreamer Windows deps ==="
 if (-not (Test-IsAdmin)) {
-    Write-Warning "Not elevated — ViGEmBus driver install may fail. Re-run in an Admin PowerShell."
+    Write-Warning "Not elevated  -  ViGEmBus driver install may fail. Re-run in an Admin PowerShell."
 }
 
 # --- Build tools ---
@@ -118,7 +118,7 @@ if (-not $gstLaunch) {
         if ($LASTEXITCODE -eq 0) {
             Write-Host "    $el OK"
         } else {
-            Write-Warning "    $el missing — install GStreamer plugins / complete package"
+            Write-Warning "    $el missing  -  install GStreamer plugins / complete package"
         }
     }
 }

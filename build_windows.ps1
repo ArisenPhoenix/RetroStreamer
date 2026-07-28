@@ -1,6 +1,6 @@
-# Windows build (client by default; pass -BuildHost for Yuzu host + ViGEm/DXGI).
+﻿# Windows build (client by default; pass -BuildHost for Yuzu host + ViGEm/DXGI).
 # Runtime: SDL2.dll (copied on build) + GStreamer MSVC 64-bit on PATH.
-# Host extras: ViGEmBus + ViGEmClient.dll — see deploy/windows/install-deps.ps1
+# Host extras: ViGEmBus + ViGEmClient.dll  -  see deploy/windows/install-deps.ps1
 # See deploy/windows/README.md.
 #
 # Usage:
@@ -20,7 +20,7 @@ param(
     [int]$Jobs = 0
 )
 
-# Avoid $(if { } else { }) inside param() — Windows PowerShell can report
+# Avoid $(if { } else { }) inside param()  -  Windows PowerShell can report
 # "Unexpected token '}'" on the param block.
 if ([string]::IsNullOrWhiteSpace($VcpkgRoot)) {
     if ($env:VCPKG_ROOT) {

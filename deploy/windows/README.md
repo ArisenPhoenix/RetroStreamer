@@ -9,6 +9,20 @@
 
 Linux-only tools (gamescope, Gamescope WSI, VirtualGL, uinput) are **not** used on Windows.
 
+## Update / install (client PC)
+
+Repo usually lives at `%USERPROFILE%\Documents\RetroStreamer`.
+
+```powershell
+# After Linux pushes to GitHub — pull, build, install to Program Files:
+.\deploy\windows\update-and-install.ps1 -ResetHard
+
+# Build/install only (no git):
+.\deploy\windows\update-and-install.ps1 -SkipPull
+```
+
+`-ResetHard` discards local edits on the Windows tree so it always matches `origin/master` (recommended for a pure client machine).
+
 ## Install deps
 
 ```powershell

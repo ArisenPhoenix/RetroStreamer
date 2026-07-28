@@ -59,13 +59,18 @@ $needsConfigure = $Reconfigure -or $Clean -or -not (Test-Path $cacheFile)
 if ($needsConfigure) {
     Write-Host "Configuring CMake (ARCHSTREAMER_BUILD_HOST=$hostFlag)..."
 
+    # Only pick a generator for a new build tree. Reconfigure must keep the
+    # existing generator (VS vs Ninja) or cmake errors out.
     $generatorArgs = @()
-    if (Get-Command ninja -ErrorAction SilentlyContinue) {
+    $freshTree = $Clean -or -not (Test-Path $cacheFile)
+    if ($freshTree -and (Get-Command ninja -ErrorAction SilentlyContinue)) {
         $generatorArgs = @("-G", "Ninja", "-DCMAKE_BUILD_TYPE=$Config")
         Write-Host "Using Ninja generator."
-    } else {
+    } elseif ($freshTree) {
         Write-Host "Ninja not found; using CMake's default generator (often Visual Studio)."
         Write-Host "Tip: install Ninja and re-run with -Clean for faster incremental builds."
+    } else {
+        Write-Host "Reconfigure: keeping existing generator from build cache."
     }
 
     cmake -S . -B $buildDir `

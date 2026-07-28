@@ -15,7 +15,7 @@
 namespace archstreamer {
 
 constexpr std::uint32_t ProtocolMagic = 0x41525354; // "ARST"
-constexpr std::uint16_t ProtocolVersion = 11;
+constexpr std::uint16_t ProtocolVersion = 12;
 constexpr std::uint8_t MaxRemoteClients = 2;
 constexpr std::uint8_t MaxPlayersPerClient = 2;
 constexpr std::uint8_t MaxRetroArchPorts = 5; // Ports 0-3 plus a host player if desired.
@@ -47,6 +47,8 @@ enum class PacketType : std::uint8_t {
     DiscControlRequest = 18,
     DiscControlResponse = 19,
     KeyboardInput = 20,
+    // Client → host: intentional Stop / video-window close (not a link drop).
+    ClientSessionLeave = 21,
 };
 
 enum class ClientRole : std::uint8_t {
@@ -174,6 +176,13 @@ struct SessionStarting {
 };
 
 struct SessionEnded {
+    std::string reason;
+};
+
+// Client tells the host it is leaving on purpose (Stop Client / close video window).
+// Host ends the session immediately; TCP drops without this get the reconnect window.
+struct ClientSessionLeave {
+    ClientId client_id = 0;
     std::string reason;
 };
 
@@ -386,6 +395,7 @@ using PacketPayload = std::variant<
     SessionReady,
     SessionStarting,
     SessionEnded,
+    ClientSessionLeave,
     MediaEndpoint,
     ArtAssetRequest,
     ArtAssetResponse,

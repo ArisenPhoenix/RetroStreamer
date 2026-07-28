@@ -158,7 +158,9 @@ std::string sdl_stick_binding(const std::string& guid, int axis_x, int axis_y) {
 void write_yuzu_sdl_binding_map(
     const std::function<void(std::string_view, std::string_view)>& set,
     const std::string& guid) {
-    // Button indices match RetroArch sdl2 autoconfig for ArchStreamer uinput pads.
+    // Yuzu/SDL enumerates ArchStreamer uinput face buttons as
+    // 0=SOUTH(A), 1=EAST(B), 2=WEST(X), 3=NORTH(Y). RetroArch udev uses
+    // linux keycode order instead (2=NORTH, 3=WEST) — keep these distinct.
     set("button_a", sdl_button_binding(guid, 0));
     set("button_b", sdl_button_binding(guid, 1));
     set("button_x", sdl_button_binding(guid, 2));

@@ -1,6 +1,7 @@
 #include "client/gstreamer_probe.hpp"
 
-#include <cstdlib>
+#include "common/platform/process_utils.hpp"
+
 #include <cstring>
 #include <string>
 #include <cstddef>
@@ -15,7 +16,8 @@ constexpr const char* kDevNull = "/dev/null";
 #endif
 
 int run_quiet(const std::string& command) {
-    return std::system(command.c_str());
+    // Windows GUI builds: std::system() opens a console per probe on Join.
+    return run_command_exit_code(command.c_str());
 }
 
 GstVideoSinkKind kind_for_sink(const char* element) {

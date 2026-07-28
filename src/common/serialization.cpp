@@ -357,6 +357,13 @@ ByteBuffer serialize_payload(const SessionEnded& payload) {
     return writer.take();
 }
 
+ByteBuffer serialize_payload(const ClientSessionLeave& payload) {
+    Writer writer;
+    writer.write_pod<ClientId>(payload.client_id);
+    writer.write_string(payload.reason);
+    return writer.take();
+}
+
 ByteBuffer serialize_payload(const MediaEndpoint& payload) {
     Writer writer;
     writer.write_string(payload.video_uri);
@@ -413,6 +420,7 @@ PacketType packet_type_for(const ActiveSessionInfo&) { return PacketType::Active
 PacketType packet_type_for(const SessionReady&) { return PacketType::SessionReady; }
 PacketType packet_type_for(const SessionStarting&) { return PacketType::SessionStarting; }
 PacketType packet_type_for(const SessionEnded&) { return PacketType::SessionEnded; }
+PacketType packet_type_for(const ClientSessionLeave&) { return PacketType::ClientSessionLeave; }
 PacketType packet_type_for(const MediaEndpoint&) { return PacketType::MediaEndpoint; }
 PacketType packet_type_for(const ArtAssetRequest&) { return PacketType::ArtAssetRequest; }
 PacketType packet_type_for(const ArtAssetResponse&) { return PacketType::ArtAssetResponse; }
@@ -491,6 +499,10 @@ ByteBuffer serialize_packet(const SessionStarting& payload) {
 }
 
 ByteBuffer serialize_packet(const SessionEnded& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const ClientSessionLeave& payload) {
     return serialize_packet_impl(payload);
 }
 
@@ -681,6 +693,13 @@ SessionEnded read_session_ended(Reader& reader) {
     return SessionEnded{reader.read_string()};
 }
 
+ClientSessionLeave read_client_session_leave(Reader& reader) {
+    return ClientSessionLeave{
+        reader.read_pod<ClientId>(),
+        reader.read_string(),
+    };
+}
+
 MediaEndpoint read_media_endpoint(Reader& reader) {
     return MediaEndpoint{
         reader.read_string(),
@@ -770,6 +789,8 @@ PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
             return read_session_starting(payload_reader);
         case PacketType::SessionEnded:
             return read_session_ended(payload_reader);
+        case PacketType::ClientSessionLeave:
+            return read_client_session_leave(payload_reader);
         case PacketType::MediaEndpoint:
             return read_media_endpoint(payload_reader);
         case PacketType::ArtAssetRequest:

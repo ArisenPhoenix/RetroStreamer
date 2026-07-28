@@ -40,22 +40,27 @@ std::string sanitize_device_name(std::string_view value) {
 }
 
 // RetroPad uses SNES-oriented names (B=south, A=east, Y=west, X=north).
-// uinput emits SDL-order indices: 0=SOUTH, 1=EAST, 2=WEST, 3=NORTH.
 //
-// Nintendo / default: map by Xbox/SDL *letter* (A→A) so a physical A presses
-// the face button games label "A".
-// PlayStation: map by *position* so DualShock Cross (south) hits RetroPad B →
-// PS Cross, not Circle.
+// Linux udev indexes EV_KEY in ascending code order. With our uinput pad
+// (BTN_C not advertised) that is:
+//   0=SOUTH, 1=EAST, 2=NORTH, 3=WEST
+// NOT the common SDL face order (2=WEST, 3=NORTH). Mixing those up swaps
+// Square/Triangle on PS (and X/Y on Nintendo) while leaving Cross/Circle OK.
+//
+// Nintendo / default: map by Xbox/SDL *letter* (physical A → RetroPad A).
+// PlayStation: map by *position* so DualShock Cross (south) hits RetroPad B
+// (PS Cross), Square (west) hits RetroPad Y, Triangle (north) hits RetroPad X.
 struct FaceButtonIndices {
-    const char* b = "1";
-    const char* a = "0";
-    const char* y = "3";
-    const char* x = "2";
+    const char* b = "1"; // EAST
+    const char* a = "0"; // SOUTH
+    const char* y = "2"; // NORTH (letter Y) / overridden for PS → WEST
+    const char* x = "3"; // WEST  (letter X) / overridden for PS → NORTH
 };
 
 FaceButtonIndices face_button_indices_for_system(std::string_view system_key) {
     if (system_key == "ps1" || system_key == "ps2" || system_key == "psp") {
-        return FaceButtonIndices{"0", "1", "2", "3"};
+        // b=SOUTH, a=EAST, y=WEST(Square), x=NORTH(Triangle)
+        return FaceButtonIndices{"0", "1", "3", "2"};
     }
     return FaceButtonIndices{};
 }

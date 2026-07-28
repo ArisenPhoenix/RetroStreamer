@@ -1,16 +1,18 @@
 ﻿# Finish a Program Files install after:
 #   cmake --install build --prefix "C:\Program Files\ArchStreamer"
 #
-# Run from the repo root in an Admin PowerShell if writing under Program Files.
+# Run from the repo root. Prefer Admin PowerShell if writing under Program Files.
 #
 # Usage:
 #   .\deploy\windows\finish-install.ps1
 #   .\deploy\windows\finish-install.ps1 -Prefix "C:\Program Files\ArchStreamer" -VcpkgRoot "C:\dev\vcpkg"
+#   .\deploy\windows\finish-install.ps1 -Launch
 
 param(
     [string]$Prefix = "C:\Program Files\ArchStreamer",
     [string]$VcpkgRoot = "",
-    [switch]$Launch
+    [switch]$Launch,
+    [switch]$Shortcuts
 )
 
 $ErrorActionPreference = "Stop"
@@ -29,11 +31,16 @@ if (-not (Test-Path $exe)) {
     throw "Missing $exe - run: cmake --install build --prefix `"$Prefix`""
 }
 
+$vcpkgBin = Join-Path $VcpkgRoot "installed\x64-windows\bin"
+if (-not (Test-Path $vcpkgBin)) {
+    throw "vcpkg bin not found: $vcpkgBin (pass -VcpkgRoot)"
+}
+
 # --- SDL2.dll (build tree first, then vcpkg) ---
 $sdlCandidates = @(
     (Join-Path (Get-Location) "build\SDL2.dll"),
     (Join-Path (Get-Location) "build\Release\SDL2.dll"),
-    (Join-Path $VcpkgRoot "installed\x64-windows\bin\SDL2.dll")
+    (Join-Path $vcpkgBin "SDL2.dll")
 )
 $sdlCopied = $false
 foreach ($src in $sdlCandidates) {
@@ -48,12 +55,11 @@ if (-not $sdlCopied) {
     Write-Warning "SDL2.dll not found. Controllers may fail until you copy it into $binDir"
 }
 
-# --- windeployqt (Qt is usually only under vcpkg, not a system install) ---
+# --- windeployqt (Qt plugins + core Qt DLLs) ---
 $deployCandidates = @(
     (Join-Path $VcpkgRoot "installed\x64-windows\tools\Qt6\bin\windeployqt.exe"),
     (Join-Path $VcpkgRoot "installed\x64-windows\tools\Qt6\bin\windeployqt6.exe")
 )
-# Also search if the default layout differs
 $foundDeploy = $null
 foreach ($c in $deployCandidates) {
     if (Test-Path $c) {
@@ -68,26 +74,64 @@ if (-not $foundDeploy -and (Test-Path $VcpkgRoot)) {
         $foundDeploy = $hit.FullName
     }
 }
-
 if (-not $foundDeploy) {
-    Write-Host ""
-    Write-Host "windeployqt not found under: $VcpkgRoot"
-    Write-Host "Qt is probably installed via vcpkg, but VCPKG_ROOT was wrong/empty."
-    Write-Host "Find it, then re-run with -VcpkgRoot:"
-    Write-Host '  Get-ChildItem -Path C:\ -Filter windeployqt.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 5 FullName'
-    Write-Host '  .\deploy\windows\finish-install.ps1 -VcpkgRoot "C:\path\to\vcpkg"'
-    throw "windeployqt.exe not found"
+    throw "windeployqt.exe not found under $VcpkgRoot"
 }
 
 Write-Host "Using windeployqt: $foundDeploy"
-& $foundDeploy $exe
+& $foundDeploy --release $exe
 if ($LASTEXITCODE -ne 0) {
     throw "windeployqt failed with exit code $LASTEXITCODE"
+}
+
+# windeployqt often skips Qt's vcpkg transitive deps; copy them explicitly.
+$qtDeps = @(
+    "libpng16.dll",
+    "harfbuzz.dll",
+    "md4c.dll",
+    "freetype.dll",
+    "zlib1.dll",
+    "double-conversion.dll",
+    "pcre2-16.dll",
+    "zstd.dll",
+    "bz2.dll",
+    "brotlidec.dll",
+    "brotlicommon.dll",
+    "brotlienc.dll"
+)
+foreach ($name in $qtDeps) {
+    $src = Join-Path $vcpkgBin $name
+    if (Test-Path $src) {
+        Copy-Item $src $binDir -Force
+        Write-Host "Copied Qt dep $name"
+    } else {
+        Write-Warning "Optional Qt dep missing in vcpkg: $name"
+    }
+}
+
+if (-not (Test-Path (Join-Path $binDir "platforms\qwindows.dll"))) {
+    throw "platforms\qwindows.dll missing after windeployqt"
+}
+
+if ($Shortcuts) {
+    $w = New-Object -ComObject WScript.Shell
+    foreach ($dir in @(
+        [Environment]::GetFolderPath("Desktop"),
+        (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs")
+    )) {
+        if (-not (Test-Path $dir)) { continue }
+        $lnk = $w.CreateShortcut((Join-Path $dir "ArchStreamer.lnk"))
+        $lnk.TargetPath = $exe
+        $lnk.WorkingDirectory = $binDir
+        $lnk.Description = "ArchStreamer"
+        $lnk.Save()
+        Write-Host "Shortcut: $(Join-Path $dir 'ArchStreamer.lnk')"
+    }
 }
 
 Write-Host ""
 Write-Host "Install ready: $exe"
 Write-Host "GStreamer must still be on PATH (gst-launch-1.0)."
 if ($Launch) {
-    & $exe
+    Start-Process -FilePath $exe -WorkingDirectory $binDir
 }

@@ -18,8 +18,6 @@ constexpr auto kMinReconfigureInterval = std::chrono::seconds(5);
 constexpr auto kPostReconfigureGrace = std::chrono::seconds(12);
 // After a failed High stay, wait before retrying — High restarts the shared capture tee.
 constexpr auto kHighTierFailureCooldown = std::chrono::seconds(180);
-// Clean leave (closed window / Stop Client): don't hold the whole host for a full minute.
-constexpr auto kCleanDisconnectGrace = std::chrono::seconds(15);
 constexpr std::uint8_t kBadHealthThreshold = 3;
 // Demote from High only after a longer bad streak; brief decode stalls are common at 60fps.
 constexpr std::uint8_t kBadHealthThresholdFromHigh = 6;
@@ -46,10 +44,10 @@ bool any_connected_seated_player(const SessionPlan& plan) {
 }
 
 std::chrono::seconds reconnect_grace_for(const SessionClientConnection& client, std::chrono::seconds full) {
-    // Intentional leave → short grace so the host can return to lobby for a new game.
-    // Heartbeat loss → keep the full reconnect window for flaky links.
-    if (client.disconnect_reason == "disconnected") {
-        return std::min(full, kCleanDisconnectGrace);
+    // Explicit ClientSessionLeave → end immediately (no reconnect hold).
+    // TCP close / heartbeat loss → full reconnect window for flaky links.
+    if (client.disconnect_reason == "left") {
+        return std::chrono::seconds(0);
     }
     return full;
 }
@@ -85,7 +83,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
         auto& client = plan_.clients[i];
         if (client.connection_state == SessionConnectionState::Disconnected) {
             const auto grace = reconnect_grace_for(client, reconnect_timeout_);
-            if (now - client.disconnected_at > grace) {
+            if (now - client.disconnected_at >= grace) {
                 // Last seated player gave up reconnecting → end session (host returns to lobby).
                 if (!any_connected_seated_player(plan_)) {
                     return client_label(client) + " left; ending session for a new lobby";
@@ -117,6 +115,20 @@ std::optional<std::string> SessionControlMonitor::poll() {
             }
 
             const auto payload = deserialize_packet(*packet);
+            if (const auto* leave = std::get_if<ClientSessionLeave>(&payload); leave != nullptr) {
+                const auto reason = leave->reason.empty() ? "left" : leave->reason;
+                if (remove_viewer(i, reason)) {
+                    removed_current = true;
+                    break;
+                }
+                mark_player_disconnected(client, "left");
+                if (!any_connected_seated_player(plan_)) {
+                    return client_label(client) + " left; ending session for a new lobby";
+                }
+                ++i;
+                removed_current = true;
+                break;
+            }
             if (const auto* heartbeat = std::get_if<ViewerHeartbeat>(&payload); heartbeat != nullptr) {
                 if (heartbeat->client_id == client.client_id) {
                     handle_heartbeat(client, *heartbeat);
@@ -347,8 +359,12 @@ void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& cl
     std::cerr
         << "Player " << static_cast<int>(client.client_id)
         << " (" << client.hello.username << ") disconnected: "
-        << reason << "; reserving seats for "
-        << grace.count() << "s\n";
+        << reason;
+    if (grace.count() == 0) {
+        std::cerr << "; ending seat immediately (client left)\n";
+    } else {
+        std::cerr << "; reserving seats for " << grace.count() << "s\n";
+    }
 }
 
 std::string SessionControlMonitor::client_label(const SessionClientConnection& client) {

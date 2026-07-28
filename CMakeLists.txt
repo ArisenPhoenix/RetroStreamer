@@ -352,6 +352,8 @@ target_link_libraries(client_catalog_probe
 # Client GUI always when Qt is present; Host tab only when ARCHSTREAMER_BUILD_HOST=ON.
 if(Qt6Widgets_FOUND)
     set(CMAKE_AUTOMOC ON)
+    # WIN32 = Windows GUI subsystem (no console window). Logs still go to
+    # %TEMP%\archstreamer-logs\gui.log. Omit WIN32 only if you need stdout.
     add_executable(archstreamer_gui
         src/gui/game_picker_widget.cpp
         src/gui/game_picker_widget.hpp
@@ -363,6 +365,9 @@ if(Qt6Widgets_FOUND)
         src/gui/host_search_dialog.hpp
         src/tools/archstreamer_gui.cpp
     )
+    if(WIN32)
+        set_target_properties(archstreamer_gui PROPERTIES WIN32_EXECUTABLE TRUE)
+    endif()
     target_include_directories(archstreamer_gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/gui)
     target_link_libraries(archstreamer_gui
         PRIVATE

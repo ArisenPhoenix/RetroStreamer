@@ -556,6 +556,29 @@ ClientRunResult ClientApp::join_session(
 
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+
+    // Tell the host this was intentional (Stop / video close). Unexpected TCP drops
+    // omit this packet so the host keeps seats for the reconnect window.
+    if (!result.host_disconnected && result.client_id.has_value()) {
+        const bool host_ended_session =
+            result.ended_reason.has_value() &&
+            *result.ended_reason != "video window closed";
+        if (!host_ended_session) {
+            const auto reason = result.ended_reason.value_or("client stopped");
+            try {
+                joined_session.stream.send_packet(serialize_packet(ClientSessionLeave{
+                    *result.client_id,
+                    reason,
+                }));
+            } catch (const std::exception& error) {
+                if (callbacks.on_status) {
+                    callbacks.on_status(
+                        std::string("Failed to send session leave: ") + error.what());
+                }
+            }
+        }
+    }
+
     input_stop.store(true, std::memory_order_relaxed);
     if (input_thread.joinable()) {
         input_thread.join();

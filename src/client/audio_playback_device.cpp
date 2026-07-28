@@ -52,25 +52,8 @@ std::string trim_copy(std::string value) {
 }
 
 std::string capture_command_output(const std::string& command) {
-#ifdef _WIN32
-    FILE* pipe = _popen(command.c_str(), "r");
-#else
-    FILE* pipe = popen(command.c_str(), "r");
-#endif
-    if (pipe == nullptr) {
-        return {};
-    }
-    std::string output;
-    char buffer[512];
-    while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-        output += buffer;
-    }
-#ifdef _WIN32
-    _pclose(pipe);
-#else
-    pclose(pipe);
-#endif
-    return output;
+    // Windows GUI builds: _popen() opens a console per gst-device-monitor call.
+    return read_command_output(command.c_str());
 }
 
 #ifdef _WIN32

@@ -77,7 +77,9 @@ if ($needsConfigure) {
         @generatorArgs `
         -DARCHSTREAMER_BUILD_HOST=$hostFlag `
         -DCMAKE_TOOLCHAIN_FILE="$toolchain"
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    if ($LASTEXITCODE -ne 0) {
+        throw "cmake configure failed with exit $LASTEXITCODE"
+    }
 } else {
     Write-Host "Reusing existing build cache ($cacheFile)."
     Write-Host "Pass -Reconfigure to refresh cmake options, or -Clean for a full rebuild."
@@ -89,4 +91,6 @@ if ($Jobs -le 0) {
 
 Write-Host "Building ($Config, -j$Jobs)..."
 cmake --build $buildDir --config $Config --parallel $Jobs
-exit $LASTEXITCODE
+if ($LASTEXITCODE -ne 0) {
+    throw "cmake --build failed with exit $LASTEXITCODE"
+}

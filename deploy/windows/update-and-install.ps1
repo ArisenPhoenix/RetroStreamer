@@ -94,7 +94,6 @@ if ($BuildHost) { $buildArgs["BuildHost"] = $true }
 if ($Reconfigure) { $buildArgs["Reconfigure"] = $true }
 if ($Clean) { $buildArgs["Clean"] = $true }
 & (Join-Path $RepoRoot "build_windows.ps1") @buildArgs
-if ($LASTEXITCODE -ne 0) { throw "build_windows.ps1 failed with exit $LASTEXITCODE" }
 
 if ($SkipInstall) {
     Write-Host "Skipping install. Binary under build\ or build\Release\"

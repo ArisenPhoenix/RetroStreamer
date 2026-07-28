@@ -86,7 +86,9 @@ std::vector<LinkOutbound> LinkCoordinator::handle(
     const SessionPlan& plan,
     ClientId from_client_id,
     const std::string& from_username,
-    const LinkRequest& request) {
+    const LinkRequest& request,
+    std::function<bool(std::string_view)> target_seated,
+    std::function<bool(ClientId)> peer_connected) {
     std::vector<LinkOutbound> out;
 
     LinkResponse base;
@@ -130,9 +132,15 @@ std::vector<LinkOutbound> LinkCoordinator::handle(
         out.push_back({from_client_id, std::move(base)});
         return out;
     }
-    if (!target_is_seated(plan, request.target_username)) {
+    const bool seated =
+        target_seated
+            ? target_seated(request.target_username)
+            : target_is_seated(plan, request.target_username);
+    if (!seated) {
         base.status = LinkStatus::Error;
-        base.message = "No connected client with that username in this session";
+        base.message = target_seated
+            ? "No connected player with that username on this host"
+            : "No connected client with that username in this session";
         out.push_back({from_client_id, std::move(base)});
         return out;
     }
@@ -164,7 +172,9 @@ std::vector<LinkOutbound> LinkCoordinator::handle(
         matched_peer.message = "Matched with " + from_username;
 
         out.push_back({from_client_id, std::move(matched_self)});
-        if (client_connected(plan, peer_id)) {
+        const bool peer_ok =
+            peer_connected ? peer_connected(peer_id) : client_connected(plan, peer_id);
+        if (peer_ok) {
             out.push_back({peer_id, std::move(matched_peer)});
         }
         return out;

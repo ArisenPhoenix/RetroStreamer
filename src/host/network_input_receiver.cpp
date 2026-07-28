@@ -9,10 +9,17 @@
 namespace archstreamer {
 
 NetworkInputReceiver::NetworkInputReceiver(std::uint16_t port, InputRouter& input_router)
-    : input_router_(input_router) {
+    : target_(&input_router) {
     socket_.bind_any(port);
     socket_.set_nonblocking(true);
     std::cout << "Receiving UDP controller input on port " << port << '\n';
+}
+
+NetworkInputReceiver::NetworkInputReceiver(std::uint16_t port, InputRouterDemux& demux)
+    : target_(&demux) {
+    socket_.bind_any(port);
+    socket_.set_nonblocking(true);
+    std::cout << "Receiving UDP controller input on port " << port << " (demux)\n";
 }
 
 NetworkInputReceiver::~NetworkInputReceiver() {
@@ -38,8 +45,6 @@ void NetworkInputReceiver::stop() {
 void NetworkInputReceiver::thread_main() {
     while (running_.load(std::memory_order_relaxed)) {
         poll();
-        // Change-filtered uinput means a short sleep is enough for latency without
-        // burning a core. ~500 µs ≈ 2 kHz sample ceiling.
         std::this_thread::sleep_for(std::chrono::microseconds(500));
     }
 }
@@ -64,7 +69,13 @@ void NetworkInputReceiver::poll() {
                         << ", buttons=0x" << std::hex << input->state.buttons << std::dec
                         << ")\n";
                 }
-                if (input_router_.route(*input)) {
+                bool applied = false;
+                if (auto* router = std::get_if<InputRouter*>(&target_); router != nullptr) {
+                    applied = (*router)->route(*input);
+                } else if (auto* demux = std::get_if<InputRouterDemux*>(&target_); demux != nullptr) {
+                    applied = (*demux)->route(*input);
+                }
+                if (applied) {
                     ++packets_applied_;
                 } else if (packets_applied_ == 0 && packets_received_ <= 20) {
                     std::cout
@@ -74,7 +85,11 @@ void NetworkInputReceiver::poll() {
                         << " has no seat assignment; ignored\n";
                 }
             } else if (auto* keys = std::get_if<KeyboardInput>(&payload); keys != nullptr) {
-                input_router_.route(*keys);
+                if (auto* router = std::get_if<InputRouter*>(&target_); router != nullptr) {
+                    (*router)->route(*keys);
+                } else if (auto* demux = std::get_if<InputRouterDemux*>(&target_); demux != nullptr) {
+                    (*demux)->route(*keys);
+                }
             }
         } catch (const std::exception& error) {
             std::cerr << "Ignoring bad input packet: " << error.what() << '\n';

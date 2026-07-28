@@ -343,13 +343,16 @@ std::filesystem::path write_retroarch_input_override(
     int vulkan_gpu_index,
     std::string_view system_key,
     const std::filesystem::path& core_path,
-    int resolution_scale) {
+    int resolution_scale,
+    int slot_index,
+    std::uint16_t network_cmd_port) {
     // Home path so Flatpak ArchStreamer + flatpak-spawn --host retroarch share the same files.
     const auto root = retroarch_runtime_root();
     const auto directory = root / "config";
     std::filesystem::create_directories(directory);
 
-    const auto autoconfig_directory = root / "autoconfig";
+    const auto autoconfig_directory =
+        root / ("autoconfig_slot" + std::to_string(std::max(0, slot_index)));
     std::filesystem::remove_all(autoconfig_directory);
     std::filesystem::create_directories(autoconfig_directory / joypad_driver);
 
@@ -362,7 +365,8 @@ std::filesystem::path write_retroarch_input_override(
             port,
             face);
     }
-    const auto path = directory / "input_override.cfg";
+    const auto path =
+        directory / ("input_override_slot" + std::to_string(std::max(0, slot_index)) + ".cfg");
     std::ofstream file(path, std::ios::trunc);
     if (!file) {
         throw std::runtime_error("failed to write RetroArch input override");
@@ -397,7 +401,7 @@ std::filesystem::path write_retroarch_input_override(
         // dead controller as soon as the GUI or another window takes focus.
         << "pause_nonactive = \"false\"\n"
         << "network_cmd_enable = \"true\"\n"
-        << "network_cmd_port = \"" << DefaultRetroArchNetcmdPort << "\"\n"
+        << "network_cmd_port = \"" << network_cmd_port << "\"\n"
         // Virtual keyboard from clients: Space holds fast-forward; F1 opens menu.
         // Disable the enable-hotkey chord so kids do not need a modifier.
         // Note: official key is input_toggle_fast_forward (underscore), not …fastforward.

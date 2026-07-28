@@ -42,6 +42,8 @@ public:
     /**
      * @param logical_host_client_id  First mutual requester (owns primary instance).
      * @param logical_client_client_id Second matcher (will own peer instance).
+     * @param peers_already_running   True when two SP session slots already have
+     *        separate emulators (cross-slot Link); skips runtime promotion stub.
      */
     StartResult begin(
         std::string_view system_key,
@@ -49,7 +51,8 @@ public:
         ClientId logical_client_client_id,
         std::string logical_host_username,
         std::string logical_client_username,
-        std::uint8_t seated_players);
+        std::uint8_t seated_players,
+        bool peers_already_running = false);
 
     void clear();
 

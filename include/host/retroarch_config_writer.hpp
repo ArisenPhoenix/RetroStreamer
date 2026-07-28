@@ -27,7 +27,9 @@ std::filesystem::path write_retroarch_input_override(
     int vulkan_gpu_index = -1,
     std::string_view system_key = {},
     const std::filesystem::path& core_path = {},
-    int resolution_scale = 1);
+    int resolution_scale = 1,
+    int slot_index = 0,
+    std::uint16_t network_cmd_port = 55355);
 
 // True for HW-rendered libretro cores that need gl + (usually) VirtualGL on Xvfb.
 // Software cores (gambatte, etc.) should use plain Xvfb + sdl2 — vglrun left remotes

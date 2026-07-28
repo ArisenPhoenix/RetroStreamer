@@ -2,8 +2,10 @@
 
 #include "common/protocol.hpp"
 
+#include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -24,11 +26,19 @@ struct LinkOutbound {
  */
 class LinkCoordinator {
 public:
+    /**
+     * @param target_seated If set, used instead of plan-local username lookup
+     *        (host-wide concurrent SP slots).
+     * @param peer_connected If set, decides whether to emit the peer Matched reply
+     *        (cross-slot peer may live in another SessionPlan).
+     */
     std::vector<LinkOutbound> handle(
         const SessionPlan& plan,
         ClientId from_client_id,
         const std::string& from_username,
-        const LinkRequest& request);
+        const LinkRequest& request,
+        std::function<bool(std::string_view)> target_seated = {},
+        std::function<bool(ClientId)> peer_connected = {});
 
     void clear_client(ClientId client_id);
 

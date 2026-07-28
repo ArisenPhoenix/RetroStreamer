@@ -107,4 +107,25 @@ SessionPlan wait_for_session_clients(
     std::function<bool()> should_stop = {},
     std::filesystem::path art_root = {});
 
+/** Same as wait_for_session_clients but uses an existing listener (shared control port). */
+SessionPlan gather_session_clients(
+    TcpListener& listener,
+    std::uint8_t client_count,
+    const GameList& game_list,
+    std::chrono::seconds timeout,
+    std::optional<ClientHello> host_hello = std::nullopt,
+    std::function<bool()> should_stop = {},
+    std::filesystem::path art_root = {},
+    std::optional<SessionClientConnection> first_client = std::nullopt);
+
+/** Assign seats, send HostWelcome/SeatAssignment/SessionReady, set save_username. */
+void finalize_session_plan_ready(SessionPlan& plan);
+
+/** Build a ready Singleplayer plan from one seated player client. */
+SessionPlan make_singleplayer_session_plan(
+    ClientId client_id,
+    ClientHello hello,
+    TcpStream stream,
+    const GameList& game_list);
+
 } // namespace archstreamer

@@ -333,21 +333,99 @@ std::vector<VirtualGamepadIdentity> virtual_identities_for_session(const Session
     return identities;
 }
 
-SessionPlan wait_for_session_clients(
-    std::uint16_t control_port,
+
+void assign_seats_welcome_and_save_username(SessionPlan& plan) {
+    SeatManager seat_manager;
+    seat_manager.set_host_player_count(plan.host_hello.has_value() ? 1 : 0);
+    std::vector<ClientSeatRequest> seat_requests;
+    seat_requests.reserve(plan.clients.size());
+    for (const auto& client : plan.clients) {
+        seat_requests.push_back(ClientSeatRequest{
+            client.client_id,
+            client.hello.requested_players,
+        });
+    }
+    plan.seats = seat_manager.assign(seat_requests);
+
+    for (auto& client : plan.clients) {
+        HostWelcome welcome;
+        welcome.client_id = client.client_id;
+        welcome.max_players_for_client = MaxPlayersPerClient;
+        welcome.host_is_player = plan.host_hello.has_value();
+        client.stream.send_packet(serialize_packet(welcome));
+        client.stream.send_packet(serialize_packet(plan.seats));
+    }
+    send_session_ready_to_clients(plan);
+
+    if (plan.host_hello.has_value() && !plan.host_hello->username.empty()) {
+        plan.save_username = plan.host_hello->username;
+    }
+    for (const auto& client : plan.clients) {
+        if (client.hello.requested_players > 0) {
+            if (plan.save_username.empty()) {
+                plan.save_username = client.hello.username;
+            }
+            break;
+        }
+    }
+    if (plan.save_username.empty() && !plan.clients.empty()) {
+        plan.save_username = plan.clients.front().hello.username;
+    }
+}
+
+void finalize_session_plan_ready(SessionPlan& plan) {
+    assign_seats_welcome_and_save_username(plan);
+}
+
+SessionPlan make_singleplayer_session_plan(
+    ClientId client_id,
+    ClientHello hello,
+    TcpStream stream,
+    const GameList& game_list) {
+    if (!hello.selected_game_id.has_value()) {
+        throw std::runtime_error("session client did not select a game");
+    }
+    const auto selected_game = game_info_for(game_list, *hello.selected_game_id);
+    if (!selected_game.has_value()) {
+        throw std::runtime_error("session client selected an unknown game");
+    }
+    if (hello.session_mode != GameSessionMode::SinglePlayer) {
+        throw std::runtime_error("make_singleplayer_session_plan requires Singleplayer mode");
+    }
+    if (hello.requested_players == 0) {
+        throw std::runtime_error("singleplayer session requires a seated player");
+    }
+
+    SessionPlan plan;
+    plan.selected_game_id = *hello.selected_game_id;
+    plan.session_mode = GameSessionMode::SinglePlayer;
+    plan.clients.push_back(SessionClientConnection{
+        client_id,
+        std::move(hello),
+        std::move(stream),
+    });
+    if (!launch_requirements_satisfied(plan, *selected_game)) {
+        throw std::runtime_error("singleplayer launch requirements not satisfied");
+    }
+    finalize_session_plan_ready(plan);
+    return plan;
+}
+
+SessionPlan gather_session_clients(
+    TcpListener& listener,
     std::uint8_t client_count,
     const GameList& game_list,
     std::chrono::seconds timeout,
     std::optional<ClientHello> host_hello,
     std::function<bool()> should_stop,
-    std::filesystem::path art_root) {
+    std::filesystem::path art_root,
+    std::optional<SessionClientConnection> first_client) {
     if (art_root.empty()) {
         art_root = DefaultArtRoot;
     }
-    TcpListener listener(control_port);
     std::cout
         << "Waiting up to " << timeout.count()
-        << "s for enough players on TCP port " << control_port
+        << "s for enough players on shared control listener"
         << " (max clients " << static_cast<int>(client_count) << ").\n";
 
     SessionPlan plan;
@@ -358,6 +436,24 @@ SessionPlan wait_for_session_clients(
     auto selected_game_info = std::optional<GameInfo>{};
     auto selected_mode = std::optional<GameSessionMode>{};
     const auto deadline = std::chrono::steady_clock::now() + timeout;
+
+    ClientId client_id = 1;
+    if (first_client.has_value()) {
+        client_id = static_cast<ClientId>(first_client->client_id + 1);
+        selected_game = first_client->hello.selected_game_id;
+        selected_mode = first_client->hello.session_mode;
+        if (selected_game.has_value()) {
+            selected_game_info = game_info_for(game_list, *selected_game);
+        }
+        plan.clients.push_back(std::move(*first_client));
+        plan.selected_game_id = selected_game.value_or(GameId{});
+        plan.session_mode = selected_mode.value_or(GameSessionMode::Multiplayer);
+        if (selected_game_info.has_value() &&
+            launch_requirements_satisfied(plan, *selected_game_info)) {
+            assign_seats_welcome_and_save_username(plan);
+            return plan;
+        }
+    }
 
     if (plan.host_hello.has_value()) {
         if (!valid_username(plan.host_hello->username)) {
@@ -373,7 +469,7 @@ SessionPlan wait_for_session_clients(
         selected_game = plan.host_hello->selected_game_id;
         selected_game_info = game_info_for(game_list, *selected_game);
         if (!selected_game_info.has_value()) {
-            throw std::runtime_error("host selected an unknown game");
+            throw std::runtime_error("selected game is missing from game list");
         }
         if (!valid_game_player_limits(selected_game_info->min_players, selected_game_info->max_players)) {
             throw std::runtime_error("selected game has invalid player metadata");
@@ -382,8 +478,6 @@ SessionPlan wait_for_session_clients(
         plan.selected_game_id = *selected_game;
         plan.session_mode = *selected_mode;
 
-        // Host alone can satisfy singleplayer (and some multiplayer setups later).
-        // Launch immediately instead of holding the lobby open for optional remotes.
         if (launch_requirements_satisfied(plan, *selected_game_info)) {
             std::cout
                 << "Host player already satisfies "
@@ -393,7 +487,7 @@ SessionPlan wait_for_session_clients(
         }
     }
 
-    for (ClientId client_id = 1; client_id <= client_count;) {
+    for (; plan.clients.size() < client_count;) {
         if (should_stop && should_stop()) {
             throw std::runtime_error("host stopped");
         }
@@ -435,7 +529,6 @@ SessionPlan wait_for_session_clients(
             while (true) {
                 const auto packet = stream->receive_packet();
                 if (!packet.has_value()) {
-                    // Catalog/art-only client disconnected.
                     next_payload.reset();
                     break;
                 }
@@ -533,44 +626,28 @@ SessionPlan wait_for_session_clients(
         throw std::runtime_error(message.str());
     }
 
-    SeatManager seat_manager;
-    seat_manager.set_host_player_count(plan.host_hello.has_value() ? 1 : 0);
-    std::vector<ClientSeatRequest> seat_requests;
-    seat_requests.reserve(plan.clients.size());
-    for (const auto& client : plan.clients) {
-        seat_requests.push_back(ClientSeatRequest{
-            client.client_id,
-            client.hello.requested_players,
-        });
-    }
-    plan.seats = seat_manager.assign(seat_requests);
-
-    for (auto& client : plan.clients) {
-        HostWelcome welcome;
-        welcome.client_id = client.client_id;
-        welcome.max_players_for_client = MaxPlayersPerClient;
-        welcome.host_is_player = plan.host_hello.has_value();
-        client.stream.send_packet(serialize_packet(welcome));
-        client.stream.send_packet(serialize_packet(plan.seats));
-    }
-    send_session_ready_to_clients(plan);
-
-    if (plan.host_hello.has_value() && !plan.host_hello->username.empty()) {
-        plan.save_username = plan.host_hello->username;
-    }
-    for (const auto& client : plan.clients) {
-        if (client.hello.requested_players > 0) {
-            if (plan.save_username.empty()) {
-                plan.save_username = client.hello.username;
-            }
-            break;
-        }
-    }
-    if (plan.save_username.empty() && !plan.clients.empty()) {
-        plan.save_username = plan.clients.front().hello.username;
-    }
-
+    assign_seats_welcome_and_save_username(plan);
     return plan;
+}
+
+SessionPlan wait_for_session_clients(
+    std::uint16_t control_port,
+    std::uint8_t client_count,
+    const GameList& game_list,
+    std::chrono::seconds timeout,
+    std::optional<ClientHello> host_hello,
+    std::function<bool()> should_stop,
+    std::filesystem::path art_root) {
+    TcpListener listener(control_port);
+    return gather_session_clients(
+        listener,
+        client_count,
+        game_list,
+        timeout,
+        std::move(host_hello),
+        std::move(should_stop),
+        std::move(art_root),
+        std::nullopt);
 }
 
 } // namespace archstreamer

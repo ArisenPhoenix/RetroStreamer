@@ -6,6 +6,8 @@
 #include "host/media_server.hpp"
 #include "host/session_service.hpp"
 
+#include <functional>
+#include <optional>
 #include <cstddef>
 
 namespace archstreamer {
@@ -24,5 +26,21 @@ void poll_active_session_joins(
     const HostAppConfig& config,
     std::size_t& media_index,
     MediaServer& media_server);
+
+/**
+ * Accept one control connection (non-blocking). Handles ActiveSessionInfo / art / catalog.
+ * On ClientHello, returns the hello + stream for the caller to route (new SP / multi / late join).
+ */
+struct AcceptedControlHello {
+    bool have_hello = false;
+    ClientHello hello;
+    TcpStream stream;
+};
+
+std::optional<AcceptedControlHello> try_accept_control_hello(
+    TcpListener& listener,
+    const GameList& game_list,
+    const std::filesystem::path& art_root,
+    const std::function<ActiveSessionInfo()>& active_info_fn = {});
 
 } // namespace archstreamer

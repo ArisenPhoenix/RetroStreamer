@@ -1,6 +1,8 @@
 #include "host/session_control_monitor.hpp"
 
 #include "common/serialization.hpp"
+#include "host/active_session_slot.hpp"
+#include "host/host_session_hub.hpp"
 #include "host/retroarch_netcmd.hpp"
 
 #include <algorithm>
@@ -59,13 +61,15 @@ SessionControlMonitor::SessionControlMonitor(
     InputRouter& input_router,
     MediaServer& media_server,
     std::chrono::seconds heartbeat_timeout,
-    std::chrono::seconds reconnect_timeout)
+    std::chrono::seconds reconnect_timeout,
+    HostSessionHub* host_hub)
     : plan_(plan),
       input_router_(input_router),
       media_server_(media_server),
       heartbeat_timeout_(heartbeat_timeout),
       reconnect_timeout_(reconnect_timeout),
-      started_at_(std::chrono::steady_clock::now()) {
+      started_at_(std::chrono::steady_clock::now()),
+      host_hub_(host_hub) {
     const auto now = started_at_;
     for (auto& client : plan_.clients) {
         client.last_seen = now;
@@ -148,77 +152,106 @@ std::optional<std::string> SessionControlMonitor::poll() {
                 }
             } else if (const auto* link_request = std::get_if<LinkRequest>(&payload);
                        link_request != nullptr) {
-                auto outbound = plan_.link_coordinator.handle(
-                    plan_,
-                    client.client_id,
-                    client.hello.username,
-                    *link_request);
+                std::vector<LinkOutbound> outbound;
+                if (host_hub_ != nullptr) {
+                    // Need ActiveSessionSlot& — hub looks up from client id.
+                    if (auto* slot = host_hub_->slot_for_client(client.client_id);
+                        slot != nullptr) {
+                        outbound = host_hub_->handle_link(
+                            *slot,
+                            client.client_id,
+                            client.hello.username,
+                            *link_request);
+                    } else {
+                        LinkResponse err;
+                        err.status = LinkStatus::Error;
+                        err.message = "Link: session slot not registered";
+                        outbound.push_back({client.client_id, std::move(err)});
+                    }
+                } else {
+                    outbound = plan_.link_coordinator.handle(
+                        plan_,
+                        client.client_id,
+                        client.hello.username,
+                        *link_request);
 
-                bool started_cable = false;
-                for (auto& item : outbound) {
-                    if (!started_cable && item.response.status == LinkStatus::Matched) {
-                        started_cable = true;
-                        std::string peer_user = item.response.peer_username;
-                        ClientId peer_id = 0;
-                        for (const auto& other : outbound) {
-                            if (other.client_id != item.client_id) {
-                                peer_id = other.client_id;
-                                break;
-                            }
-                        }
-                        if (peer_id == 0) {
-                            // Mutual peer may already be disconnected from TCP; still try.
-                            for (const auto& candidate : plan_.clients) {
-                                if (candidate.client_id != client.client_id &&
-                                    candidate.connection_state == SessionConnectionState::Connected &&
-                                    candidate.hello.username == peer_user) {
-                                    peer_id = candidate.client_id;
+                    bool started_cable = false;
+                    for (auto& item : outbound) {
+                        if (!started_cable && item.response.status == LinkStatus::Matched) {
+                            started_cable = true;
+                            std::string peer_user = item.response.peer_username;
+                            ClientId peer_id = 0;
+                            for (const auto& other : outbound) {
+                                if (other.client_id != item.client_id) {
+                                    peer_id = other.client_id;
                                     break;
                                 }
                             }
-                        }
-                        // peer had the pending offer → first requester = logical host.
-                        const auto start = plan_.link_cable.begin(
-                            plan_.system_key,
-                            peer_id,
-                            client.client_id,
-                            peer_user,
-                            client.hello.username,
-                            assigned_player_count(plan_.seats));
-                        for (auto& update : outbound) {
-                            update.response.message = start.message;
-                            if (!start.ok) {
-                                update.response.ok = false;
-                                update.response.status = LinkStatus::Error;
+                            if (peer_id == 0) {
+                                for (const auto& candidate : plan_.clients) {
+                                    if (candidate.client_id != client.client_id &&
+                                        candidate.connection_state == SessionConnectionState::Connected &&
+                                        candidate.hello.username == peer_user) {
+                                        peer_id = candidate.client_id;
+                                        break;
+                                    }
+                                }
                             }
-                        }
-                        if (start.ok) {
-                            std::cout << "Link cable: " << start.message << '\n';
-                            if (start.needs_runtime_promotion) {
-                                plan_.pending_link_promotion = true;
-                                plan_.pending_link_host_client_id = start.logical_host_client_id;
-                                plan_.pending_link_client_client_id = start.logical_client_client_id;
-                                plan_.pending_link_host_username = start.logical_host_username;
-                                plan_.pending_link_client_username = start.logical_client_username;
+                            const auto start = plan_.link_cable.begin(
+                                plan_.system_key,
+                                peer_id,
+                                client.client_id,
+                                peer_user,
+                                client.hello.username,
+                                assigned_player_count(plan_.seats),
+                                false);
+                            for (auto& update : outbound) {
+                                update.response.message = start.message;
+                                if (!start.ok) {
+                                    update.response.ok = false;
+                                    update.response.status = LinkStatus::Error;
+                                }
                             }
+                            if (start.ok) {
+                                std::cout << "Link cable: " << start.message << '\n';
+                                if (start.needs_runtime_promotion) {
+                                    plan_.pending_link_promotion = true;
+                                    plan_.pending_link_host_client_id = start.logical_host_client_id;
+                                    plan_.pending_link_client_client_id = start.logical_client_client_id;
+                                    plan_.pending_link_host_username = start.logical_host_username;
+                                    plan_.pending_link_client_username = start.logical_client_username;
+                                }
 #if defined(ARCHSTREAMER_DEBUG_GB_LINK)
-                            send_retroarch_netcmd(
-                                std::string("SHOW_MSG ") + "Link cable: dual GB ready",
-                                plan_.retroarch_netcmd_port);
+                                send_retroarch_netcmd(
+                                    std::string("SHOW_MSG ") + "Link cable: dual GB ready",
+                                    plan_.retroarch_netcmd_port);
 #endif
-                        } else {
-                            std::cerr << "Link cable: " << start.message << '\n';
+                            } else {
+                                std::cerr << "Link cable: " << start.message << '\n';
+                            }
                         }
                     }
                 }
 
                 for (const auto& item : outbound) {
                     SessionClientConnection* target = nullptr;
-                    for (auto& candidate : plan_.clients) {
-                        if (candidate.client_id == item.client_id &&
-                            candidate.connection_state == SessionConnectionState::Connected) {
-                            target = &candidate;
-                            break;
+                    if (host_hub_ != nullptr) {
+                        if (auto* slot = host_hub_->slot_for_client(item.client_id); slot != nullptr) {
+                            for (auto& candidate : slot->plan().clients) {
+                                if (candidate.client_id == item.client_id &&
+                                    candidate.connection_state == SessionConnectionState::Connected) {
+                                    target = &candidate;
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        for (auto& candidate : plan_.clients) {
+                            if (candidate.client_id == item.client_id &&
+                                candidate.connection_state == SessionConnectionState::Connected) {
+                                target = &candidate;
+                                break;
+                            }
                         }
                     }
                     if (target == nullptr) {
@@ -438,6 +471,9 @@ bool SessionControlMonitor::remove_viewer(std::size_t index, std::string_view re
         << " (" << plan_.clients[index].hello.username << "): "
         << reason << '\n';
     plan_.link_coordinator.clear_client(plan_.clients[index].client_id);
+    if (host_hub_ != nullptr) {
+        host_hub_->clear_link_client(plan_.clients[index].client_id);
+    }
     if (plan_.clients[index].client_id == plan_.link_cable.client_a() ||
         plan_.clients[index].client_id == plan_.link_cable.client_b()) {
         plan_.link_cable.clear();
@@ -449,6 +485,9 @@ bool SessionControlMonitor::remove_viewer(std::size_t index, std::string_view re
 
 void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& client, std::string_view reason) {
     plan_.link_coordinator.clear_client(client.client_id);
+    if (host_hub_ != nullptr) {
+        host_hub_->clear_link_client(client.client_id);
+    }
     if (client.client_id == plan_.link_cable.client_a() ||
         client.client_id == plan_.link_cable.client_b()) {
         plan_.link_cable.clear();

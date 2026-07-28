@@ -20,17 +20,20 @@ namespace {
 constexpr std::uint16_t kVirtualVendorId = 0x1209;
 constexpr std::uint16_t kVirtualProductIdBase = 0xa517;
 
-bool is_archstreamer_joystick(int device_index) {
+bool is_archstreamer_joystick(int device_index, std::uint16_t product_id_base, std::size_t players) {
     const auto vendor = static_cast<std::uint16_t>(SDL_JoystickGetDeviceVendor(device_index));
     const auto product = static_cast<std::uint16_t>(SDL_JoystickGetDeviceProduct(device_index));
+    const auto base = product_id_base != 0 ? product_id_base : kVirtualProductIdBase;
+    const auto span = std::max<std::size_t>(players, 1);
     if (vendor == kVirtualVendorId &&
-        product >= kVirtualProductIdBase &&
-        product < kVirtualProductIdBase + MaxRetroArchPorts) {
+        product >= base &&
+        product < static_cast<std::uint16_t>(base + span)) {
         return true;
     }
 
     const char* name = SDL_JoystickNameForIndex(device_index);
-    return name != nullptr && std::string(name).rfind("ArchStreamer", 0) == 0;
+    return product_id_base == 0 &&
+        name != nullptr && std::string(name).rfind("ArchStreamer", 0) == 0;
 }
 
 std::string guid_string_for_index(int device_index) {
@@ -71,7 +74,8 @@ std::string sdl_archstreamer_pad_whitelist(std::size_t players) {
 std::vector<ArchStreamerSdlPad> find_archstreamer_sdl_pads(
     std::size_t players,
     const std::string& ignore_devices,
-    bool verbose) {
+    bool verbose,
+    std::uint16_t product_id_base) {
     // Must match RetroArch's environment: ignored pads disappear from SDL's joystick
     // list and renumber remaining devices (often moving ArchStreamer from 2 → 0).
     // Use a process hint only for this scan — never setenv, or the host bridge can no
@@ -112,7 +116,7 @@ std::vector<ArchStreamerSdlPad> find_archstreamer_sdl_pads(
         const char* name = SDL_JoystickNameForIndex(index);
         const auto vendor = static_cast<std::uint16_t>(SDL_JoystickGetDeviceVendor(index));
         const auto product = static_cast<std::uint16_t>(SDL_JoystickGetDeviceProduct(index));
-        const bool virtual_pad = is_archstreamer_joystick(index);
+        const bool virtual_pad = is_archstreamer_joystick(index, product_id_base, players);
         if (verbose) {
             std::cout
                 << "  [" << index << "] " << (name != nullptr ? name : "?")
@@ -150,8 +154,9 @@ std::vector<ArchStreamerSdlPad> find_archstreamer_sdl_pads(
 std::vector<std::size_t> find_archstreamer_sdl_joypad_indices(
     std::size_t players,
     const std::string& ignore_devices,
-    bool verbose) {
-    const auto pads = find_archstreamer_sdl_pads(players, ignore_devices, verbose);
+    bool verbose,
+    std::uint16_t product_id_base) {
+    const auto pads = find_archstreamer_sdl_pads(players, ignore_devices, verbose, product_id_base);
     std::vector<std::size_t> indices;
     indices.reserve(pads.size());
     for (const auto& pad : pads) {
@@ -162,7 +167,8 @@ std::vector<std::size_t> find_archstreamer_sdl_joypad_indices(
 
 std::vector<std::size_t> find_archstreamer_udev_joypad_indices(
     std::size_t players,
-    bool verbose) {
+    bool verbose,
+    std::uint16_t product_id_base) {
     // RetroArch's udev joypad driver indexes joystick devices in the same order as
     // /dev/input/jsN appearance in /proc/bus/input/devices (js number == pad index).
     std::ifstream in("/proc/bus/input/devices");
@@ -170,6 +176,9 @@ std::vector<std::size_t> find_archstreamer_udev_joypad_indices(
         std::cerr << "Warning: cannot read /proc/bus/input/devices for udev pad indices\n";
         return {};
     }
+
+    const auto base = product_id_base != 0 ? product_id_base : kVirtualProductIdBase;
+    const auto span = std::max<std::size_t>(players, 1);
 
     std::vector<std::pair<std::uint16_t, std::size_t>> found;
     std::string line;
@@ -210,9 +219,9 @@ std::vector<std::size_t> find_archstreamer_udev_joypad_indices(
             }
             const bool virtual_pad =
                 (vendor == kVirtualVendorId &&
-                 product >= kVirtualProductIdBase &&
-                 product < kVirtualProductIdBase + MaxRetroArchPorts) ||
-                name.rfind("ArchStreamer", 0) == 0;
+                 product >= base &&
+                 product < static_cast<std::uint16_t>(base + span)) ||
+                (product_id_base == 0 && name.rfind("ArchStreamer", 0) == 0);
             if (verbose) {
                 std::cout
                     << "  udev[js" << index << "] " << name << " "

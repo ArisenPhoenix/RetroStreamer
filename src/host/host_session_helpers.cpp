@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -248,6 +249,97 @@ void poll_active_session_joins(
         } catch (const std::exception&) {
         }
         std::cerr << "Rejected active-session join: " << error.what() << '\n';
+    }
+}
+
+std::optional<AcceptedControlHello> try_accept_control_hello(
+    TcpListener& listener,
+    const GameList& game_list,
+    const std::filesystem::path& art_root,
+    const std::function<ActiveSessionInfo()>& active_info_fn) {
+    auto stream = listener.accept_for(std::chrono::milliseconds(0));
+    if (!stream.has_value()) {
+        return std::nullopt;
+    }
+
+    std::cout << "Accepted control connection.\n";
+    try {
+        const auto first_payload = receive_control_payload(*stream);
+        if (std::holds_alternative<ActiveSessionInfoRequest>(first_payload)) {
+            ActiveSessionInfo info{};
+            if (active_info_fn) {
+                info = active_info_fn();
+            }
+            stream->send_packet(serialize_packet(info));
+            return AcceptedControlHello{};
+        }
+        const auto resolved_art =
+            art_root.empty() ? std::filesystem::path{DefaultArtRoot} : art_root;
+        if (const auto* art_request = std::get_if<ArtAssetRequest>(&first_payload);
+            art_request != nullptr) {
+            stream->send_packet(serialize_packet(load_art_asset_response(
+                resolved_art,
+                art_request->asset_key,
+                art_request->role)));
+            return AcceptedControlHello{};
+        }
+        const auto* game_list_request = std::get_if<GameListRequest>(&first_payload);
+        if (game_list_request == nullptr) {
+            throw std::runtime_error("expected GameListRequest from control client");
+        }
+        stream->send_packet(serialize_packet(catalog_delta_for_request(game_list, *game_list_request)));
+
+        auto next_payload = std::optional<PacketPayload>{};
+        while (true) {
+            const auto packet = stream->receive_packet();
+            if (!packet.has_value()) {
+                return AcceptedControlHello{};
+            }
+            auto payload = deserialize_packet(*packet);
+            if (const auto* art_request = std::get_if<ArtAssetRequest>(&payload);
+                art_request != nullptr) {
+                stream->send_packet(serialize_packet(load_art_asset_response(
+                    resolved_art,
+                    art_request->asset_key,
+                    art_request->role)));
+                continue;
+            }
+            next_payload = std::move(payload);
+            break;
+        }
+        if (!next_payload.has_value()) {
+            return AcceptedControlHello{};
+        }
+
+        const auto* hello = std::get_if<ClientHello>(&*next_payload);
+        if (hello == nullptr) {
+            throw std::runtime_error("expected ClientHello from control client");
+        }
+        if (!valid_username(hello->username)) {
+            throw std::runtime_error("control client supplied an invalid username");
+        }
+        if (!valid_player_count(hello->requested_players)) {
+            throw std::runtime_error("control client requested too many players");
+        }
+        if (hello->controllers.size() > hello->requested_players) {
+            throw std::runtime_error("control client supplied controller metadata for unrequested players");
+        }
+        if (!hello->selected_game_id.has_value()) {
+            throw std::runtime_error("control client did not select a game");
+        }
+
+        AcceptedControlHello accepted;
+        accepted.have_hello = true;
+        accepted.hello = *hello;
+        accepted.stream = std::move(*stream);
+        return accepted;
+    } catch (const std::exception& error) {
+        try {
+            stream->send_packet(serialize_packet(ErrorPacket{error.what()}));
+        } catch (const std::exception&) {
+        }
+        std::cerr << "Rejected control client: " << error.what() << '\n';
+        return AcceptedControlHello{};
     }
 }
 

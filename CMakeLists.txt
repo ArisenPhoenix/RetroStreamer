@@ -225,9 +225,13 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/gpu_select.cpp
         src/host/host_app.cpp
         src/host/host_app_config.cpp
+        src/host/host_concurrent_lobby.cpp
         src/host/host_launch_planner.cpp
         src/host/host_session_helpers.cpp
+        src/host/host_session_hub.cpp
         src/host/input_router.cpp
+        src/host/input_router_demux.cpp
+        src/host/active_session_slot.cpp
         src/host/launch_environment.cpp
         src/host/libretro_core_registry.cpp
         src/host/virtual_keyboard.cpp
@@ -253,6 +257,7 @@ if(ARCHSTREAMER_BUILD_HOST)
             src/host/windows_retroarch_process.cpp
             src/host/windows_vigem_gamepad.cpp
             src/host/windows_media_server.cpp
+            src/host/windows_capture_platform.cpp
         )
     else()
         list(APPEND ARCHSTREAMER_HOST_SOURCES
@@ -260,6 +265,7 @@ if(ARCHSTREAMER_BUILD_HOST)
             src/host/linux_uinput_gamepad.cpp
             src/host/posix_retroarch_process.cpp
             src/host/virtual_display.cpp
+            src/host/linux_capture_platform.cpp
         )
     endif()
 
@@ -362,7 +368,7 @@ if(Qt6Widgets_FOUND)
     set(CMAKE_AUTOMOC ON)
     # WIN32 = Windows GUI subsystem (no console window). Logs still go to
     # %TEMP%\archstreamer-logs\gui.log. Omit WIN32 only if you need stdout.
-    add_executable(archstreamer_gui
+    set(ARCHSTREAMER_GUI_SOURCES
         src/gui/game_picker_widget.cpp
         src/gui/game_picker_widget.hpp
         src/gui/game_selection_dialog.cpp
@@ -371,8 +377,25 @@ if(Qt6Widgets_FOUND)
         src/gui/host_picker_widget.hpp
         src/gui/host_search_dialog.cpp
         src/gui/host_search_dialog.hpp
+        src/gui/gui_logging.cpp
+        src/gui/gui_logging.hpp
+        src/gui/gui_util.cpp
+        src/gui/gui_util.hpp
+        src/gui/main_window.hpp
+        src/gui/main_window.cpp
+        src/gui/main_window_client.cpp
+        src/gui/main_window_settings.cpp
+        src/gui/main_window_game_options.cpp
         src/tools/archstreamer_gui.cpp
     )
+    if(ARCHSTREAMER_BUILD_HOST)
+        list(APPEND ARCHSTREAMER_GUI_SOURCES
+            src/gui/gui_host_runner.cpp
+            src/gui/gui_host_runner.hpp
+            src/gui/main_window_host.cpp
+        )
+    endif()
+    add_executable(archstreamer_gui ${ARCHSTREAMER_GUI_SOURCES})
     if(WIN32)
         set_target_properties(archstreamer_gui PROPERTIES WIN32_EXECUTABLE TRUE)
     endif()

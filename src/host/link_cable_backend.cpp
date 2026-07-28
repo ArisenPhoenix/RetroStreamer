@@ -154,7 +154,8 @@ LinkCableBackend::StartResult LinkCableBackend::begin(
     ClientId logical_client_client_id,
     std::string logical_host_username,
     std::string logical_client_username,
-    std::uint8_t seated_players) {
+    std::uint8_t seated_players,
+    bool peers_already_running) {
     StartResult result;
     clear();
 
@@ -164,7 +165,7 @@ LinkCableBackend::StartResult LinkCableBackend::begin(
     }
     if (seated_players < 2) {
         result.message =
-            "Link needs at least 2 seated players in the session "
+            "Link needs at least 2 seated players "
             "(each linked player will own one emulator instance)";
         return result;
     }
@@ -214,16 +215,24 @@ LinkCableBackend::StartResult LinkCableBackend::begin(
     }
 #endif
 
-    // Multi-instance path: promote SessionRuntime to Link; peer process stubbed for now.
+    // Multi-instance path: two SP slots already running, or promote one shared session.
     if (system_key == "gba" || system_key == "nds" || system_key == "switch") {
         mode_ = LinkCableMode::GbaNetpacket;
         result.ok = true;
-        result.needs_runtime_promotion = true;
         result.mode = mode_;
-        result.message =
-            "Matched " + user_a_ + " ↔ " + user_b_ + " on " + std::string(system_key) +
-            ". Promoting to Link runtime (logical host=" + user_a_ +
-            "). Peer emulator + dual streams not started yet.";
+        if (peers_already_running) {
+            result.needs_runtime_promotion = false;
+            result.message =
+                "Matched " + user_a_ + " ↔ " + user_b_ + " on " + std::string(system_key) +
+                ". Both singleplayer instances are running (logical host=" + user_a_ +
+                "). Cable/netpacket between them is not wired yet.";
+        } else {
+            result.needs_runtime_promotion = true;
+            result.message =
+                "Matched " + user_a_ + " ↔ " + user_b_ + " on " + std::string(system_key) +
+                ". Promoting to Link runtime (logical host=" + user_a_ +
+                "). Peer emulator + dual streams not started yet.";
+        }
         return result;
     }
 

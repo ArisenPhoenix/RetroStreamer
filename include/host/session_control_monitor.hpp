@@ -11,6 +11,8 @@
 
 namespace archstreamer {
 
+class HostSessionHub;
+
 class SessionControlMonitor {
 public:
     SessionControlMonitor(
@@ -18,7 +20,8 @@ public:
         InputRouter& input_router,
         MediaServer& media_server,
         std::chrono::seconds heartbeat_timeout,
-        std::chrono::seconds reconnect_timeout);
+        std::chrono::seconds reconnect_timeout,
+        HostSessionHub* host_hub = nullptr);
 
     std::optional<std::string> poll();
 
@@ -35,6 +38,7 @@ private:
     std::chrono::seconds heartbeat_timeout_;
     std::chrono::seconds reconnect_timeout_;
     std::chrono::steady_clock::time_point started_at_;
+    HostSessionHub* host_hub_ = nullptr;
 };
 
 } // namespace archstreamer

@@ -63,6 +63,15 @@ struct SessionPlan {
     // Mid-session mutual link matchmaking (backends wired later).
     LinkCoordinator link_coordinator;
     LinkCableBackend link_cable;
+    /**
+     * Set by SessionControlMonitor when a match needs SessionRuntime promotion.
+     * Consumed by host_app (fields mirror LinkPromotionRequest).
+     */
+    bool pending_link_promotion = false;
+    ClientId pending_link_host_client_id = 0;
+    ClientId pending_link_client_client_id = 0;
+    std::string pending_link_host_username;
+    std::string pending_link_client_username;
 };
 
 const char* session_mode_name(GameSessionMode mode);

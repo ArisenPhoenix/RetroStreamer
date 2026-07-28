@@ -689,7 +689,7 @@ private:
         auto* link_box = new QGroupBox("Link with player", page);
         auto* link_form = new QFormLayout(link_box);
         game_options_link_status_ = new QLabel(
-            "Join a link-capable session (Switch / GB / GBC / GBA) to request a peer.",
+            "Join a link-capable session (GBA / DS / Switch) to request a peer.",
             link_box);
         game_options_link_status_->setWordWrap(true);
         game_options_link_user_ = new QLineEdit(link_box);
@@ -832,14 +832,14 @@ private:
         const bool link_active = link_session && link_capable;
         const QString link_status = !link_session
             ? QStringLiteral(
-                  "Join a link-capable session (Switch / GB / GBC / GBA) to request a peer.")
+                  "Join a link-capable session (GBA / DS / Switch) to request a peer.")
             : (!link_capable
                    ? QString("Active session (%1) does not support link yet.")
                          .arg(QString::fromStdString(
                              link_system.empty() ? "unknown system" : link_system))
                    : QStringLiteral(
                          "Enter a seated peer's username. Both must request each other. "
-                         "GB/GBC reloads into a dual Game Boy cable (shared screen)."));
+                         "Multi-instance link backends are not started yet."));
         // Don't overwrite a live host response message every poll tick.
         if (game_options_link_status_ != nullptr) {
             const auto current = game_options_link_status_->text();

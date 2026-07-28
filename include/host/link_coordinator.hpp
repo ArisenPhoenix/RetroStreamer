@@ -19,7 +19,8 @@ struct LinkOutbound {
 
 /**
  * Tracks mutual link requests between seated clients.
- * On match, LinkCableBackend may relaunch into dual-GB (DoubleCherryGB) mode.
+ * On match, LinkCableBackend may start a system-specific backend (multi-instance TBD;
+ * DEBUG_GB_LINK enables experimental DoubleCherryGB dual-GB relaunch).
  */
 class LinkCoordinator {
 public:

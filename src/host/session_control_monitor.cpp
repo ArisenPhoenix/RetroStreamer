@@ -177,12 +177,13 @@ std::optional<std::string> SessionControlMonitor::poll() {
                                 }
                             }
                         }
+                        // peer had the pending offer → first requester = logical host.
                         const auto start = plan_.link_cable.begin(
                             plan_.system_key,
-                            client.client_id,
                             peer_id,
-                            client.hello.username,
+                            client.client_id,
                             peer_user,
+                            client.hello.username,
                             assigned_player_count(plan_.seats));
                         for (auto& update : outbound) {
                             update.response.message = start.message;
@@ -193,11 +194,20 @@ std::optional<std::string> SessionControlMonitor::poll() {
                         }
                         if (start.ok) {
                             std::cout << "Link cable: " << start.message << '\n';
+                            if (start.needs_runtime_promotion) {
+                                plan_.pending_link_promotion = true;
+                                plan_.pending_link_host_client_id = start.logical_host_client_id;
+                                plan_.pending_link_client_client_id = start.logical_client_client_id;
+                                plan_.pending_link_host_username = start.logical_host_username;
+                                plan_.pending_link_client_username = start.logical_client_username;
+                            }
+#if defined(ARCHSTREAMER_DEBUG_GB_LINK)
                             send_retroarch_netcmd(
                                 std::string("SHOW_MSG ") + "Link cable: dual GB ready",
                                 plan_.retroarch_netcmd_port);
+#endif
                         } else {
-                            std::cerr << "Link cable failed: " << start.message << '\n';
+                            std::cerr << "Link cable: " << start.message << '\n';
                         }
                     }
                 }

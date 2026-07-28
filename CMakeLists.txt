@@ -23,6 +23,8 @@ else()
 endif()
 option(ARCHSTREAMER_REQUIRE_GUI "Fail configure if Qt6 Widgets is missing" OFF)
 option(ARCHSTREAMER_BUILD_CONTROLLER_PROBE "Build controller probe tool" ON)
+# Experimental DoubleCherryGB dual-machine cable (no GB/GBC saves to test with yet).
+option(ARCHSTREAMER_DEBUG_GB_LINK "Enable experimental GB/GBC dual-GB link backend" OFF)
 
 function(archstreamer_require_pkgconfig_module RESULT_PREFIX MODULE_NAME)
     pkg_check_modules(${RESULT_PREFIX} IMPORTED_TARGET ${MODULE_NAME})
@@ -113,6 +115,9 @@ endif()
 
 add_library(archstreamer_core ${ARCHSTREAMER_CORE_SOURCES})
 target_include_directories(archstreamer_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+if(ARCHSTREAMER_DEBUG_GB_LINK)
+    target_compile_definitions(archstreamer_core PUBLIC ARCHSTREAMER_DEBUG_GB_LINK=1)
+endif()
 target_link_libraries(archstreamer_core PUBLIC nlohmann_json::nlohmann_json)
 if(WIN32)
     target_link_libraries(archstreamer_core PUBLIC ws2_32 iphlpapi)
@@ -239,6 +244,7 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/seat_manager.cpp
         src/host/session_control_monitor.cpp
         src/host/session_lobby.cpp
+        src/host/session_runtime.cpp
         src/host/session_service.cpp
         src/host/virtual_joypad_resolve.cpp
     )
@@ -401,6 +407,7 @@ message(STATUS "")
 message(STATUS "ArchStreamer dependency summary")
 message(STATUS "  C++ standard:     ${CMAKE_CXX_STANDARD}")
 message(STATUS "  Build host:       ${ARCHSTREAMER_BUILD_HOST}")
+message(STATUS "  Debug GB link:    ${ARCHSTREAMER_DEBUG_GB_LINK}")
 message(STATUS "  Controller:       ${ARCHSTREAMER_CONTROLLER_BACKEND}")
 if(DEFINED SDL2_VERSION)
     message(STATUS "  SDL2:             ${SDL2_VERSION}")

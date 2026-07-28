@@ -17,10 +17,17 @@ LibretroCoreRegistry LibretroCoreRegistry::ubuntu_defaults() {
 
 LibretroCoreRegistry::LibretroCoreRegistry(std::vector<std::filesystem::path> core_dirs)
     : core_dirs_(std::move(core_dirs)) {
+#if defined(ARCHSTREAMER_DEBUG_GB_LINK)
     add_system("gb", "Game Boy", {{"doublecherrygb", "DoubleCherryGB"}, {"gambatte", "Gambatte"}, {"sameboy", "SameBoy"}, {"tgbdual", "TGB Dual"}});
     add_system("gbc", "Game Boy Color", {{"doublecherrygb", "DoubleCherryGB"}, {"gambatte", "Gambatte"}, {"sameboy", "SameBoy"}, {"tgbdual", "TGB Dual"}});
     add_system("gb-gbc", "Game Boy / Game Boy Color", {{"doublecherrygb", "DoubleCherryGB"}, {"gambatte", "Gambatte"}, {"sameboy", "SameBoy"}, {"tgbdual", "TGB Dual"}});
     add_system("gba", "Game Boy Advance", {{"gpsp", "gpSP"}, {"mgba", "mGBA"}, {"vbam", "VBA-M"}, {"vba_m", "VBA-M"}, {"vba_next", "VBA Next"}});
+#else
+    add_system("gb", "Game Boy", {{"gambatte", "Gambatte"}, {"sameboy", "SameBoy"}});
+    add_system("gbc", "Game Boy Color", {{"gambatte", "Gambatte"}, {"sameboy", "SameBoy"}});
+    add_system("gb-gbc", "Game Boy / Game Boy Color", {{"gambatte", "Gambatte"}, {"sameboy", "SameBoy"}});
+    add_system("gba", "Game Boy Advance", {{"mgba", "mGBA"}, {"vbam", "VBA-M"}, {"vba_m", "VBA-M"}, {"vba_next", "VBA Next"}});
+#endif
     add_system("nds", "Nintendo DS", {{"melonds", "melonDS"}, {"desmume", "DeSmuME"}});
     add_system("n64", "Nintendo 64", {{"mupen64plus_next", "Mupen64Plus-Next"}, {"parallel_n64", "ParaLLEl N64"}});
     // Match RetroArchSysBin/ra.py preference: CHD-capable cores before Beetle

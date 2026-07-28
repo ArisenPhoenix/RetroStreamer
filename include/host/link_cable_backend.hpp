@@ -18,26 +18,37 @@ enum class LinkCableMode : std::uint8_t {
 };
 
 /**
- * Host-side virtual link-cable activation after mutual LinkCoordinator match.
- * GB/GBC: relaunches into DoubleCherryGB dual-machine mode (shared stream, two pads).
- * GBA: reports capability / missing core until dual-instance media lands.
+ * Host-side virtual link activation after mutual LinkCoordinator match.
+ *
+ * Default builds: matchmaking only for gba / nds / switch (multi-instance backend TBD).
+ * ARCHSTREAMER_DEBUG_GB_LINK: experimental DoubleCherryGB dual-machine relaunch for gb/gbc.
  */
 class LinkCableBackend {
 public:
     struct StartResult {
         bool ok = false;
         bool needs_relaunch = false;
+        /** Host should promote SessionRuntime Single/Multi → Link. */
+        bool needs_runtime_promotion = false;
         LinkCableMode mode = LinkCableMode::None;
         std::string message;
         std::filesystem::path core_path;
+        ClientId logical_host_client_id = 0;
+        ClientId logical_client_client_id = 0;
+        std::string logical_host_username;
+        std::string logical_client_username;
     };
 
+    /**
+     * @param logical_host_client_id  First mutual requester (owns primary instance).
+     * @param logical_client_client_id Second matcher (will own peer instance).
+     */
     StartResult begin(
         std::string_view system_key,
-        ClientId client_a,
-        ClientId client_b,
-        std::string user_a,
-        std::string user_b,
+        ClientId logical_host_client_id,
+        ClientId logical_client_client_id,
+        std::string logical_host_username,
+        std::string logical_client_username,
         std::uint8_t seated_players);
 
     void clear();
@@ -49,6 +60,9 @@ public:
 
     ClientId client_a() const { return client_a_; }
     ClientId client_b() const { return client_b_; }
+    /** Alias: first requester / logical host. */
+    ClientId logical_host_client_id() const { return client_a_; }
+    ClientId logical_client_client_id() const { return client_b_; }
 
     /** Write DoubleCherryGB core options for dual local machines + cable. */
     static bool write_dual_gb_core_options();

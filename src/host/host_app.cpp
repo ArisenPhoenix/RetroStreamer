@@ -27,6 +27,7 @@
 #include "host/save_profile.hpp"
 #include "host/standalone_emulator.hpp"
 #include "host/session_control_monitor.hpp"
+#include "host/session_runtime.hpp"
 #include "host/session_service.hpp"
 #include "host/virtual_joypad_resolve.hpp"
 #include "host/link_cable_backend.hpp"
@@ -243,9 +244,11 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         }
         if (session_plan.has_value()) {
             session_plan->system_key = system_key;
+#if defined(ARCHSTREAMER_DEBUG_GB_LINK)
             if (system_key == "gb" || system_key == "gbc" || system_key == "gb-gbc") {
                 LinkCableBackend::write_single_gb_core_options();
             }
+#endif
             if (const auto hosted = catalog.find_hosted(launch_plan.game_id); hosted.has_value()) {
                 session_plan->playlist_discs = hosted->get().info.playlist_discs;
                 session_plan->current_disc_index = 0;
@@ -890,8 +893,18 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             local_bridge.emplace(*bridge_device);
         }
 
-        HostRetroArchProcess retroarch;
+        auto session_runtime = make_session_runtime(launch_plan);
+        session_runtime->bind_launch_config(std::move(launch_config));
+        std::cout
+            << "Session runtime: " << session_runtime->kind_name()
+            << " (shared_emulator=" << (session_runtime->uses_shared_emulator() ? "yes" : "no")
+            << ", instances=" << static_cast<int>(session_runtime->emulator_instance_count())
+            << ", logical_host_client=" << static_cast<int>(session_runtime->logical_host_client_id())
+            << ", save_user=" << session_runtime->save_username()
+            << ")\n";
+
         {
+            const auto& launch_config = session_runtime->launch_config();
             std::string command;
             if (launch_config.standalone) {
                 command.clear();
@@ -938,15 +951,15 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                 std::cout << "Launching RetroArch...\nCommand: " << command << '\n';
             }
         }
-        retroarch.launch(launch_config);
+        session_runtime->start_emulator();
         // Flatpak RetroArch can take a moment; failed exec exits almost immediately.
-        for (int i = 0; i < 10 && retroarch.running(); ++i) {
+        for (int i = 0; i < 10 && session_runtime->emulator_running(); ++i) {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
-        if (!retroarch.running()) {
-            const auto code = retroarch.last_exit_code().value_or(127);
-            const auto stderr_tail = retroarch.last_stderr_tail();
-            if (launch_config.standalone) {
+        if (!session_runtime->emulator_running()) {
+            const auto code = session_runtime->last_exit_code().value_or(127);
+            const auto stderr_tail = session_runtime->last_stderr_tail();
+            if (session_runtime->launch_config().standalone) {
                 std::string message =
                     "Standalone emulator exited immediately (code " + std::to_string(code) + "). "
                     "Check Yuzu AppImage/keys under ~/.local/share/archstreamer/yuzu and "
@@ -1012,7 +1025,7 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         }
 
         auto next_audio_park = std::chrono::steady_clock::now();
-        while (!should_stop() && retroarch.running()) {
+        while (!should_stop() && session_runtime->emulator_running()) {
             if (local_bridge.has_value()) {
                 local_bridge->update(input_router);
             }
@@ -1032,9 +1045,40 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                     break;
                 }
             }
+            if (session_plan.has_value() && session_plan->pending_link_promotion) {
+                session_plan->pending_link_promotion = false;
+                LinkPromotionRequest promotion;
+                promotion.logical_host_client_id = session_plan->pending_link_host_client_id;
+                promotion.logical_client_client_id = session_plan->pending_link_client_client_id;
+                promotion.logical_host_username = session_plan->pending_link_host_username;
+                promotion.logical_client_username = session_plan->pending_link_client_username;
+                promotion.system_key = session_plan->system_key;
+
+                auto link_runtime = promote_to_link_runtime(std::move(session_runtime), std::move(promotion));
+                if (!link_runtime) {
+                    std::cerr << "Link promotion failed: current runtime is not Single/Multi\n";
+                    session_end_reason = "link promotion failed";
+                    break;
+                }
+                std::cout
+                    << "Session runtime: " << link_runtime->kind_name()
+                    << " (shared_emulator=" << (link_runtime->uses_shared_emulator() ? "yes" : "no")
+                    << ", instances=" << static_cast<int>(link_runtime->emulator_instance_count())
+                    << ", logical_host_client="
+                    << static_cast<int>(link_runtime->logical_host_client_id())
+                    << ", logical_client="
+                    << static_cast<int>(link_runtime->logical_client_client_id())
+                    << ")\n"
+                    << link_runtime->status_message() << '\n';
+                send_retroarch_netcmd(
+                    "SHOW_MSG Link runtime: peer instance pending",
+                    session_plan->retroarch_netcmd_port);
+                session_runtime = std::move(link_runtime);
+            }
             if (session_plan.has_value() &&
-                !launch_config.standalone &&
+                !session_runtime->launch_config().standalone &&
                 session_plan->link_cable.consume_relaunch_request()) {
+#if defined(ARCHSTREAMER_DEBUG_GB_LINK)
                 const auto link_core = session_plan->link_cable.pending_core_path();
                 if (!link_core.has_value()) {
                     std::cerr << "Link cable relaunch requested but core path is empty\n";
@@ -1042,7 +1086,8 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                     std::cout
                         << "Link cable: relaunching RetroArch with "
                         << link_core->string() << '\n';
-                    retroarch.stop();
+                    session_runtime->stop_emulator();
+                    auto& launch_config = session_runtime->launch_config();
                     launch_config.core_path = *link_core;
                     LinkCableBackend::write_dual_gb_core_options();
                     const auto runtime_override = write_retroarch_input_override(
@@ -1078,11 +1123,11 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                         launch_config.environment = launch_env.entries;
                         launch_config.unset_environment = launch_env.unset;
                     }
-                    retroarch.launch(launch_config);
-                    for (int i = 0; i < 10 && retroarch.running(); ++i) {
+                    session_runtime->start_emulator();
+                    for (int i = 0; i < 10 && session_runtime->emulator_running(); ++i) {
                         std::this_thread::sleep_for(std::chrono::milliseconds(50));
                     }
-                    if (!retroarch.running()) {
+                    if (!session_runtime->emulator_running()) {
                         session_end_reason =
                             "link cable relaunch failed (RetroArch exited immediately)";
                         std::cerr << "Stopping session: " << *session_end_reason << '\n';
@@ -1093,6 +1138,9 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                         session_plan->retroarch_netcmd_port);
                     std::cout << "Link cable: dual-GB RetroArch is running\n";
                 }
+#else
+                std::cerr << "Link cable relaunch ignored (ARCHSTREAMER_DEBUG_GB_LINK is off)\n";
+#endif
             }
             if (config.audio) {
                 const auto now = std::chrono::steady_clock::now();
@@ -1110,12 +1158,12 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             }
         }
 
-        if (!should_stop() && !session_end_reason.has_value() && !retroarch.running()) {
-            const auto code = retroarch.last_exit_code().value_or(-1);
-            const auto stderr_tail = retroarch.last_stderr_tail();
+        if (!should_stop() && !session_end_reason.has_value() && !session_runtime->emulator_running()) {
+            const auto code = session_runtime->last_exit_code().value_or(-1);
+            const auto stderr_tail = session_runtime->last_stderr_tail();
             std::ostringstream reason;
             reason << "emulator exited (code " << code << ")";
-            if (launch_config.standalone && gamescope_capture) {
+            if (session_runtime->launch_config().standalone && gamescope_capture) {
                 reason << " — if Host GPU is the non-boot NVIDIA, check Gamescope WSI "
                           "(ENABLE_GAMESCOPE_WSI / VK_ADD_IMPLICIT_LAYER_PATH); "
                           "Yuzu often logs \"Device lacks a present queue\"";
@@ -1131,14 +1179,14 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             network_receiver->stop();
         }
 
-        retroarch.stop();
-        if (!launch_config.standalone && system_key == "ps2") {
+        session_runtime->stop_emulator();
+        if (!session_runtime->launch_config().standalone && system_key == "ps2") {
             harvest_user_ps2_memcards(save_profile);
             std::cout
                 << "PS2 memcards: harvested to "
                 << user_ps2_memcard_directory(save_profile) << '\n';
         }
-        if (const auto code = retroarch.last_exit_code(); code.has_value()) {
+        if (const auto code = session_runtime->last_exit_code(); code.has_value()) {
             std::cout << "RetroArch exited with code " << *code << '\n';
             if (*code == 127) {
                 std::cerr

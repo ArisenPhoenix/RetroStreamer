@@ -3,6 +3,7 @@
 #include "common/link_capability.hpp"
 #include "common/platform/paths.hpp"
 #include "host/libretro_core_registry.hpp"
+#include "host/standalone_emulator.hpp"
 
 #include <fstream>
 #include <unordered_map>
@@ -12,8 +13,20 @@
 namespace archstreamer {
 namespace {
 
+constexpr std::uint16_t kDefaultGbaNetplayPort = 55435;
+
 bool is_gb_family(std::string_view system_key) {
     return system_key == "gb" || system_key == "gbc" || system_key == "gb-gbc";
+}
+
+bool is_netplay_flag(const std::string& arg) {
+    return arg == "-H" || arg == "--host" || arg == "-C" || arg == "--connect" ||
+        arg.rfind("--connect=", 0) == 0 || arg == "--port" || arg.rfind("--port=", 0) == 0 ||
+        arg == "--nick" || arg.rfind("--nick=", 0) == 0;
+}
+
+bool netplay_flag_takes_value(const std::string& arg) {
+    return arg == "-C" || arg == "--connect" || arg == "--port" || arg == "--nick";
 }
 
 #if defined(ARCHSTREAMER_DEBUG_GB_LINK)
@@ -79,7 +92,57 @@ std::filesystem::path doublecherry_opt_path() {
 
 #endif // ARCHSTREAMER_DEBUG_GB_LINK
 
+std::optional<std::filesystem::path> find_gpsp_core() {
+    for (const auto& dir : LibretroCoreRegistry::default_core_dirs()) {
+        for (const char* name : {"gpsp_libretro.so", "gpsp_libretro.dll"}) {
+            const auto path = dir / name;
+            if (std::filesystem::is_regular_file(path)) {
+                return path;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
 } // namespace
+
+void LinkCableBackend::apply_netplay_launch_args(
+    std::vector<std::string>& extra_args,
+    bool is_host,
+    std::uint16_t port,
+    const std::string& nick) {
+    std::vector<std::string> kept;
+    kept.reserve(extra_args.size());
+    for (std::size_t i = 0; i < extra_args.size();) {
+        const auto& arg = extra_args[i];
+        if (is_netplay_flag(arg)) {
+            if (netplay_flag_takes_value(arg) && arg.find('=') == std::string::npos &&
+                i + 1 < extra_args.size()) {
+                i += 2;
+            } else {
+                ++i;
+            }
+            continue;
+        }
+        kept.push_back(arg);
+        ++i;
+    }
+    extra_args = std::move(kept);
+
+    if (is_host) {
+        extra_args.push_back("--host");
+        extra_args.push_back("--port");
+        extra_args.push_back(std::to_string(port));
+    } else {
+        // Preferred form: address|port (see RetroArch --connect docs).
+        extra_args.push_back("--connect");
+        extra_args.push_back("127.0.0.1|" + std::to_string(port));
+    }
+    if (!nick.empty()) {
+        extra_args.push_back("--nick");
+        extra_args.push_back(nick);
+    }
+}
 
 bool LinkCableBackend::write_dual_gb_core_options() {
 #if defined(ARCHSTREAMER_DEBUG_GB_LINK)
@@ -133,18 +196,11 @@ std::optional<std::filesystem::path> LinkCableBackend::resolve_link_core(std::st
         }
         return std::nullopt;
     }
-    if (system_key == "gba") {
-        for (const auto& dir : LibretroCoreRegistry::default_core_dirs()) {
-            const auto path = dir / "gpsp_libretro.so";
-            if (std::filesystem::is_regular_file(path)) {
-                return path;
-            }
-        }
-        return std::nullopt;
-    }
-#else
-    (void)system_key;
 #endif
+    if (system_key == "gba") {
+        return find_gpsp_core();
+    }
+    (void)system_key;
     return std::nullopt;
 }
 
@@ -155,7 +211,8 @@ LinkCableBackend::StartResult LinkCableBackend::begin(
     std::string logical_host_username,
     std::string logical_client_username,
     std::uint8_t seated_players,
-    bool peers_already_running) {
+    bool peers_already_running,
+    std::uint16_t netplay_port_hint) {
     StartResult result;
     clear();
 
@@ -178,6 +235,8 @@ LinkCableBackend::StartResult LinkCableBackend::begin(
     result.logical_client_client_id = client_b_;
     result.logical_host_username = user_a_;
     result.logical_client_username = user_b_;
+    netplay_port_ = netplay_port_hint == 0 ? kDefaultGbaNetplayPort : netplay_port_hint;
+    result.netplay_port = netplay_port_;
 
 #if defined(ARCHSTREAMER_DEBUG_GB_LINK)
     if (is_gb_family(system_key)) {
@@ -215,24 +274,62 @@ LinkCableBackend::StartResult LinkCableBackend::begin(
     }
 #endif
 
-    // Multi-instance path: two SP slots already running, or promote one shared session.
-    if (system_key == "gba" || system_key == "nds" || system_key == "switch") {
+    if (system_key == "gba") {
+        const auto core = resolve_link_core("gba");
+        if (!core.has_value()) {
+            result.message =
+                "gpSP core not found. Install gpsp_libretro under ~/.config/retroarch/cores "
+                "(GBA link uses RetroArch netpacket, which mGBA does not provide).";
+            return result;
+        }
         mode_ = LinkCableMode::GbaNetpacket;
+        pending_core_path_ = *core;
         result.ok = true;
         result.mode = mode_;
+        result.core_path = *core;
         if (peers_already_running) {
+            result.needs_gba_netplay = true;
             result.needs_runtime_promotion = false;
             result.message =
-                "Matched " + user_a_ + " ↔ " + user_b_ + " on " + std::string(system_key) +
-                ". Both singleplayer instances are running (logical host=" + user_a_ +
-                "). Cable/netpacket between them is not wired yet.";
+                "Matched " + user_a_ + " ↔ " + user_b_ +
+                ". Starting gpSP netplay cable on 127.0.0.1:" + std::to_string(netplay_port_) +
+                " (host=" + user_a_ + "). Enter the Cable Club / link room in-game.";
         } else {
             result.needs_runtime_promotion = true;
             result.message =
-                "Matched " + user_a_ + " ↔ " + user_b_ + " on " + std::string(system_key) +
-                ". Promoting to Link runtime (logical host=" + user_a_ +
-                "). Peer emulator + dual streams not started yet.";
+                "Matched " + user_a_ + " ↔ " + user_b_ +
+                ". Same-slot GBA link still needs a second emulator instance "
+                "(use two concurrent singleplayer sessions, then Link).";
         }
+        return result;
+    }
+
+    if (system_key == "nds") {
+        mode_ = LinkCableMode::GbaNetpacket;
+        result.ok = true;
+        result.mode = mode_;
+        result.message =
+            "Matched " + user_a_ + " ↔ " + user_b_ +
+            " on nds. In-game link transport for this system is not wired yet.";
+        return result;
+    }
+
+    if (system_key == "switch") {
+        if (!ryujinx_runtime_available()) {
+            result.message =
+                "Switch Link needs Ryujinx with ldn_mitm. Install Ryujinx under " +
+                default_ryujinx_runtime_root().string() +
+                " (or set ARCHSTREAMER_RYUJINX), then relaunch both sessions.";
+            return result;
+        }
+        mode_ = LinkCableMode::SwitchLdnMitm;
+        result.ok = true;
+        result.mode = mode_;
+        // Sessions already start with multiplayer_mode=ldn_mitm — no relaunch.
+        result.message =
+            "Matched " + user_a_ + " ↔ " + user_b_ +
+            ". Local Wireless (ldn_mitm) is enabled — open Local Play / LDN in-game. "
+            "Both players must be on Ryujinx with the same title.";
         return result;
     }
 
@@ -244,6 +341,7 @@ void LinkCableBackend::clear() {
     mode_ = LinkCableMode::None;
     relaunch_requested_ = false;
     pending_core_path_.clear();
+    netplay_port_ = kDefaultGbaNetplayPort;
     client_a_ = 0;
     client_b_ = 0;
     user_a_.clear();

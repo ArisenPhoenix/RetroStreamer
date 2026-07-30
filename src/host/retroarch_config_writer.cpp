@@ -402,6 +402,11 @@ std::filesystem::path write_retroarch_input_override(
         << "pause_nonactive = \"false\"\n"
         << "network_cmd_enable = \"true\"\n"
         << "network_cmd_port = \"" << network_cmd_port << "\"\n"
+        // Localhost GBA link (gpSP netpacket) must not hit public lobby / MITM / UPnP.
+        << "netplay_public_announce = \"false\"\n"
+        << "netplay_use_mitm_server = \"false\"\n"
+        << "netplay_nat_traversal = \"false\"\n"
+        << "netplay_allow_slaves = \"false\"\n"
         // Virtual keyboard from clients: Space holds fast-forward; F1 opens menu.
         // Disable the enable-hotkey chord so kids do not need a modifier.
         // Note: official key is input_toggle_fast_forward (underscore), not …fastforward.

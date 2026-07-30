@@ -243,6 +243,7 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/retroarch_resolve.cpp
         src/host/save_profile.cpp
         src/host/standalone_emulator.cpp
+        src/host/switch_save_share.cpp
         src/host/link_coordinator.cpp
         src/host/link_cable_backend.cpp
         src/host/seat_manager.cpp

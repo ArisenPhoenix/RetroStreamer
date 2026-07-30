@@ -3,10 +3,10 @@
 
 #include "common/platform/process_utils.hpp"
 
+#include <functional>
 #include <iostream>
 #include <stdexcept>
 #include <string>
-#include <vector>
 #include <vector>
 
 namespace archstreamer {
@@ -125,9 +125,9 @@ std::string ensure_named_null_sink(const char* sink_name, const char* descriptio
     return sink_name;
 }
 
-using SinkInputMatchFn = bool (*)(const std::string&);
-
-int move_matching_sink_inputs_to(const char* destination_sink, SinkInputMatchFn matches) {
+int move_matching_sink_inputs_to(
+    const char* destination_sink,
+    const std::function<bool(const std::string&)>& matches) {
     const auto dump = read_command_output("pactl list sink-inputs 2>/dev/null");
     if (dump.empty()) {
         return 0;
@@ -175,7 +175,31 @@ bool block_looks_like_retroarch(const std::string& block) {
         block.find("node.name = \"RetroArch\"") != std::string::npos;
 }
 
+bool block_has_application_id(const std::string& block, const std::string& application_id) {
+    // pactl: application.id = "archstreamer-slot-0"
+    const std::string needle = "application.id = \"" + application_id + "\"";
+    return block.find(needle) != std::string::npos;
+}
+
 } // namespace
+
+std::string StreamingAudioSink::slot_sink_name(int slot_index) {
+    if (slot_index < 0) {
+        slot_index = 0;
+    }
+    return std::string(kName) + "-" + std::to_string(slot_index);
+}
+
+std::string StreamingAudioSink::slot_application_id(int slot_index) {
+    if (slot_index < 0) {
+        slot_index = 0;
+    }
+    return std::string(kName) + "-slot-" + std::to_string(slot_index);
+}
+
+bool StreamingAudioSink::is_streaming_sink_name(std::string_view sink_name) {
+    return sink_name == kName || sink_name.rfind("archstreamer-", 0) == 0;
+}
 
 std::string StreamingAudioSink::ensure() {
     const auto name = ensure_named_null_sink(kName, "ArchStreamer");
@@ -187,6 +211,18 @@ std::string StreamingAudioSink::ensure() {
 
 std::string StreamingAudioSink::monitor_source() {
     return ensure() + ".monitor";
+}
+
+std::string StreamingAudioSink::ensure_slot(int slot_index) {
+    const auto name = slot_sink_name(slot_index);
+    const auto description = "ArchStreamer slot " + std::to_string(slot_index < 0 ? 0 : slot_index);
+    ensure_named_null_sink(name.c_str(), description.c_str());
+    restore_default_sink();
+    return name;
+}
+
+std::string StreamingAudioSink::monitor_source_for_slot(int slot_index) {
+    return ensure_slot(slot_index) + ".monitor";
 }
 
 void StreamingAudioSink::park_game_audio() {
@@ -209,11 +245,36 @@ void StreamingAudioSink::park_game_audio() {
     }
 }
 
+void StreamingAudioSink::park_game_audio_for_slot(int slot_index) {
+    const auto sink = slot_sink_name(slot_index);
+    const auto app_id = slot_application_id(slot_index);
+    try {
+        ensure_slot(slot_index);
+    } catch (const std::exception& error) {
+        std::cerr
+            << "Warning: could not ensure streaming audio sink for slot " << slot_index
+            << ": " << error.what() << '\n';
+        return;
+    }
+
+    const auto moved = move_matching_sink_inputs_to(
+        sink.c_str(),
+        [&](const std::string& block) {
+            return block_has_application_id(block, app_id);
+        });
+    if (moved > 0) {
+        std::cout
+            << "Parked " << moved
+            << " stream(s) on '" << sink
+            << "' (slot " << slot_index << ").\n";
+    }
+}
+
 void StreamingAudioSink::restore_default_sink() {
     // Never leave the session default on the silent capture sink — that mutes desktop
     // audio until the user notices.
     const auto current = read_command_output("pactl get-default-sink 2>/dev/null");
-    if (current != kName && current.rfind("archstreamer", 0) != 0) {
+    if (!is_streaming_sink_name(current)) {
         return;
     }
 
@@ -235,14 +296,13 @@ void StreamingAudioSink::restore_default_sink() {
         auto rest = line.substr(first_tab + 1);
         const auto second_tab = rest.find('\t');
         const auto name = second_tab == std::string::npos ? rest : rest.substr(0, second_tab);
-        if (name.empty() || name == kName || name.rfind("archstreamer", 0) == 0) {
+        if (name.empty() || is_streaming_sink_name(name)) {
             continue;
         }
         // Prefer speakers/HDMI over DualSense headphone jacks when reclaiming default.
-        const auto lower = name;
-        if (lower.find("Wireless_Controller") != std::string::npos ||
-            lower.find("dualsense") != std::string::npos ||
-            lower.find("DualShock") != std::string::npos) {
+        if (name.find("Wireless_Controller") != std::string::npos ||
+            name.find("dualsense") != std::string::npos ||
+            name.find("DualShock") != std::string::npos) {
             continue;
         }
         const auto result = read_command_output(
@@ -270,7 +330,7 @@ void StreamingAudioSink::restore_default_sink() {
         auto rest = line.substr(first_tab + 1);
         const auto second_tab = rest.find('\t');
         const auto name = second_tab == std::string::npos ? rest : rest.substr(0, second_tab);
-        if (name.empty() || name == kName || name.rfind("archstreamer", 0) == 0) {
+        if (name.empty() || is_streaming_sink_name(name)) {
             continue;
         }
         const auto result = read_command_output(
@@ -298,9 +358,32 @@ std::string StreamingAudioSink::default_monitor_source() {
 
 namespace archstreamer {
 
+std::string StreamingAudioSink::slot_sink_name(int slot_index) {
+    if (slot_index < 0) {
+        slot_index = 0;
+    }
+    return std::string(kName) + "-" + std::to_string(slot_index);
+}
+
+std::string StreamingAudioSink::slot_application_id(int slot_index) {
+    if (slot_index < 0) {
+        slot_index = 0;
+    }
+    return std::string(kName) + "-slot-" + std::to_string(slot_index);
+}
+
+bool StreamingAudioSink::is_streaming_sink_name(std::string_view sink_name) {
+    return sink_name == kName || sink_name.rfind("archstreamer-", 0) == 0;
+}
+
 std::string StreamingAudioSink::ensure() { return kName; }
 std::string StreamingAudioSink::monitor_source() { return std::string(kName) + ".monitor"; }
+std::string StreamingAudioSink::ensure_slot(int slot_index) { return slot_sink_name(slot_index); }
+std::string StreamingAudioSink::monitor_source_for_slot(int slot_index) {
+    return slot_sink_name(slot_index) + ".monitor";
+}
 void StreamingAudioSink::park_game_audio() {}
+void StreamingAudioSink::park_game_audio_for_slot(int) {}
 void StreamingAudioSink::restore_default_sink() {}
 std::string StreamingAudioSink::default_monitor_source() { return {}; }
 

@@ -25,6 +25,7 @@
 #include "host/retroarch_resolve.hpp"
 #include "host/save_profile.hpp"
 #include "host/standalone_emulator.hpp"
+#include "host/switch_save_share.hpp"
 #include "host/session_control_monitor.hpp"
 #include "host/session_lobby.hpp"
 #include "host/session_runtime.hpp"
@@ -480,21 +481,21 @@ int HostApp::run_direct_session(
 
     if (launch_config.standalone || system_key == "switch") {
         // Re-verify at launch so a stale catalog / missing install cannot start.
-        const auto yuzu = ensure_yuzu_runtime();
-        if (!yuzu.has_value()) {
-            const auto message = yuzu_unavailable_message();
+        const auto runtime = resolve_switch_runtime();
+        if (!runtime.has_value()) {
+            const auto message = switch_runtime_unavailable_message();
             if (session_plan.has_value()) {
                 send_error_to_session_clients(*session_plan, message);
             }
             throw std::runtime_error(message);
         }
         launch_config.standalone = true;
-        launch_config.core_path = yuzu->path;
-        launch_config.standalone_args_before_content = yuzu->args_before_content;
+        launch_config.core_path = runtime->path;
+        launch_config.standalone_args_before_content = runtime->args_before_content;
     }
 
     if (launch_config.standalone) {
-        // Yuzu bindings need SDL GUIDs even when RetroArch would use udev.
+        // Controller GUID binding is Yuzu-specific; still resolve pads for logging.
         if (resolved_pads.empty()) {
             resolved_pads = find_archstreamer_sdl_pads(
                 launch_plan.players,
@@ -517,48 +518,72 @@ int HostApp::run_direct_session(
         } else if (gamescope_capture) {
             force_vulkan = true;
         }
-        // Yuzu ignores gamescope --prefer-vk-device for the child and sorts Vulkan
-        // devices itself (3060 before 1660). Pin qt-config vulkan_device to that order.
-        int yuzu_vulkan_device = -1;
-        if (resolved_gpu.has_value()) {
-            yuzu_vulkan_device = yuzu_vulkan_device_index(*resolved_gpu);
-        }
-        const auto yuzu_user = prepare_yuzu_user_profile(
-            save_profile,
-            force_opengl,
-            force_vulkan,
-            yuzu_vulkan_device,
-            config.yuzu_resolution_scale);
-        std::vector<std::string> pad_guids;
-        pad_guids.reserve(resolved_pads.size());
-        for (const auto& pad : resolved_pads) {
-            pad_guids.push_back(pad.guid);
-        }
-        configure_yuzu_archstreamer_controls(yuzu_user, pad_guids);
-        launch_env_request.yuzu_profile = yuzu_user;
-        // Always restore fullscreen launch args for standalone.
-        launch_config.standalone_args_before_content = {"-f", "-g"};
-        launch_config.quiet_stdio = !config.verbose;
-        std::cout
-            << "Yuzu renderer: "
-            << (force_opengl ? "OpenGL" : force_vulkan ? "Vulkan" : "default");
-        if (yuzu_vulkan_device >= 0 && resolved_gpu.has_value()) {
+
+        const auto core_name = launch_config.core_path.filename().string();
+        const bool use_ryujinx =
+            core_name.find("Ryujinx") != std::string::npos ||
+            core_name.find("ryujinx") != std::string::npos;
+
+        if (use_ryujinx) {
+            const auto ryujinx_user = prepare_ryujinx_user_profile(
+                save_profile,
+                /*enable_ldn_mitm=*/true,
+                config.yuzu_resolution_scale);
+            launch_env_request.ryujinx_profile = ryujinx_user;
+            launch_config.standalone_args_before_content = {"--fullscreen"};
+            launch_config.quiet_stdio = !config.verbose;
+            const auto synced = sync_switch_shared_saves_for_profile(save_profile);
             std::cout
-                << " (vulkan_device=" << yuzu_vulkan_device
-                << " → " << resolved_gpu->name << ")";
-        }
-        std::cout << '\n';
-        {
-            const int scale = std::clamp(config.yuzu_resolution_scale, 1, 6);
-            std::cout << "Yuzu resolution: " << scale << "x native"
-                      << " (resolution_setup=" << (scale + 1) << ")\n";
+                << "Ryujinx (ldn_mitm) config: " << ryujinx_user.data_root
+                << "\nRyujinx keys:            " << ryujinx_user.keys_directory
+                << "\nShared Switch saves:     " << synced.size() << " title(s)\n";
+            {
+                const int scale = std::clamp(config.yuzu_resolution_scale, 1, 4);
+                std::cout << "Ryujinx resolution: " << scale << "x native\n";
+            }
+        } else {
+            // Yuzu ignores gamescope --prefer-vk-device for the child and sorts Vulkan
+            // devices itself (3060 before 1660). Pin qt-config vulkan_device to that order.
+            int yuzu_vulkan_device = -1;
+            if (resolved_gpu.has_value()) {
+                yuzu_vulkan_device = yuzu_vulkan_device_index(*resolved_gpu);
+            }
+            const auto yuzu_user = prepare_yuzu_user_profile(
+                save_profile,
+                force_opengl,
+                force_vulkan,
+                yuzu_vulkan_device,
+                config.yuzu_resolution_scale);
+            std::vector<std::string> pad_guids;
+            pad_guids.reserve(resolved_pads.size());
+            for (const auto& pad : resolved_pads) {
+                pad_guids.push_back(pad.guid);
+            }
+            configure_yuzu_archstreamer_controls(yuzu_user, pad_guids);
+            launch_env_request.yuzu_profile = yuzu_user;
+            launch_config.standalone_args_before_content = {"-f", "-g"};
+            launch_config.quiet_stdio = !config.verbose;
+            sync_switch_shared_saves_for_profile(save_profile);
+            std::cout
+                << "Yuzu renderer: "
+                << (force_opengl ? "OpenGL" : force_vulkan ? "Vulkan" : "default");
+            if (yuzu_vulkan_device >= 0 && resolved_gpu.has_value()) {
+                std::cout
+                    << " (vulkan_device=" << yuzu_vulkan_device
+                    << " → " << resolved_gpu->name << ")";
+            }
+            std::cout << '\n';
+            {
+                const int scale = std::clamp(config.yuzu_resolution_scale, 1, 6);
+                std::cout << "Yuzu resolution: " << scale << "x native"
+                          << " (resolution_setup=" << (scale + 1) << ")\n";
+            }
+            std::cout
+                << "Yuzu user data: " << yuzu_user.xdg_data_home
+                << "\nYuzu keys:      " << yuzu_user.keys_directory << '\n';
         }
 
         apply_standalone_capture_prefix(launch_config, capture, config, gamescope_vk_device);
-
-        std::cout
-            << "Yuzu user data: " << yuzu_user.xdg_data_home
-            << "\nYuzu keys:      " << yuzu_user.keys_directory << '\n';
     } else {
         const auto runtime_override = write_retroarch_input_override(
             virtual_joypad_index,

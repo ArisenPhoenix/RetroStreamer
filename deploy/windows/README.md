@@ -23,6 +23,8 @@ Repo usually lives at `%USERPROFILE%\Documents\RetroStreamer`.
 
 `-ResetHard` discards local edits on the Windows tree so it always matches `origin/master` (recommended for a pure client machine).
 
+Install overwrites `C:\Program Files\ArchStreamer\bin\*.exe`. Run an **Admin** PowerShell, and close `archstreamer_gui` / `session_client` first (the script stops them when it can). A locked `session_client.exe` usually shows as cmake `file INSTALL cannot copy file` / permission denied.
+
 ## Install deps
 
 ```powershell

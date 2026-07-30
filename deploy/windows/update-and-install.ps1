@@ -4,6 +4,9 @@
 #   .\deploy\windows\update-and-install.ps1
 #   .\deploy\windows\update-and-install.ps1 -ResetHard
 #
+# Close ArchStreamer / session_client before install (the script also tries to stop them);
+# otherwise cmake --install can fail with permission denied on bin\*.exe.
+#
 # Options:
 #   -ResetHard     discard local edits, match origin/master (typical for a client PC)
 #   -SkipPull      build/install only (no git)
@@ -101,9 +104,53 @@ if ($SkipInstall) {
 }
 
 Write-Host "Installing to $Prefix ..."
-Get-Process archstreamer_gui -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-cmake --install build --config $Config --prefix $Prefix
-if ($LASTEXITCODE -ne 0) { throw "cmake --install failed" }
+# cmake --install overwrites bin\*.exe; Windows locks running images (permission denied).
+$installBin = Join-Path $Prefix "bin"
+$procsToStop = @(
+    "archstreamer_gui",
+    "session_client",
+    "host_runner",
+    "client_catalog_probe",
+    "game_catalog_probe",
+    "asset_probe",
+    "steam_art_import",
+    "uinput_probe",
+    "controller_probe"
+)
+foreach ($name in $procsToStop) {
+    Get-Process -Name $name -ErrorAction SilentlyContinue |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+}
+Start-Sleep -Milliseconds 500
+
+# If something still holds an installed exe (Explorer preview, AV), retry a few times.
+$installOk = $false
+for ($attempt = 1; $attempt -le 5; $attempt++) {
+    cmake --install build --config $Config --prefix $Prefix
+    if ($LASTEXITCODE -eq 0) {
+        $installOk = $true
+        break
+    }
+    Write-Warning "cmake --install failed (attempt $attempt/5). Retrying after stopping processes again..."
+    foreach ($name in $procsToStop) {
+        Get-Process -Name $name -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 1
+}
+if (-not $installOk) {
+    throw @"
+cmake --install failed (often permission denied on $installBin\*.exe).
+
+Common causes:
+  1. ArchStreamer / session_client still running — close them (Task Manager).
+  2. Not elevated — Program Files needs Admin PowerShell.
+  3. Antivirus briefly locking the new binaries — retry.
+
+Then re-run:
+  .\deploy\windows\update-and-install.ps1 -SkipPull
+"@
+}
 
 $finish = Join-Path $RepoRoot "deploy\windows\finish-install.ps1"
 $finishArgs = @{

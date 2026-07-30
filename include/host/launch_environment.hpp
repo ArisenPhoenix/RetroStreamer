@@ -39,6 +39,7 @@ struct EmulatorLaunchEnvRequest {
 
     std::optional<GpuDevice> render_gpu;
     std::optional<YuzuUserProfile> yuzu_profile; // set for standalone Yuzu
+    std::optional<RyujinxUserProfile> ryujinx_profile; // set for standalone Ryujinx
 };
 
 // Layer builders (also usable for tests / diagnostics).

@@ -3,6 +3,7 @@
 #include "common/platform/paths.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -782,6 +783,7 @@ std::string ryujinx_unavailable_message() {
 
 std::optional<ResolvedStandaloneEmulator> ensure_ryujinx_runtime() {
     const auto root = default_ryujinx_runtime_root();
+    const auto keys_dir = root / "keys";
 #ifdef _WIN32
     const auto managed_binary = root / "Ryujinx.exe";
 #else
@@ -789,6 +791,7 @@ std::optional<ResolvedStandaloneEmulator> ensure_ryujinx_runtime() {
     const auto managed_appimage = root / "Ryujinx.AppImage";
 #endif
     std::filesystem::create_directories(root);
+    std::filesystem::create_directories(keys_dir);
 
 #ifdef _WIN32
     if (!std::filesystem::exists(managed_binary)) {
@@ -835,6 +838,14 @@ std::optional<ResolvedStandaloneEmulator> ensure_ryujinx_runtime() {
 #endif
     }
 
+    // Prefer Yuzu managed keys, then personal installs.
+    copy_key_files(default_yuzu_runtime_root() / "keys", keys_dir);
+    if (!std::filesystem::is_regular_file(keys_dir / "prod.keys")) {
+        if (const auto source_keys = find_source_keys_dir(); source_keys.has_value()) {
+            copy_key_files(*source_keys, keys_dir);
+        }
+    }
+
 #ifdef _WIN32
     if (!std::filesystem::is_regular_file(managed_binary)) {
         return std::nullopt;
@@ -852,6 +863,148 @@ std::optional<ResolvedStandaloneEmulator> ensure_ryujinx_runtime() {
     }
     return std::nullopt;
 #endif
+}
+
+std::optional<ResolvedStandaloneEmulator> resolve_switch_runtime() {
+    if (ryujinx_runtime_available()) {
+        return ensure_ryujinx_runtime();
+    }
+    if (yuzu_runtime_available()) {
+        return ensure_yuzu_runtime();
+    }
+    return std::nullopt;
+}
+
+std::string switch_runtime_unavailable_message() {
+    return "No Switch emulator found. Install Ryujinx (preferred) under " +
+        default_ryujinx_runtime_root().string() +
+        " or Yuzu under " + default_yuzu_runtime_root().string() +
+        " (or set ARCHSTREAMER_RYUJINX / ARCHSTREAMER_YUZU).";
+}
+
+namespace {
+
+void upsert_json_number(std::string& json, const std::string& key, int value) {
+    const std::string needle = "\"" + key + "\"";
+    const auto pos = json.find(needle);
+    if (pos == std::string::npos) {
+        // Insert before final closing brace.
+        const auto brace = json.rfind('}');
+        if (brace == std::string::npos) {
+            return;
+        }
+        std::string insert = "  \"" + key + "\": " + std::to_string(value) + ",\n";
+        json.insert(brace, insert);
+        return;
+    }
+    const auto colon = json.find(':', pos);
+    if (colon == std::string::npos) {
+        return;
+    }
+    auto start = colon + 1;
+    while (start < json.size() && (json[start] == ' ' || json[start] == '\t')) {
+        ++start;
+    }
+    auto end = start;
+    while (end < json.size() && (std::isdigit(static_cast<unsigned char>(json[end])) || json[end] == '-')) {
+        ++end;
+    }
+    json.replace(start, end - start, std::to_string(value));
+}
+
+void upsert_json_bool(std::string& json, const std::string& key, bool value) {
+    const std::string needle = "\"" + key + "\"";
+    const auto pos = json.find(needle);
+    const char* lit = value ? "true" : "false";
+    if (pos == std::string::npos) {
+        const auto brace = json.rfind('}');
+        if (brace == std::string::npos) {
+            return;
+        }
+        json.insert(brace, std::string("  \"") + key + "\": " + lit + ",\n");
+        return;
+    }
+    const auto colon = json.find(':', pos);
+    if (colon == std::string::npos) {
+        return;
+    }
+    auto start = colon + 1;
+    while (start < json.size() && (json[start] == ' ' || json[start] == '\t')) {
+        ++start;
+    }
+    auto end = start;
+    while (end < json.size() && std::isalpha(static_cast<unsigned char>(json[end]))) {
+        ++end;
+    }
+    json.replace(start, end - start, lit);
+}
+
+void ensure_ryujinx_config(
+    const std::filesystem::path& config_path,
+    bool enable_ldn_mitm,
+    int resolution_scale) {
+    std::filesystem::create_directories(config_path.parent_path());
+    std::string contents;
+    if (std::filesystem::is_regular_file(config_path)) {
+        std::ifstream in(config_path);
+        contents.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+    if (contents.empty()) {
+        contents = "{\n}\n";
+    }
+    // 0=Disabled, 1=LdnRyu, 2=LdnMitm (same-network / same-host Link).
+    upsert_json_number(contents, "multiplayer_mode", enable_ldn_mitm ? 2 : 1);
+    upsert_json_bool(contents, "enable_internet_access", false);
+    upsert_json_bool(contents, "enable_vsync", true);
+    upsert_json_number(contents, "dram_size", 3); // 12 GiB
+    if (resolution_scale > 0) {
+        upsert_json_number(contents, "res_scale", std::clamp(resolution_scale, 1, 4));
+    }
+    std::ofstream out(config_path, std::ios::trunc);
+    if (!out) {
+        throw std::runtime_error("failed to write Ryujinx Config.json: " + config_path.string());
+    }
+    out << contents;
+}
+
+} // namespace
+
+RyujinxUserProfile prepare_ryujinx_user_profile(
+    const SaveProfile& save_profile,
+    bool enable_ldn_mitm,
+    int resolution_scale) {
+    RyujinxUserProfile profile;
+    profile.xdg_config_home = save_profile.user_directory / "ryujinx" / "xdg-config";
+    profile.data_root = profile.xdg_config_home / "Ryujinx";
+    profile.keys_directory = profile.data_root / "system";
+
+    std::filesystem::create_directories(profile.data_root / "bis" / "user" / "save");
+    std::filesystem::create_directories(profile.keys_directory);
+    std::filesystem::create_directories(save_profile.user_directory / "switch" / "saves");
+
+    copy_key_files(default_ryujinx_runtime_root() / "keys", profile.keys_directory);
+    if (!std::filesystem::is_regular_file(profile.keys_directory / "prod.keys")) {
+        copy_key_files(default_yuzu_runtime_root() / "keys", profile.keys_directory);
+    }
+    if (!std::filesystem::is_regular_file(profile.keys_directory / "prod.keys")) {
+        if (const auto source_keys = find_source_keys_dir(); source_keys.has_value()) {
+            copy_key_files(*source_keys, profile.keys_directory);
+        }
+    }
+
+    ensure_ryujinx_config(
+        profile.data_root / "Config.json",
+        enable_ldn_mitm,
+        resolution_scale);
+    return profile;
+}
+
+std::vector<std::pair<std::string, std::string>> ryujinx_launch_environment(
+    const RyujinxUserProfile& profile) {
+    return {
+        {"XDG_CONFIG_HOME", profile.xdg_config_home.string()},
+        {"SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1"},
+    };
 }
 
 } // namespace archstreamer

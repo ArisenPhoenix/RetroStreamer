@@ -399,27 +399,30 @@ void MainWindow::load_host_games() {
             append_log(
                 host_log_,
                 QString("No playable titles under %1 (need matching libretro cores "
-                        "visible to this app, or Yuzu for Switch).")
+                        "visible to this app, or Ryujinx/Yuzu for Switch).")
                     .arg(QString::fromStdString(rom_root.string())),
-                GuiLogLevel::Quiet);
-        }
-        if (!archstreamer::yuzu_runtime_available()) {
-            append_log(
-                host_log_,
-                QString::fromStdString(archstreamer::yuzu_unavailable_message()),
                 GuiLogLevel::Quiet);
         }
         if (archstreamer::ryujinx_runtime_available()) {
             if (const auto ryu = archstreamer::resolve_ryujinx(); ryu.has_value()) {
                 append_log(
                     host_log_,
-                    QString("Ryujinx available for future link backends: %1")
+                    QString("Switch runtime: Ryujinx (%1) — preferred for Link/LDN")
                         .arg(QString::fromStdString(ryu->path.string())));
             }
-        } else {
+        } else if (archstreamer::yuzu_runtime_available()) {
+            append_log(
+                host_log_,
+                QString("Switch runtime: Yuzu (fallback). Install Ryujinx for Local Wireless Link."),
+                GuiLogLevel::Quiet);
             append_log(
                 host_log_,
                 QString::fromStdString(archstreamer::ryujinx_unavailable_message()),
+                GuiLogLevel::Quiet);
+        } else {
+            append_log(
+                host_log_,
+                QString::fromStdString(archstreamer::switch_runtime_unavailable_message()),
                 GuiLogLevel::Quiet);
         }
     } catch (const std::exception& error) {

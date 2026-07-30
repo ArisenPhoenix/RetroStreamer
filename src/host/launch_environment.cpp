@@ -1,12 +1,16 @@
 #include "host/launch_environment.hpp"
 
 #include "common/platform/process_utils.hpp"
+#include "host/streaming_audio_sink.hpp"
 #ifndef _WIN32
 #include "host/virtual_display.hpp"
 
 #include <filesystem>
 #include <unistd.h>
 #endif
+
+#include <stdexcept>
+#include <string>
 
 namespace archstreamer {
 namespace {
@@ -109,7 +113,23 @@ ProcessEnvironment audio_launch_environment(
     }
     if (stream_audio) {
         if (!audio_source.empty() && audio_source.ends_with(".monitor")) {
-            env.set("PULSE_SINK", audio_source.substr(0, audio_source.size() - 8));
+            const auto sink = audio_source.substr(0, audio_source.size() - 8);
+            env.set("PULSE_SINK", sink);
+            // Tag this emulator so concurrent slots can park/capture independently.
+            if (StreamingAudioSink::is_streaming_sink_name(sink)) {
+                if (sink == StreamingAudioSink::kName) {
+                    env.set("PULSE_PROP_application.id", StreamingAudioSink::kName);
+                } else if (sink.rfind("archstreamer-", 0) == 0) {
+                    try {
+                        const int slot = std::stoi(sink.substr(std::string("archstreamer-").size()));
+                        env.set(
+                            "PULSE_PROP_application.id",
+                            StreamingAudioSink::slot_application_id(slot));
+                    } catch (const std::exception&) {
+                        env.set("PULSE_PROP_application.id", sink);
+                    }
+                }
+            }
         }
         // Prefer a small Pulse quantum so audio_sync pacing stays near realtime.
         env.set("PULSE_LATENCY_MSEC", "40");
@@ -118,7 +138,7 @@ ProcessEnvironment audio_launch_environment(
         // PULSE_SINK=archstreamer in the GUI process environment.
         env.set("SDL_AUDIODRIVER", "pulse");
         const auto default_sink = read_command_output("pactl get-default-sink 2>/dev/null");
-        if (!default_sink.empty() && default_sink != "archstreamer") {
+        if (!default_sink.empty() && !StreamingAudioSink::is_streaming_sink_name(default_sink)) {
             env.set("PULSE_SINK", default_sink);
         }
     }
@@ -201,6 +221,9 @@ ProcessEnvironment build_emulator_launch_environment(const EmulatorLaunchEnvRequ
         request.capture_display));
     if (request.yuzu_profile.has_value()) {
         env.merge_pairs(yuzu_launch_environment(*request.yuzu_profile));
+    }
+    if (request.ryujinx_profile.has_value()) {
+        env.merge_pairs(ryujinx_launch_environment(*request.ryujinx_profile));
     }
     return env;
 }

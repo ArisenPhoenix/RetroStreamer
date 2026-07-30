@@ -46,7 +46,7 @@ LibretroCoreRegistry::LibretroCoreRegistry(std::vector<std::filesystem::path> co
     add_system("gamecube", "GameCube", {{"dolphin", "Dolphin"}});
     add_system("wii", "Wii", {{"dolphin", "Dolphin"}});
     add_system("3ds", "Nintendo 3DS", {{"citra", "Citra"}});
-    add_system("switch", "Nintendo Switch", {{"yuzu", "Yuzu"}, {"ryujinx", "Ryujinx"}, {"suyu", "Suyu"}});
+    add_system("switch", "Nintendo Switch", {{"ryujinx", "Ryujinx"}, {"yuzu", "Yuzu"}, {"suyu", "Suyu"}});
     add_system("snes", "SNES / Super Famicom", {{"snes9x", "Snes9x"}, {"bsnes", "bsnes"}, {"bsnes_mercury_balanced", "bsnes-mercury Balanced"}, {"mesen_s", "Mesen-S"}, {"snes9x2010", "Snes9x 2010"}, {"snes9x_2010", "Snes9x 2010"}, {"snes9x_2005", "Snes9x 2005"}});
     add_system("nes", "NES / Famicom", {{"nestopia", "Nestopia"}, {"fceumm", "FCEUmm"}, {"mesen", "Mesen"}, {"quicknes", "QuickNES"}});
     add_system("pce", "PC Engine / TurboGrafx-16", {{"mednafen_pce_fast", "Beetle PCE FAST"}});

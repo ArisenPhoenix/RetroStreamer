@@ -75,6 +75,9 @@ public:
     /** Queue an already-handshaken late viewer / reconnect stream for this slot. */
     void enqueue_join(TcpStream stream, ClientHello hello, bool is_reconnect);
 
+    /** After GBA Link match: relaunch this slot's RetroArch as netplay host or client. */
+    void request_gba_netplay_relaunch(GbaNetplayRelaunchRequest request);
+
     MediaServer* media_server() { return media_server_.get(); }
     InputRouter* input_router() { return input_router_.get(); }
     std::size_t& media_index() { return media_index_; }
@@ -92,6 +95,7 @@ private:
     void register_input_clients();
     void unregister_input_clients();
     void shutdown_media_and_clients(const std::string& end_reason);
+    std::optional<GbaNetplayRelaunchRequest> consume_gba_netplay_relaunch();
 
     ActiveSessionSlotConfig config_;
     std::thread worker_;
@@ -100,6 +104,9 @@ private:
 
     std::mutex join_mutex_;
     std::queue<PendingJoin> pending_joins_;
+
+    std::mutex gba_netplay_mutex_;
+    std::optional<GbaNetplayRelaunchRequest> pending_gba_netplay_;
 
     std::unique_ptr<HostVirtualGamepadBus> gamepads_;
     std::unique_ptr<VirtualKeyboard> keyboard_;

@@ -226,6 +226,10 @@ std::vector<LinkOutbound> HostSessionHub::handle_link(
             const bool cross_slot =
                 peer_slot != nullptr && peer_slot != &from_slot;
 
+            const std::uint16_t netplay_port = static_cast<std::uint16_t>(
+                55435 +
+                std::min(from_slot.slot_index(), peer_slot != nullptr ? peer_slot->slot_index() : 0));
+
             const auto start = link_cable_.begin(
                 from_slot.plan().system_key,
                 peer_id,
@@ -233,7 +237,8 @@ std::vector<LinkOutbound> HostSessionHub::handle_link(
                 peer_user,
                 from_username,
                 2,
-                cross_slot);
+                cross_slot,
+                netplay_port);
 
             for (auto& update : outbound) {
                 update.response.message = start.message;
@@ -253,6 +258,35 @@ std::vector<LinkOutbound> HostSessionHub::handle_link(
                     from_slot.plan().pending_link_client_client_id = start.logical_client_client_id;
                     from_slot.plan().pending_link_host_username = start.logical_host_username;
                     from_slot.plan().pending_link_client_username = start.logical_client_username;
+                }
+                if (start.needs_gba_netplay && cross_slot && peer_slot != nullptr) {
+                    ActiveSessionSlot* host_slot =
+                        slot_for_client(start.logical_host_client_id);
+                    ActiveSessionSlot* client_slot =
+                        slot_for_client(start.logical_client_client_id);
+                    if (host_slot == nullptr || client_slot == nullptr) {
+                        std::cerr
+                            << "Link cable: GBA netplay matched but could not resolve both slots\n";
+                    } else {
+                        GbaNetplayRelaunchRequest host_req;
+                        host_req.is_host = true;
+                        host_req.port = start.netplay_port;
+                        host_req.nick = start.logical_host_username;
+                        host_req.core_path = start.core_path;
+                        GbaNetplayRelaunchRequest client_req;
+                        client_req.is_host = false;
+                        client_req.port = start.netplay_port;
+                        client_req.nick = start.logical_client_username;
+                        client_req.core_path = start.core_path;
+                        // Host first so its pending is visible before client delay ends.
+                        host_slot->request_gba_netplay_relaunch(std::move(host_req));
+                        client_slot->request_gba_netplay_relaunch(std::move(client_req));
+                        std::cout
+                            << "Link cable: queued gpSP netplay "
+                            << "host_slot=" << host_slot->slot_index()
+                            << " client_slot=" << client_slot->slot_index()
+                            << " port=" << start.netplay_port << '\n';
+                    }
                 }
                 send_retroarch_netcmd(
                     std::string("SHOW_MSG ") + start.message,

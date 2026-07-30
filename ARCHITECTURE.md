@@ -162,7 +162,7 @@ The host CLI exposes this as `--host-role player|viewer` (default `viewer`). Hos
 
 Video/audio streaming defaults **on** (`--video` / `--audio`; disable with `--no-video` / `--no-audio`). When video is enabled, RetroArch runs on the virtual capture display. Client `wants_video` / `wants_audio` decide which remotes get RTP fanout. The host always reserves loopback destinations at the base `--video-port` / `--audio-port` so the GUI can toggle **Watch stream locally** mid-session without changing seats (host cannot become a player mid-session).
 
-When audio streaming is enabled without an explicit `--audio-source`, a dedicated host (Viewer) creates a Pulse/PipeWire null sink (`archstreamer`) so speakers stay quiet unless **Watch stream locally** plays the RTP feed. **Host Player** keeps the real display and default sink so singleplayer local play works; video streaming is disabled in that mode (use Host Viewer to stream to clients on this PC or the LAN).
+When audio streaming is enabled without an explicit `--audio-source`, a dedicated host (Viewer) creates a Pulse/PipeWire null sink so speakers stay quiet unless **Watch stream locally** plays the RTP feed. Single-session uses `archstreamer`; concurrent session slots use `archstreamer-0`, `archstreamer-1`, … so each client hears only that slot. **Host Player** keeps the real display and default sink so singleplayer local play works; video streaming is disabled in that mode (use Host Viewer to stream to clients on this PC or the LAN).
 
 Same-machine client+host: run Host as **Viewer** with streaming on, then on the Client tab use **This PC** (`127.0.0.1`) or LAN discovery (announcements also target loopback).
 
@@ -300,7 +300,7 @@ Audio is opt-in on the host:
 host_runner --audio --audio-source <source>
 ```
 
-The first audio path captures a PulseAudio/PipeWire source with `pulsesrc`, encodes Opus with `opusenc`, packetizes with `rtpopuspay`, and fans the **same** RTP packets to every destination with `multiudpsink` (Watch locally on `127.0.0.1` plus remotes). One capture/encode — not one `pulsesrc` per client. If `--audio-source` is omitted on a streaming host (Viewer), the host creates a dedicated null sink named `archstreamer` and captures `archstreamer.monitor` so RetroArch audio does not play on the host speakers unless **Watch stream locally** is enabled. Host Player keeps the default sink for local speakers. The client receives `rtp+opus://` endpoints with `udpsrc`, `rtpopusdepay`, `opusdec`, and `autoaudiosink`.
+The first audio path captures a PulseAudio/PipeWire source with `pulsesrc`, encodes Opus with `opusenc`, packetizes with `rtpopuspay`, and fans the **same** RTP packets to every destination with `multiudpsink` (Watch locally on `127.0.0.1` plus remotes). One capture/encode per session slot — not one `pulsesrc` per client. If `--audio-source` is omitted on a streaming host (Viewer), the host creates a dedicated null sink (`archstreamer` or `archstreamer-N` for concurrent slots) and captures its `.monitor` so RetroArch audio does not play on the host speakers unless **Watch stream locally** is enabled. Host Player keeps the default sink for local speakers. The client receives `rtp+opus://` endpoints with `udpsrc`, `rtpopusdepay`, `opusdec`, and `autoaudiosink`.
 
 Current limitations:
 

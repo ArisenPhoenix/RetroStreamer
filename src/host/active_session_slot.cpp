@@ -20,6 +20,7 @@
 #include "host/retroarch_resolve.hpp"
 #include "host/session_lobby.hpp"
 #include "host/standalone_emulator.hpp"
+#include "host/switch_save_share.hpp"
 #include "host/virtual_joypad_resolve.hpp"
 
 #include <algorithm>
@@ -36,12 +37,23 @@ namespace {
 
 std::mutex audio_park_mutex;
 
-void park_game_audio_locked(StreamingAudioSink* sink) {
+void park_game_audio_locked(StreamingAudioSink* sink, int slot_index) {
     if (sink == nullptr) {
         return;
     }
     std::lock_guard lock(audio_park_mutex);
-    sink->park_game_audio();
+    sink->park_game_audio_for_slot(slot_index);
+}
+
+bool should_use_slot_streaming_sink(const std::string& audio_source) {
+    if (audio_source.empty()) {
+        return true;
+    }
+    if (!audio_source.ends_with(".monitor")) {
+        return false;
+    }
+    const auto sink = audio_source.substr(0, audio_source.size() - 8);
+    return StreamingAudioSink::is_streaming_sink_name(sink);
 }
 
 int parse_virtual_display_number(const std::string& virtual_display) {
@@ -102,6 +114,21 @@ void ActiveSessionSlot::join() {
 void ActiveSessionSlot::enqueue_join(TcpStream stream, ClientHello hello, bool is_reconnect) {
     std::lock_guard lock(join_mutex_);
     pending_joins_.push(PendingJoin{std::move(stream), std::move(hello), is_reconnect});
+}
+
+void ActiveSessionSlot::request_gba_netplay_relaunch(GbaNetplayRelaunchRequest request) {
+    std::lock_guard lock(gba_netplay_mutex_);
+    pending_gba_netplay_ = std::move(request);
+}
+
+std::optional<GbaNetplayRelaunchRequest> ActiveSessionSlot::consume_gba_netplay_relaunch() {
+    std::lock_guard lock(gba_netplay_mutex_);
+    if (!pending_gba_netplay_.has_value()) {
+        return std::nullopt;
+    }
+    auto request = std::move(*pending_gba_netplay_);
+    pending_gba_netplay_.reset();
+    return request;
 }
 
 void ActiveSessionSlot::thread_main() {
@@ -257,6 +284,22 @@ void ActiveSessionSlot::run_session() {
     auto& config = slot_config_;
     auto& launch_plan = config_.launch_plan;
     auto& plan = config_.plan;
+
+    // Concurrent slots each get archstreamer-N so pulsesrc does not mix sessions.
+    if (config.audio && config_.streaming_audio != nullptr &&
+        should_use_slot_streaming_sink(config.audio_source)) {
+        try {
+            config.audio_source =
+                config_.streaming_audio->monitor_source_for_slot(slot);
+            std::cout
+                << "session slot " << slot << ": audio capture "
+                << config.audio_source << '\n';
+        } catch (const std::exception& error) {
+            std::cerr
+                << "session slot " << slot << ": warning: per-slot audio sink failed: "
+                << error.what() << '\n';
+        }
+    }
 
     plan.retroarch_netcmd_port =
         static_cast<std::uint16_t>(DefaultRetroArchNetcmdPort + slot);
@@ -544,15 +587,15 @@ void ActiveSessionSlot::run_session() {
     }
 
     if (launch_config.standalone || system_key_ == "switch") {
-        const auto yuzu = ensure_yuzu_runtime();
-        if (!yuzu.has_value()) {
-            const auto message = yuzu_unavailable_message();
+        const auto runtime = resolve_switch_runtime();
+        if (!runtime.has_value()) {
+            const auto message = switch_runtime_unavailable_message();
             send_error_to_session_clients(plan, message);
             throw std::runtime_error(message);
         }
         launch_config.standalone = true;
-        launch_config.core_path = yuzu->path;
-        launch_config.standalone_args_before_content = yuzu->args_before_content;
+        launch_config.core_path = runtime->path;
+        launch_config.standalone_args_before_content = runtime->args_before_content;
     }
 
     if (launch_config.standalone) {
@@ -578,25 +621,52 @@ void ActiveSessionSlot::run_session() {
         } else if (gamescope_capture_) {
             force_vulkan = true;
         }
-        int yuzu_vulkan_device = -1;
-        if (resolved_gpu.has_value()) {
-            yuzu_vulkan_device = yuzu_vulkan_device_index(*resolved_gpu);
+
+        const auto core_name = launch_config.core_path.filename().string();
+        const bool use_ryujinx =
+            core_name.find("Ryujinx") != std::string::npos ||
+            core_name.find("ryujinx") != std::string::npos;
+
+        if (use_ryujinx) {
+            const auto ryujinx_user = prepare_ryujinx_user_profile(
+                save_profile_,
+                /*enable_ldn_mitm=*/true,
+                config.yuzu_resolution_scale);
+            launch_env_request.ryujinx_profile = ryujinx_user;
+            launch_config.standalone_args_before_content = {"--fullscreen"};
+            launch_config.quiet_stdio = !config.verbose;
+            const auto synced = sync_switch_shared_saves_for_profile(save_profile_);
+            std::cout
+                << "session slot " << slot << ": Ryujinx (ldn_mitm)"
+                << " config=" << ryujinx_user.data_root
+                << " shared_saves=" << synced.size() << '\n';
+        } else {
+            int yuzu_vulkan_device = -1;
+            if (resolved_gpu.has_value()) {
+                yuzu_vulkan_device = yuzu_vulkan_device_index(*resolved_gpu);
+            }
+            const auto yuzu_user = prepare_yuzu_user_profile(
+                save_profile_,
+                force_opengl,
+                force_vulkan,
+                yuzu_vulkan_device,
+                config.yuzu_resolution_scale);
+            std::vector<std::string> pad_guids;
+            pad_guids.reserve(resolved_pads.size());
+            for (const auto& pad : resolved_pads) {
+                pad_guids.push_back(pad.guid);
+            }
+            configure_yuzu_archstreamer_controls(yuzu_user, pad_guids);
+            launch_env_request.yuzu_profile = yuzu_user;
+            launch_config.standalone_args_before_content = {"-f", "-g"};
+            launch_config.quiet_stdio = !config.verbose;
+            const auto synced = sync_switch_shared_saves_for_profile(save_profile_);
+            if (!synced.empty()) {
+                std::cout
+                    << "session slot " << slot << ": Yuzu fallback; synced "
+                    << synced.size() << " Switch save title(s)\n";
+            }
         }
-        const auto yuzu_user = prepare_yuzu_user_profile(
-            save_profile_,
-            force_opengl,
-            force_vulkan,
-            yuzu_vulkan_device,
-            config.yuzu_resolution_scale);
-        std::vector<std::string> pad_guids;
-        pad_guids.reserve(resolved_pads.size());
-        for (const auto& pad : resolved_pads) {
-            pad_guids.push_back(pad.guid);
-        }
-        configure_yuzu_archstreamer_controls(yuzu_user, pad_guids);
-        launch_env_request.yuzu_profile = yuzu_user;
-        launch_config.standalone_args_before_content = {"-f", "-g"};
-        launch_config.quiet_stdio = !config.verbose;
 
         if (gamescope_capture_) {
 #ifndef _WIN32
@@ -617,7 +687,7 @@ void ActiveSessionSlot::run_session() {
             }
             launch_config.command_prefix = std::move(prefix);
             std::cout
-                << "session slot " << slot << ": Yuzu gamescope headless ("
+                << "session slot " << slot << ": Switch gamescope headless ("
                 << width << "x" << height << ")\n";
 #endif
         } else if (virtualgl_capture) {
@@ -671,7 +741,7 @@ void ActiveSessionSlot::run_session() {
     }
 
     if (config.audio) {
-        park_game_audio_locked(config_.streaming_audio);
+        park_game_audio_locked(config_.streaming_audio, slot);
     }
 
     input_router_ = std::make_unique<InputRouter>(*gamepads_, keyboard_.get());
@@ -800,7 +870,7 @@ void ActiveSessionSlot::run_session() {
 
     if (config.audio) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        park_game_audio_locked(config_.streaming_audio);
+        park_game_audio_locked(config_.streaming_audio, slot);
     }
 
     if (config.pulse_input && launch_plan.players > 0) {
@@ -903,10 +973,83 @@ void ActiveSessionSlot::run_session() {
             std::cerr << "session slot " << slot << ": link cable relaunch ignored (debug off)\n";
 #endif
         }
+        if (const auto gba = consume_gba_netplay_relaunch(); gba.has_value()) {
+            if (session_runtime_->launch_config().standalone) {
+                std::cerr
+                    << "session slot " << slot
+                    << ": GBA netplay ignored (standalone emulator)\n";
+            } else {
+                // Client connects after host has time to bind --host.
+                if (!gba->is_host) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+                }
+                std::cout
+                    << "session slot " << slot << ": GBA netplay relaunch as "
+                    << (gba->is_host ? "host" : "client")
+                    << " port=" << gba->port
+                    << " core=" << gba->core_path << '\n';
+                session_runtime_->stop_emulator();
+                auto& relaunch_config = session_runtime_->launch_config();
+                if (!gba->core_path.empty()) {
+                    relaunch_config.core_path = gba->core_path;
+                }
+                LinkCableBackend::apply_netplay_launch_args(
+                    relaunch_config.extra_args,
+                    gba->is_host,
+                    gba->port,
+                    gba->nick);
+                const auto runtime_override = write_retroarch_input_override(
+                    virtual_joypad_index_,
+                    launch_plan.virtual_identities,
+                    config.retroarch_joypad_driver,
+                    launch_plan.players,
+                    save_profile_,
+                    config.audio || config.video,
+                    capture_fullscreen && use_virtual_capture_,
+                    config.video_resolution,
+                    (!use_virtual_capture_ && resolved_gpu.has_value()) ? resolved_gpu->vulkan_index : -1,
+                    system_key_,
+                    relaunch_config.core_path,
+                    config.retroarch_resolution_scale,
+                    slot,
+                    plan.retroarch_netcmd_port);
+                bool replaced_c = false;
+                for (std::size_t i = 0; i + 1 < relaunch_config.extra_args.size(); ++i) {
+                    if (relaunch_config.extra_args[i] == "-c") {
+                        relaunch_config.extra_args[i + 1] = runtime_override.string();
+                        replaced_c = true;
+                        break;
+                    }
+                }
+                if (!replaced_c) {
+                    relaunch_config.extra_args.push_back("-c");
+                    relaunch_config.extra_args.push_back(runtime_override.string());
+                }
+                {
+                    const auto launch_env = build_emulator_launch_environment(launch_env_request);
+                    relaunch_config.environment = launch_env.entries;
+                    relaunch_config.unset_environment = launch_env.unset;
+                }
+                session_runtime_->start_emulator();
+                for (int i = 0; i < 20 && session_runtime_->emulator_running(); ++i) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+                if (!session_runtime_->emulator_running()) {
+                    session_end_reason =
+                        "GBA netplay relaunch failed (RetroArch exited immediately)";
+                    break;
+                }
+                send_retroarch_netcmd(
+                    gba->is_host
+                        ? "SHOW_MSG GBA cable host ready — Cable Club"
+                        : "SHOW_MSG GBA cable connected — Cable Club",
+                    plan.retroarch_netcmd_port);
+            }
+        }
         if (config.audio) {
             const auto now = std::chrono::steady_clock::now();
             if (now >= next_audio_park) {
-                park_game_audio_locked(config_.streaming_audio);
+                park_game_audio_locked(config_.streaming_audio, slot);
                 next_audio_park = now + std::chrono::seconds(3);
             }
         }

@@ -1005,6 +1005,8 @@ int HostApp::run_direct_session(
                 << "On Bazzite install: flatpak install flathub org.libretro.RetroArch\n";
         }
     }
+    // Close XTest before Xvfb so Xlib does not abort the process.
+    keyboard.unplug();
     if (media_server) {
         media_server->stop();
         media_server.reset();

@@ -86,6 +86,15 @@ void VirtualKeyboard::ensure_xtest_display() {
     if (display == nullptr) {
         throw std::runtime_error("failed to open X display " + capture_display_ + " for virtual keyboard");
     }
+    // Xlib's default fatal I/O path calls exit(1). When a session slot stops Xvfb,
+    // that would kill the whole host_runner lobby. Prefer closing the Display and
+    // continuing so concurrent sessions / the accept loop stay alive.
+    XSetIOErrorExitHandler(
+        display,
+        [](Display*, void*) {
+            // Intentionally empty: do not terminate the process.
+        },
+        nullptr);
     int event_base = 0;
     int error_base = 0;
     int major = 0;
@@ -124,7 +133,12 @@ void VirtualKeyboard::unplug() {
         }
     }
     if (display_ != nullptr) {
-        XCloseDisplay(as_display(display_));
+        // XCloseDisplay can itself trip the fatal I/O path if Xvfb is already gone;
+        // the IO exit handler above keeps host_runner alive.
+        try {
+            XCloseDisplay(as_display(display_));
+        } catch (...) {
+        }
         display_ = nullptr;
     }
     plugged_ = false;

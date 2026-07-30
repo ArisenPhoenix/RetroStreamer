@@ -276,6 +276,11 @@ void MainWindow::connect_client() {
         append_log(client_log_, "Select a host (Select Host… or This PC) before Connect.");
         return;
     }
+    // Video-window close ends the session worker, but std::thread stays joinable until
+    // joined. Auto-reap finished workers so Connect/Join work without Stop Client.
+    if (client_thread_.joinable() && !client_session_live_.load()) {
+        client_thread_.join();
+    }
     if (client_thread_.joinable()) {
         append_log(client_log_, "Stop the running client session before reconnecting.");
         return;
@@ -348,6 +353,9 @@ void MainWindow::connect_client() {
 }
 
 void MainWindow::start_client() {
+    if (client_thread_.joinable() && !client_session_live_.load()) {
+        client_thread_.join();
+    }
     if (client_thread_.joinable()) {
         append_log(client_log_, "Client session is already running.");
         return;
@@ -408,6 +416,7 @@ void MainWindow::start_client() {
             .arg(QString::fromStdString(*config.game_selector)));
 
     client_stop_requested_ = false;
+    client_session_live_ = true;
     disc_control_ = std::make_shared<archstreamer::DiscControlBridge>();
     link_control_ = std::make_shared<archstreamer::LinkControlBridge>();
     heartbeat_prefs_ = std::make_shared<archstreamer::ClientHeartbeatPrefs>();
@@ -522,11 +531,16 @@ void MainWindow::start_client() {
                 append_log(client_log_, "Host lobby timed out before enough players arrived.");
             }
         }
+        client_session_live_ = false;
         QMetaObject::invokeMethod(
             client_catalog_status_,
             [this] {
                 client_catalog_status_->setText("Client stopped");
                 refresh_game_options_ui();
+                // Reap finished worker so the next Connect/Join does not need Stop Client.
+                if (client_thread_.joinable() && !client_session_live_.load()) {
+                    client_thread_.join();
+                }
             },
             Qt::QueuedConnection);
         append_log(client_log_, "Client worker stopped.", GuiLogLevel::Quiet);
@@ -538,6 +552,7 @@ void MainWindow::stop_client() {
     if (client_thread_.joinable()) {
         client_thread_.join();
     }
+    client_session_live_ = false;
     if (disc_control_) {
         std::lock_guard lock(disc_control_->mutex);
         disc_control_->session_active = false;

@@ -131,6 +131,7 @@ private:
 #endif
     std::atomic_bool client_stop_requested_ = false;
     std::atomic_bool client_connecting_ = false;
+    std::atomic_bool client_session_live_ = false;
     std::atomic_bool art_refreshing_ = false;
     std::thread client_connect_thread_;
     std::thread client_thread_;

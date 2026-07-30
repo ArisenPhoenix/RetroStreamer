@@ -1073,6 +1073,18 @@ void ActiveSessionSlot::run_session() {
         harvest_user_ps2_memcards(save_profile_);
     }
 
+    // Drop XTest before tearing down Xvfb. Otherwise Xlib's fatal I/O handler
+    // calls exit(1) and kills the whole host_runner lobby ("XIO: fatal IO error
+    // on X server :99" right after "session finished; lobby still accepting").
+    if (input_router_ != nullptr) {
+        unregister_input_clients();
+        input_router_.reset();
+    }
+    if (keyboard_ != nullptr) {
+        keyboard_->unplug();
+        keyboard_.reset();
+    }
+
     const std::string end_reason = should_stop()
         ? "host stopped"
         : session_end_reason.value_or("session ended");

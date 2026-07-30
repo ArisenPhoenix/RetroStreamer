@@ -778,15 +778,10 @@ bool GStreamerMediaServer::reconfigure_client_video(ClientId client_id, const Vi
     if (!video_fanout_.has_value()) {
         return false;
     }
-    if (!video_fanout_->reconfigure_client(client_id, settings)) {
-        return false;
-    }
-    // Video ladder restart alone leaves the Opus timeline running → permanent
-    // client lip-desync. Nudge audio too so both RTP clocks restart together.
-    if (audio_fanout_.has_value()) {
-        audio_fanout_->restart();
-    }
-    return true;
+    // Video-only restart. Do not bounce the shared Opus fanout — that stutters every
+    // client and fights low-latency play. Clients one-shot resync when told media moved
+    // (resent MediaEndpoint) or after a real decode stall.
+    return video_fanout_->reconfigure_client(client_id, settings);
 }
 
 void GStreamerMediaServer::stop() {

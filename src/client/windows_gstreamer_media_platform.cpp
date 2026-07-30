@@ -56,7 +56,13 @@ void WindowsGStreamerMediaPlatform::append_video_branch(
     args.push_back("!");
 
     if (decoder.d3d11_zero_copy && sink.kind == GstVideoSinkKind::D3D11) {
-        // Keep frames in D3D11 memory for the Windows HW path.
+        // Keep frames in D3D11 memory (no videoconvert/download). progressreport
+        // is a passthrough ANY-caps element: ~1 Hz log lines for "video flowing"
+        // (used by video_frames_seen / heartbeats). It is not true FPS — Auto
+        // step-down must not treat missing/coarse counts as loss (host side).
+        args.push_back("progressreport");
+        args.push_back("update-freq=1");
+        args.push_back("!");
         args.push_back(sink.element);
         args.push_back(sync ? "sync=true" : "sync=false");
         return;

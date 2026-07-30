@@ -42,6 +42,9 @@ struct SessionClientConnection {
     // After Auto steps down from High due to loss/no frames, hold off retrying High.
     std::chrono::steady_clock::time_point high_tier_cooldown_until = {};
     std::chrono::steady_clock::time_point last_video_reconfigure = {};
+    // Last advertised RTP endpoints (resent after video ladder restart so the
+    // client can one-shot resync A/V without the host bouncing shared audio).
+    std::optional<MediaEndpoint> media_endpoint;
 };
 
 struct SessionPlan {

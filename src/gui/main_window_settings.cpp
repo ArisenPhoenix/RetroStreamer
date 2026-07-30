@@ -373,7 +373,7 @@ void MainWindow::load_persisted_settings() {
         client_send_keyboard_->setChecked(settings.value("client/sendKeyboard", true).toBool());
     }
     if (client_synced_av_ != nullptr) {
-        client_synced_av_->setChecked(settings.value("client/syncedAv", true).toBool());
+        client_synced_av_->setChecked(settings.value("client/syncedAv", false).toBool());
     }
     if (client_stream_quality_ != nullptr) {
         const auto tier = settings.value(

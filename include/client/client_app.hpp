@@ -160,9 +160,9 @@ struct ClientAppConfig {
     // Remotes Space/arrows/Enter/Esc/Tab/Backspace/F1 to a host virtual keyboard.
     // Default on so kids get hold-to-fast-forward (Space) without extra setup.
     bool send_keyboard = true;
-    // Prefer one shared-clock GStreamer pipeline for video+audio lip-sync.
-    // Legacy dual gst-launch receivers remain available by turning this off.
-    bool synced_av = true;
+    // Low-latency dual gst-launch receivers by default (better pad feel).
+    // Opt in to one shared-clock pipeline when lip-sync matters more than lag.
+    bool synced_av = false;
     MediaQualityTier wanted_tier = MediaQualityTier::Auto;
     // 0 = use tier default bitrate cap on the host.
     std::uint16_t max_bitrate_kbps = 0;

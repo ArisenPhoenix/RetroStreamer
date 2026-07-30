@@ -178,6 +178,7 @@ void send_session_starting_to_clients(SessionPlan& plan) {
 void send_media_endpoint_to_client(SessionPlan& plan, ClientId client_id, const MediaEndpoint& endpoint) {
     for (auto& client : plan.clients) {
         if (client.client_id == client_id && (client.hello.wants_video || client.hello.wants_audio)) {
+            client.media_endpoint = endpoint;
             client.stream.send_packet(serialize_packet(endpoint));
             return;
         }

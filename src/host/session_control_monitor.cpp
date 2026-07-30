@@ -366,11 +366,13 @@ void SessionControlMonitor::handle_heartbeat(
     }
 
     // Client Auto mode only reports health; the host decides ladder steps.
-    // Prefer real loss over a single zero-frame second (decode hiccups / IDR gaps).
+    // Step down ONLY on real loss / dead receiver (client sets loss=1000‰ when
+    // gst-launch is gone). Do NOT treat frames_decoded_delta==0 as unhealthy:
+    // that telemetry is best-effort (Windows D3D11 zero-copy has no per-frame
+    // probe; even progressreport is ~1 Hz line counts, not FPS). Missing or
+    // coarse frame counts previously forced Auto → Low and never recovered.
     const bool hard_loss = heartbeat.loss_permille >= kHighLossPermille;
-    const bool no_frames = heartbeat.frames_decoded_delta == 0;
-    const bool unhealthy = hard_loss || no_frames;
-    if (unhealthy) {
+    if (hard_loss) {
         ++client.bad_health_streak;
         client.good_health_streak = 0;
         const auto bad_needed =
@@ -383,7 +385,7 @@ void SessionControlMonitor::handle_heartbeat(
             const auto previous = client.applied_tier;
             const auto next = step_quality_tier_down(client.applied_tier);
             if (next != client.applied_tier) {
-                apply_video_tier(client, next, "auto step-down (loss/no frames)");
+                apply_video_tier(client, next, "auto step-down (loss)");
                 if (previous == MediaQualityTier::High ||
                     previous == MediaQualityTier::VeryHigh ||
                     previous == MediaQualityTier::MediumHigh) {
@@ -408,10 +410,12 @@ void SessionControlMonitor::handle_heartbeat(
         next == MediaQualityTier::VeryHigh;
     const auto good_needed =
         promoting_to_60fps ? kGoodHealthThresholdForHigh : kGoodHealthThreshold;
-    const auto min_frames =
-        promoting_to_60fps ? kMinFramesForHighStepUp : kMinFramesForStepUp;
-    // Barely-alive decode must not accumulate toward a climb.
-    if (heartbeat.frames_decoded_delta < min_frames) {
+    // True FPS probes are not available on all receive paths (gst-launch + D3D11
+    // zero-copy). Promote on sustained healthy heartbeats (no hard loss). If a
+    // fine-grained frame delta is present and clearly starving, hold the climb.
+    if (heartbeat.frames_decoded_delta >= 2 &&
+        heartbeat.frames_decoded_delta <
+            (promoting_to_60fps ? kMinFramesForHighStepUp : kMinFramesForStepUp)) {
         client.good_health_streak = 0;
         return;
     }
@@ -450,6 +454,14 @@ void SessionControlMonitor::apply_video_tier(
     client.last_video_reconfigure = now;
     client.bad_health_streak = 0;
     client.good_health_streak = 0;
+    // Hint the client to one-shot resync A/V (same URIs; video encoder restarted).
+    if (client.media_endpoint.has_value() &&
+        client.connection_state == SessionConnectionState::Connected) {
+        try {
+            client.stream.send_packet(serialize_packet(*client.media_endpoint));
+        } catch (const std::exception&) {
+        }
+    }
     std::cerr
         << "Adapted video for " << client_label(client)
         << " -> " << media_quality_tier_name(resolved)

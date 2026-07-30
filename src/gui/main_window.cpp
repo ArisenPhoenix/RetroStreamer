@@ -203,12 +203,13 @@ QWidget* MainWindow::build_client_tab() {
         "Auto starts at Medium and steps up/down from decode health (~1 Hz heartbeats).\n"
         "Host captures at 1080p; lower tiers downscale. 60fps only if the game renders that fast.\n"
         "Use Medium or Low on Wi‑Fi / weaker laptops; High/Very-High need a strong link.");
-    client_synced_av_ = new QCheckBox("Synced A/V (recommended)", form_box);
-    client_synced_av_->setChecked(true);
+    client_synced_av_ = new QCheckBox("Synced A/V (higher latency)", form_box);
+    client_synced_av_->setChecked(false);
     client_synced_av_->setToolTip(
         "Use one shared-clock GStreamer pipeline for video+audio lip-sync.\n"
+        "Off (default) keeps lower-latency dual receivers — better for play.\n"
         "Applies to the client session and to Host “Watch stream locally”.\n"
-        "Recommended on; uncheck only to fall back to dual-pipeline receivers.");
+        "Turn on for cutscenes/watch, or use Resync A/V if drift appears.");
     connect(client_synced_av_, &QCheckBox::toggled, this, [this](bool) {
 #ifdef ARCHSTREAMER_HAS_HOST
         // Keep local host watch on the same receive path as the client setting.

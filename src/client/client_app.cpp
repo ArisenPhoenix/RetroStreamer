@@ -82,6 +82,16 @@ bool handle_control_message(TcpStream& stream, const ClientAppCallbacks& callbac
                          : ("Link failed: " + link->message));
         }
     }
+    // Mid-session MediaEndpoint = host restarted video (quality ladder). Request a
+    // one-shot A/V resync; stay on the low-latency path afterward.
+    if (std::get_if<MediaEndpoint>(&payload) != nullptr) {
+        if (callbacks.media_resync) {
+            callbacks.media_resync->request();
+        }
+        if (callbacks.on_status) {
+            callbacks.on_status("Host restarted video encode; requesting A/V resync…");
+        }
+    }
 
     return true;
 }
@@ -539,16 +549,16 @@ ClientRunResult ClientApp::join_session(
                 callbacks.on_status("Audio path changed; restarted A/V together to keep lip-sync.");
             }
         }
-        const bool want_manual_resync =
+        const bool want_resync =
             callbacks.media_resync && callbacks.media_resync->take();
-        if (want_manual_resync && media_receiver.has_endpoint()) {
+        if (want_resync && media_receiver.has_endpoint()) {
             if (media_receiver.resync()) {
                 zero_frame_streak = 0;
                 awaiting_resync_after_stall = false;
                 next_auto_resync_allowed = now + std::chrono::seconds(15);
                 last_decoded_frames = media_receiver.decoded_frame_count();
                 if (callbacks.on_status) {
-                    callbacks.on_status("Resynced A/V receivers (manual).");
+                    callbacks.on_status("Resynced A/V receivers.");
                 }
             }
         }
@@ -590,11 +600,15 @@ ClientRunResult ClientApp::join_session(
 
                 // After a multi-second video stall, restart both receivers once frames
                 // return — otherwise audio keeps free-running and lip-sync never recovers.
+                // Only arm this when we previously saw decode telemetry; a permanently
+                // zero counter (e.g. D3D11 path without a probe) is not a stall.
                 if (media_receiver.video_running() && media_receiver.has_endpoint()) {
                     if (frames_delta == 0) {
-                        ++zero_frame_streak;
-                        if (zero_frame_streak >= 3) {
-                            awaiting_resync_after_stall = true;
+                        if (last_decoded_frames > 0) {
+                            ++zero_frame_streak;
+                            if (zero_frame_streak >= 3) {
+                                awaiting_resync_after_stall = true;
+                            }
                         }
                     } else {
                         if (awaiting_resync_after_stall && now >= next_auto_resync_allowed) {

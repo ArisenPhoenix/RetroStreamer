@@ -53,7 +53,7 @@ public:
     explicit operator bool() const { return active(); }
 
 private:
-    Strategy strategy_ = Strategy::Synced;
+    Strategy strategy_ = Strategy::Legacy;
     MediaEndpoint endpoint_{};
     bool has_endpoint_ = false;
     std::unique_ptr<GStreamerMediaReceiver> legacy_;

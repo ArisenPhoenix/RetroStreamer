@@ -492,10 +492,11 @@ void MainWindow::start_host() {
         append_log(host_log_, "Select None for bridge controller or change Host role to Player.");
         return;
     }
-    if (!host_game_picker_->hasSelection()) {
-        append_log(host_log_, "Choose a host game before starting.");
+    if (!host_role_is_viewer(host_role_) && !host_game_picker_->hasSelection()) {
+        append_log(host_log_, "Host Player needs a game selected (used when auto-starting a local seat).");
         return;
     }
+    // Viewer hosts are a persistent lobby: clients pick the game. No host game required.
 
     QStringList args;
     {
@@ -534,13 +535,15 @@ void MainWindow::start_host() {
         if (bridge_index >= 0) {
             host_cfg.bridge_controller_index = static_cast<std::size_t>(bridge_index);
         }
-        host_cfg.selector = *host_game_picker_->selectedGameId();
-        const auto selected_id = *host_cfg.selector;
-        persisted_host_game_id_ = QString::fromStdString(selected_id);
-        // Keep Client Join in sync for local host+client testing.
-        persisted_client_game_id_ = persisted_host_game_id_;
-        if (client_game_picker_ != nullptr) {
-            client_game_picker_->setSelectedGameId(selected_id);
+        if (host_game_picker_->hasSelection()) {
+            host_cfg.selector = *host_game_picker_->selectedGameId();
+            const auto selected_id = *host_cfg.selector;
+            persisted_host_game_id_ = QString::fromStdString(selected_id);
+            // Keep Client Join in sync for local host+client testing.
+            persisted_client_game_id_ = persisted_host_game_id_;
+            if (client_game_picker_ != nullptr) {
+                client_game_picker_->setSelectedGameId(selected_id);
+            }
         }
         persist_settings_if_idle();
 
@@ -555,6 +558,11 @@ void MainWindow::start_host() {
                 .arg(host_audio_port_->value()));
     }
     args << host_debug_args_;
+
+    append_log(
+        host_log_,
+        "Persistent lobby: sessions can start/stop without shutting down the host. "
+        "Press Stop Host only when you want host_runner to exit.");
 
     client_port_->setValue(host_control_port_->value());
     client_input_port_->setValue(host_input_port_->value());

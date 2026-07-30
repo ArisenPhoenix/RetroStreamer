@@ -6,6 +6,7 @@
 #include "common/participant_role.hpp"
 #include "common/protocol.hpp"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -133,6 +134,16 @@ struct LinkControlBridge {
     }
 };
 
+struct MediaResyncBridge {
+    std::atomic_bool requested{false};
+
+    void request() { requested.store(true, std::memory_order_release); }
+
+    bool take() {
+        return requested.exchange(false, std::memory_order_acq_rel);
+    }
+};
+
 struct ClientAppConfig {
     std::string host = "127.0.0.1";
     std::uint16_t control_port = 45555;
@@ -149,9 +160,9 @@ struct ClientAppConfig {
     // Remotes Space/arrows/Enter/Esc/Tab/Backspace/F1 to a host virtual keyboard.
     // Default on so kids get hold-to-fast-forward (Space) without extra setup.
     bool send_keyboard = true;
-    // Experimental: one shared-clock GStreamer pipeline for A/V lip-sync.
-    // Default false keeps the working dual gst-launch receivers.
-    bool synced_av = false;
+    // Prefer one shared-clock GStreamer pipeline for video+audio lip-sync.
+    // Legacy dual gst-launch receivers remain available by turning this off.
+    bool synced_av = true;
     MediaQualityTier wanted_tier = MediaQualityTier::Auto;
     // 0 = use tier default bitrate cap on the host.
     std::uint16_t max_bitrate_kbps = 0;
@@ -182,6 +193,7 @@ struct ClientAppCallbacks {
     std::shared_ptr<DiscControlBridge> disc_control;
     std::shared_ptr<LinkControlBridge> link_control;
     std::shared_ptr<ClientHeartbeatPrefs> heartbeat_prefs;
+    std::shared_ptr<MediaResyncBridge> media_resync;
 };
 
 struct ClientRunResult {

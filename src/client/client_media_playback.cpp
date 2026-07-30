@@ -17,13 +17,18 @@ void ClientMediaPlayback::connect(const MediaEndpoint& endpoint) {
 void ClientMediaPlayback::connect(const MediaEndpoint& endpoint, Strategy strategy) {
     disconnect();
     strategy_ = strategy;
+    endpoint_ = endpoint;
+    has_endpoint_ = !endpoint_.video_uri.empty() || !endpoint_.audio_uri.empty();
+    if (!has_endpoint_) {
+        return;
+    }
     if (strategy_ == Strategy::Synced) {
         synced_ = std::make_unique<GStreamerSyncedMediaReceiver>();
-        synced_->connect(endpoint);
+        synced_->connect(endpoint_);
         return;
     }
     legacy_ = std::make_unique<GStreamerMediaReceiver>();
-    legacy_->connect(endpoint);
+    legacy_->connect(endpoint_);
 }
 
 void ClientMediaPlayback::disconnect() {
@@ -35,17 +40,39 @@ void ClientMediaPlayback::disconnect() {
     }
     legacy_.reset();
     synced_.reset();
+    // Keep endpoint_/strategy_ so resync() can reconnect after a transient stall.
+}
+
+bool ClientMediaPlayback::resync() {
+    if (!has_endpoint_) {
+        return false;
+    }
+    connect(endpoint_, strategy_);
+    return active();
 }
 
 bool ClientMediaPlayback::poll() {
     if (synced_) {
+        // Synced path already restarts the whole session on device/death.
         return synced_->poll();
     }
-    return legacy_ && legacy_->poll();
+    if (!legacy_) {
+        return false;
+    }
+    // Legacy used to restart audio alone — that permanently desyncs A/V.
+    // Promote any audio recovery into a full dual-branch resync.
+    if (legacy_->poll()) {
+        return resync();
+    }
+    return false;
 }
 
 bool ClientMediaPlayback::active() const {
     return legacy_ != nullptr || synced_ != nullptr;
+}
+
+bool ClientMediaPlayback::has_endpoint() const {
+    return has_endpoint_;
 }
 
 bool ClientMediaPlayback::video_running() const {

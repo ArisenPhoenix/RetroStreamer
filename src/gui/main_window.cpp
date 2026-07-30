@@ -203,12 +203,12 @@ QWidget* MainWindow::build_client_tab() {
         "Auto starts at Medium and steps up/down from decode health (~1 Hz heartbeats).\n"
         "Host captures at 1080p; lower tiers downscale. 60fps only if the game renders that fast.\n"
         "Use Medium or Low on Wi‑Fi / weaker laptops; High/Very-High need a strong link.");
-    client_synced_av_ = new QCheckBox("Synced A/V (experimental)", form_box);
-    client_synced_av_->setChecked(false);
+    client_synced_av_ = new QCheckBox("Synced A/V (recommended)", form_box);
+    client_synced_av_->setChecked(true);
     client_synced_av_->setToolTip(
         "Use one shared-clock GStreamer pipeline for video+audio lip-sync.\n"
         "Applies to the client session and to Host “Watch stream locally”.\n"
-        "Leave unchecked to keep the current dual-pipeline receivers.");
+        "Recommended on; uncheck only to fall back to dual-pipeline receivers.");
     connect(client_synced_av_, &QCheckBox::toggled, this, [this](bool) {
 #ifdef ARCHSTREAMER_HAS_HOST
         // Keep local host watch on the same receive path as the client setting.
@@ -217,6 +217,19 @@ QWidget* MainWindow::build_client_tab() {
         }
 #endif
         persist_settings_if_idle();
+    });
+    client_resync_av_ = new QPushButton("Resync A/V", form_box);
+    client_resync_av_->setToolTip(
+        "Restart video+audio receivers together without leaving the session.\n"
+        "Use if picture and sound drift apart after a stutter.");
+    client_resync_av_->setEnabled(false);
+    connect(client_resync_av_, &QPushButton::clicked, this, [this] {
+        if (media_resync_) {
+            media_resync_->request();
+            append_log(client_log_, "Requested A/V resync…");
+        } else {
+            append_log(client_log_, "Join a session before resyncing A/V.");
+        }
     });
     connect(client_port_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
         update_client_host_summary(client_host_label_);
@@ -253,6 +266,7 @@ QWidget* MainWindow::build_client_tab() {
     form->addRow("", client_audio_);
     form->addRow("", client_send_keyboard_);
     form->addRow("", client_synced_av_);
+    form->addRow("", client_resync_av_);
 
     client_game_picker_ = new archstreamer::gui::GamePickerWidget(page);
     client_game_picker_->setArtRoot(art_root_path());

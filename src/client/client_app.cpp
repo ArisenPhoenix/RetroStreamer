@@ -481,6 +481,9 @@ ClientRunResult ClientApp::join_session(
     auto next_heartbeat = std::chrono::steady_clock::now();
     auto media_watch_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     auto media_watch_armed = static_cast<bool>(media_receiver);
+    int zero_frame_streak = 0;
+    bool awaiting_resync_after_stall = false;
+    auto next_auto_resync_allowed = std::chrono::steady_clock::now();
     while (!should_stop()) {
         if (!handle_control_message(joined_session.stream, callbacks, result)) {
             break;
@@ -533,7 +536,20 @@ ClientRunResult ClientApp::join_session(
         const auto now = std::chrono::steady_clock::now();
         if (media_receiver) {
             if (media_receiver.poll() && callbacks.on_status) {
-                callbacks.on_status("Audio output device changed; playback rebound.");
+                callbacks.on_status("Audio path changed; restarted A/V together to keep lip-sync.");
+            }
+        }
+        const bool want_manual_resync =
+            callbacks.media_resync && callbacks.media_resync->take();
+        if (want_manual_resync && media_receiver.has_endpoint()) {
+            if (media_receiver.resync()) {
+                zero_frame_streak = 0;
+                awaiting_resync_after_stall = false;
+                next_auto_resync_allowed = now + std::chrono::seconds(15);
+                last_decoded_frames = media_receiver.decoded_frame_count();
+                if (callbacks.on_status) {
+                    callbacks.on_status("Resynced A/V receivers (manual).");
+                }
             }
         }
         if (media_watch_armed && now >= media_watch_deadline) {
@@ -570,6 +586,30 @@ ClientRunResult ClientApp::join_session(
                 // mapping it to 500‰ made Auto treat every decode hiccup as 50% loss.
                 if (!media_receiver.video_running()) {
                     loss_permille = 1000;
+                }
+
+                // After a multi-second video stall, restart both receivers once frames
+                // return — otherwise audio keeps free-running and lip-sync never recovers.
+                if (media_receiver.video_running() && media_receiver.has_endpoint()) {
+                    if (frames_delta == 0) {
+                        ++zero_frame_streak;
+                        if (zero_frame_streak >= 3) {
+                            awaiting_resync_after_stall = true;
+                        }
+                    } else {
+                        if (awaiting_resync_after_stall && now >= next_auto_resync_allowed) {
+                            if (media_receiver.resync()) {
+                                next_auto_resync_allowed = now + std::chrono::seconds(30);
+                                last_decoded_frames = media_receiver.decoded_frame_count();
+                                if (callbacks.on_status) {
+                                    callbacks.on_status(
+                                        "Resynced A/V after a video stall (audio was likely drifting).");
+                                }
+                            }
+                        }
+                        zero_frame_streak = 0;
+                        awaiting_resync_after_stall = false;
+                    }
                 }
             }
             auto wanted_tier = config.wanted_tier;

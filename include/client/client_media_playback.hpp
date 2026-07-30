@@ -36,8 +36,12 @@ public:
     void disconnect() override;
     bool poll() override;
 
+    /** Tear down and reconnect both A/V branches with the last endpoint (mid-session lip-sync recovery). */
+    bool resync();
+
     Strategy strategy() const { return strategy_; }
     bool active() const;
+    bool has_endpoint() const;
 
     bool video_running() const;
     bool audio_running() const;
@@ -49,7 +53,9 @@ public:
     explicit operator bool() const { return active(); }
 
 private:
-    Strategy strategy_ = Strategy::Legacy;
+    Strategy strategy_ = Strategy::Synced;
+    MediaEndpoint endpoint_{};
+    bool has_endpoint_ = false;
     std::unique_ptr<GStreamerMediaReceiver> legacy_;
     std::unique_ptr<GStreamerSyncedMediaReceiver> synced_;
 };

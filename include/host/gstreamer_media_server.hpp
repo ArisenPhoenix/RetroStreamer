@@ -73,6 +73,8 @@ public:
         const MediaStreamRequest& destination);
     void stop();
     void stop_client(ClientId client_id);
+    /** Rebuild the shared Opus encode (pair with video ladder restarts for A/V realign). */
+    void restart();
 
 private:
     struct Destination {

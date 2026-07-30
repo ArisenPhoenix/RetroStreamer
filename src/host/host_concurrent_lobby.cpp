@@ -68,6 +68,10 @@ int run_concurrent_session_host(
                         if (slot == nullptr || !slot->finished()) {
                             return false;
                         }
+                        std::cout
+                            << "Session slot " << slot->slot_index()
+                            << " finished; host lobby still accepting clients "
+                               "(Stop Host to shut down).\n";
                         slot->join();
                         return true;
                     }),
@@ -113,110 +117,119 @@ int run_concurrent_session_host(
         };
 
         while (!should_stop()) {
-            erase_finished();
+            try {
+                erase_finished();
 
-            auto accepted = try_accept_control_hello(
-                listener,
-                list,
-                art_root,
-                [&] {
-                    ActiveSessionInfo info;
-                    info.active = live_count() > 0;
-                    info.video_enabled = config.video;
-                    info.audio_enabled = config.audio;
-                    if (info.active && !slots.empty()) {
-                        // Summarize first live slot for discovery UIs.
-                        for (const auto& slot : slots) {
-                            if (slot == nullptr || slot->finished()) {
+                auto accepted = try_accept_control_hello(
+                    listener,
+                    list,
+                    art_root,
+                    [&] {
+                        ActiveSessionInfo info;
+                        info.active = live_count() > 0;
+                        info.video_enabled = config.video;
+                        info.audio_enabled = config.audio;
+                        if (info.active && !slots.empty()) {
+                            // Summarize first live slot for discovery UIs.
+                            for (const auto& slot : slots) {
+                                if (slot == nullptr || slot->finished()) {
+                                    continue;
+                                }
+                                info.selected_game_id = slot->plan().selected_game_id;
+                                info.session_mode = slot->plan().session_mode;
+                                info.player_count = static_cast<std::uint8_t>(
+                                    assigned_player_count(slot->plan().seats));
+                                break;
+                            }
+                        }
+                        return info;
+                    });
+
+                if (accepted.has_value() && accepted->have_hello) {
+                    auto hello = std::move(accepted->hello);
+                    auto stream = std::move(accepted->stream);
+                    bool handed_off = false;
+                    try {
+                        // Reconnect to an existing seat.
+                        if (hello.requested_players > 0) {
+                            if (auto* slot = hub.slot_for_reconnect(hello); slot != nullptr) {
+                                slot->enqueue_join(std::move(stream), std::move(hello), true);
+                                handed_off = true;
                                 continue;
                             }
-                            info.selected_game_id = slot->plan().selected_game_id;
-                            info.session_mode = slot->plan().session_mode;
-                            info.player_count = static_cast<std::uint8_t>(
-                                assigned_player_count(slot->plan().seats));
-                            break;
                         }
-                    }
-                    return info;
-                });
 
-            if (accepted.has_value() && accepted->have_hello) {
-                auto hello = std::move(accepted->hello);
-                auto stream = std::move(accepted->stream);
-                bool handed_off = false;
-                try {
-                    // Reconnect to an existing seat.
-                    if (hello.requested_players > 0) {
-                        if (auto* slot = hub.slot_for_reconnect(hello); slot != nullptr) {
-                            slot->enqueue_join(std::move(stream), std::move(hello), true);
-                            handed_off = true;
-                            continue;
-                        }
-                    }
-
-                    // Late viewer into a matching live session.
-                    if (hello.requested_players == 0) {
-                        if (auto* slot = hub.slot_for_late_viewer(hello); slot != nullptr) {
-                            slot->enqueue_join(std::move(stream), std::move(hello), false);
-                            handed_off = true;
-                            continue;
-                        }
-                        throw std::runtime_error(
-                            "no active session matches that game for late viewer join");
-                    }
-
-                    // New Multiplayer lobby (only when no slots are live).
-                    if (hello.session_mode == GameSessionMode::Multiplayer) {
-                        if (live_count() > 0) {
+                        // Late viewer into a matching live session.
+                        if (hello.requested_players == 0) {
+                            if (auto* slot = hub.slot_for_late_viewer(hello); slot != nullptr) {
+                                slot->enqueue_join(std::move(stream), std::move(hello), false);
+                                handed_off = true;
+                                continue;
+                            }
                             throw std::runtime_error(
-                                "cannot start Multiplayer while singleplayer session slots are active");
+                                "no active session matches that game for late viewer join");
                         }
-                        SessionClientConnection first{
+
+                        // New Multiplayer lobby (only when no slots are live).
+                        if (hello.session_mode == GameSessionMode::Multiplayer) {
+                            if (live_count() > 0) {
+                                throw std::runtime_error(
+                                    "cannot start Multiplayer while singleplayer session slots are active");
+                            }
+                            SessionClientConnection first{
+                                hub.allocate_client_id(),
+                                hello,
+                                std::move(stream),
+                            };
+                            handed_off = true;
+                            auto plan = gather_session_clients(
+                                listener,
+                                max_slots,
+                                list,
+                                std::chrono::seconds(config.session_timeout_seconds),
+                                std::nullopt,
+                                should_stop,
+                                art_root,
+                                std::move(first));
+                            start_slot(std::move(plan));
+                            continue;
+                        }
+
+                        // New Singleplayer slot.
+                        if (hub.has_multiplayer_slot()) {
+                            throw std::runtime_error(
+                                "cannot start Singleplayer while a Multiplayer session is active");
+                        }
+                        if (live_count() >= max_slots) {
+                            throw std::runtime_error(
+                                "host is at max concurrent singleplayer sessions "
+                                "(raise Max clients / --clients)");
+                        }
+
+                        auto plan = make_singleplayer_session_plan(
                             hub.allocate_client_id(),
-                            hello,
+                            std::move(hello),
                             std::move(stream),
-                        };
+                            list);
                         handed_off = true;
-                        auto plan = gather_session_clients(
-                            listener,
-                            max_slots,
-                            list,
-                            std::chrono::seconds(config.session_timeout_seconds),
-                            std::nullopt,
-                            should_stop,
-                            art_root,
-                            std::move(first));
                         start_slot(std::move(plan));
-                        continue;
-                    }
-
-                    // New Singleplayer slot.
-                    if (hub.has_multiplayer_slot()) {
-                        throw std::runtime_error(
-                            "cannot start Singleplayer while a Multiplayer session is active");
-                    }
-                    if (live_count() >= max_slots) {
-                        throw std::runtime_error(
-                            "host is at max concurrent singleplayer sessions "
-                            "(raise Max clients / --clients)");
-                    }
-
-                    auto plan = make_singleplayer_session_plan(
-                        hub.allocate_client_id(),
-                        std::move(hello),
-                        std::move(stream),
-                        list);
-                    handed_off = true;
-                    start_slot(std::move(plan));
-                } catch (const std::exception& error) {
-                    if (!handed_off) {
-                        try {
-                            stream.send_packet(serialize_packet(ErrorPacket{error.what()}));
-                        } catch (const std::exception&) {
+                    } catch (const std::exception& error) {
+                        if (!handed_off) {
+                            try {
+                                stream.send_packet(serialize_packet(ErrorPacket{error.what()}));
+                            } catch (const std::exception&) {
+                            }
                         }
+                        std::cerr << "Rejected session start: " << error.what() << '\n';
                     }
-                    std::cerr << "Rejected session start: " << error.what() << '\n';
                 }
+            } catch (const std::exception& error) {
+                // Never let a transient lobby/accept failure kill host_runner —
+                // only Stop Host / SIGTERM should exit the accept loop.
+                if (should_stop()) {
+                    break;
+                }
+                std::cerr << "Host lobby error (staying up): " << error.what() << '\n';
             }
 
             std::this_thread::sleep_for(std::chrono::milliseconds(10));

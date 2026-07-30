@@ -532,6 +532,10 @@ void GStreamerAudioFanout::stop_client(ClientId client_id) {
     restart_pipeline();
 }
 
+void GStreamerAudioFanout::restart() {
+    restart_pipeline();
+}
+
 void GStreamerAudioFanout::restart_pipeline() {
     process_.stop();
     if (destinations_.empty()) {
@@ -774,7 +778,15 @@ bool GStreamerMediaServer::reconfigure_client_video(ClientId client_id, const Vi
     if (!video_fanout_.has_value()) {
         return false;
     }
-    return video_fanout_->reconfigure_client(client_id, settings);
+    if (!video_fanout_->reconfigure_client(client_id, settings)) {
+        return false;
+    }
+    // Video ladder restart alone leaves the Opus timeline running → permanent
+    // client lip-desync. Nudge audio too so both RTP clocks restart together.
+    if (audio_fanout_.has_value()) {
+        audio_fanout_->restart();
+    }
+    return true;
 }
 
 void GStreamerMediaServer::stop() {

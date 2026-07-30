@@ -411,6 +411,10 @@ void MainWindow::start_client() {
     disc_control_ = std::make_shared<archstreamer::DiscControlBridge>();
     link_control_ = std::make_shared<archstreamer::LinkControlBridge>();
     heartbeat_prefs_ = std::make_shared<archstreamer::ClientHeartbeatPrefs>();
+    media_resync_ = std::make_shared<archstreamer::MediaResyncBridge>();
+    if (client_resync_av_ != nullptr) {
+        client_resync_av_->setEnabled(true);
+    }
     {
         std::lock_guard lock(heartbeat_prefs_->mutex);
         heartbeat_prefs_->wanted_tier = config.wanted_tier;
@@ -424,6 +428,7 @@ void MainWindow::start_client() {
             callbacks.disc_control = disc_control_;
             callbacks.link_control = link_control_;
             callbacks.heartbeat_prefs = heartbeat_prefs_;
+            callbacks.media_resync = media_resync_;
             callbacks.on_catalog = [this](const archstreamer::GameList& full, const archstreamer::GameList& filtered) {
                 append_log(client_log_, QString("Received %1 games; %2 after filters.")
                     .arg(full.games.size())
@@ -543,6 +548,10 @@ void MainWindow::stop_client() {
         link_control_->link_capable = false;
     }
     heartbeat_prefs_.reset();
+    media_resync_.reset();
+    if (client_resync_av_ != nullptr) {
+        client_resync_av_->setEnabled(false);
+    }
 }
 
 void MainWindow::stop_client_connect() {

@@ -156,6 +156,7 @@ private:
     QCheckBox* client_send_keyboard_ = nullptr;
     QComboBox* client_stream_quality_ = nullptr;
     QCheckBox* client_synced_av_ = nullptr;
+    QPushButton* client_resync_av_ = nullptr;
     QLabel* client_catalog_status_ = nullptr;
     GamePickerWidget* client_game_picker_ = nullptr;
     QListWidget* client_controllers_ = nullptr;
@@ -163,6 +164,7 @@ private:
     std::shared_ptr<DiscControlBridge> disc_control_;
     std::shared_ptr<LinkControlBridge> link_control_;
     std::shared_ptr<ClientHeartbeatPrefs> heartbeat_prefs_;
+    std::shared_ptr<MediaResyncBridge> media_resync_;
     QLabel* game_options_status_ = nullptr;
     QComboBox* game_options_disc_ = nullptr;
     QPushButton* game_options_swap_ = nullptr;

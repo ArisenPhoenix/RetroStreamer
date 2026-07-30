@@ -162,5 +162,7 @@ if ($Launch) { $finishArgs["Launch"] = $true }
 & $finish @finishArgs
 
 Write-Host ""
-Write-Host "Done. Launch from Start Menu / Desktop (ArchStreamer), or:"
+Write-Host "Done. All users can launch ArchStreamer from the Start Menu"
+Write-Host "  (Programs → ArchStreamer) or Public Desktop."
+Write-Host "Or run:"
 Write-Host "  & `"$Prefix\bin\archstreamer_gui.exe`""

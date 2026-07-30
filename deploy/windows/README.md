@@ -25,6 +25,12 @@ Repo usually lives at `%USERPROFILE%\Documents\RetroStreamer`.
 
 Install overwrites `C:\Program Files\ArchStreamer\bin\*.exe`. Run an **Admin** PowerShell, and close `archstreamer_gui` / `session_client` first (the script stops them when it can). A locked `session_client.exe` usually shows as cmake `file INSTALL cannot copy file` / permission denied.
 
+Admin install also writes **All Users** shortcuts:
+- Start Menu → **ArchStreamer** (every Windows account)
+- Public Desktop → **ArchStreamer**
+
+Use `.\deploy\windows\finish-install.ps1 -Shortcuts -CurrentUserOnly` only if you intentionally want per-user shortcuts.
+
 ## Install deps
 
 ```powershell

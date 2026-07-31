@@ -161,7 +161,7 @@ struct ClientAppConfig {
     // Default on so kids get hold-to-fast-forward (Space) without extra setup.
     bool send_keyboard = true;
     // Low-latency dual gst-launch receivers by default (better pad feel).
-    // Opt in to one shared-clock pipeline when lip-sync matters more than lag.
+    // Optional shared-clock pipeline is experimental; prefer Resync A/V for drift.
     bool synced_av = false;
     MediaQualityTier wanted_tier = MediaQualityTier::Auto;
     // 0 = use tier default bitrate cap on the host.

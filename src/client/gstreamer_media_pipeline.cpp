@@ -129,9 +129,10 @@ std::vector<std::string> gst_h264_rtp_source_args(std::uint16_t port) {
         "caps=application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000",
         "!",
         "rtpjitterbuffer",
-        // Slightly roomier than LAN-ethernet defaults — Bazzite clients are often Wi‑Fi.
-        "latency=150",
-        "drop-on-latency=false",
+        // Matched with audio. drop-on-latency=true avoids freeze-then-burst backlog
+        // that makes pad input look like it "catches up all at once".
+        "latency=100",
+        "drop-on-latency=true",
         "!",
         "rtph264depay",
         "!",
@@ -139,13 +140,8 @@ std::vector<std::string> gst_h264_rtp_source_args(std::uint16_t port) {
 }
 
 std::vector<std::string> gst_opus_rtp_decode_args(std::uint16_t port, int jitter_latency_ms) {
-    // Default ~150 ms; Windows/Wi‑Fi clients benefit from a roomier buffer.
-    int latency = jitter_latency_ms > 0 ? jitter_latency_ms : 150;
-#ifdef _WIN32
-    if (jitter_latency_ms <= 0) {
-        latency = 250;
-    }
-#endif
+    // Match video jitter (100 ms) so dual gst-launch receivers start aligned.
+    const int latency = jitter_latency_ms > 0 ? jitter_latency_ms : 100;
     return {
         "udpsrc",
         "port=" + std::to_string(port),
@@ -153,8 +149,7 @@ std::vector<std::string> gst_opus_rtp_decode_args(std::uint16_t port, int jitter
         "!",
         "rtpjitterbuffer",
         "latency=" + std::to_string(latency),
-        // Match video: late Opus packets are better late than dropped (Wi‑Fi / WASAPI hiccups).
-        "drop-on-latency=false",
+        "drop-on-latency=true",
         "!",
         "rtpopusdepay",
         "!",

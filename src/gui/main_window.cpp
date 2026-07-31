@@ -203,13 +203,12 @@ QWidget* MainWindow::build_client_tab() {
         "Auto starts at Medium and steps up/down from decode health (~1 Hz heartbeats).\n"
         "Host captures at 1080p; lower tiers downscale. 60fps only if the game renders that fast.\n"
         "Use Medium or Low on Wi‑Fi / weaker laptops; High/Very-High need a strong link.");
-    client_synced_av_ = new QCheckBox("Synced A/V (higher latency)", form_box);
+    client_synced_av_ = new QCheckBox("Synced A/V (experimental)", form_box);
     client_synced_av_->setChecked(false);
     client_synced_av_->setToolTip(
-        "Use one shared-clock GStreamer pipeline for video+audio lip-sync.\n"
-        "Off (default) keeps lower-latency dual receivers — better for play.\n"
-        "Applies to the client session and to Host “Watch stream locally”.\n"
-        "Turn on for cutscenes/watch, or use Resync A/V if drift appears.");
+        "Optional shared-clock pipeline for lip-sync experiments.\n"
+        "Leave off for play (default): dual low-latency receivers.\n"
+        "If picture and sound drift, use Resync A/V instead of enabling this.");
     connect(client_synced_av_, &QCheckBox::toggled, this, [this](bool) {
 #ifdef ARCHSTREAMER_HAS_HOST
         // Keep local host watch on the same receive path as the client setting.
@@ -221,8 +220,8 @@ QWidget* MainWindow::build_client_tab() {
     });
     client_resync_av_ = new QPushButton("Resync A/V", form_box);
     client_resync_av_->setToolTip(
-        "Restart video+audio receivers together without leaving the session.\n"
-        "Use if picture and sound drift apart after a stutter.");
+        "Restart audio to match the current video (lip-sync recovery).\n"
+        "Use if sound drifts ahead after a stutter; video keeps playing.");
     client_resync_av_->setEnabled(false);
     connect(client_resync_av_, &QPushButton::clicked, this, [this] {
         if (media_resync_) {

@@ -82,14 +82,14 @@ bool handle_control_message(TcpStream& stream, const ClientAppCallbacks& callbac
                          : ("Link failed: " + link->message));
         }
     }
-    // Mid-session MediaEndpoint = host restarted video (quality ladder). Request a
-    // one-shot A/V resync; stay on the low-latency path afterward.
+    // Mid-session MediaEndpoint = host restarted video (quality ladder). Audio may
+    // have free-run ahead of the new video timeline — request an audio realign.
     if (std::get_if<MediaEndpoint>(&payload) != nullptr) {
         if (callbacks.media_resync) {
             callbacks.media_resync->request();
         }
         if (callbacks.on_status) {
-            callbacks.on_status("Host restarted video encode; requesting A/V resync…");
+            callbacks.on_status("Host restarted video encode; realigning audio to video…");
         }
     }
 
@@ -491,9 +491,10 @@ ClientRunResult ClientApp::join_session(
     auto next_heartbeat = std::chrono::steady_clock::now();
     auto media_watch_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     auto media_watch_armed = static_cast<bool>(media_receiver);
+    // Cooldown so host ladder hints / rapid Resync clicks do not restart in a loop.
+    auto next_resync_allowed = std::chrono::steady_clock::now();
     int zero_frame_streak = 0;
-    bool awaiting_resync_after_stall = false;
-    auto next_auto_resync_allowed = std::chrono::steady_clock::now();
+    bool audio_realign_after_video_stall = false;
     while (!should_stop()) {
         if (!handle_control_message(joined_session.stream, callbacks, result)) {
             break;
@@ -546,19 +547,21 @@ ClientRunResult ClientApp::join_session(
         const auto now = std::chrono::steady_clock::now();
         if (media_receiver) {
             if (media_receiver.poll() && callbacks.on_status) {
-                callbacks.on_status("Audio path changed; restarted A/V together to keep lip-sync.");
+                callbacks.on_status("Audio output rebound.");
             }
         }
         const bool want_resync =
             callbacks.media_resync && callbacks.media_resync->take();
-        if (want_resync && media_receiver.has_endpoint()) {
-            if (media_receiver.resync()) {
+        if (want_resync && media_receiver.has_endpoint() && now >= next_resync_allowed) {
+            // Legacy: restart audio only so it meets the current video edge.
+            // Synced: full pipeline restart (single process).
+            if (media_receiver.resync_audio()) {
+                next_resync_allowed = now + std::chrono::seconds(15);
                 zero_frame_streak = 0;
-                awaiting_resync_after_stall = false;
-                next_auto_resync_allowed = now + std::chrono::seconds(15);
+                audio_realign_after_video_stall = false;
                 last_decoded_frames = media_receiver.decoded_frame_count();
                 if (callbacks.on_status) {
-                    callbacks.on_status("Resynced A/V receivers.");
+                    callbacks.on_status("Realigned audio to video.");
                 }
             }
         }
@@ -598,31 +601,30 @@ ClientRunResult ClientApp::join_session(
                     loss_permille = 1000;
                 }
 
-                // After a multi-second video stall, restart both receivers once frames
-                // return — otherwise audio keeps free-running and lip-sync never recovers.
-                // Only arm this when we previously saw decode telemetry; a permanently
-                // zero counter (e.g. D3D11 path without a probe) is not a stall.
-                if (media_receiver.video_running() && media_receiver.has_endpoint()) {
+                // Video stall while audio keeps free-running → audio gets ahead.
+                // When frames return, restart audio only so it meets the live video edge.
+                if (media_receiver.video_running() && media_receiver.audio_running() &&
+                    media_receiver.has_endpoint()) {
                     if (frames_delta == 0) {
                         if (last_decoded_frames > 0) {
                             ++zero_frame_streak;
                             if (zero_frame_streak >= 3) {
-                                awaiting_resync_after_stall = true;
+                                audio_realign_after_video_stall = true;
                             }
                         }
                     } else {
-                        if (awaiting_resync_after_stall && now >= next_auto_resync_allowed) {
-                            if (media_receiver.resync()) {
-                                next_auto_resync_allowed = now + std::chrono::seconds(30);
+                        if (audio_realign_after_video_stall && now >= next_resync_allowed) {
+                            if (media_receiver.resync_audio()) {
+                                next_resync_allowed = now + std::chrono::seconds(15);
                                 last_decoded_frames = media_receiver.decoded_frame_count();
                                 if (callbacks.on_status) {
                                     callbacks.on_status(
-                                        "Resynced A/V after a video stall (audio was likely drifting).");
+                                        "Video recovered; restarted audio to match (lip-sync).");
                                 }
                             }
                         }
                         zero_frame_streak = 0;
-                        awaiting_resync_after_stall = false;
+                        audio_realign_after_video_stall = false;
                     }
                 }
             }

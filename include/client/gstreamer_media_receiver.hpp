@@ -18,10 +18,13 @@ public:
     bool video_running() const;
     bool audio_running() const;
     bool video_frames_seen() const;
-    // Best-effort count of decoded frames from gst identity log lines.
+    // Best-effort count of decoded frames from gst progressreport log lines.
     std::uint64_t decoded_frame_count() const;
     const std::string& video_pipeline_info() const;
     const std::string& audio_pipeline_info() const;
+
+    /** Restart Opus only — used when video lagged and audio free-ran ahead. */
+    bool restart_audio();
 
 private:
     void start_audio_pipeline(bool wait_for_ready);

@@ -780,7 +780,7 @@ bool GStreamerMediaServer::reconfigure_client_video(ClientId client_id, const Vi
     }
     // Video-only restart. Do not bounce the shared Opus fanout — that stutters every
     // client and fights low-latency play. Clients one-shot resync when told media moved
-    // (resent MediaEndpoint) or after a real decode stall.
+    // (resent MediaEndpoint after a ladder change).
     return video_fanout_->reconfigure_client(client_id, settings);
 }
 

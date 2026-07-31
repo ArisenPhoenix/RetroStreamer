@@ -110,9 +110,16 @@ bool GStreamerMediaReceiver::poll() {
         return false;
     }
 
+    return restart_audio();
+}
+
+bool GStreamerMediaReceiver::restart_audio() {
+    if (endpoint_.audio_uri.empty()) {
+        return false;
+    }
     audio_process_.stop();
     start_audio_pipeline(false);
-    return true;
+    return audio_process_.running();
 }
 
 bool GStreamerMediaReceiver::video_running() const {

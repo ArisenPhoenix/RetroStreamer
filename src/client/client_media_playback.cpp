@@ -51,20 +51,28 @@ bool ClientMediaPlayback::resync() {
     return active();
 }
 
+bool ClientMediaPlayback::resync_audio() {
+    if (!has_endpoint_) {
+        return false;
+    }
+    if (synced_) {
+        // Single process — cannot restart Opus alone.
+        return resync();
+    }
+    if (!legacy_) {
+        return false;
+    }
+    return legacy_->restart_audio();
+}
+
 bool ClientMediaPlayback::poll() {
     if (synced_) {
         // Synced path already restarts the whole session on device/death.
         return synced_->poll();
     }
-    if (!legacy_) {
-        return false;
-    }
-    // Legacy used to restart audio alone — that permanently desyncs A/V.
-    // Promote any audio recovery into a full dual-branch resync.
-    if (legacy_->poll()) {
-        return resync();
-    }
-    return false;
+    // Legacy: audio-only rebind (device change / died). Leaving video running is
+    // intentional — restarting Opus is how we pull audio back to the live edge.
+    return legacy_ && legacy_->poll();
 }
 
 bool ClientMediaPlayback::active() const {

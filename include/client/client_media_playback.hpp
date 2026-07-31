@@ -36,8 +36,15 @@ public:
     void disconnect() override;
     bool poll() override;
 
-    /** Tear down and reconnect both A/V branches with the last endpoint (mid-session lip-sync recovery). */
+    /** Tear down and reconnect both A/V branches (Synced path, or hard recovery). */
     bool resync();
+
+    /**
+     * Realign lip-sync on the Legacy path: restart audio only so it meets the
+     * current live video edge (typical case: video stalled/behind, audio ran ahead).
+     * Synced path falls back to a full resync.
+     */
+    bool resync_audio();
 
     Strategy strategy() const { return strategy_; }
     bool active() const;

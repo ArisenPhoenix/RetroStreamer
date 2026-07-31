@@ -550,6 +550,12 @@ ClientRunResult ClientApp::join_session(
                 callbacks.on_status("Audio output rebound.");
             }
         }
+        if (controller_backend.has_value()) {
+            if (auto hotplug = controller_backend->take_hotplug_status();
+                hotplug.has_value() && callbacks.on_status) {
+                callbacks.on_status(*hotplug);
+            }
+        }
         const bool want_resync =
             callbacks.media_resync && callbacks.media_resync->take();
         if (want_resync && media_receiver.has_endpoint() && now >= next_resync_allowed) {

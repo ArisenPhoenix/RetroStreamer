@@ -24,12 +24,36 @@ constexpr std::uint8_t kBadHealthThreshold = 3;
 // Demote from High only after a longer bad streak; brief decode stalls are common at 60fps.
 constexpr std::uint8_t kBadHealthThresholdFromHigh = 6;
 constexpr std::uint8_t kGoodHealthThreshold = 10;           // Low → Medium (~10s)
-constexpr std::uint8_t kGoodHealthThresholdForHigh = 45;    // Medium → High (~45s stable)
+constexpr std::uint8_t kGoodHealthThresholdForHigh = 45;    // Medium → Med-High (~45s)
 constexpr std::uint16_t kHighLossPermille = 100;
 // Require sustained decode rate before climbing (heartbeats are ~1 Hz).
 constexpr std::uint16_t kMinFramesForStepUp = 8;
 constexpr std::uint16_t kMinFramesForHighStepUp = 20;
+// Auto must not walk into High/Very-High: each step restarts the shared encode
+// tee (~1s full-screen freeze). 1080p60@12–25 Mbps also overloads many Wi‑Fi
+// clients. Players can still pick High/Very-High explicitly in the client UI.
+constexpr MediaQualityTier kAutoMaxTier = MediaQualityTier::MediumHigh;
 constexpr auto kFramecountOsdInterval = std::chrono::milliseconds(500);
+
+bool tier_above(MediaQualityTier a, MediaQualityTier b) {
+    const auto rank = [](MediaQualityTier tier) {
+        switch (tier) {
+        case MediaQualityTier::Low:
+            return 0;
+        case MediaQualityTier::Medium:
+        case MediaQualityTier::Auto:
+            return 1;
+        case MediaQualityTier::MediumHigh:
+            return 2;
+        case MediaQualityTier::High:
+            return 3;
+        case MediaQualityTier::VeryHigh:
+            return 4;
+        }
+        return 0;
+    };
+    return rank(a) > rank(b);
+}
 
 bool client_is_seated_player(const SessionClientConnection& client) {
     return client.hello.requested_players > 0;
@@ -366,6 +390,13 @@ void SessionControlMonitor::handle_heartbeat(
     }
 
     // Client Auto mode only reports health; the host decides ladder steps.
+    // Enforce the Auto ceiling even if a prior build already climbed too high —
+    // one demote restart is better than staying on 1080p60@25 Mbps with freezes.
+    if (tier_above(client.applied_tier, kAutoMaxTier)) {
+        apply_video_tier(client, kAutoMaxTier, "auto ceiling (cap High/Very-High)");
+        return;
+    }
+
     // Step down ONLY on real loss / dead receiver (client sets loss=1000‰ when
     // gst-launch is gone). Do NOT treat frames_decoded_delta==0 as unhealthy:
     // that telemetry is best-effort (Windows D3D11 zero-copy has no per-frame
@@ -399,7 +430,7 @@ void SessionControlMonitor::handle_heartbeat(
 
     client.bad_health_streak = 0;
     const auto next = step_quality_tier_up(client.applied_tier);
-    if (next == client.applied_tier) {
+    if (next == client.applied_tier || tier_above(next, kAutoMaxTier)) {
         client.good_health_streak = 0;
         return;
     }
@@ -412,10 +443,8 @@ void SessionControlMonitor::handle_heartbeat(
         promoting_to_60fps ? kGoodHealthThresholdForHigh : kGoodHealthThreshold;
     // True FPS probes are not available on all receive paths (gst-launch + D3D11
     // zero-copy). Promote Low→Medium on sustained no-loss heartbeats. Climbing
-    // into 60 fps / 1080p without any frame telemetry is blind: Windows often
-    // reports delta=0 even while video plays, and Auto then walks to Very-High
-    // (25 Mbps) → decode/Wi‑Fi stalls that feel like freezes while UDP input
-    // still arrives on time (late picture = felt button lag / burst catch-up).
+    // into 60 fps without frame telemetry is blind and previously walked Auto
+    // into Very-High with encode restarts every ~45s (full-screen freezes).
     if (promoting_to_60fps && heartbeat.frames_decoded_delta == 0) {
         client.good_health_streak = 0;
         return;

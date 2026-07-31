@@ -10,6 +10,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <vector>
 
 namespace archstreamer::gui {
 
@@ -86,12 +87,20 @@ HostPickerWidget::HostPickerWidget(QWidget* parent)
     setBrowsing(false);
 }
 
+void HostPickerWidget::setSeedHosts(std::vector<std::string> hosts) {
+    seed_hosts_ = std::move(hosts);
+    if (browser_) {
+        browser_->set_seed_hosts(seed_hosts_);
+    }
+}
+
 void HostPickerWidget::setBrowsing(bool enabled) {
     if (enabled) {
         if (!browser_) {
             try {
                 browser_ = std::make_unique<HostDiscoveryBrowser>();
-                status_->setText("Listening for hosts on LAN...");
+                browser_->set_seed_hosts(seed_hosts_);
+                status_->setText("Probing LAN for hosts (unicast + broadcast)...");
             } catch (const std::exception& error) {
                 status_->setText(QString("Discovery unavailable: %1").arg(error.what()));
                 return;

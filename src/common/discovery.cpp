@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #ifdef _WIN32
@@ -52,6 +53,28 @@ std::optional<std::string> read_string(const ByteBuffer& bytes, std::size_t& off
 }
 
 std::vector<std::string> getIPTargets() {return {"255.255.255.255", "127.0.0.1"};}
+
+bool parse_ipv4(std::string_view text, std::uint32_t& out_host_order) {
+    if (text.empty() || text.size() >= INET_ADDRSTRLEN) {
+        return false;
+    }
+    char buffer[INET_ADDRSTRLEN]{};
+    std::memcpy(buffer, text.data(), text.size());
+    in_addr addr{};
+    if (inet_pton(AF_INET, buffer, &addr) != 1) {
+        return false;
+    }
+    out_host_order = ntohl(addr.s_addr);
+    return true;
+}
+
+bool is_loopback_ipv4(std::string_view address) {
+    std::uint32_t host = 0;
+    if (!parse_ipv4(address, host)) {
+        return false;
+    }
+    return (host >> 24) == 127;
+}
 
 #ifdef _WIN32
 std::vector<std::string> ipv4_broadcast_targets() {
@@ -164,6 +187,19 @@ ByteBuffer serialize_host_announcement(const HostAnnouncement& announcement) {
     return out;
 }
 
+ByteBuffer serialize_host_probe() {
+    ByteBuffer out;
+    const auto* magic = DiscoveryProbeMagic;
+    out.insert(out.end(), magic, magic + std::strlen(magic));
+    return out;
+}
+
+bool is_host_probe(const ByteBuffer& bytes) {
+    const auto magic_size = std::strlen(DiscoveryProbeMagic);
+    return bytes.size() >= magic_size &&
+        std::memcmp(bytes.data(), DiscoveryProbeMagic, magic_size) == 0;
+}
+
 std::optional<HostAnnouncement> parse_host_announcement(const ByteBuffer& bytes) {
     const auto magic_size = std::strlen(DiscoveryMagic);
     if (bytes.size() < magic_size) {
@@ -189,6 +225,9 @@ std::optional<HostAnnouncement> parse_host_announcement(const ByteBuffer& bytes)
 
 HostDiscoveryAnnouncer::HostDiscoveryAnnouncer(HostAnnouncement announcement, std::uint16_t discovery_port)
     : announcement_(std::move(announcement)), discovery_port_(discovery_port) {
+    // Bind so we can answer unicast probes. Broadcast alone is often dropped on Wi‑Fi.
+    socket_.bind_any(discovery_port_);
+    socket_.set_nonblocking(true);
     socket_.enable_broadcast(true);
 }
 
@@ -196,50 +235,162 @@ void HostDiscoveryAnnouncer::set_announcement(HostAnnouncement announcement) {
     announcement_ = std::move(announcement);
 }
 
-void HostDiscoveryAnnouncer::advertise() {
-    const auto packet = serialize_host_announcement(announcement_);
-    for (const auto& target : ipv4_broadcast_targets()) {
-        socket_.send_to(packet, target, discovery_port_);
+void HostDiscoveryAnnouncer::poll_probes() {
+    const auto reply = serialize_host_announcement(announcement_);
+    while (true) {
+        const auto datagram = socket_.receive_from();
+        if (!datagram.has_value()) {
+            return;
+        }
+        if (!is_host_probe(datagram->bytes)) {
+            continue;
+        }
+        // Reply to the client's discovery listen port (not the ephemeral probe source).
+        try {
+            socket_.send_to(reply, datagram->host, discovery_port_);
+        } catch (...) {
+        }
     }
 }
 
-HostDiscoveryBrowser::HostDiscoveryBrowser(std::uint16_t discovery_port) {
-    socket_.bind_any(discovery_port);
+void HostDiscoveryAnnouncer::advertise() {
+    poll_probes();
+    const auto packet = serialize_host_announcement(announcement_);
+    for (const auto& target : ipv4_broadcast_targets()) {
+        try {
+            socket_.send_to(packet, target, discovery_port_);
+        } catch (...) {
+        }
+    }
+}
+
+HostDiscoveryBrowser::HostDiscoveryBrowser(std::uint16_t discovery_port)
+    : discovery_port_(discovery_port) {
+    socket_.bind_any(discovery_port_);
     socket_.set_nonblocking(true);
+    probe_socket_.set_nonblocking(true);
+    next_subnet_probe_ = std::chrono::steady_clock::now();
+}
+
+void HostDiscoveryBrowser::set_seed_hosts(std::vector<std::string> hosts) {
+    seed_hosts_ = std::move(hosts);
+}
+
+void HostDiscoveryBrowser::note_announcement(
+    const HostAnnouncement& announcement,
+    const std::string& address) {
+    const auto now = std::chrono::steady_clock::now();
+    // Keep one row per (username, source address). The same process may legitimately
+    // appear on LAN, loopback, docker, and VPN IPs — each is a distinct connect path.
+    auto existing = std::find_if(hosts_.begin(), hosts_.end(), [&](const DiscoveredHost& host) {
+        return host.username == announcement.username && host.address == address;
+    });
+    if (existing != hosts_.end()) {
+        existing->control_port = announcement.control_port;
+        existing->input_port = announcement.input_port;
+        existing->last_seen = now;
+        return;
+    }
+
+    hosts_.push_back(DiscoveredHost{
+        announcement.username,
+        address,
+        announcement.control_port,
+        announcement.input_port,
+        now,
+    });
 }
 
 void HostDiscoveryBrowser::poll() {
     while (true) {
         const auto datagram = socket_.receive_from();
         if (!datagram.has_value()) {
-            return;
+            break;
         }
-
         const auto announcement = parse_host_announcement(datagram->bytes);
         if (!announcement.has_value()) {
             continue;
         }
+        note_announcement(*announcement, datagram->host);
+    }
+    probe_lan();
+}
 
-        const auto now = std::chrono::steady_clock::now();
-        // Keep one row per (username, source address). The same process may legitimately
-        // appear on LAN, loopback, docker, and VPN IPs — each is a distinct connect path.
-        auto existing = std::find_if(hosts_.begin(), hosts_.end(), [&](const DiscoveredHost& host) {
-            return host.username == announcement->username && host.address == datagram->host;
-        });
-        if (existing != hosts_.end()) {
-            existing->control_port = announcement->control_port;
-            existing->input_port = announcement->input_port;
-            existing->last_seen = now;
+std::vector<std::string> HostDiscoveryBrowser::probe_targets() const {
+    std::vector<std::string> targets;
+    auto add = [&](const std::string& address) {
+        if (address.empty()) {
+            return;
+        }
+        std::uint32_t host = 0;
+        if (!parse_ipv4(address, host) || is_loopback_ipv4(address)) {
+            return;
+        }
+        if (std::find(targets.begin(), targets.end(), address) == targets.end()) {
+            targets.push_back(address);
+        }
+    };
+
+    for (const auto& seed : seed_hosts_) {
+        add(seed);
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    // Full /24 sweeps are chatty — only when due.
+    if (now < next_subnet_probe_) {
+        return targets;
+    }
+
+    for (const auto& local : local_ipv4_addresses()) {
+        std::uint32_t host = 0;
+        if (!parse_ipv4(local, host)) {
             continue;
         }
+        // Skip typical virtual/VPN ranges so we do not spray 250 probes into docker/libvirt.
+        if ((host >> 16) == 0xac11u) { // 172.17.x.x
+            continue;
+        }
+        if ((host & 0xffffff00u) == 0xc0a87a00u) { // 192.168.122.x
+            continue;
+        }
+        if ((host >> 24) == 100u) { // 100.x.x.x (CGNAT / tailscale-like)
+            continue;
+        }
+        const std::uint32_t base = host & 0xffffff00u;
+        for (std::uint32_t octet = 1; octet <= 254; ++octet) {
+            const std::uint32_t candidate = base | octet;
+            if (candidate == host) {
+                continue;
+            }
+            in_addr addr{};
+            addr.s_addr = htonl(candidate);
+            char text[INET_ADDRSTRLEN]{};
+            if (inet_ntop(AF_INET, &addr, text, sizeof(text)) == nullptr) {
+                continue;
+            }
+            add(text);
+        }
+    }
+    return targets;
+}
 
-        hosts_.push_back(DiscoveredHost{
-            announcement->username,
-            datagram->host,
-            announcement->control_port,
-            announcement->input_port,
-            now,
-        });
+void HostDiscoveryBrowser::probe_lan() {
+    const auto now = std::chrono::steady_clock::now();
+    const bool subnet_due = now >= next_subnet_probe_;
+    const auto targets = probe_targets();
+    if (subnet_due) {
+        next_subnet_probe_ = now + std::chrono::seconds(5);
+    }
+    if (targets.empty()) {
+        return;
+    }
+
+    const auto probe = serialize_host_probe();
+    for (const auto& target : targets) {
+        try {
+            probe_socket_.send_to(probe, target, discovery_port_);
+        } catch (...) {
+        }
     }
 }
 
@@ -255,32 +406,6 @@ void HostDiscoveryBrowser::expire_older_than(std::chrono::seconds max_age) {
 std::vector<DiscoveredHost> HostDiscoveryBrowser::hosts() const {
     return hosts_;
 }
-
-namespace {
-
-bool parse_ipv4(std::string_view text, std::uint32_t& out_host_order) {
-    if (text.empty() || text.size() >= INET_ADDRSTRLEN) {
-        return false;
-    }
-    char buffer[INET_ADDRSTRLEN]{};
-    std::memcpy(buffer, text.data(), text.size());
-    in_addr addr{};
-    if (inet_pton(AF_INET, buffer, &addr) != 1) {
-        return false;
-    }
-    out_host_order = ntohl(addr.s_addr);
-    return true;
-}
-
-bool is_loopback_ipv4(std::string_view address) {
-    std::uint32_t host = 0;
-    if (!parse_ipv4(address, host)) {
-        return false;
-    }
-    return (host >> 24) == 127;
-}
-
-} // namespace
 
 std::vector<std::string> local_ipv4_addresses() {
     std::vector<std::string> addresses;

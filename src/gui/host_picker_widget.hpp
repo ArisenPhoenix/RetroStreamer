@@ -21,6 +21,7 @@ public:
     explicit HostPickerWidget(QWidget* parent = nullptr);
 
     void setBrowsing(bool enabled);
+    void setSeedHosts(std::vector<std::string> hosts);
     bool hasSelection() const;
     std::optional<DiscoveredHost> selectedHost() const;
 
@@ -37,6 +38,7 @@ private:
     void applySelection(bool force = false);
 
     std::unique_ptr<HostDiscoveryBrowser> browser_;
+    std::vector<std::string> seed_hosts_;
     QTimer* timer_ = nullptr;
     QListWidget* list_ = nullptr;
     QLabel* status_ = nullptr;

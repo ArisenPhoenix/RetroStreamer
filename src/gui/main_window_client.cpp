@@ -222,6 +222,14 @@ void MainWindow::start_client_host_auto_pick() {
     stop_client_host_auto_pick();
     try {
         client_auto_browser_ = std::make_unique<archstreamer::HostDiscoveryBrowser>();
+        std::vector<std::string> seeds;
+        QSettings settings(QStringLiteral("ArchStreamer"), QStringLiteral("ArchStreamer"));
+        const auto saved = settings.value(QStringLiteral("client/hostAddress")).toString().trimmed();
+        if (!saved.isEmpty() && saved != QStringLiteral("127.0.0.1") &&
+            !saved.startsWith(QStringLiteral("127."))) {
+            seeds.push_back(saved.toStdString());
+        }
+        client_auto_browser_->set_seed_hosts(std::move(seeds));
     } catch (const std::exception& error) {
         append_log(client_log_, QString("Host auto-pick unavailable: %1").arg(error.what()));
         return;
@@ -275,6 +283,14 @@ void MainWindow::connect_client() {
     if (client_host_ == nullptr || client_host_->text().trimmed().isEmpty()) {
         append_log(client_log_, "Select a host (Select Host… or This PC) before Connect.");
         return;
+    }
+    const auto host_text = client_host_->text().trimmed();
+    if (host_text == QStringLiteral("127.0.0.1") || host_text.startsWith(QStringLiteral("127."))) {
+        append_log(
+            client_log_,
+            "Host is This PC (127.0.0.1) — that only works if ArchStreamer Host is running on "
+            "THIS Windows machine. For the Linux host, use Select Host… and pick the LAN entry "
+            "(e.g. 192.168.x.x), not This PC.");
     }
     // Video-window close ends the session worker, but std::thread stays joinable until
     // joined. Auto-reap finished workers so Connect/Join work without Stop Client.

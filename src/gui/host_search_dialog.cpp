@@ -4,8 +4,11 @@
 #include <QDialogButtonBox>
 #include <QHideEvent>
 #include <QLabel>
+#include <QSettings>
 #include <QShowEvent>
 #include <QVBoxLayout>
+
+#include <vector>
 
 namespace archstreamer::gui {
 
@@ -16,7 +19,9 @@ HostSearchDialog::HostSearchDialog(QWidget* parent)
 
     auto* root = new QVBoxLayout(this);
     root->addWidget(new QLabel(
-        "Hosts on the same subnet are preferred. Loopback is only via This PC on the Client tab.",
+        "Hosts on the same subnet are preferred. If the list stays empty on Wi‑Fi, "
+        "the client probes by unicast (broadcast is often blocked). Loopback is only "
+        "via This PC on the Client tab.",
         this));
 
     picker_ = new HostPickerWidget(this);
@@ -36,6 +41,14 @@ std::optional<DiscoveredHost> HostSearchDialog::selectedHost() const {
 
 void HostSearchDialog::showEvent(QShowEvent* event) {
     QDialog::showEvent(event);
+    std::vector<std::string> seeds;
+    QSettings settings(QStringLiteral("ArchStreamer"), QStringLiteral("ArchStreamer"));
+    const auto saved = settings.value(QStringLiteral("client/hostAddress")).toString().trimmed();
+    if (!saved.isEmpty() && saved != QStringLiteral("127.0.0.1") &&
+        !saved.startsWith(QStringLiteral("127."))) {
+        seeds.push_back(saved.toStdString());
+    }
+    picker_->setSeedHosts(std::move(seeds));
     picker_->setBrowsing(true);
 }
 

@@ -336,7 +336,7 @@ void MainWindow::sync_host_advertise(bool enabled) {
         }
         host_advertise_timer_->start();
         advertise_host();
-        append_log(host_log_, "LAN advertise broadcasting (UDP 45550).");
+        append_log(host_log_, "LAN advertise on UDP 45550 (broadcast + unicast probe replies).");
     } else {
         host_advertise_timer_->stop();
         host_announcer_.reset();

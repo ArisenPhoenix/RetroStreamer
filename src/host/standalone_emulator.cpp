@@ -68,24 +68,7 @@ bool directory_has_entries(const std::filesystem::path& path) {
     return !ec && it != std::filesystem::directory_iterator{};
 }
 
-std::filesystem::path managed_ryujinx_firmware_registered() {
-    return default_ryujinx_runtime_root() / "firmware" / "registered";
-}
-
-std::vector<std::filesystem::path> ryujinx_firmware_source_candidates() {
-    std::vector<std::filesystem::path> out;
-    out.push_back(managed_ryujinx_firmware_registered());
-    if (const auto home = home_dir(); !home.empty()) {
-        out.push_back(home / ".config" / "Ryujinx" / "bis" / "system" / "Contents" / "registered");
-#ifdef _WIN32
-        if (const char* local = std::getenv("LOCALAPPDATA"); local != nullptr && *local != '\0') {
-            out.push_back(
-                std::filesystem::path{local} / "Ryujinx" / "bis" / "system" / "Contents" / "registered");
-        }
-#endif
-    }
-    return out;
-}
+std::optional<std::filesystem::path> find_source_keys_dir();
 
 void copy_directory_recursive_skip_existing(
     const std::filesystem::path& source,
@@ -112,23 +95,85 @@ void copy_directory_recursive_skip_existing(
     }
 }
 
-/** Shared firmware NCAs under the managed Ryujinx runtime (seeded from a desktop install). */
-std::filesystem::path ensure_managed_ryujinx_firmware() {
-    const auto managed = managed_ryujinx_firmware_registered();
-    if (directory_has_entries(managed)) {
-        return managed;
+std::filesystem::path managed_ryujinx_firmware_registered() {
+    return switch_system_defaults_root() / "firmware" / "registered";
+}
+
+std::filesystem::path switch_system_keys_directory() {
+    return switch_system_defaults_root() / "keys";
+}
+
+std::vector<std::filesystem::path> ryujinx_firmware_source_candidates() {
+    std::vector<std::filesystem::path> out;
+    out.push_back(managed_ryujinx_firmware_registered());
+    // Legacy ArchStreamer locations (pre system/switch layout).
+    out.push_back(default_ryujinx_runtime_root() / "firmware" / "registered");
+    // One-time bootstrap only — never the long-term source of truth.
+    if (const auto home = home_dir(); !home.empty()) {
+        out.push_back(home / ".config" / "Ryujinx" / "bis" / "system" / "Contents" / "registered");
+#ifdef _WIN32
+        if (const char* local = std::getenv("LOCALAPPDATA"); local != nullptr && *local != '\0') {
+            out.push_back(
+                std::filesystem::path{local} / "Ryujinx" / "bis" / "system" / "Contents" / "registered");
+        }
+#endif
+    }
+    return out;
+}
+
+std::vector<std::filesystem::path> switch_keys_source_candidates() {
+    std::vector<std::filesystem::path> out;
+    out.push_back(switch_system_keys_directory());
+    out.push_back(default_ryujinx_runtime_root() / "keys");
+    out.push_back(default_yuzu_runtime_root() / "keys");
+    if (const auto source = find_source_keys_dir(); source.has_value()) {
+        out.push_back(*source);
+    }
+    return out;
+}
+
+/** Ensure ~/.local/share/archstreamer/system/switch/{keys,firmware} is populated. */
+void ensure_switch_system_defaults() {
+    const auto keys_dir = switch_system_keys_directory();
+    std::filesystem::create_directories(keys_dir);
+    if (!std::filesystem::is_regular_file(keys_dir / "prod.keys")) {
+        for (const auto& source : switch_keys_source_candidates()) {
+            if (source == keys_dir) {
+                continue;
+            }
+            copy_key_files(source, keys_dir);
+            if (std::filesystem::is_regular_file(keys_dir / "prod.keys")) {
+                std::cout << "Switch keys: installed into " << keys_dir << " (from " << source << ")\n";
+                break;
+            }
+        }
+    }
+
+    const auto firmware = managed_ryujinx_firmware_registered();
+    if (directory_has_entries(firmware)) {
+        return;
     }
     for (const auto& source : ryujinx_firmware_source_candidates()) {
-        if (source == managed || !directory_has_entries(source)) {
+        if (source == firmware || !directory_has_entries(source)) {
             continue;
         }
-        std::cout << "Installing Ryujinx firmware into " << managed << " (from " << source << ")\n";
-        copy_directory_recursive_skip_existing(source, managed);
-        if (directory_has_entries(managed)) {
-            return managed;
+        // Don't copy through a symlink that already points at the destination.
+        std::error_code ec;
+        if (std::filesystem::equivalent(source, firmware, ec)) {
+            continue;
+        }
+        std::cout << "Switch firmware: installing into " << firmware << " (from " << source << ")\n";
+        copy_directory_recursive_skip_existing(source, firmware);
+        if (directory_has_entries(firmware)) {
+            return;
         }
     }
-    return managed;
+}
+
+/** Shared firmware NCAs under ArchStreamer system/switch (seeded once). */
+std::filesystem::path ensure_managed_ryujinx_firmware() {
+    ensure_switch_system_defaults();
+    return managed_ryujinx_firmware_registered();
 }
 
 /** Ensure the per-user Ryujinx profile can see system firmware (avoids "Firmware not found"). */
@@ -141,9 +186,10 @@ void ensure_ryujinx_firmware(const std::filesystem::path& data_root) {
 
     const auto managed = ensure_managed_ryujinx_firmware();
     if (!directory_has_entries(managed)) {
-        std::cout << "Warning: Ryujinx firmware not found. Install firmware once in a desktop "
-                     "Ryujinx (File → Install Firmware), or copy NCAs into "
-                  << managed << '\n';
+        std::cout << "Warning: Switch firmware not found under "
+                  << managed
+                  << ". Place firmware NCAs there (or bootstrap once from a desktop Ryujinx "
+                     "install).\n";
         std::filesystem::create_directories(profile_registered);
         return;
     }
@@ -631,6 +677,25 @@ std::optional<std::filesystem::path> find_source_ryujinx() {
 
 } // namespace
 
+std::filesystem::path default_archstreamer_data_root() {
+    if (const auto home = home_dir(); !home.empty()) {
+#ifdef _WIN32
+        const auto cache = archstreamer_cache_directory();
+        if (!cache.empty()) {
+            return std::filesystem::path{cache};
+        }
+        return home / "AppData" / "Local" / "archstreamer";
+#else
+        return home / ".local/share/archstreamer";
+#endif
+    }
+    return std::filesystem::current_path() / "archstreamer-data";
+}
+
+std::filesystem::path switch_system_defaults_root() {
+    return default_archstreamer_data_root() / "system" / "switch";
+}
+
 std::filesystem::path default_yuzu_runtime_root() {
     if (const auto home = home_dir(); !home.empty()) {
 #ifdef _WIN32
@@ -769,10 +834,14 @@ YuzuUserProfile prepare_yuzu_user_profile(
     std::filesystem::create_directories(profile.xdg_data_home / "yuzu" / "screenshot");
     std::filesystem::create_directories(profile.xdg_data_home / "yuzu" / "dump");
 
-    const auto shared_keys = default_yuzu_runtime_root() / "keys";
+    const auto shared_keys = switch_system_keys_directory();
+    ensure_switch_system_defaults();
     copy_key_files(shared_keys, profile.keys_directory);
 
-    // Also seed from the host user's personal Yuzu install when shared keys were empty.
+    // Legacy / personal bootstrap when system/switch keys are still empty.
+    if (!std::filesystem::exists(profile.keys_directory / "prod.keys")) {
+        copy_key_files(default_yuzu_runtime_root() / "keys", profile.keys_directory);
+    }
     if (!std::filesystem::exists(profile.keys_directory / "prod.keys")) {
         if (const auto source_keys = find_source_keys_dir(); source_keys.has_value()) {
             copy_key_files(*source_keys, profile.keys_directory);
@@ -1028,6 +1097,7 @@ void ensure_ryujinx_config(
     cfg["show_confirm_exit"] = false;
     cfg["skip_user_profiles"] = true;
     cfg["enable_discord_integration"] = false;
+    cfg["disable_input_when_out_of_focus"] = false;
 
     if (resolution_scale > 0) {
         cfg["res_scale"] = std::clamp(resolution_scale, 1, 4);
@@ -1055,7 +1125,11 @@ RyujinxUserProfile prepare_ryujinx_user_profile(
     std::filesystem::create_directories(profile.keys_directory);
     std::filesystem::create_directories(save_profile.user_directory / "switch" / "saves");
 
-    copy_key_files(default_ryujinx_runtime_root() / "keys", profile.keys_directory);
+    ensure_switch_system_defaults();
+    copy_key_files(switch_system_keys_directory(), profile.keys_directory);
+    if (!std::filesystem::is_regular_file(profile.keys_directory / "prod.keys")) {
+        copy_key_files(default_ryujinx_runtime_root() / "keys", profile.keys_directory);
+    }
     if (!std::filesystem::is_regular_file(profile.keys_directory / "prod.keys")) {
         copy_key_files(default_yuzu_runtime_root() / "keys", profile.keys_directory);
     }
@@ -1074,12 +1148,159 @@ RyujinxUserProfile prepare_ryujinx_user_profile(
     return profile;
 }
 
+namespace {
+
+// SDL GUID (32 hex) → Ryujinx GamepadSDL2 id: "{index}-{Guid-style}".
+std::string ryujinx_device_id_from_sdl_guid(std::size_t index, const std::string& sdl_guid) {
+    if (sdl_guid.size() < 32) {
+        return std::to_string(index) + "-" + sdl_guid;
+    }
+    auto byte = [&](std::size_t i) { return sdl_guid.substr(i * 2, 2); };
+    const std::string a = byte(3) + byte(2) + byte(1) + byte(0);
+    const std::string b = byte(5) + byte(4);
+    const std::string c = byte(7) + byte(6);
+    const std::string d = byte(8) + byte(9);
+    const std::string e = byte(10) + byte(11) + byte(12) + byte(13) + byte(14) + byte(15);
+    return std::to_string(index) + "-" + a + "-" + b + "-" + c + "-" + d + "-" + e;
+}
+
+nlohmann::json ryujinx_pro_controller_sdl_binding(
+    std::size_t player_index,
+    const std::string& sdl_guid,
+    const std::string& pad_name) {
+    nlohmann::json entry = {
+        {"left_joycon_stick",
+         {{"joystick", "Left"},
+          {"invert_stick_x", false},
+          {"invert_stick_y", false},
+          {"rotate90_cw", false},
+          {"stick_button", "LeftStick"}}},
+        {"right_joycon_stick",
+         {{"joystick", "Right"},
+          {"invert_stick_x", false},
+          {"invert_stick_y", false},
+          {"rotate90_cw", false},
+          {"stick_button", "RightStick"}}},
+        {"deadzone_left", 0.1},
+        {"deadzone_right", 0.1},
+        {"range_left", 1.0},
+        {"range_right", 1.0},
+        {"trigger_threshold", 0.5},
+        {"motion",
+         {{"motion_backend", "GamepadDriver"},
+          {"sensitivity", 100},
+          {"gyro_deadzone", 1},
+          {"enable_motion", false}}},
+        {"rumble", {{"strong_rumble", 1.0}, {"weak_rumble", 1.0}, {"enable_rumble", false}}},
+        {"led",
+         {{"enable_led", false},
+          {"turn_off_led", false},
+          {"use_rainbow", false},
+          {"led_color", 0}}},
+        {"left_joycon",
+         {{"button_minus", "Back"},
+          {"button_l", "LeftShoulder"},
+          {"button_zl", "LeftTrigger"},
+          {"button_sl", "Unbound"},
+          {"button_sr", "Unbound"},
+          {"dpad_up", "DpadUp"},
+          {"dpad_down", "DpadDown"},
+          {"dpad_left", "DpadLeft"},
+          {"dpad_right", "DpadRight"}}},
+        {"right_joycon",
+         {{"button_plus", "Start"},
+          {"button_r", "RightShoulder"},
+          {"button_zr", "RightTrigger"},
+          {"button_sl", "Unbound"},
+          {"button_sr", "Unbound"},
+          {"button_x", "Y"},
+          {"button_b", "A"},
+          {"button_y", "X"},
+          {"button_a", "B"}}},
+        {"version", 1},
+        {"backend", "GamepadSDL2"},
+        {"id", ryujinx_device_id_from_sdl_guid(player_index, sdl_guid)},
+        {"name", pad_name},
+        {"controller_type", "ProController"},
+        {"player_index", "Player" + std::to_string(player_index + 1)},
+    };
+    return entry;
+}
+
+// Matches linux_uinput button registration order (SOUTH…DPAD_RIGHT) + ABS axes.
+std::string archstreamer_sdl_gamecontroller_mapping(
+    const std::string& sdl_guid,
+    const std::string& name) {
+    return sdl_guid + "," + name +
+        ",platform:Linux,a:b0,b:b1,x:b2,y:b3,back:b4,guide:b5,start:b6,"
+        "leftstick:b7,rightstick:b8,leftshoulder:b9,rightshoulder:b10,"
+        "dpup:b11,dpdown:b12,dpleft:b13,dpright:b14,"
+        "leftx:a0,lefty:a1,rightx:a2,righty:a3,lefttrigger:a4,righttrigger:a5";
+}
+
+} // namespace
+
+void configure_ryujinx_archstreamer_controls(
+    RyujinxUserProfile& profile,
+    const std::vector<std::string>& sdl_guids) {
+    if (sdl_guids.empty()) {
+        std::cerr << "Warning: no ArchStreamer SDL GUIDs; Ryujinx input_config left unchanged.\n";
+        return;
+    }
+
+    const auto config_path = profile.data_root / "Config.json";
+    nlohmann::json cfg = nlohmann::json::object();
+    if (std::filesystem::is_regular_file(config_path)) {
+        try {
+            std::ifstream in(config_path);
+            cfg = nlohmann::json::parse(in, nullptr, /*allow_exceptions=*/true);
+            if (!cfg.is_object()) {
+                cfg = nlohmann::json::object();
+            }
+        } catch (const nlohmann::json::exception&) {
+            cfg = nlohmann::json::object();
+        }
+    }
+
+    nlohmann::json input = nlohmann::json::array();
+    std::string mappings;
+    for (std::size_t i = 0; i < sdl_guids.size() && i < 8; ++i) {
+        if (sdl_guids[i].empty()) {
+            continue;
+        }
+        const auto name =
+            i == 0 ? std::string("ArchStreamer") : ("ArchStreamer_P" + std::to_string(i + 1));
+        input.push_back(ryujinx_pro_controller_sdl_binding(i, sdl_guids[i], name));
+        if (!mappings.empty()) {
+            mappings.push_back('\n');
+        }
+        mappings += archstreamer_sdl_gamecontroller_mapping(sdl_guids[i], name);
+    }
+    cfg["input_config"] = std::move(input);
+    cfg["use_input_global_config"] = false;
+    cfg["disable_input_when_out_of_focus"] = false;
+
+    std::ofstream out(config_path, std::ios::trunc);
+    if (!out) {
+        throw std::runtime_error("failed to write Ryujinx input_config: " + config_path.string());
+    }
+    out << cfg.dump(2) << '\n';
+    profile.sdl_gamecontroller_config = std::move(mappings);
+    std::cout
+        << "Ryujinx Controls: bound " << sdl_guids.size()
+        << " ArchStreamer pad(s) via GamepadSDL2 (+ SDL_GAMECONTROLLERCONFIG)\n";
+}
+
 std::vector<std::pair<std::string, std::string>> ryujinx_launch_environment(
     const RyujinxUserProfile& profile) {
-    return {
+    std::vector<std::pair<std::string, std::string>> env{
         {"XDG_CONFIG_HOME", profile.xdg_config_home.string()},
         {"SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1"},
     };
+    if (!profile.sdl_gamecontroller_config.empty()) {
+        env.emplace_back("SDL_GAMECONTROLLERCONFIG", profile.sdl_gamecontroller_config);
+    }
+    return env;
 }
 
 } // namespace archstreamer

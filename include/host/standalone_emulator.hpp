@@ -29,7 +29,15 @@ struct RyujinxUserProfile {
     std::filesystem::path xdg_config_home;
     std::filesystem::path data_root; // .../xdg-config/Ryujinx
     std::filesystem::path keys_directory;
+    // Injected into the Ryujinx child so ArchStreamer uinput pads show up as SDL GameControllers.
+    std::string sdl_gamecontroller_config;
 };
+
+// ArchStreamer-owned shared data (not personal ~/.config/Ryujinx or ~/.local/share/yuzu).
+// Layout: <data>/system/<device>/{keys,firmware/...}
+// Example: ~/.local/share/archstreamer/system/switch/{keys,firmware/registered}
+std::filesystem::path default_archstreamer_data_root();
+std::filesystem::path switch_system_defaults_root();
 
 // Managed tree: ~/.local/share/archstreamer/yuzu/{yuzu.AppImage,keys/...}
 std::filesystem::path default_yuzu_runtime_root();
@@ -101,6 +109,12 @@ RyujinxUserProfile prepare_ryujinx_user_profile(
     const SaveProfile& save_profile,
     bool enable_ldn_mitm = true,
     int resolution_scale = 1);
+
+// Bind Player1…N to ArchStreamer uinput pads (GamepadSDL2 + GUID) and build an
+// SDL_GAMECONTROLLERCONFIG mapping so Ryujinx can open those pads under gamescope.
+void configure_ryujinx_archstreamer_controls(
+    RyujinxUserProfile& profile,
+    const std::vector<std::string>& sdl_guids);
 
 std::vector<std::pair<std::string, std::string>> ryujinx_launch_environment(
     const RyujinxUserProfile& profile);

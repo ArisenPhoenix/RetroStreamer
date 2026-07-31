@@ -628,10 +628,16 @@ void ActiveSessionSlot::run_session() {
             core_name.find("ryujinx") != std::string::npos;
 
         if (use_ryujinx) {
-            const auto ryujinx_user = prepare_ryujinx_user_profile(
+            auto ryujinx_user = prepare_ryujinx_user_profile(
                 save_profile_,
                 /*enable_ldn_mitm=*/true,
                 config.yuzu_resolution_scale);
+            std::vector<std::string> pad_guids;
+            pad_guids.reserve(resolved_pads.size());
+            for (const auto& pad : resolved_pads) {
+                pad_guids.push_back(pad.guid);
+            }
+            configure_ryujinx_archstreamer_controls(ryujinx_user, pad_guids);
             launch_env_request.ryujinx_profile = ryujinx_user;
             launch_config.standalone_args_before_content = {"--fullscreen"};
             launch_config.quiet_stdio = !config.verbose;

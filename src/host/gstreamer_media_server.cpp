@@ -261,12 +261,11 @@ void GStreamerVideoFanout::restart_pipeline() {
         const int key_int_max = std::min(configured_key_int, sixth_sec);
 
         // Live capture must drop OLD frames under backpressure, never NEW ones.
-        // leaky=downstream previously discarded scene cuts (credits → title) while the
-        // encoder was busy, so remotes stayed on the last static screen until Pokemon
-        // animation produced a steady stream of unique frames.
+        // Keep the queue tiny: max-size-buffers=4 held up to ~4 frames (~130 ms at
+        // 30 fps) before encode, which dominated felt button lag after pad UDP.
         args.insert(args.end(), {
             "queue",
-            "max-size-buffers=4",
+            "max-size-buffers=1",
             "max-size-time=0",
             "max-size-bytes=0",
             "leaky=upstream",
@@ -284,6 +283,7 @@ void GStreamerVideoFanout::restart_pipeline() {
         }
         args.insert(args.end(), {
             "videorate",
+            "drop-only=true",
             "!",
             "video/x-raw,framerate=" + std::to_string(framerate) + "/1",
             "!",
@@ -292,7 +292,7 @@ void GStreamerVideoFanout::restart_pipeline() {
             args.insert(args.end(), {
                 "nvh264enc",
                 "zerolatency=true",
-                "preset=low-latency-hq",
+                "preset=low-latency-hp",
                 "strict-gop=true",
                 "bitrate=" + std::to_string(bitrate),
                 "gop-size=" + std::to_string(key_int_max),

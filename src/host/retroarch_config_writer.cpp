@@ -439,9 +439,9 @@ std::filesystem::path write_retroarch_input_override(
             << "audio_mute = \"false\"\n"
             << "audio_driver = \"pulse\"\n"
             << "audio_sync = \"true\"\n"
-            // Low Pulse latency keeps GB/intro timers moving; a large default
-            // buffer made timed credits crawl until clients held Space (FF).
-            << "audio_latency = \"64\"\n"
+            // Keep Pulse latency modest: audio_sync paces the core to this buffer, so
+            // 64 ms here alone made every button feel a frame late before capture.
+            << "audio_latency = \"32\"\n"
             << "video_vsync = \"false\"\n"
             << "runahead_enabled = \"false\"\n";
         // framecount_show stays off by default. Clients can request a ticking

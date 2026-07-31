@@ -107,6 +107,7 @@ void WindowsMediaServer::restart_video() {
         "video/x-raw,width=" + std::to_string(width) + ",height=" + std::to_string(height),
         "!",
         "videorate",
+        "drop-only=true",
         "!",
         "video/x-raw,framerate=" + std::to_string(framerate) + "/1",
         "!",
@@ -115,7 +116,7 @@ void WindowsMediaServer::restart_video() {
         args.insert(args.end(), {
             "nvh264enc",
             "zerolatency=true",
-            "preset=low-latency-hq",
+            "preset=low-latency-hp",
             "bitrate=" + std::to_string(bitrate),
             "!",
             "video/x-h264,profile=baseline,stream-format=byte-stream",

@@ -2,6 +2,8 @@
 
 #include "common/platform/paths.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -884,87 +886,47 @@ std::string switch_runtime_unavailable_message() {
 
 namespace {
 
-void upsert_json_number(std::string& json, const std::string& key, int value) {
-    const std::string needle = "\"" + key + "\"";
-    const auto pos = json.find(needle);
-    if (pos == std::string::npos) {
-        // Insert before final closing brace.
-        const auto brace = json.rfind('}');
-        if (brace == std::string::npos) {
-            return;
-        }
-        std::string insert = "  \"" + key + "\": " + std::to_string(value) + ",\n";
-        json.insert(brace, insert);
-        return;
-    }
-    const auto colon = json.find(':', pos);
-    if (colon == std::string::npos) {
-        return;
-    }
-    auto start = colon + 1;
-    while (start < json.size() && (json[start] == ' ' || json[start] == '\t')) {
-        ++start;
-    }
-    auto end = start;
-    while (end < json.size() && (std::isdigit(static_cast<unsigned char>(json[end])) || json[end] == '-')) {
-        ++end;
-    }
-    json.replace(start, end - start, std::to_string(value));
-}
-
-void upsert_json_bool(std::string& json, const std::string& key, bool value) {
-    const std::string needle = "\"" + key + "\"";
-    const auto pos = json.find(needle);
-    const char* lit = value ? "true" : "false";
-    if (pos == std::string::npos) {
-        const auto brace = json.rfind('}');
-        if (brace == std::string::npos) {
-            return;
-        }
-        json.insert(brace, std::string("  \"") + key + "\": " + lit + ",\n");
-        return;
-    }
-    const auto colon = json.find(':', pos);
-    if (colon == std::string::npos) {
-        return;
-    }
-    auto start = colon + 1;
-    while (start < json.size() && (json[start] == ' ' || json[start] == '\t')) {
-        ++start;
-    }
-    auto end = start;
-    while (end < json.size() && std::isalpha(static_cast<unsigned char>(json[end]))) {
-        ++end;
-    }
-    json.replace(start, end - start, lit);
-}
-
 void ensure_ryujinx_config(
     const std::filesystem::path& config_path,
     bool enable_ldn_mitm,
     int resolution_scale) {
     std::filesystem::create_directories(config_path.parent_path());
-    std::string contents;
+    nlohmann::json cfg = nlohmann::json::object();
     if (std::filesystem::is_regular_file(config_path)) {
-        std::ifstream in(config_path);
-        contents.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        try {
+            std::ifstream in(config_path);
+            cfg = nlohmann::json::parse(in, nullptr, /*allow_exceptions=*/true);
+            if (!cfg.is_object()) {
+                cfg = nlohmann::json::object();
+            }
+        } catch (const nlohmann::json::exception&) {
+            cfg = nlohmann::json::object();
+        }
     }
-    if (contents.empty()) {
-        contents = "{\n}\n";
-    }
+
     // 0=Disabled, 1=LdnRyu, 2=LdnMitm (same-network / same-host Link).
-    upsert_json_number(contents, "multiplayer_mode", enable_ldn_mitm ? 2 : 1);
-    upsert_json_bool(contents, "enable_internet_access", false);
-    upsert_json_bool(contents, "enable_vsync", true);
-    upsert_json_number(contents, "dram_size", 3); // 12 GiB
+    cfg["multiplayer_mode"] = enable_ldn_mitm ? 2 : 1;
+    cfg["enable_internet_access"] = false;
+    cfg["enable_vsync"] = true;
+    cfg["dram_size"] = 3; // 12 GiB guest DRAM (0 is too small for Sword/Shield)
+
+    // Headless gamescope cannot dismiss Avalonia dialogs — disable anything that
+    // blocks before LoadGuestApplication.
+    cfg["check_updates_on_start"] = false;
+    cfg["update_checker_type"] = "Disabled";
+    cfg["show_confirm_exit"] = false;
+    cfg["skip_user_profiles"] = true;
+    cfg["enable_discord_integration"] = false;
+
     if (resolution_scale > 0) {
-        upsert_json_number(contents, "res_scale", std::clamp(resolution_scale, 1, 4));
+        cfg["res_scale"] = std::clamp(resolution_scale, 1, 4);
     }
+
     std::ofstream out(config_path, std::ios::trunc);
     if (!out) {
         throw std::runtime_error("failed to write Ryujinx Config.json: " + config_path.string());
     }
-    out << contents;
+    out << cfg.dump(2) << '\n';
 }
 
 } // namespace

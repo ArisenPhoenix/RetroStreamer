@@ -59,6 +59,117 @@ void copy_key_files(const std::filesystem::path& source_dir, const std::filesyst
     }
 }
 
+bool directory_has_entries(const std::filesystem::path& path) {
+    std::error_code ec;
+    if (!std::filesystem::is_directory(path, ec)) {
+        return false;
+    }
+    const auto it = std::filesystem::directory_iterator(path, ec);
+    return !ec && it != std::filesystem::directory_iterator{};
+}
+
+std::filesystem::path managed_ryujinx_firmware_registered() {
+    return default_ryujinx_runtime_root() / "firmware" / "registered";
+}
+
+std::vector<std::filesystem::path> ryujinx_firmware_source_candidates() {
+    std::vector<std::filesystem::path> out;
+    out.push_back(managed_ryujinx_firmware_registered());
+    if (const auto home = home_dir(); !home.empty()) {
+        out.push_back(home / ".config" / "Ryujinx" / "bis" / "system" / "Contents" / "registered");
+#ifdef _WIN32
+        if (const char* local = std::getenv("LOCALAPPDATA"); local != nullptr && *local != '\0') {
+            out.push_back(
+                std::filesystem::path{local} / "Ryujinx" / "bis" / "system" / "Contents" / "registered");
+        }
+#endif
+    }
+    return out;
+}
+
+void copy_directory_recursive_skip_existing(
+    const std::filesystem::path& source,
+    const std::filesystem::path& destination) {
+    std::filesystem::create_directories(destination);
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(source)) {
+        const auto relative = std::filesystem::relative(entry.path(), source);
+        const auto target = destination / relative;
+        if (entry.is_directory()) {
+            std::filesystem::create_directories(target);
+            continue;
+        }
+        if (!entry.is_regular_file() && !entry.is_symlink()) {
+            continue;
+        }
+        std::filesystem::create_directories(target.parent_path());
+        std::error_code ec;
+        std::filesystem::copy(
+            entry.path(),
+            target,
+            std::filesystem::copy_options::skip_existing |
+                std::filesystem::copy_options::copy_symlinks,
+            ec);
+    }
+}
+
+/** Shared firmware NCAs under the managed Ryujinx runtime (seeded from a desktop install). */
+std::filesystem::path ensure_managed_ryujinx_firmware() {
+    const auto managed = managed_ryujinx_firmware_registered();
+    if (directory_has_entries(managed)) {
+        return managed;
+    }
+    for (const auto& source : ryujinx_firmware_source_candidates()) {
+        if (source == managed || !directory_has_entries(source)) {
+            continue;
+        }
+        std::cout << "Installing Ryujinx firmware into " << managed << " (from " << source << ")\n";
+        copy_directory_recursive_skip_existing(source, managed);
+        if (directory_has_entries(managed)) {
+            return managed;
+        }
+    }
+    return managed;
+}
+
+/** Ensure the per-user Ryujinx profile can see system firmware (avoids "Firmware not found"). */
+void ensure_ryujinx_firmware(const std::filesystem::path& data_root) {
+    const auto profile_registered =
+        data_root / "bis" / "system" / "Contents" / "registered";
+    if (directory_has_entries(profile_registered)) {
+        return;
+    }
+
+    const auto managed = ensure_managed_ryujinx_firmware();
+    if (!directory_has_entries(managed)) {
+        std::cout << "Warning: Ryujinx firmware not found. Install firmware once in a desktop "
+                     "Ryujinx (File → Install Firmware), or copy NCAs into "
+                  << managed << '\n';
+        std::filesystem::create_directories(profile_registered);
+        return;
+    }
+
+    std::error_code ec;
+    if (std::filesystem::exists(profile_registered, ec)) {
+        // Empty placeholder dir from an earlier session — replace with a link/copy.
+        std::filesystem::remove_all(profile_registered, ec);
+    }
+    std::filesystem::create_directories(profile_registered.parent_path());
+
+#ifndef _WIN32
+    std::filesystem::create_directory_symlink(managed, profile_registered, ec);
+    if (!ec && directory_has_entries(profile_registered)) {
+        std::cout << "Ryujinx firmware: linked " << profile_registered << " -> " << managed << '\n';
+        return;
+    }
+    ec.clear();
+    if (std::filesystem::exists(profile_registered)) {
+        std::filesystem::remove_all(profile_registered, ec);
+    }
+#endif
+    copy_directory_recursive_skip_existing(managed, profile_registered);
+    std::cout << "Ryujinx firmware: seeded " << profile_registered << '\n';
+}
+
 // Yuzu/QSettings: unquoted commas truncate values (bindings become just "pad:0").
 std::string quote_qt_ini_value(std::string_view value) {
     if (value == "[empty]") {
@@ -953,6 +1064,8 @@ RyujinxUserProfile prepare_ryujinx_user_profile(
             copy_key_files(*source_keys, profile.keys_directory);
         }
     }
+
+    ensure_ryujinx_firmware(profile.data_root);
 
     ensure_ryujinx_config(
         profile.data_root / "Config.json",

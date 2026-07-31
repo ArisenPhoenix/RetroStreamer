@@ -373,7 +373,15 @@ void MainWindow::load_persisted_settings() {
         client_send_keyboard_->setChecked(settings.value("client/sendKeyboard", true).toBool());
     }
     if (client_synced_av_ != nullptr) {
-        client_synced_av_->setChecked(settings.value("client/syncedAv", false).toBool());
+        // Older builds defaulted Synced A/V on (clock sync latency → felt input lag).
+        // One-time force Legacy for play; users can re-enable the experimental checkbox.
+        if (!settings.value("client/legacyAvPlayDefaultApplied", false).toBool()) {
+            client_synced_av_->setChecked(false);
+            settings.setValue("client/syncedAv", false);
+            settings.setValue("client/legacyAvPlayDefaultApplied", true);
+        } else {
+            client_synced_av_->setChecked(settings.value("client/syncedAv", false).toBool());
+        }
     }
     if (client_stream_quality_ != nullptr) {
         const auto tier = settings.value(

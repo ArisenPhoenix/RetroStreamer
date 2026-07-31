@@ -411,8 +411,15 @@ void SessionControlMonitor::handle_heartbeat(
     const auto good_needed =
         promoting_to_60fps ? kGoodHealthThresholdForHigh : kGoodHealthThreshold;
     // True FPS probes are not available on all receive paths (gst-launch + D3D11
-    // zero-copy). Promote on sustained healthy heartbeats (no hard loss). If a
-    // fine-grained frame delta is present and clearly starving, hold the climb.
+    // zero-copy). Promote Low→Medium on sustained no-loss heartbeats. Climbing
+    // into 60 fps / 1080p without any frame telemetry is blind: Windows often
+    // reports delta=0 even while video plays, and Auto then walks to Very-High
+    // (25 Mbps) → decode/Wi‑Fi stalls that feel like freezes while UDP input
+    // still arrives on time (late picture = felt button lag / burst catch-up).
+    if (promoting_to_60fps && heartbeat.frames_decoded_delta == 0) {
+        client.good_health_streak = 0;
+        return;
+    }
     if (heartbeat.frames_decoded_delta >= 2 &&
         heartbeat.frames_decoded_delta <
             (promoting_to_60fps ? kMinFramesForHighStepUp : kMinFramesForStepUp)) {

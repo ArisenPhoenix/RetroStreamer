@@ -399,7 +399,7 @@ ClientRunResult ClientApp::join_session(
         }
 
         // Dedicated thread: media/TCP work on the session loop must not stall pads.
-        // ~125 Hz keepalive + triple-send on edges (fresh timestamps) for Wi‑Fi loss.
+        // ~250 Hz keepalive + triple-send on edges (fresh timestamps) for Wi‑Fi loss.
         input_thread = std::thread([
             &input_stop,
             &controller_backend,
@@ -413,7 +413,7 @@ ClientRunResult ClientApp::join_session(
             std::array<bool, MaxPlayersPerClient> have_last_sent{};
             KeyboardState last_keys{};
             bool have_last_keys = false;
-            constexpr auto kInputTick = std::chrono::milliseconds(8);
+            constexpr auto kInputTick = std::chrono::milliseconds(4);
             constexpr int kChangeCopies = 3;
             while (!input_stop.load(std::memory_order_relaxed)) {
                 const auto tick_start = std::chrono::steady_clock::now();

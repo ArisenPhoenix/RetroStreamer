@@ -129,9 +129,10 @@ std::vector<std::string> gst_h264_rtp_source_args(std::uint16_t port) {
         "caps=application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000",
         "!",
         "rtpjitterbuffer",
-        // Matched with audio. drop-on-latency=true avoids freeze-then-burst backlog
-        // that makes pad input look like it "catches up all at once".
-        "latency=100",
+        // Matched with audio. Keep this low: pad UDP is already ~ms-fast; felt
+        // "controller lag" is almost always this buffer delaying the picture of
+        // the press. drop-on-latency=true avoids freeze-then-burst backlog.
+        "latency=40",
         "drop-on-latency=true",
         "!",
         "rtph264depay",
@@ -140,8 +141,8 @@ std::vector<std::string> gst_h264_rtp_source_args(std::uint16_t port) {
 }
 
 std::vector<std::string> gst_opus_rtp_decode_args(std::uint16_t port, int jitter_latency_ms) {
-    // Match video jitter (100 ms) so dual gst-launch receivers start aligned.
-    const int latency = jitter_latency_ms > 0 ? jitter_latency_ms : 100;
+    // Match video jitter (40 ms) so dual gst-launch receivers stay lip-aligned.
+    const int latency = jitter_latency_ms > 0 ? jitter_latency_ms : 40;
     return {
         "udpsrc",
         "port=" + std::to_string(port),

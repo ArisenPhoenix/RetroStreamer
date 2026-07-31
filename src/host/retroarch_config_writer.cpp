@@ -311,6 +311,33 @@ void apply_retroarch_resolution_scale(
     }
 }
 
+// Stream-friendly DS layout: large main (top) screen with a smaller touchscreen
+// beside it. melonDS "Hybrid Top" + small=Bottom matches that; Top/Bottom stacks
+// both at equal size and wastes vertical space on the stream.
+void apply_nds_screen_layout(const std::filesystem::path& core_path) {
+    if (core_path.empty()) {
+        return;
+    }
+    const auto key = core_file_key(core_path);
+    auto write = [&](std::string_view dir, std::vector<std::pair<std::string, std::string>> opts) {
+        const auto path = retroarch_core_opt_path(dir);
+        if (!path.empty()) {
+            upsert_core_opt_file(path, opts);
+        }
+    };
+
+    if (key == "melonds") {
+        write("melonDS", {
+            {"melonds_screen_layout", "Hybrid Top"},
+            {"melonds_hybrid_small_screen", "Bottom"},
+            // Soft-GL path still accepts this; OpenGL uses it for scale. 3 keeps
+            // the touchscreen readable but clearly secondary.
+            {"melonds_hybrid_ratio", "3"},
+            {"melonds_screen_gap", "0"},
+        });
+    }
+}
+
 } // namespace
 
 bool core_needs_gl_on_virtual_display(const std::filesystem::path& core_path) {
@@ -524,6 +551,7 @@ std::filesystem::path write_retroarch_input_override(
         ensure_lrps2_virtual_display_options();
     }
     apply_retroarch_resolution_scale(core_path, resolution_scale);
+    apply_nds_screen_layout(core_path);
 
     return path;
 }

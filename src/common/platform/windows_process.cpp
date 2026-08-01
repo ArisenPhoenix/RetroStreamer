@@ -109,6 +109,32 @@ std::string build_environment_block(
     return block;
 }
 
+// Windows has no PR_SET_PDEATHSIG. Without this, a GUI crash (or Task Manager
+// kill) orphans gst-launch children forever: the video receiver self-exits when
+// its window closes, but the audio receiver has no window and lingers holding
+// the RTP port. Every process assigned to this job dies when our last handle to
+// it goes away, which the kernel guarantees even on abnormal termination.
+HANDLE kill_on_close_job() {
+    static HANDLE job = [] {
+        HANDLE created = CreateJobObjectA(nullptr, nullptr);
+        if (created == nullptr) {
+            return static_cast<HANDLE>(nullptr);
+        }
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if (!SetInformationJobObject(
+                created,
+                JobObjectExtendedLimitInformation,
+                &limits,
+                sizeof(limits))) {
+            CloseHandle(created);
+            return static_cast<HANDLE>(nullptr);
+        }
+        return created;
+    }();
+    return job;
+}
+
 HANDLE open_nul_handle(DWORD access) {
     SECURITY_ATTRIBUTES security{};
     security.nLength = sizeof(security);
@@ -268,7 +294,8 @@ void WindowsChildProcess::start(
         nullptr,
         nullptr,
         TRUE,
-        CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
+        // Suspended so the child joins the job before it can run or spawn helpers.
+        CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED,
         env_block.empty() ? nullptr : env_block.data(),
         nullptr,
         &startup_ex.StartupInfo,
@@ -286,6 +313,22 @@ void WindowsChildProcess::start(
         throw std::runtime_error(
             "CreateProcess failed for '" + resolved_args[0] + "' (Win32 " +
             std::to_string(GetLastError()) + ")");
+    }
+
+    // A missing job is not fatal: the child still runs, it just reverts to the
+    // old behaviour of surviving an abnormal parent exit.
+    if (HANDLE job = kill_on_close_job(); job != nullptr) {
+        AssignProcessToJobObject(job, info.hProcess);
+    }
+
+    if (ResumeThread(info.hThread) == static_cast<DWORD>(-1)) {
+        const DWORD error = GetLastError();
+        TerminateProcess(info.hProcess, 1);
+        CloseHandle(info.hThread);
+        CloseHandle(info.hProcess);
+        throw std::runtime_error(
+            "ResumeThread failed for '" + resolved_args[0] + "' (Win32 " +
+            std::to_string(error) + ")");
     }
 
     CloseHandle(info.hThread);

@@ -99,7 +99,7 @@ void GStreamerVideoFanout::apply_nvenc_environment(
 }
 
 std::vector<std::string> GStreamerVideoFanout::build_single_encode_args(
-    MediaQualityTier tier,
+    const VideoEncodeSettings& settings,
     const std::string& host,
     std::uint16_t port) const {
     if (!gst_element_available("multiudpsink")) {
@@ -109,7 +109,6 @@ std::vector<std::string> GStreamerVideoFanout::build_single_encode_args(
         throw std::runtime_error("pipewiresrc is required for gamescope video capture");
     }
 
-    const auto settings = video_encode_settings_for_tier(tier);
     const int bitrate = settings.bitrate_kbps == 0 ? 1500 : settings.bitrate_kbps;
     const int framerate = settings.framerate == 0 ? 30 : static_cast<int>(settings.framerate);
     const int configured_key_int =
@@ -231,7 +230,7 @@ std::vector<MediaClientStream> GStreamerVideoFanout::start(
         slot.host = destination.destination_host;
         slot.base_port = destination.port;
         slot.port = destination.port;
-        slot.tier = MediaQualityTier::Medium;
+        slot.settings = video_encode_settings(MediaStreamSize::P720, MediaQualityTier::Medium);
         destinations_.push_back(std::move(slot));
         streams.push_back(MediaClientStream{
             destination.client_id,
@@ -263,7 +262,7 @@ std::vector<MediaClientStream> GStreamerVideoFanout::start_pipewire(
         slot.host = destination.destination_host;
         slot.base_port = destination.port;
         slot.port = destination.port;
-        slot.tier = MediaQualityTier::Medium;
+        slot.settings = video_encode_settings(MediaStreamSize::P720, MediaQualityTier::Medium);
         destinations_.push_back(std::move(slot));
         streams.push_back(MediaClientStream{
             destination.client_id,
@@ -289,9 +288,9 @@ MediaClientStream GStreamerVideoFanout::add(
     slot.host = destination.destination_host;
     slot.base_port = destination.port;
     slot.port = destination.port;
-    slot.tier = settings.bitrate_kbps == 0
-        ? MediaQualityTier::Medium
-        : media_quality_tier_for_settings(settings);
+    slot.settings = settings.bitrate_kbps == 0
+        ? video_encode_settings(MediaStreamSize::P720, MediaQualityTier::Medium)
+        : settings;
     destinations_.push_back(std::move(slot));
     restart_pipeline();
 
@@ -318,8 +317,7 @@ std::optional<std::string> GStreamerVideoFanout::begin_tier_cutover(
     if (slot->staging_active) {
         return std::nullopt;
     }
-    const auto tier = media_quality_tier_for_settings(settings);
-    if (slot->tier == tier) {
+    if (slot->settings == settings) {
         return std::nullopt;
     }
 
@@ -331,7 +329,7 @@ std::optional<std::string> GStreamerVideoFanout::begin_tier_cutover(
     const auto staging_log = staging_encode_log_path();
     try {
         terminate_gst_multiudpsink_on_port(staging_port);
-        auto args = build_single_encode_args(tier, slot->host, staging_port);
+        auto args = build_single_encode_args(settings, slot->host, staging_port);
         apply_nvenc_environment(slot->staging, std::move(args), staging_log);
         // ximagesrc + nvenc can take ~1s to fail (context/session errors surface
         // at first frame). Telling the client about a pipeline that is about to
@@ -352,7 +350,7 @@ std::optional<std::string> GStreamerVideoFanout::begin_tier_cutover(
 
     slot->staging_active = true;
     slot->staging_port = staging_port;
-    slot->staging_tier = tier;
+    slot->staging_settings = settings;
     slot->staging_started = std::chrono::steady_clock::now();
     return rtp_h264_uri(slot->host, staging_port);
 }
@@ -381,7 +379,7 @@ bool GStreamerVideoFanout::complete_tier_cutover(
     slot->dedicated = std::move(slot->staging);
     slot->staging = ChildProcess{};
     slot->port = slot->staging_port;
-    slot->tier = slot->staging_tier;
+    slot->settings = slot->staging_settings;
     slot->staging_active = false;
     slot->staging_port = 0;
 
@@ -391,7 +389,8 @@ bool GStreamerVideoFanout::complete_tier_cutover(
     }
 
     std::cout << "Video cutover complete for client " << static_cast<int>(client_id)
-              << " -> " << media_quality_tier_name(slot->tier)
+              << " -> " << media_stream_size_name(media_stream_size_for_settings(slot->settings))
+              << "/" << media_quality_tier_name(media_quality_tier_for_settings(slot->settings))
               << " on port " << slot->port << '\n';
     return true;
 }
@@ -470,44 +469,30 @@ void GStreamerVideoFanout::stop_client(ClientId client_id) {
 void GStreamerVideoFanout::restart_pipeline() {
     process_.stop();
 
-    std::vector<std::pair<std::string, std::uint16_t>> very_high_clients;
-    std::vector<std::pair<std::string, std::uint16_t>> high_clients;
-    std::vector<std::pair<std::string, std::uint16_t>> medium_high_clients;
-    std::vector<std::pair<std::string, std::uint16_t>> medium_clients;
-    std::vector<std::pair<std::string, std::uint16_t>> low_clients;
+    struct SharedBranch {
+        VideoEncodeSettings settings;
+        std::vector<std::pair<std::string, std::uint16_t>> clients;
+    };
+    std::vector<SharedBranch> branches;
     for (const auto& destination : destinations_) {
         if (destination.dedicated.running()) {
             continue;
         }
         const auto client = std::make_pair(destination.host, destination.port);
-        switch (destination.tier) {
-        case MediaQualityTier::Low:
-            low_clients.push_back(client);
-            break;
-        case MediaQualityTier::Medium:
-        case MediaQualityTier::Auto:
-            medium_clients.push_back(client);
-            break;
-        case MediaQualityTier::MediumHigh:
-            medium_high_clients.push_back(client);
-            break;
-        case MediaQualityTier::VeryHigh:
-            very_high_clients.push_back(client);
-            break;
-        case MediaQualityTier::High:
-        default:
-            high_clients.push_back(client);
-            break;
+        bool merged = false;
+        for (auto& branch : branches) {
+            if (branch.settings == destination.settings) {
+                branch.clients.push_back(client);
+                merged = true;
+                break;
+            }
+        }
+        if (!merged) {
+            branches.push_back(SharedBranch{destination.settings, {client}});
         }
     }
 
-    const int active_tiers =
-        (very_high_clients.empty() ? 0 : 1) +
-        (high_clients.empty() ? 0 : 1) +
-        (medium_high_clients.empty() ? 0 : 1) +
-        (medium_clients.empty() ? 0 : 1) +
-        (low_clients.empty() ? 0 : 1);
-    if (active_tiers == 0) {
+    if (branches.empty()) {
         return;
     }
 
@@ -642,44 +627,16 @@ void GStreamerVideoFanout::restart_pipeline() {
         });
     }
 
-    if (active_tiers == 1) {
-        // Single tier: no tee needed.
-        const auto* clients = !very_high_clients.empty() ? &very_high_clients
-            : !high_clients.empty() ? &high_clients
-            : !medium_high_clients.empty() ? &medium_high_clients
-            : !medium_clients.empty() ? &medium_clients
-            : &low_clients;
-        const auto tier = !very_high_clients.empty() ? MediaQualityTier::VeryHigh
-            : !high_clients.empty() ? MediaQualityTier::High
-            : !medium_high_clients.empty() ? MediaQualityTier::MediumHigh
-            : !medium_clients.empty() ? MediaQualityTier::Medium
-            : MediaQualityTier::Low;
-        const auto settings = video_encode_settings_for_tier(tier);
+    if (branches.size() == 1) {
         args.push_back("!");
-        // Prefer nvenc for any tier when available — switching encoders mid-session
-        // forced full pipeline rebuilds and visible freezes.
-        append_h264_branch(args, settings, *clients, nvenc);
+        append_h264_branch(args, branches[0].settings, branches[0].clients, nvenc);
     } else {
         args.insert(args.end(), {"!", "tee", "name=t"});
-        auto append_tier = [&](
-            const std::vector<std::pair<std::string, std::uint16_t>>& clients,
-            MediaQualityTier tier) {
-            if (clients.empty()) {
-                return;
-            }
+        for (const auto& branch : branches) {
             args.push_back("t.");
             args.push_back("!");
-            append_h264_branch(
-                args,
-                video_encode_settings_for_tier(tier),
-                clients,
-                nvenc);
-        };
-        append_tier(very_high_clients, MediaQualityTier::VeryHigh);
-        append_tier(high_clients, MediaQualityTier::High);
-        append_tier(medium_high_clients, MediaQualityTier::MediumHigh);
-        append_tier(medium_clients, MediaQualityTier::Medium);
-        append_tier(low_clients, MediaQualityTier::Low);
+            append_h264_branch(args, branch.settings, branch.clients, nvenc);
+        }
     }
 
     // nvidia-smi / Host GPU indices use PCI order. CUDA defaults to
@@ -701,22 +658,14 @@ void GStreamerVideoFanout::restart_pipeline() {
         std::cout << " cuda=" << nvenc_cuda_device_id_;
     }
     std::cout << "):";
-    auto log_tier = [](const char* label, const std::vector<std::pair<std::string, std::uint16_t>>& clients, MediaQualityTier tier) {
-        if (clients.empty()) {
-            return;
-        }
-        const auto s = video_encode_settings_for_tier(tier);
-        std::cout << " " << label << "=" << clients.size()
+    for (const auto& branch : branches) {
+        const auto& s = branch.settings;
+        std::cout << " " << branch.clients.size()
                   << "@" << s.bitrate_kbps << "kbps/" << static_cast<int>(s.framerate) << "fps";
         if (s.width > 0 && s.height > 0) {
             std::cout << "/" << s.width << "x" << s.height;
         }
-    };
-    log_tier("vhigh", very_high_clients, MediaQualityTier::VeryHigh);
-    log_tier("high", high_clients, MediaQualityTier::High);
-    log_tier("mhigh", medium_high_clients, MediaQualityTier::MediumHigh);
-    log_tier("med", medium_clients, MediaQualityTier::Medium);
-    log_tier("low", low_clients, MediaQualityTier::Low);
+    }
     std::cout << '\n';
 }
 

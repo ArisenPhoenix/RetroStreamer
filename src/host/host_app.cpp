@@ -639,12 +639,8 @@ int HostApp::run_direct_session(
                       << " (known cores via .opt)\n";
         }
         if (!system_key.empty()) {
-            std::cout << "Face buttons: system=" << system_key;
-            if (system_key == "ps1" || system_key == "ps2" || system_key == "psp") {
-                std::cout << " (PlayStation position map)\n";
-            } else {
-                std::cout << " (Nintendo/Xbox letter map)\n";
-            }
+            std::cout << "Face buttons: system=" << system_key
+                      << " (" << face_button_map_name(system_key) << ")\n";
         }
     }
 
@@ -748,12 +744,18 @@ int HostApp::run_direct_session(
     }
     auto session_monitor = std::optional<SessionControlMonitor>{};
     if (session_plan.has_value() && media_server) {
+        std::uint16_t capture_w = 1920;
+        std::uint16_t capture_h = 1080;
+        parse_video_resolution(config.video_resolution, capture_w, capture_h);
         session_monitor.emplace(
             *session_plan,
             input_router,
             *media_server,
             std::chrono::seconds(config.client_timeout_seconds),
-            std::chrono::seconds(config.player_reconnect_timeout_seconds));
+            std::chrono::seconds(config.player_reconnect_timeout_seconds),
+            nullptr,
+            capture_w,
+            capture_h);
     }
 
     auto local_bridge = std::optional<LocalControllerBridge>{};

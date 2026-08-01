@@ -88,21 +88,27 @@ SessionControlMonitor::SessionControlMonitor(
     MediaServer& media_server,
     std::chrono::seconds heartbeat_timeout,
     std::chrono::seconds reconnect_timeout,
-    HostSessionHub* host_hub)
+    HostSessionHub* host_hub,
+    std::uint16_t capture_width,
+    std::uint16_t capture_height)
     : plan_(plan),
       input_router_(input_router),
       media_server_(media_server),
       heartbeat_timeout_(heartbeat_timeout),
       reconnect_timeout_(reconnect_timeout),
       started_at_(std::chrono::steady_clock::now()),
-      host_hub_(host_hub) {
+      host_hub_(host_hub),
+      capture_width_(capture_width == 0 ? 1920 : capture_width),
+      capture_height_(capture_height == 0 ? 1080 : capture_height) {
     const auto now = started_at_;
     for (auto& client : plan_.clients) {
         client.last_seen = now;
-        // Start at Medium: High is 12 Mbps/60 and restarts the shared pipeline.
-        // Auto can still step up after a long healthy streak (see kGoodHealthThresholdForHigh).
+        // Start at Medium@720p: High is 12 Mbps/60 and restarts the shared pipeline.
+        // Auto can still step up quality after a long healthy streak.
         client.applied_tier = MediaQualityTier::Medium;
         client.wanted_tier = MediaQualityTier::Auto;
+        client.applied_size = MediaStreamSize::P720;
+        client.wanted_size = MediaStreamSize::Auto;
     }
 }
 
@@ -228,6 +234,9 @@ std::optional<std::string> SessionControlMonitor::poll() {
                         if (client.pending_tier.has_value()) {
                             client.applied_tier = *client.pending_tier;
                         }
+                        if (client.pending_size.has_value()) {
+                            client.applied_size = *client.pending_size;
+                        }
                         if (client.media_endpoint.has_value()) {
                             client.media_endpoint->video_uri = video_ready->video_uri;
                             try {
@@ -238,7 +247,8 @@ std::optional<std::string> SessionControlMonitor::poll() {
                         client.last_video_reconfigure = now;
                         std::cout
                             << "Video cutover ready from " << client_label(client)
-                            << " -> " << media_quality_tier_name(client.applied_tier) << '\n';
+                            << " -> " << media_stream_size_name(client.applied_size)
+                            << "/" << media_quality_tier_name(client.applied_tier) << '\n';
                     } else {
                         media_server_.abort_video_tier_cutover(client.client_id);
                         std::cerr
@@ -247,6 +257,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
                     }
                     client.pending_video_uri.reset();
                     client.pending_tier.reset();
+                    client.pending_size.reset();
                     client.video_cutover_started = {};
                 }
             } else if (const auto* link_request = std::get_if<LinkRequest>(&payload);
@@ -383,9 +394,11 @@ std::optional<std::string> SessionControlMonitor::poll() {
             media_server_.abort_video_tier_cutover(client.client_id);
             std::cerr
                 << "Video cutover timed out for " << client_label(client)
-                << "; keeping " << media_quality_tier_name(client.applied_tier) << '\n';
+                << "; keeping " << media_stream_size_name(client.applied_size)
+                << "/" << media_quality_tier_name(client.applied_tier) << '\n';
             client.pending_video_uri.reset();
             client.pending_tier.reset();
+            client.pending_size.reset();
             client.video_cutover_started = {};
             client.last_video_reconfigure = now;
         }
@@ -448,6 +461,7 @@ void SessionControlMonitor::handle_heartbeat(
     const auto now = std::chrono::steady_clock::now();
     client.last_seen = now;
     client.wanted_tier = heartbeat.wanted_tier;
+    client.wanted_size = heartbeat.wanted_size;
     client.max_bitrate_kbps = heartbeat.max_bitrate_kbps;
     client.show_framecount = heartbeat.show_framecount;
 
@@ -460,16 +474,36 @@ void SessionControlMonitor::handle_heartbeat(
         return;
     }
 
+    // Client resolves Auto size before send; omitted/legacy → keep applied size.
+    const MediaStreamSize resolved_size =
+        heartbeat.wanted_size == MediaStreamSize::Auto
+            ? client.applied_size
+            : heartbeat.wanted_size;
+
     if (heartbeat.wanted_tier != MediaQualityTier::Auto) {
         const auto resolved = select_video_tier(
             heartbeat.wanted_tier,
             client.applied_tier,
             client.max_bitrate_kbps);
-        if (resolved != client.applied_tier) {
-            apply_video_tier(client, resolved, "client requested tier");
+        if (resolved != client.applied_tier || resolved_size != client.applied_size) {
+            apply_video_encode(
+                client,
+                resolved_size,
+                resolved,
+                "client requested size/quality");
         }
         client.bad_health_streak = 0;
         client.good_health_streak = 0;
+        return;
+    }
+
+    // Size can still change under Auto quality (display preference).
+    if (resolved_size != client.applied_size) {
+        apply_video_encode(
+            client,
+            resolved_size,
+            client.applied_tier,
+            "client requested size");
         return;
     }
 
@@ -482,11 +516,15 @@ void SessionControlMonitor::handle_heartbeat(
         return;
     }
 
-    // Client Auto mode only reports health; the host decides ladder steps.
-    // Enforce the Auto ceiling even if a prior build already climbed too high —
-    // one demote restart is better than staying on 1080p60@25 Mbps with freezes.
+    // Client Auto mode only reports health; the host decides quality ladder steps.
+    // Size stays fixed. Enforce the Auto quality ceiling even if a prior build
+    // already climbed too high.
     if (tier_above(client.applied_tier, kAutoMaxTier)) {
-        apply_video_tier(client, kAutoMaxTier, "auto ceiling (cap High/Very-High)");
+        apply_video_encode(
+            client,
+            client.applied_size,
+            kAutoMaxTier,
+            "auto ceiling (cap High/Very-High)");
         return;
     }
 
@@ -509,7 +547,7 @@ void SessionControlMonitor::handle_heartbeat(
             const auto previous = client.applied_tier;
             const auto next = step_quality_tier_down(client.applied_tier);
             if (next != client.applied_tier) {
-                apply_video_tier(client, next, "auto step-down (loss)");
+                apply_video_encode(client, client.applied_size, next, "auto step-down (loss)");
                 if (previous == MediaQualityTier::High ||
                     previous == MediaQualityTier::VeryHigh ||
                     previous == MediaQualityTier::MediumHigh) {
@@ -557,13 +595,14 @@ void SessionControlMonitor::handle_heartbeat(
 
     ++client.good_health_streak;
     if (client.good_health_streak >= good_needed) {
-        apply_video_tier(client, next, "auto step-up (healthy)");
+        apply_video_encode(client, client.applied_size, next, "auto step-up (healthy)");
         client.good_health_streak = 0;
     }
 }
 
-void SessionControlMonitor::apply_video_tier(
+void SessionControlMonitor::apply_video_encode(
     SessionClientConnection& client,
+    MediaStreamSize size,
     MediaQualityTier tier,
     std::string_view reason) {
     const auto now = std::chrono::steady_clock::now();
@@ -576,15 +615,19 @@ void SessionControlMonitor::apply_video_tier(
         return;
     }
 
-    // Selector: map wanted/auto step onto a ladder branch, capped by client max bitrate.
+    if (size == MediaStreamSize::Auto) {
+        size = client.applied_size;
+    }
     const auto resolved = select_video_tier(tier, client.applied_tier, client.max_bitrate_kbps);
-    const auto settings = video_encode_settings_for_tier(resolved);
+    const auto settings =
+        video_encode_settings(size, resolved, capture_width_, capture_height_);
     const auto staging_uri = media_server_.begin_video_tier_cutover(client.client_id, settings);
     if (!staging_uri.has_value()) {
         return;
     }
 
     client.pending_tier = resolved;
+    client.pending_size = size;
     client.pending_video_uri = *staging_uri;
     client.video_cutover_started = now;
     client.bad_health_streak = 0;
@@ -596,6 +639,7 @@ void SessionControlMonitor::apply_video_tier(
         } catch (const std::exception&) {
             media_server_.abort_video_tier_cutover(client.client_id);
             client.pending_tier.reset();
+            client.pending_size.reset();
             client.pending_video_uri.reset();
             client.video_cutover_started = {};
             return;
@@ -603,7 +647,8 @@ void SessionControlMonitor::apply_video_tier(
     }
     std::cerr
         << "Staging video for " << client_label(client)
-        << " -> " << media_quality_tier_name(resolved)
+        << " -> " << media_stream_size_name(size)
+        << "/" << media_quality_tier_name(resolved)
         << " (" << settings.bitrate_kbps << " kbps, "
         << static_cast<int>(settings.framerate) << " fps";
     if (settings.width > 0 && settings.height > 0) {

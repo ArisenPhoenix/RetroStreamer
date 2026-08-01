@@ -5,6 +5,7 @@
 #include "client/input_sender.hpp"
 #include "client/keyboard_poller.hpp"
 #include "client/session_service.hpp"
+#include "client/video_window_geometry.hpp"
 #include "common/addresses.hpp"
 #include "common/link_capability.hpp"
 #include "common/platform/default_platform.hpp"
@@ -391,6 +392,20 @@ ClientRunResult ClientApp::join_session(
     auto input_socket = std::optional<UdpSocket>{};
     std::atomic<bool> input_stop{false};
     std::thread input_thread;
+    // Unwinding past a joinable std::thread calls std::terminate. The session loop below
+    // throws whenever the host drops mid-session, so the join cannot live only on the
+    // normal exit path. Declared after the thread so it runs before the thread's dtor,
+    // and before the backend/sender/socket the thread holds references to.
+    struct JoinInputThread {
+        std::atomic<bool>& stop;
+        std::thread& thread;
+        ~JoinInputThread() {
+            stop.store(true, std::memory_order_relaxed);
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+    } join_input_thread{input_stop, input_thread};
     const bool want_pads =
         config.input_port.has_value() &&
         config.filter.requested_players > 0 &&
@@ -433,6 +448,7 @@ ClientRunResult ClientApp::join_session(
             &input_socket,
             &config,
             want_pads,
+            face_button_prefs = callbacks.face_button_prefs,
             keyboard_poller = std::move(keyboard_poller)
         ]() mutable {
             std::array<ControllerState, MaxPlayersPerClient> last_sent{};
@@ -443,6 +459,11 @@ ClientRunResult ClientApp::join_session(
             constexpr int kChangeCopies = 3;
             while (!input_stop.load(std::memory_order_relaxed)) {
                 const auto tick_start = std::chrono::steady_clock::now();
+                bool swap_nw = false;
+                bool swap_se = false;
+                if (face_button_prefs) {
+                    face_button_prefs->snapshot(swap_nw, swap_se);
+                }
                 if (want_pads && controller_backend.has_value()) {
                     for (LocalPlayerIndex player = 0; player < config.filter.requested_players; ++player) {
                         const auto state = controller_backend->poll(player);
@@ -455,6 +476,7 @@ ClientRunResult ClientApp::join_session(
                         const int copies = changed ? kChangeCopies : 1;
                         for (int copy = 0; copy < copies; ++copy) {
                             auto sample = *state;
+                            apply_face_button_swaps(sample, swap_nw, swap_se);
                             // Distinct timestamps so host ordering accepts each UDP copy.
                             sample.timestamp_us =
                                 archstreamer::steady_timestamp_us() + static_cast<std::uint64_t>(copy);
@@ -712,10 +734,21 @@ ClientRunResult ClientApp::join_session(
                 }
             }
             auto wanted_tier = config.wanted_tier;
+            auto wanted_size = config.wanted_size;
             auto max_bitrate_kbps = config.max_bitrate_kbps;
             auto show_framecount = config.show_framecount;
             if (callbacks.heartbeat_prefs) {
-                callbacks.heartbeat_prefs->snapshot(wanted_tier, max_bitrate_kbps, show_framecount);
+                callbacks.heartbeat_prefs->snapshot(
+                    wanted_tier,
+                    wanted_size,
+                    max_bitrate_kbps,
+                    show_framecount);
+            }
+            if (wanted_size == MediaStreamSize::Auto) {
+                const int display_h = primary_display_height();
+                wanted_size = display_h > 0
+                    ? media_stream_size_for_display_height(display_h)
+                    : MediaStreamSize::P720;
             }
             joined_session.stream.send_packet(serialize_packet(ViewerHeartbeat{
                 *result.client_id,
@@ -725,6 +758,7 @@ ClientRunResult ClientApp::join_session(
                 wanted_tier,
                 max_bitrate_kbps,
                 show_framecount,
+                wanted_size,
             }));
             next_heartbeat = now + std::chrono::seconds(1);
         }

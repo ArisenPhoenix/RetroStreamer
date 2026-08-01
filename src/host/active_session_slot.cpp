@@ -741,13 +741,18 @@ void ActiveSessionSlot::run_session() {
     send_session_starting_to_clients(plan);
 
     if (media_server_ != nullptr) {
+        std::uint16_t capture_w = 1920;
+        std::uint16_t capture_h = 1080;
+        parse_video_resolution(config.video_resolution, capture_w, capture_h);
         session_monitor_.emplace(
             plan,
             *input_router_,
             *media_server_,
             std::chrono::seconds(config.client_timeout_seconds),
             std::chrono::seconds(config.player_reconnect_timeout_seconds),
-            config_.hub);
+            config_.hub,
+            capture_w,
+            capture_h);
     }
 
     auto local_bridge = std::optional<LocalControllerBridge>{};

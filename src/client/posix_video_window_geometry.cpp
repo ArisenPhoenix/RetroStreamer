@@ -345,4 +345,14 @@ bool apply_video_window_geometry(
     return true;
 }
 
+int primary_display_height() {
+    Display* display = open_display();
+    if (display == nullptr) {
+        return 0;
+    }
+    const int height = DisplayHeight(display, DefaultScreen(display));
+    XCloseDisplay(display);
+    return height > 0 ? height : 0;
+}
+
 } // namespace archstreamer

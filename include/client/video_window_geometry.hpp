@@ -32,4 +32,7 @@ bool apply_video_window_geometry(
     const VideoWindowGeometry& geometry,
     std::chrono::milliseconds timeout = std::chrono::milliseconds(2500));
 
+/** Primary screen height in pixels (0 if unavailable). Used for Auto stream size. */
+int primary_display_height();
+
 } // namespace archstreamer

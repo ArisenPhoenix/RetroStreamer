@@ -7,6 +7,7 @@
 #include <chrono>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -248,6 +249,17 @@ void VirtualKeyboard::release_all() {
 
 namespace {
 
+// Xlib's default protocol-error handler prints to stderr and calls exit(1). We probe
+// windows owned by the emulator, and those can be destroyed between the XQueryTree that
+// hands us the id and the property fetch that follows, so BadWindow is routine here.
+// Without this the host dies mid-session on a race it should just retry past.
+void install_x_error_guard() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        XSetErrorHandler([](Display*, XErrorEvent*) { return 0; });
+    });
+}
+
 std::string window_title(Display* display, Window window) {
     Atom actual_type = None;
     int actual_format = 0;
@@ -308,33 +320,6 @@ bool window_is_viewable(Display* display, Window window) {
     return attrs.map_state == IsViewable && attrs.width >= 64 && attrs.height >= 64;
 }
 
-bool window_is_focus_target(Display* display, Window candidate, Window focus) {
-    if (candidate == 0 || focus == 0 || focus == PointerRoot || focus == None) {
-        return false;
-    }
-    Window current = focus;
-    for (int depth = 0; depth < 64; ++depth) {
-        if (current == candidate) {
-            return true;
-        }
-        Window root = 0;
-        Window parent = 0;
-        Window* children = nullptr;
-        unsigned int child_count = 0;
-        if (!XQueryTree(display, current, &root, &parent, &children, &child_count)) {
-            return false;
-        }
-        if (children != nullptr) {
-            XFree(children);
-        }
-        if (parent == 0 || parent == current || parent == root) {
-            return false;
-        }
-        current = parent;
-    }
-    return false;
-}
-
 bool is_soft_keyboard_dialog_title(const std::string& title) {
     // Avalonia hosts swkbd in ContentDialogOverlayWindow (Title is hard-coded in
     // Ryujinx XAML). GTK builds use a real "Software Keyboard" window title.
@@ -343,6 +328,10 @@ bool is_soft_keyboard_dialog_title(const std::string& title) {
 }
 
 // A dialog that has opened and is accepting typed input: viewable + keyboard focus.
+//
+// Walks up from the focused window rather than enumerating the whole tree. A desktop
+// display holds hundreds of windows and each one costs a title round-trip, so the
+// enumerating version took seconds per tick and the pad OSK showed up late.
 std::optional<Window> find_focused_text_dialog(Display* display) {
     Window focus = 0;
     int revert = RevertToNone;
@@ -351,35 +340,42 @@ std::optional<Window> find_focused_text_dialog(Display* display) {
         return std::nullopt;
     }
 
-    std::vector<std::pair<Window, std::string>> windows;
-    collect_windows(display, DefaultRootWindow(display), windows);
-
-    // Prefer an explicit Software Keyboard title when both are present.
-    Window overlay = 0;
-    for (const auto& [window, title] : windows) {
-        if (!is_soft_keyboard_dialog_title(title) || !window_is_viewable(display, window)) {
-            continue;
+    Window current = focus;
+    for (int depth = 0; depth < 64; ++depth) {
+        const auto title = window_title(display, current);
+        if (is_soft_keyboard_dialog_title(title) && window_is_viewable(display, current)) {
+            return current;
         }
-        if (!window_is_focus_target(display, window, focus)) {
-            continue;
+        Window root = 0;
+        Window parent = 0;
+        Window* children = nullptr;
+        unsigned int child_count = 0;
+        if (!XQueryTree(display, current, &root, &parent, &children, &child_count)) {
+            return std::nullopt;
         }
-        if (title.find("Software Keyboard") != std::string::npos) {
-            return window;
+        if (children != nullptr) {
+            XFree(children);
         }
-        if (overlay == 0) {
-            overlay = window;
+        if (parent == 0 || parent == current || parent == root) {
+            return std::nullopt;
         }
-    }
-    if (overlay != 0) {
-        return overlay;
+        current = parent;
     }
     return std::nullopt;
 }
 
-bool text_dialog_ready_on_display(const std::string& display_name) {
+enum class TextDialogProbe {
+    // Display could not be opened at all (candidate slot is not in use).
+    Unavailable,
+    NoDialog,
+    Ready,
+};
+
+TextDialogProbe probe_text_dialog(const std::string& display_name) {
+    install_x_error_guard();
     Display* display = XOpenDisplay(display_name.c_str());
     if (display == nullptr) {
-        return false;
+        return TextDialogProbe::Unavailable;
     }
     XSetIOErrorExitHandler(
         display,
@@ -388,7 +384,7 @@ bool text_dialog_ready_on_display(const std::string& display_name) {
 
     const bool ready = find_focused_text_dialog(display).has_value();
     XCloseDisplay(display);
-    return ready;
+    return ready ? TextDialogProbe::Ready : TextDialogProbe::NoDialog;
 }
 
 void xtest_key(Display* display, KeySym keysym, bool pressed) {
@@ -430,6 +426,7 @@ void xtest_type_ascii(Display* display, const std::string& text) {
 }
 
 bool try_autofill_on_display(const std::string& display_name, const std::string& text) {
+    install_x_error_guard();
     Display* display = XOpenDisplay(display_name.c_str());
     if (display == nullptr) {
         return false;
@@ -463,6 +460,16 @@ bool try_autofill_on_display(const std::string& display_name, const std::string&
     XFlush(display);
     // Give Avalonia a beat to focus the text box before the first glyph.
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+    // Ryujinx seeds swkbd with the current Switch profile nickname, so typing alone
+    // appends to it and the player ends up with "AlinaAlina".
+    xtest_key(display, XK_Control_L, true);
+    xtest_key(display, XK_a, true);
+    xtest_key(display, XK_a, false);
+    xtest_key(display, XK_Control_L, false);
+    xtest_key(display, XK_BackSpace, true);
+    xtest_key(display, XK_BackSpace, false);
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
 
     xtest_type_ascii(display, text);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -544,24 +551,45 @@ void schedule_ryujinx_soft_keyboard(
                  fallback_text = std::move(fallback_text),
                  prompt = std::move(prompt),
                  preferred_display = std::move(preferred_display)]() {
-        const auto displays = soft_keyboard_display_candidates(preferred_display);
+        struct DisplayProbe {
+            std::string name;
+            // Attempt index before which we do not retry XOpenDisplay on this slot.
+            int retry_at = 0;
+        };
+        std::vector<DisplayProbe> probes;
+        for (auto& name : soft_keyboard_display_candidates(preferred_display)) {
+            probes.push_back({std::move(name), 0});
+        }
+
         std::string found_display;
         // Wait until a dialog is mapped *and* holding keyboard focus (wants typed text),
         // not merely present unmapped in the window tree (boot-time false positives).
-        for (int attempt = 0; attempt < 720; ++attempt) {
-            for (const auto& name : displays) {
+        // Most candidate slots are empty, so back those off: a tick then only pays for
+        // the one or two displays that exist and can run at a tight interval.
+        constexpr auto kPollInterval = std::chrono::milliseconds(150);
+        constexpr int kPollAttempts = 2400; // ~6 minutes
+        constexpr int kUnavailableBackoff = 13; // ~2s before re-probing a dead slot
+        for (int attempt = 0; attempt < kPollAttempts; ++attempt) {
+            for (auto& probe : probes) {
+                if (attempt < probe.retry_at) {
+                    continue;
+                }
                 try {
-                    if (text_dialog_ready_on_display(name)) {
-                        found_display = name;
+                    const auto result = probe_text_dialog(probe.name);
+                    if (result == TextDialogProbe::Unavailable) {
+                        probe.retry_at = attempt + kUnavailableBackoff;
+                    } else if (result == TextDialogProbe::Ready) {
+                        found_display = probe.name;
                         break;
                     }
                 } catch (...) {
+                    probe.retry_at = attempt + kUnavailableBackoff;
                 }
             }
             if (!found_display.empty()) {
                 break;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            std::this_thread::sleep_for(kPollInterval);
         }
         if (found_display.empty()) {
             std::cerr << "Ryujinx Software Keyboard: timed out waiting for text-input dialog\n";
@@ -571,7 +599,10 @@ void schedule_ryujinx_soft_keyboard(
         SoftKeyboardRequest request;
         {
             std::lock_guard lock(bridge->mutex);
-            request = bridge->make_request(prompt, fallback_text, 12);
+            // Blank field: the player is being asked to type a name, and prefilling it
+            // just means erasing it on a pad keyboard first. fallback_text is only for
+            // the no-answer path below.
+            request = bridge->make_request(prompt, /*initial_text=*/{}, 12);
         }
         bridge->publish_request(request);
         std::cout

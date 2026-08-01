@@ -35,6 +35,7 @@ struct SessionClientCliArgs {
     bool wants_audio = true;
     bool synced_av = false;
     MediaQualityTier wanted_tier = MediaQualityTier::Auto;
+    MediaStreamSize wanted_size = MediaStreamSize::Auto;
 
     ClientAppConfig app_config() const;
 };

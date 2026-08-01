@@ -36,7 +36,7 @@ std::optional<std::string> resolve_steam_persona_name(
     std::string_view account_id = {},
     const std::filesystem::path& steam_dir_override = {});
 
-// Prefer Steam persona, then Steam account id, then fallback_username.
+// Prefer the Steam persona, else fallback_username. Never returns a numeric account id.
 std::string preferred_steam_or_username_display_name(
     std::string_view fallback_username,
     std::string_view steam_account_id = {},

@@ -91,6 +91,7 @@ ClientAppConfig SessionClientCliArgs::app_config() const {
     config.wants_audio = wants_audio;
     config.synced_av = synced_av;
     config.wanted_tier = wanted_tier;
+    config.wanted_size = wanted_size;
     return config;
 }
 
@@ -108,7 +109,8 @@ void SessionClientCli::print_usage() const {
         << "                      [--active-session]\n"
         << "                      [--controller index] [--controller index] [--game index-or-id]\n"
         << "                      [--input-port port] [--no-video] [--no-audio] [--synced-av]\n"
-        << "                      [--stream-quality auto|low|medium|med-high|high|very-high] [--list-games]\n";
+        << "                      [--stream-quality auto|low|medium|med-high|high|very-high]\n"
+        << "                      [--stream-size auto|540p|720p|1080p|1440p] [--list-games]\n";
 }
 
 SessionClientCliArgs SessionClientCli::parse(int argc, char** argv) const {
@@ -214,6 +216,24 @@ SessionClientCliArgs SessionClientCli::parse(int argc, char** argv) const {
                 args.wanted_tier = MediaQualityTier::VeryHigh;
             } else {
                 throw std::runtime_error("--stream-quality requires auto|low|medium|med-high|high|very-high");
+            }
+        } else if (arg == "--stream-size") {
+            if (++i >= argc) {
+                throw std::runtime_error("--stream-size requires auto|540p|720p|1080p|1440p");
+            }
+            const std::string value = argv[i];
+            if (value == "auto") {
+                args.wanted_size = MediaStreamSize::Auto;
+            } else if (value == "540p" || value == "540") {
+                args.wanted_size = MediaStreamSize::P540;
+            } else if (value == "720p" || value == "720") {
+                args.wanted_size = MediaStreamSize::P720;
+            } else if (value == "1080p" || value == "1080") {
+                args.wanted_size = MediaStreamSize::P1080;
+            } else if (value == "1440p" || value == "1440") {
+                args.wanted_size = MediaStreamSize::P1440;
+            } else {
+                throw std::runtime_error("--stream-size requires auto|540p|720p|1080p|1440p");
             }
         } else if (arg == "--help" || arg == "-h") {
             print_usage();

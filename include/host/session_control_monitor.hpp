@@ -21,7 +21,9 @@ public:
         MediaServer& media_server,
         std::chrono::seconds heartbeat_timeout,
         std::chrono::seconds reconnect_timeout,
-        HostSessionHub* host_hub = nullptr);
+        HostSessionHub* host_hub = nullptr,
+        std::uint16_t capture_width = 1920,
+        std::uint16_t capture_height = 1080);
 
     std::optional<std::string> poll();
 
@@ -29,7 +31,11 @@ private:
     bool remove_viewer(std::size_t index, std::string_view reason);
     void mark_player_disconnected(SessionClientConnection& client, std::string_view reason);
     void handle_heartbeat(SessionClientConnection& client, const ViewerHeartbeat& heartbeat);
-    void apply_video_tier(SessionClientConnection& client, MediaQualityTier tier, std::string_view reason);
+    void apply_video_encode(
+        SessionClientConnection& client,
+        MediaStreamSize size,
+        MediaQualityTier tier,
+        std::string_view reason);
     static std::string client_label(const SessionClientConnection& client);
 
     SessionPlan& plan_;
@@ -39,6 +45,8 @@ private:
     std::chrono::seconds reconnect_timeout_;
     std::chrono::steady_clock::time_point started_at_;
     HostSessionHub* host_hub_ = nullptr;
+    std::uint16_t capture_width_ = 1920;
+    std::uint16_t capture_height_ = 1080;
 };
 
 } // namespace archstreamer

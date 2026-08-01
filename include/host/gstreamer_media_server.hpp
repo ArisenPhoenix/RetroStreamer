@@ -53,13 +53,14 @@ private:
         std::uint16_t base_port = 0;
         /** Port the client currently receives on. */
         std::uint16_t port = 0;
-        MediaQualityTier tier = MediaQualityTier::Medium;
+        /** Current encode settings (size + quality merged). */
+        VideoEncodeSettings settings{};
         /** When running, this client is off the shared tee. */
         ChildProcess dedicated;
         ChildProcess staging;
         bool staging_active = false;
         std::uint16_t staging_port = 0;
-        MediaQualityTier staging_tier = MediaQualityTier::Medium;
+        VideoEncodeSettings staging_settings{};
         std::chrono::steady_clock::time_point staging_started{};
     };
 
@@ -67,7 +68,7 @@ private:
     const Destination* find_destination(ClientId client_id) const;
     void restart_pipeline();
     std::vector<std::string> build_single_encode_args(
-        MediaQualityTier tier,
+        const VideoEncodeSettings& settings,
         const std::string& host,
         std::uint16_t port) const;
     void apply_nvenc_environment(

@@ -49,16 +49,25 @@ Open the VM window:
 3. Copy or clone this repo, then:
 
 ```bash
-# If the metal repo is not shared into the guest, clone from GitHub:
-curl -fsSL https://raw.githubusercontent.com/ArisenPhoenix/RetroStreamer/main/deploy/vm-client/guest-bootstrap.sh -o guest-bootstrap.sh
+# If the metal repo is not shared into the guest, fetch the bootstrap script from master:
+curl -fsSL https://raw.githubusercontent.com/ArisenPhoenix/RetroStreamer/master/deploy/vm-client/guest-bootstrap.sh -o guest-bootstrap.sh
+bash guest-bootstrap.sh                  # deploy branch (master)
+bash guest-bootstrap.sh --branch dev     # test another branch
+
 # Or, after cloning the repo in the guest:
 bash deploy/vm-client/guest-bootstrap.sh
+bash deploy/vm-client/guest-bootstrap.sh --branch dev
 ```
 
-`guest-bootstrap.sh` installs deps, configures **`-DARCHSTREAMER_BUILD_HOST=OFF`**, and builds `session_client` / `archstreamer_gui`.
+`guest-bootstrap.sh` installs deps, checks out the chosen branch (default **`master`**), configures **`-DARCHSTREAMER_BUILD_HOST=OFF`**, and builds `session_client` / `archstreamer_gui`.
 
-Default clone URL: `https://github.com/ArisenPhoenix/RetroStreamer.git`  
-Override with `ARCHSTREAMER_REPO_URL=...` if needed.
+Defaults / overrides:
+
+| Setting | Default | Override |
+|---------|---------|----------|
+| Branch | `master` | `--branch` / `-b`, or `ARCHSTREAMER_REPO_BRANCH` |
+| Clone URL | `https://github.com/ArisenPhoenix/RetroStreamer.git` | `ARCHSTREAMER_REPO_URL` |
+| Checkout dir | `$HOME/ArchStreamer` | `ARCHSTREAMER_REPO_DIR` |
 
 ### Push a metal build into the VM (no guest rebuild)
 

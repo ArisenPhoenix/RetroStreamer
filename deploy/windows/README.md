@@ -14,14 +14,19 @@ Linux-only tools (gamescope, Gamescope WSI, VirtualGL, uinput) are **not** used 
 Repo usually lives at `%USERPROFILE%\Documents\RetroStreamer`.
 
 ```powershell
-# After Linux pushes to GitHub — pull, build, install to Program Files:
+# After Linux pushes to GitHub — pull deploy branch (master), build, install:
 .\deploy\windows\update-and-install.ps1 -ResetHard
+
+# Test another branch in isolation (e.g. refactor work on dev):
+.\deploy\windows\update-and-install.ps1 -ResetHard -Branch dev
 
 # Build/install only (no git):
 .\deploy\windows\update-and-install.ps1 -SkipPull
 ```
 
-`-ResetHard` discards local edits on the Windows tree so it always matches `origin/master` (recommended for a pure client machine).
+`-Branch` defaults to **`master`** (deploy / stable). Pass another name to pull that ref instead.
+
+`-ResetHard` discards local edits on the Windows tree so it always matches `origin/<Branch>` (recommended for a pure client machine).
 
 Install overwrites `C:\Program Files\ArchStreamer\bin\*.exe`. Run an **Admin** PowerShell, and close `archstreamer_gui` / `session_client` first (the script stops them when it can). A locked `session_client.exe` usually shows as cmake `file INSTALL cannot copy file` / permission denied.
 

@@ -3,12 +3,14 @@
 # From the repo root (usually Documents\RetroStreamer), Admin PowerShell recommended:
 #   .\deploy\windows\update-and-install.ps1
 #   .\deploy\windows\update-and-install.ps1 -ResetHard
+#   .\deploy\windows\update-and-install.ps1 -ResetHard -Branch dev
 #
 # Close ArchStreamer / session_client before install (the script also tries to stop them);
 # otherwise cmake --install can fail with permission denied on bin\*.exe.
 #
 # Options:
-#   -ResetHard     discard local edits, match origin/master (typical for a client PC)
+#   -Branch        git branch to pull (default: master — deploy / stable)
+#   -ResetHard     discard local edits, match origin/<Branch> (typical for a client PC)
 #   -SkipPull      build/install only (no git)
 #   -SkipInstall   build only
 #   -BuildHost     host-capable GUI (needs ViGEm etc.)
@@ -17,10 +19,12 @@
 #   -Launch        start the installed GUI when done
 #   -Prefix        install root (default: C:\Program Files\ArchStreamer)
 #   -VcpkgRoot     default C:\dev\vcpkg or $env:VCPKG_ROOT
-#   -Branch        default master
 #
-# Day-to-day after Linux pushes to GitHub:
+# Day-to-day after Linux pushes to GitHub (deploy branch):
 #   .\deploy\windows\update-and-install.ps1 -ResetHard
+#
+# Test a non-deploy branch in isolation:
+#   .\deploy\windows\update-and-install.ps1 -ResetHard -Branch dev
 
 param(
     [switch]$ResetHard,
@@ -52,9 +56,14 @@ if ([string]::IsNullOrWhiteSpace($VcpkgRoot)) {
     }
 }
 
+if ([string]::IsNullOrWhiteSpace($Branch)) {
+    throw "-Branch must not be empty (default is master)"
+}
+
 Set-Location $RepoRoot
 Write-Host "=== ArchStreamer Windows update ==="
 Write-Host "Repo: $RepoRoot"
+Write-Host "Branch: $Branch"
 
 if (-not $SkipPull) {
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
@@ -64,12 +73,22 @@ if (-not $SkipPull) {
     git fetch origin
     if ($LASTEXITCODE -ne 0) { throw "git fetch failed" }
 
+    $remoteRef = "origin/$Branch"
+    $remoteExists = @(git rev-parse --verify $remoteRef 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $remoteExists.Count -eq 0) {
+        throw "Remote branch not found: $remoteRef (push it first, or check -Branch spelling)"
+    }
+
     $status = @(git status --porcelain)
     if ($ResetHard) {
-        Write-Host "Resetting to origin/$Branch (discarding local changes)..."
+        Write-Host "Resetting to $remoteRef (discarding local changes)..."
         git checkout $Branch
+        if ($LASTEXITCODE -ne 0) {
+            # First time checking out a remote-only branch on this machine.
+            git checkout -B $Branch $remoteRef
+        }
         if ($LASTEXITCODE -ne 0) { throw "git checkout $Branch failed" }
-        git reset --hard "origin/$Branch"
+        git reset --hard $remoteRef
         if ($LASTEXITCODE -ne 0) { throw "git reset --hard failed" }
         git clean -fd
     } elseif ($status.Count -gt 0) {
@@ -77,13 +96,16 @@ if (-not $SkipPull) {
         git status -sb
         throw "Refusing to pull over dirty tree. Re-run with -ResetHard, or commit/stash locally, or pass -SkipPull."
     } else {
-        Write-Host "Pulling origin/$Branch..."
+        Write-Host "Pulling $remoteRef..."
         git checkout $Branch
+        if ($LASTEXITCODE -ne 0) {
+            git checkout -B $Branch $remoteRef
+        }
         if ($LASTEXITCODE -ne 0) { throw "git checkout $Branch failed" }
         git pull --ff-only origin $Branch
         if ($LASTEXITCODE -ne 0) { throw "git pull failed (try -ResetHard if histories diverged)" }
     }
-    Write-Host "Git: $(git rev-parse --short HEAD) $(git log -1 --pretty=%s)"
+    Write-Host "Git: $(git rev-parse --short HEAD) $(git log -1 --pretty=%s) [$Branch]"
 } else {
     Write-Host "Skipping git pull."
 }

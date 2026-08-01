@@ -107,6 +107,27 @@ SessionControlMonitor::SessionControlMonitor(
 std::optional<std::string> SessionControlMonitor::poll() {
     const auto now = std::chrono::steady_clock::now();
     const auto in_startup_grace = now - started_at_ < kStartupHeartbeatGrace;
+
+    if (plan_.soft_keyboard) {
+        if (const auto request = plan_.soft_keyboard->take_unsent_request(); request.has_value()) {
+            for (auto& client : plan_.clients) {
+                if (client.connection_state != SessionConnectionState::Connected) {
+                    continue;
+                }
+                try {
+                    client.stream.send_packet(serialize_packet(*request));
+                    std::cout
+                        << "Soft keyboard request id=" << request->request_id
+                        << " sent to " << client_label(client) << '\n';
+                } catch (const std::exception& error) {
+                    std::cerr
+                        << "Failed to send SoftKeyboardRequest to "
+                        << client_label(client) << ": " << error.what() << '\n';
+                }
+            }
+        }
+    }
+
     for (std::size_t i = 0; i < plan_.clients.size();) {
         auto& client = plan_.clients[i];
         if (client.connection_state == SessionConnectionState::Disconnected) {
@@ -173,6 +194,15 @@ std::optional<std::string> SessionControlMonitor::poll() {
                     std::cout << "Disc control: " << response.message << '\n';
                 } else {
                     std::cerr << "Disc control failed: " << response.message << '\n';
+                }
+            } else if (const auto* soft_keyboard = std::get_if<SoftKeyboardResponse>(&payload);
+                       soft_keyboard != nullptr) {
+                if (plan_.soft_keyboard) {
+                    plan_.soft_keyboard->submit_response(*soft_keyboard);
+                    std::cout
+                        << "Soft keyboard response id=" << soft_keyboard->request_id
+                        << " accepted=" << (soft_keyboard->accepted ? "yes" : "no")
+                        << " from " << client_label(client) << '\n';
                 }
             } else if (const auto* link_request = std::get_if<LinkRequest>(&payload);
                        link_request != nullptr) {

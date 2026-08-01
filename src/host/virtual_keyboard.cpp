@@ -1,10 +1,13 @@
 #ifndef _WIN32
 #include "host/virtual_keyboard.hpp"
+#include "host/soft_keyboard_host.hpp"
 
 #include "host/retroarch_netcmd.hpp"
 
 #include <chrono>
 #include <iostream>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -335,6 +338,30 @@ void xtest_type_ascii(Display* display, const std::string& text) {
     }
 }
 
+bool dialog_present_on_display(const std::string& display_name) {
+    Display* display = XOpenDisplay(display_name.c_str());
+    if (display == nullptr) {
+        return false;
+    }
+    XSetIOErrorExitHandler(
+        display,
+        [](Display*, void*) {},
+        nullptr);
+
+    std::vector<std::pair<Window, std::string>> windows;
+    collect_windows(display, DefaultRootWindow(display), windows);
+    bool found = false;
+    for (const auto& [window, title] : windows) {
+        if (title.find("ContentDialogOverlayWindow") != std::string::npos ||
+            title.find("Software Keyboard") != std::string::npos) {
+            found = true;
+            break;
+        }
+    }
+    XCloseDisplay(display);
+    return found;
+}
+
 bool try_autofill_on_display(const std::string& display_name, const std::string& text) {
     Display* display = XOpenDisplay(display_name.c_str());
     if (display == nullptr) {
@@ -373,54 +400,131 @@ bool try_autofill_on_display(const std::string& display_name, const std::string&
     xtest_key(display, XK_Return, false);
     XCloseDisplay(display);
     std::cout
-        << "Ryujinx Software Keyboard: autofilled \"" << text
+        << "Ryujinx Software Keyboard: injected \"" << text
         << "\" on display " << display_name << '\n';
     return true;
 }
 
-} // namespace
-
-void schedule_ryujinx_name_dialog_autofill(std::string text) {
-    // Pokemon trainer names are 1–12 Latin characters.
+std::string title_case_fallback(std::string text) {
     if (text.size() > 12) {
         text.resize(12);
     }
     if (text.empty()) {
-        text = "Player";
-    } else {
-        // Match Profiles.json title-case (e.g. "alina" → "Alina").
-        bool capitalize = true;
-        for (char& character : text) {
-            if (character == ' ' || character == '-' || character == '_') {
-                if (character == '_' || character == '-') {
-                    character = ' ';
-                }
-                capitalize = true;
-                continue;
-            }
-            if (capitalize && character >= 'a' && character <= 'z') {
-                character = static_cast<char>(character - 'a' + 'A');
-            } else if (!capitalize && character >= 'A' && character <= 'Z') {
-                character = static_cast<char>(character - 'A' + 'a');
-            }
-            capitalize = false;
-        }
+        return "Player";
     }
-    std::thread([text = std::move(text)]() {
-        // Dialog appears well after boot (shader/cache); poll for ~3 minutes.
+    bool capitalize = true;
+    for (char& character : text) {
+        if (character == ' ' || character == '-' || character == '_') {
+            if (character == '_' || character == '-') {
+                character = ' ';
+            }
+            capitalize = true;
+            continue;
+        }
+        if (capitalize && character >= 'a' && character <= 'z') {
+            character = static_cast<char>(character - 'a' + 'A');
+        } else if (!capitalize && character >= 'A' && character <= 'Z') {
+            character = static_cast<char>(character - 'A' + 'a');
+        }
+        capitalize = false;
+    }
+    return text;
+}
+
+} // namespace
+
+void schedule_ryujinx_soft_keyboard(
+    std::shared_ptr<SoftKeyboardHostBridge> bridge,
+    std::string fallback_text,
+    std::string prompt) {
+    fallback_text = title_case_fallback(std::move(fallback_text));
+    if (prompt.empty()) {
+        prompt = "The game is asking for text. Enter it with the pad.";
+    }
+    if (!bridge) {
+        bridge = std::make_shared<SoftKeyboardHostBridge>();
+    }
+
+    std::thread([bridge = std::move(bridge),
+                 fallback_text = std::move(fallback_text),
+                 prompt = std::move(prompt)]() {
+        std::string found_display;
         for (int attempt = 0; attempt < 360; ++attempt) {
             for (int display_index = 1; display_index <= 10; ++display_index) {
                 const auto name = ":" + std::to_string(display_index);
                 try {
-                    if (try_autofill_on_display(name, text)) {
-                        return;
+                    if (dialog_present_on_display(name)) {
+                        found_display = name;
+                        break;
                     }
                 } catch (...) {
                 }
             }
+            if (!found_display.empty()) {
+                break;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
-        std::cerr << "Ryujinx Software Keyboard: autofill timed out waiting for dialog\n";
+        if (found_display.empty()) {
+            std::cerr << "Ryujinx Software Keyboard: timed out waiting for dialog\n";
+            return;
+        }
+
+        SoftKeyboardRequest request;
+        {
+            std::lock_guard lock(bridge->mutex);
+            request = bridge->make_request(prompt, fallback_text, 12);
+        }
+        bridge->publish_request(request);
+        std::cout
+            << "Ryujinx Software Keyboard: dialog on " << found_display
+            << " — requesting pad OSK (id=" << request.request_id << ")\n";
+
+        std::optional<SoftKeyboardResponse> response;
+        for (int wait = 0; wait < 360; ++wait) {
+            response = bridge->take_response();
+            if (response.has_value() && response->request_id == request.request_id) {
+                break;
+            }
+            response.reset();
+            if (wait > 0 && wait % 10 == 0) {
+                std::lock_guard lock(bridge->mutex);
+                if (bridge->pending_to_clients.has_value() &&
+                    bridge->pending_to_clients->request_id == request.request_id) {
+                    bridge->pending_to_clients_sent = false;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+
+        std::string text = fallback_text;
+        if (response.has_value() && response->accepted && !response->text.empty()) {
+            text = response->text;
+            if (text.size() > 12) {
+                text.resize(12);
+            }
+        } else if (!response.has_value()) {
+            std::cerr
+                << "Ryujinx Software Keyboard: no pad OSK response; using fallback \""
+                << fallback_text << "\"\n";
+        } else {
+            std::cerr
+                << "Ryujinx Software Keyboard: pad OSK cancelled; using fallback \""
+                << fallback_text << "\"\n";
+        }
+
+        for (int attempt = 0; attempt < 20; ++attempt) {
+            try {
+                if (try_autofill_on_display(found_display, text)) {
+                    bridge->clear();
+                    return;
+                }
+            } catch (...) {
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        }
+        std::cerr << "Ryujinx Software Keyboard: failed to inject text into dialog\n";
+        bridge->clear();
     }).detach();
 }
 

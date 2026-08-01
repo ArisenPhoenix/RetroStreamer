@@ -4,6 +4,7 @@
 #include "gui_util.hpp"
 #include "game_picker_widget.hpp"
 #include "host_search_dialog.hpp"
+#include "pad_on_screen_keyboard.hpp"
 #include "common/catalog_paths.hpp"
 #include "common/catalog_presenter.hpp"
 #include "common/addresses.hpp"
@@ -17,6 +18,7 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDialog>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -401,6 +403,11 @@ QWidget* MainWindow::build_game_options_tab() {
     game_options_poll_timer_->setInterval(500);
     connect(game_options_poll_timer_, &QTimer::timeout, this, [this] {
         refresh_game_options_ui();
+        if (soft_keyboard_) {
+            if (const auto request = soft_keyboard_->take_request(); request.has_value()) {
+                open_soft_keyboard_from_host(*request);
+            }
+        }
         if (!disc_control_) {
             return;
         }
@@ -603,6 +610,16 @@ QWidget* MainWindow::build_settings_tab() {
         }
         persist_settings_if_idle();
     });
+
+    settings_pad_osk_ = new QPushButton(QStringLiteral("Pad on-screen keyboard"), form_box);
+    settings_pad_osk_->setCheckable(true);
+    settings_pad_osk_->setToolTip(
+        QStringLiteral("Opens a controller-friendly letter keyboard for testing.\n"
+                       "Done / Cancel closes it; click this button again to close."));
+    form->addRow(QStringLiteral("Client"), settings_pad_osk_);
+    connect(settings_pad_osk_, &QPushButton::toggled, this, [this](bool checked) {
+        toggle_pad_on_screen_keyboard(checked);
+    });
 #ifdef ARCHSTREAMER_HAS_HOST
     settings_native_host_runner_ = new QLineEdit(form_box);
     settings_native_host_runner_->setPlaceholderText(
@@ -764,6 +781,107 @@ QWidget* MainWindow::build_settings_tab() {
     root->addLayout(left, 1);
     root->addWidget(settings_log_, 2);
     return page;
+}
+
+void MainWindow::toggle_pad_on_screen_keyboard(bool open) {
+    if (!open) {
+        close_pad_on_screen_keyboard();
+        return;
+    }
+
+    if (pad_osk_ != nullptr) {
+        pad_osk_->raise();
+        pad_osk_->activateWindow();
+        if (settings_pad_osk_ != nullptr) {
+            const QSignalBlocker blocker(settings_pad_osk_);
+            settings_pad_osk_->setChecked(true);
+        }
+        return;
+    }
+
+    soft_keyboard_request_id_ = 0;
+    PadOnScreenKeyboard::Options options;
+    options.title = QStringLiteral("Pad on-screen keyboard");
+    options.prompt = QStringLiteral("Test the controller letter keyboard.");
+    options.max_length = 12;
+    pad_osk_ = new PadOnScreenKeyboard(std::move(options), this);
+    pad_osk_->setAttribute(Qt::WA_DeleteOnClose);
+    connect(pad_osk_, &QDialog::finished, this, [this](int) {
+        pad_osk_ = nullptr;
+        if (settings_pad_osk_ != nullptr) {
+            const QSignalBlocker blocker(settings_pad_osk_);
+            settings_pad_osk_->setChecked(false);
+        }
+    });
+    pad_osk_->show();
+    pad_osk_->raise();
+    pad_osk_->activateWindow();
+    if (settings_pad_osk_ != nullptr) {
+        const QSignalBlocker blocker(settings_pad_osk_);
+        settings_pad_osk_->setChecked(true);
+    }
+}
+
+void MainWindow::open_soft_keyboard_from_host(const SoftKeyboardRequest& request) {
+    if (pad_osk_ != nullptr) {
+        pad_osk_->disconnect();
+        pad_osk_->deleteLater();
+        pad_osk_ = nullptr;
+    }
+
+    soft_keyboard_request_id_ = request.request_id;
+    const auto prompt = request.prompt.empty()
+        ? QStringLiteral("The game is asking for text. Enter it with the pad.")
+        : QString::fromStdString(request.prompt);
+
+    PadOnScreenKeyboard::Options options;
+    options.title = QStringLiteral("Software Keyboard");
+    options.prompt = prompt;
+    options.initial_text = QString::fromStdString(request.initial_text);
+    options.max_length = request.max_length == 0 ? 12 : static_cast<int>(request.max_length);
+    pad_osk_ = new PadOnScreenKeyboard(std::move(options), this);
+    pad_osk_->setAttribute(Qt::WA_DeleteOnClose);
+    connect(pad_osk_, &QDialog::finished, this, [this](int result) {
+        const QString text = pad_osk_ != nullptr ? pad_osk_->text() : QString{};
+        const auto request_id = soft_keyboard_request_id_;
+        pad_osk_ = nullptr;
+        soft_keyboard_request_id_ = 0;
+        if (settings_pad_osk_ != nullptr) {
+            const QSignalBlocker blocker(settings_pad_osk_);
+            settings_pad_osk_->setChecked(false);
+        }
+        if (request_id != 0 && soft_keyboard_) {
+            SoftKeyboardResponse response;
+            response.request_id = request_id;
+            response.accepted = result == QDialog::Accepted;
+            response.text = text.toStdString();
+            soft_keyboard_->submit_response(std::move(response));
+            append_log(
+                client_log_,
+                response.accepted
+                    ? QStringLiteral("Sent pad keyboard text to host.")
+                    : QStringLiteral("Cancelled pad keyboard."));
+        }
+    });
+    pad_osk_->show();
+    pad_osk_->raise();
+    pad_osk_->activateWindow();
+    if (settings_pad_osk_ != nullptr) {
+        const QSignalBlocker blocker(settings_pad_osk_);
+        settings_pad_osk_->setChecked(true);
+    }
+    append_log(client_log_, QStringLiteral("Pad keyboard opened: %1").arg(prompt));
+}
+
+void MainWindow::close_pad_on_screen_keyboard() {
+    if (pad_osk_ != nullptr) {
+        pad_osk_->close();
+        pad_osk_ = nullptr;
+    }
+    if (settings_pad_osk_ != nullptr) {
+        const QSignalBlocker blocker(settings_pad_osk_);
+        settings_pad_osk_->setChecked(false);
+    }
 }
 
 } // namespace archstreamer::gui

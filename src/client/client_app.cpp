@@ -82,6 +82,19 @@ bool handle_control_message(TcpStream& stream, const ClientAppCallbacks& callbac
                          : ("Link failed: " + link->message));
         }
     }
+    if (const auto* soft_keyboard = std::get_if<SoftKeyboardRequest>(&payload);
+        soft_keyboard != nullptr) {
+        if (callbacks.soft_keyboard) {
+            callbacks.soft_keyboard->set_request(*soft_keyboard);
+        }
+        if (callbacks.on_status) {
+            callbacks.on_status(
+                "Host requested pad keyboard" +
+                (soft_keyboard->prompt.empty()
+                     ? std::string{}
+                     : (": " + soft_keyboard->prompt)));
+        }
+    }
     // Mid-session MediaEndpoint = host restarted video (quality ladder). Audio may
     // have free-run ahead of the new video timeline — request an audio realign.
     if (std::get_if<MediaEndpoint>(&payload) != nullptr) {
@@ -517,6 +530,18 @@ ClientRunResult ClientApp::join_session(
                 } catch (const std::exception& error) {
                     if (callbacks.on_status) {
                         callbacks.on_status(std::string("Failed to send link request: ") + error.what());
+                    }
+                }
+            }
+        }
+        if (callbacks.soft_keyboard) {
+            if (const auto response = callbacks.soft_keyboard->take_response(); response.has_value()) {
+                try {
+                    joined_session.stream.send_packet(serialize_packet(*response));
+                } catch (const std::exception& error) {
+                    if (callbacks.on_status) {
+                        callbacks.on_status(
+                            std::string("Failed to send soft keyboard response: ") + error.what());
                     }
                 }
             }

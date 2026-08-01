@@ -64,18 +64,22 @@ private:
         Space,
         Backspace,
         Done,
+        CaseToggle,
+        Skip,
     };
 
     struct Cell {
         CellKind kind = CellKind::Character;
         QString label;
-        QChar character; // valid when kind == Character
+        QChar character; // uppercase A–Z / digit when kind == Character
         QToolButton* button = nullptr;
     };
 
     void build_ui();
     void rebuild_grid();
     void refresh_text_field();
+    void refresh_letter_labels();
+    void toggle_case();
     void set_cursor(int index);
     void move_cursor(int dx, int dy);
     void activate_cell();
@@ -83,7 +87,11 @@ private:
     void backspace();
     void accept_text();
     void poll_controllers();
-    void apply_pad_edges(std::uint32_t previous, std::uint32_t next);
+    void apply_pad_edges(
+        std::uint32_t previous_buttons,
+        std::uint32_t next_buttons,
+        std::uint16_t previous_r2,
+        std::uint16_t next_r2);
     void ensure_pad_backend();
     void release_pad_backend();
 
@@ -96,11 +104,13 @@ private:
 
     QString text_;
     std::vector<Cell> cells_;
-    int columns_ = 7;
+    int columns_ = 14;
     int cursor_ = 0;
+    bool upper_case_ = true;
 
     std::unique_ptr<archstreamer::Sdl2ControllerBackend> pad_backend_;
     std::uint32_t last_buttons_ = 0;
+    std::uint16_t last_r2_ = 0;
     qint64 next_repeat_ms_ = 0;
     int held_nav_dx_ = 0;
     int held_nav_dy_ = 0;

@@ -39,6 +39,8 @@ class QWidget;
 
 namespace archstreamer::gui {
 
+class PadOnScreenKeyboard;
+
 class MainWindow final : public QMainWindow {
 public:
     MainWindow();
@@ -92,6 +94,9 @@ private:
     void apply_art_root_to_pickers();
     void detect_steam_account();
     void refresh_art_from_steam();
+    void toggle_pad_on_screen_keyboard(bool open);
+    void open_soft_keyboard_from_host(const archstreamer::SoftKeyboardRequest& request);
+    void close_pad_on_screen_keyboard();
 
     GameFilter client_filter_from_fields() const;
     void refresh_filtered_client_games();
@@ -164,6 +169,7 @@ private:
     QPlainTextEdit* client_log_ = nullptr;
     std::shared_ptr<DiscControlBridge> disc_control_;
     std::shared_ptr<LinkControlBridge> link_control_;
+    std::shared_ptr<SoftKeyboardBridge> soft_keyboard_;
     std::shared_ptr<ClientHeartbeatPrefs> heartbeat_prefs_;
     std::shared_ptr<MediaResyncBridge> media_resync_;
     QLabel* game_options_status_ = nullptr;
@@ -219,6 +225,9 @@ private:
     QComboBox* settings_retroarch_scale_ = nullptr;
 #endif
     QComboBox* settings_audio_out_ = nullptr;
+    QPushButton* settings_pad_osk_ = nullptr;
+    PadOnScreenKeyboard* pad_osk_ = nullptr;
+    std::uint32_t soft_keyboard_request_id_ = 0;
     QPlainTextEdit* settings_log_ = nullptr;
 };
 

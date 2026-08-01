@@ -77,6 +77,8 @@ ByteBuffer serialize_payload(const DiscControlRequest& payload);
 ByteBuffer serialize_payload(const DiscControlResponse& payload);
 ByteBuffer serialize_payload(const LinkRequest& payload);
 ByteBuffer serialize_payload(const LinkResponse& payload);
+ByteBuffer serialize_payload(const SoftKeyboardRequest& payload);
+ByteBuffer serialize_payload(const SoftKeyboardResponse& payload);
 
 PacketType packet_type_for(const ClientHello& payload);
 PacketType packet_type_for(const HostWelcome& payload);
@@ -101,6 +103,8 @@ PacketType packet_type_for(const DiscControlRequest& payload);
 PacketType packet_type_for(const DiscControlResponse& payload);
 PacketType packet_type_for(const LinkRequest& payload);
 PacketType packet_type_for(const LinkResponse& payload);
+PacketType packet_type_for(const SoftKeyboardRequest& payload);
+PacketType packet_type_for(const SoftKeyboardResponse& payload);
 
 ByteBuffer serialize_packet(const ClientHello& payload);
 ByteBuffer serialize_packet(const HostWelcome& payload);
@@ -125,6 +129,8 @@ ByteBuffer serialize_packet(const DiscControlRequest& payload);
 ByteBuffer serialize_packet(const DiscControlResponse& payload);
 ByteBuffer serialize_packet(const LinkRequest& payload);
 ByteBuffer serialize_packet(const LinkResponse& payload);
+ByteBuffer serialize_packet(const SoftKeyboardRequest& payload);
+ByteBuffer serialize_packet(const SoftKeyboardResponse& payload);
 
 PacketPayload deserialize_packet(std::span<const std::uint8_t> packet);
 

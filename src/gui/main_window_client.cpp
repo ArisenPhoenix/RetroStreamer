@@ -437,6 +437,7 @@ void MainWindow::start_client() {
     client_session_live_ = true;
     disc_control_ = std::make_shared<archstreamer::DiscControlBridge>();
     link_control_ = std::make_shared<archstreamer::LinkControlBridge>();
+    soft_keyboard_ = std::make_shared<archstreamer::SoftKeyboardBridge>();
     heartbeat_prefs_ = std::make_shared<archstreamer::ClientHeartbeatPrefs>();
     media_resync_ = std::make_shared<archstreamer::MediaResyncBridge>();
     if (client_resync_av_ != nullptr) {
@@ -454,6 +455,7 @@ void MainWindow::start_client() {
             archstreamer::ClientAppCallbacks callbacks;
             callbacks.disc_control = disc_control_;
             callbacks.link_control = link_control_;
+            callbacks.soft_keyboard = soft_keyboard_;
             callbacks.heartbeat_prefs = heartbeat_prefs_;
             callbacks.media_resync = media_resync_;
             callbacks.on_catalog = [this](const archstreamer::GameList& full, const archstreamer::GameList& filtered) {
@@ -580,6 +582,9 @@ void MainWindow::stop_client() {
         link_control_->session_active = false;
         link_control_->link_capable = false;
     }
+    soft_keyboard_.reset();
+    soft_keyboard_request_id_ = 0;
+    close_pad_on_screen_keyboard();
     heartbeat_prefs_.reset();
     media_resync_.reset();
     if (client_resync_av_ != nullptr) {

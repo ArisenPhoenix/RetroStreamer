@@ -3,9 +3,12 @@
 #include "common/keyboard_state.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 
 namespace archstreamer {
+
+struct SoftKeyboardHostBridge;
 
 // How a remoted key is applied on the host.
 enum class RemotedKeyAction : std::uint8_t {
@@ -58,10 +61,13 @@ private:
 };
 
 #ifndef _WIN32
-// Ryujinx shows an Avalonia "Software Keyboard" ContentDialog for Switch swkbd
-// (e.g. Pokemon "What is your name?"). Under gamescope that dialog is in the
-// stream but not reachable with a pad — watch nested X displays and type `text`.
-void schedule_ryujinx_name_dialog_autofill(std::string text);
+// Ryujinx Avalonia "Software Keyboard" under gamescope: detect the dialog, ask
+// the client pad OSK via SoftKeyboardHostBridge, then XTest-type the result.
+// Falls back to `fallback_text` if no client responds in time.
+void schedule_ryujinx_soft_keyboard(
+    std::shared_ptr<SoftKeyboardHostBridge> bridge,
+    std::string fallback_text,
+    std::string prompt = "The game is asking for text. Enter it with the pad.");
 #endif
 
 } // namespace archstreamer

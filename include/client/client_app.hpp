@@ -134,6 +134,37 @@ struct LinkControlBridge {
     }
 };
 
+// Shared between the GUI thread and the client session loop for host Soft Keyboard prompts.
+struct SoftKeyboardBridge {
+    std::mutex mutex;
+    std::optional<SoftKeyboardRequest> pending_request;
+    std::optional<SoftKeyboardResponse> pending_response;
+
+    void set_request(SoftKeyboardRequest request) {
+        std::lock_guard lock(mutex);
+        pending_request = std::move(request);
+    }
+
+    std::optional<SoftKeyboardRequest> take_request() {
+        std::lock_guard lock(mutex);
+        auto request = pending_request;
+        pending_request.reset();
+        return request;
+    }
+
+    void submit_response(SoftKeyboardResponse response) {
+        std::lock_guard lock(mutex);
+        pending_response = std::move(response);
+    }
+
+    std::optional<SoftKeyboardResponse> take_response() {
+        std::lock_guard lock(mutex);
+        auto response = pending_response;
+        pending_response.reset();
+        return response;
+    }
+};
+
 struct MediaResyncBridge {
     std::atomic_bool requested{false};
 
@@ -192,6 +223,7 @@ struct ClientAppCallbacks {
     std::function<void(const std::string& message)> on_status;
     std::shared_ptr<DiscControlBridge> disc_control;
     std::shared_ptr<LinkControlBridge> link_control;
+    std::shared_ptr<SoftKeyboardBridge> soft_keyboard;
     std::shared_ptr<ClientHeartbeatPrefs> heartbeat_prefs;
     std::shared_ptr<MediaResyncBridge> media_resync;
 };

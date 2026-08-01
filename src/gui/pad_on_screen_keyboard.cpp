@@ -25,6 +25,7 @@ namespace {
 constexpr int kStickDeadzone = 12000;
 constexpr int kInitialRepeatMs = 320;
 constexpr int kRepeatMs = 110;
+constexpr std::uint16_t kTriggerPressThreshold = 16384; // ~25% of UINT16_MAX
 
 bool button_down(std::uint32_t buttons, ControllerButton bit) {
     return (buttons & bit) != 0;
@@ -32,6 +33,10 @@ bool button_down(std::uint32_t buttons, ControllerButton bit) {
 
 bool button_pressed(std::uint32_t previous, std::uint32_t next, ControllerButton bit) {
     return !button_down(previous, bit) && button_down(next, bit);
+}
+
+bool trigger_pressed(std::uint16_t previous, std::uint16_t next) {
+    return previous < kTriggerPressThreshold && next >= kTriggerPressThreshold;
 }
 
 int stick_axis_to_dir(std::int16_t value) {
@@ -50,9 +55,11 @@ PadOnScreenKeyboard::PadOnScreenKeyboard(Options options, QWidget* parent)
     : QDialog(parent)
     , options_(std::move(options)) {
     setWindowTitle(options_.title);
-    setModal(true);
+    // Non-modal so Settings can toggle it closed; prompt() still uses exec().
+    setWindowModality(Qt::NonModal);
+    setModal(false);
     setWindowFlag(Qt::WindowStaysOnTopHint, true);
-    resize(520, 460);
+    resize(780, 420);
 
     if (options_.max_length < 1) {
         options_.max_length = 1;
@@ -110,7 +117,8 @@ void PadOnScreenKeyboard::build_ui() {
     root->addWidget(grid_host_, 1);
 
     hint_label_ = new QLabel(
-        QStringLiteral("D-pad / stick: move · A: select · B: backspace · Start: done · Back: cancel"),
+        QStringLiteral(
+            "D-pad / stick: move · A: select · □/X: DEL · R2 / Start: OK · Aa: case · Back: cancel"),
         this);
     hint_label_->setWordWrap(true);
     root->addWidget(hint_label_);
@@ -143,7 +151,7 @@ void PadOnScreenKeyboard::rebuild_grid() {
 
     auto* grid = new QGridLayout(grid_host_);
     grid->setSpacing(6);
-    columns_ = 7;
+    columns_ = 14;
 
     const auto add_char = [&](QChar character) {
         Cell cell;
@@ -152,50 +160,62 @@ void PadOnScreenKeyboard::rebuild_grid() {
         cell.label = QString(character);
         cells_.push_back(cell);
     };
+    const auto add_special = [&](CellKind kind, const QString& label) {
+        Cell cell;
+        cell.kind = kind;
+        cell.label = label;
+        cells_.push_back(cell);
+    };
+    const auto add_skip = [&]() {
+        Cell cell;
+        cell.kind = CellKind::Skip;
+        cells_.push_back(cell);
+    };
 
-    for (char letter = 'A'; letter <= 'Z'; ++letter) {
-        add_char(QChar(letter));
-    }
+    // Top: digits + Space / DEL / OK / Aa
     for (char digit = '0'; digit <= '9'; ++digit) {
         add_char(QChar(digit));
     }
+    add_special(CellKind::Space, QStringLiteral("Space"));
+    add_special(CellKind::Backspace, QStringLiteral("DEL"));
+    add_special(CellKind::Done, QStringLiteral("OK"));
+    add_special(CellKind::CaseToggle, QStringLiteral("Aa"));
 
-    {
-        Cell space;
-        space.kind = CellKind::Space;
-        space.label = QStringLiteral("Space");
-        cells_.push_back(space);
+    // Letters: 13 per row (A–M, N–Z), pad to 14 columns.
+    for (char letter = 'A'; letter <= 'M'; ++letter) {
+        add_char(QChar(letter));
     }
-    {
-        Cell backspace;
-        backspace.kind = CellKind::Backspace;
-        backspace.label = QStringLiteral("Del");
-        cells_.push_back(backspace);
+    add_skip();
+    for (char letter = 'N'; letter <= 'Z'; ++letter) {
+        add_char(QChar(letter));
     }
-    {
-        Cell done;
-        done.kind = CellKind::Done;
-        done.label = QStringLiteral("OK");
-        cells_.push_back(done);
-    }
+    add_skip();
 
     for (int index = 0; index < static_cast<int>(cells_.size()); ++index) {
         auto& cell = cells_[static_cast<std::size_t>(index)];
+        if (cell.kind == CellKind::Skip) {
+            auto* spacer = new QWidget(grid_host_);
+            spacer->setMinimumSize(40, 44);
+            spacer->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+            grid->addWidget(spacer, index / columns_, index % columns_);
+            continue;
+        }
+
         auto* button = new QToolButton(grid_host_);
         button->setText(cell.label);
         button->setCheckable(true);
         button->setAutoRaise(false);
-        button->setMinimumSize(56, 44);
+        button->setMinimumSize(40, 44);
         button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         cell.button = button;
-        const int row = index / columns_;
-        const int col = index % columns_;
-        grid->addWidget(button, row, col);
+        grid->addWidget(button, index / columns_, index % columns_);
         connect(button, &QToolButton::clicked, this, [this, index]() {
             set_cursor(index);
             activate_cell();
         });
     }
+
+    refresh_letter_labels();
 }
 
 void PadOnScreenKeyboard::refresh_text_field() {
@@ -203,12 +223,49 @@ void PadOnScreenKeyboard::refresh_text_field() {
     text_field_->setCursorPosition(text_.size());
 }
 
+void PadOnScreenKeyboard::refresh_letter_labels() {
+    for (auto& cell : cells_) {
+        if (cell.kind != CellKind::Character || cell.button == nullptr) {
+            continue;
+        }
+        if (cell.character.isLetter()) {
+            const QChar shown = upper_case_ ? cell.character : cell.character.toLower();
+            cell.label = QString(shown);
+            cell.button->setText(cell.label);
+        }
+    }
+    for (auto& cell : cells_) {
+        if (cell.kind == CellKind::CaseToggle && cell.button != nullptr) {
+            cell.button->setText(upper_case_ ? QStringLiteral("Aa") : QStringLiteral("aA"));
+            cell.label = cell.button->text();
+        }
+    }
+}
+
+void PadOnScreenKeyboard::toggle_case() {
+    upper_case_ = !upper_case_;
+    refresh_letter_labels();
+}
+
 void PadOnScreenKeyboard::set_cursor(int index) {
     if (cells_.empty()) {
         cursor_ = 0;
         return;
     }
-    cursor_ = std::clamp(index, 0, static_cast<int>(cells_.size()) - 1);
+    index = std::clamp(index, 0, static_cast<int>(cells_.size()) - 1);
+    if (cells_[static_cast<std::size_t>(index)].kind == CellKind::Skip) {
+        // Prefer previous real cell.
+        while (index > 0 && cells_[static_cast<std::size_t>(index)].kind == CellKind::Skip) {
+            --index;
+        }
+        if (cells_[static_cast<std::size_t>(index)].kind == CellKind::Skip) {
+            while (index + 1 < static_cast<int>(cells_.size()) &&
+                   cells_[static_cast<std::size_t>(index)].kind == CellKind::Skip) {
+                ++index;
+            }
+        }
+    }
+    cursor_ = index;
     for (int i = 0; i < static_cast<int>(cells_.size()); ++i) {
         if (cells_[static_cast<std::size_t>(i)].button != nullptr) {
             cells_[static_cast<std::size_t>(i)].button->setChecked(i == cursor_);
@@ -227,13 +284,23 @@ void PadOnScreenKeyboard::move_cursor(int dx, int dy) {
     const int rows = (count + columns_ - 1) / columns_;
     int row = cursor_ / columns_;
     int col = cursor_ % columns_;
-    row = (row + dy % rows + rows) % rows;
-    col = (col + dx % columns_ + columns_) % columns_;
-    int next = row * columns_ + col;
-    if (next >= count) {
-        next = count - 1;
+
+    for (int attempt = 0; attempt < count; ++attempt) {
+        row = (row + dy % rows + rows) % rows;
+        col = (col + dx % columns_ + columns_) % columns_;
+        int next = row * columns_ + col;
+        if (next >= count) {
+            next = count - 1;
+        }
+        if (cells_[static_cast<std::size_t>(next)].kind != CellKind::Skip) {
+            set_cursor(next);
+            return;
+        }
+        // Landed on skip: keep stepping in the same direction.
+        if (dx == 0 && dy == 0) {
+            break;
+        }
     }
-    set_cursor(next);
 }
 
 void PadOnScreenKeyboard::activate_cell() {
@@ -242,9 +309,14 @@ void PadOnScreenKeyboard::activate_cell() {
     }
     const auto& cell = cells_[static_cast<std::size_t>(cursor_)];
     switch (cell.kind) {
-    case CellKind::Character:
-        insert_character(cell.character);
+    case CellKind::Character: {
+        QChar character = cell.character;
+        if (character.isLetter() && !upper_case_) {
+            character = character.toLower();
+        }
+        insert_character(character);
         break;
+    }
     case CellKind::Space:
         insert_character(QChar(' '));
         break;
@@ -253,6 +325,11 @@ void PadOnScreenKeyboard::activate_cell() {
         break;
     case CellKind::Done:
         accept_text();
+        break;
+    case CellKind::CaseToggle:
+        toggle_case();
+        break;
+    case CellKind::Skip:
         break;
     }
 }
@@ -319,7 +396,8 @@ void PadOnScreenKeyboard::poll_controllers() {
     }
 
     const auto buttons = state->buttons;
-    apply_pad_edges(last_buttons_, buttons);
+    const auto r2 = state->right_trigger;
+    apply_pad_edges(last_buttons_, buttons, last_r2_, r2);
 
     int dx = 0;
     int dy = 0;
@@ -356,22 +434,32 @@ void PadOnScreenKeyboard::poll_controllers() {
     }
 
     last_buttons_ = buttons;
+    last_r2_ = r2;
 }
 
-void PadOnScreenKeyboard::apply_pad_edges(std::uint32_t previous, std::uint32_t next) {
-    if (button_pressed(previous, next, ButtonA) || button_pressed(previous, next, ButtonX)) {
+void PadOnScreenKeyboard::apply_pad_edges(
+    std::uint32_t previous_buttons,
+    std::uint32_t next_buttons,
+    std::uint16_t previous_r2,
+    std::uint16_t next_r2) {
+    if (button_pressed(previous_buttons, next_buttons, ButtonA)) {
         activate_cell();
     }
-    if (button_pressed(previous, next, ButtonB)) {
+    // Square (SDL X) → DEL
+    if (button_pressed(previous_buttons, next_buttons, ButtonX)) {
         backspace();
     }
-    if (button_pressed(previous, next, ButtonY)) {
+    if (button_pressed(previous_buttons, next_buttons, ButtonB)) {
+        backspace();
+    }
+    if (button_pressed(previous_buttons, next_buttons, ButtonY)) {
         insert_character(QChar(' '));
     }
-    if (button_pressed(previous, next, ButtonStart)) {
+    if (button_pressed(previous_buttons, next_buttons, ButtonStart) ||
+        trigger_pressed(previous_r2, next_r2)) {
         accept_text();
     }
-    if (button_pressed(previous, next, ButtonBack)) {
+    if (button_pressed(previous_buttons, next_buttons, ButtonBack)) {
         reject();
     }
 }
@@ -379,6 +467,7 @@ void PadOnScreenKeyboard::apply_pad_edges(std::uint32_t previous, std::uint32_t 
 void PadOnScreenKeyboard::showEvent(QShowEvent* event) {
     QDialog::showEvent(event);
     last_buttons_ = 0;
+    last_r2_ = 0;
     held_nav_dx_ = 0;
     held_nav_dy_ = 0;
     next_repeat_ms_ = 0;
@@ -412,8 +501,11 @@ void PadOnScreenKeyboard::keyPressEvent(QKeyEvent* event) {
         break;
     case Qt::Key_Return:
     case Qt::Key_Enter:
-    case Qt::Key_Space:
         activate_cell();
+        break;
+    case Qt::Key_Space:
+        // Space key inserts a space; grid Space cell still works via Enter when selected.
+        insert_character(QChar(' '));
         break;
     case Qt::Key_Backspace:
         backspace();
@@ -421,12 +513,20 @@ void PadOnScreenKeyboard::keyPressEvent(QKeyEvent* event) {
     case Qt::Key_Escape:
         reject();
         break;
+    case Qt::Key_CapsLock:
+        toggle_case();
+        break;
     default: {
         const QString text = event->text();
         if (text.size() == 1) {
-            const QChar character = text.at(0).toUpper();
-            if (character.isLetterOrNumber() || character == QChar(' ')) {
-                insert_character(character == QChar(' ') ? QChar(' ') : character);
+            QChar character = text.at(0);
+            if (character.isLetter()) {
+                character = upper_case_ ? character.toUpper() : character.toLower();
+                insert_character(character);
+                break;
+            }
+            if (character.isDigit() || character == QChar(' ')) {
+                insert_character(character);
                 break;
             }
         }

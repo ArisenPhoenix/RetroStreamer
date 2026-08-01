@@ -422,6 +422,23 @@ ByteBuffer serialize_payload(const LinkResponse& payload) {
     return writer.take();
 }
 
+ByteBuffer serialize_payload(const SoftKeyboardRequest& payload) {
+    Writer writer;
+    writer.write_pod<std::uint32_t>(payload.request_id);
+    writer.write_string(payload.prompt);
+    writer.write_string(payload.initial_text);
+    writer.write_pod<std::uint8_t>(payload.max_length);
+    return writer.take();
+}
+
+ByteBuffer serialize_payload(const SoftKeyboardResponse& payload) {
+    Writer writer;
+    writer.write_pod<std::uint32_t>(payload.request_id);
+    writer.write_bool(payload.accepted);
+    writer.write_string(payload.text);
+    return writer.take();
+}
+
 PacketType packet_type_for(const ClientHello&) { return PacketType::ClientHello; }
 PacketType packet_type_for(const HostWelcome&) { return PacketType::HostWelcome; }
 PacketType packet_type_for(const ClientConfig&) { return PacketType::ClientConfig; }
@@ -445,6 +462,8 @@ PacketType packet_type_for(const DiscControlRequest&) { return PacketType::DiscC
 PacketType packet_type_for(const DiscControlResponse&) { return PacketType::DiscControlResponse; }
 PacketType packet_type_for(const LinkRequest&) { return PacketType::LinkRequest; }
 PacketType packet_type_for(const LinkResponse&) { return PacketType::LinkResponse; }
+PacketType packet_type_for(const SoftKeyboardRequest&) { return PacketType::SoftKeyboardRequest; }
+PacketType packet_type_for(const SoftKeyboardResponse&) { return PacketType::SoftKeyboardResponse; }
 
 template <typename Payload>
 ByteBuffer serialize_packet_impl(const Payload& payload) {
@@ -550,6 +569,14 @@ ByteBuffer serialize_packet(const LinkRequest& payload) {
 }
 
 ByteBuffer serialize_packet(const LinkResponse& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const SoftKeyboardRequest& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const SoftKeyboardResponse& payload) {
     return serialize_packet_impl(payload);
 }
 
@@ -782,6 +809,23 @@ LinkResponse read_link_response(Reader& reader) {
     };
 }
 
+SoftKeyboardRequest read_soft_keyboard_request(Reader& reader) {
+    SoftKeyboardRequest payload;
+    payload.request_id = reader.read_pod<std::uint32_t>();
+    payload.prompt = reader.read_string();
+    payload.initial_text = reader.read_string();
+    payload.max_length = reader.read_pod<std::uint8_t>();
+    return payload;
+}
+
+SoftKeyboardResponse read_soft_keyboard_response(Reader& reader) {
+    SoftKeyboardResponse payload;
+    payload.request_id = reader.read_pod<std::uint32_t>();
+    payload.accepted = reader.read_bool();
+    payload.text = reader.read_string();
+    return payload;
+}
+
 PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
     Reader header_reader(packet);
     const auto magic = header_reader.read_pod<std::uint32_t>();
@@ -849,6 +893,10 @@ PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
             return read_link_request(payload_reader);
         case PacketType::LinkResponse:
             return read_link_response(payload_reader);
+        case PacketType::SoftKeyboardRequest:
+            return read_soft_keyboard_request(payload_reader);
+        case PacketType::SoftKeyboardResponse:
+            return read_soft_keyboard_response(payload_reader);
     }
 
     throw std::runtime_error("unknown packet type");

@@ -23,6 +23,7 @@
 #include "host/switch_save_share.hpp"
 #include "host/virtual_joypad_resolve.hpp"
 #include "host/virtual_keyboard.hpp"
+#include "host/soft_keyboard_host.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -663,7 +664,13 @@ void ActiveSessionSlot::run_session() {
                 << " config=" << ryujinx_user.data_root
                 << " shared_saves=" << synced.size() << '\n';
 #ifndef _WIN32
-            schedule_ryujinx_name_dialog_autofill(profile_name);
+            if (!plan.soft_keyboard) {
+                plan.soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();
+            }
+            schedule_ryujinx_soft_keyboard(
+                plan.soft_keyboard,
+                profile_name,
+                "What is your name?");
 #endif
         } else {
             int yuzu_vulkan_device = -1;

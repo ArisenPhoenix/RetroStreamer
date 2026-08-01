@@ -18,6 +18,7 @@
 #include "host/input_router.hpp"
 #include "host/launch_environment.hpp"
 #include "host/virtual_keyboard.hpp"
+#include "host/soft_keyboard_host.hpp"
 #include "host/local_controller_bridge.hpp"
 #include "host/network_input_receiver.hpp"
 #include "host/platform/default_host_platform.hpp"
@@ -552,7 +553,20 @@ int HostApp::run_direct_session(
                 std::cout << "Ryujinx resolution: " << scale << "x native\n";
             }
 #ifndef _WIN32
-            schedule_ryujinx_name_dialog_autofill(profile_name);
+            if (session_plan.has_value()) {
+                if (!session_plan->soft_keyboard) {
+                    session_plan->soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();
+                }
+                schedule_ryujinx_soft_keyboard(
+                    session_plan->soft_keyboard,
+                    profile_name,
+                    "What is your name?");
+            } else {
+                schedule_ryujinx_soft_keyboard(
+                    std::make_shared<SoftKeyboardHostBridge>(),
+                    profile_name,
+                    "What is your name?");
+            }
 #endif
         } else {
             // Yuzu ignores gamescope --prefer-vk-device for the child and sorts Vulkan

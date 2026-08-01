@@ -15,7 +15,7 @@
 namespace archstreamer {
 
 constexpr std::uint32_t ProtocolMagic = 0x41525354; // "ARST"
-constexpr std::uint16_t ProtocolVersion = 13;
+constexpr std::uint16_t ProtocolVersion = 14;
 constexpr std::uint8_t MaxRemoteClients = 2;
 constexpr std::uint8_t MaxPlayersPerClient = 2;
 constexpr std::uint8_t MaxRetroArchPorts = 5; // Ports 0-3 plus a host player if desired.
@@ -51,6 +51,10 @@ enum class PacketType : std::uint8_t {
     ClientSessionLeave = 21,
     LinkRequest = 22,
     LinkResponse = 23,
+    // Host → client: Ryujinx (or similar) Software Keyboard needs text from the pad OSK.
+    SoftKeyboardRequest = 24,
+    // Client → host: typed text (or cancel) for SoftKeyboardRequest.
+    SoftKeyboardResponse = 25,
 };
 
 enum class ClientRole : std::uint8_t {
@@ -408,6 +412,21 @@ struct LinkResponse {
     std::string message;
 };
 
+// Host asks the client GUI to open the pad on-screen keyboard.
+struct SoftKeyboardRequest {
+    std::uint32_t request_id = 0;
+    std::string prompt;
+    std::string initial_text;
+    std::uint8_t max_length = 12;
+};
+
+// Client returns the pad-OSK result (accepted=false → cancelled).
+struct SoftKeyboardResponse {
+    std::uint32_t request_id = 0;
+    bool accepted = false;
+    std::string text;
+};
+
 using PacketPayload = std::variant<
     ClientHello,
     HostWelcome,
@@ -431,6 +450,8 @@ using PacketPayload = std::variant<
     DiscControlResponse,
     LinkRequest,
     LinkResponse,
+    SoftKeyboardRequest,
+    SoftKeyboardResponse,
     KeyboardInput>;
 
 ClientRole role_for_player_count(std::uint8_t requested_players);

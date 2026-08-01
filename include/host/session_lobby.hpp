@@ -4,6 +4,7 @@
 #include "common/platform/default_platform.hpp"
 #include "host/link_cable_backend.hpp"
 #include "host/link_coordinator.hpp"
+#include "host/soft_keyboard_host.hpp"
 #include "host/virtual_gamepad.hpp"
 #include "host/retroarch_netcmd.hpp"
 #include "host/seat_manager.hpp"
@@ -12,6 +13,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -75,6 +77,8 @@ struct SessionPlan {
     ClientId pending_link_client_client_id = 0;
     std::string pending_link_host_username;
     std::string pending_link_client_username;
+    /** Pad OSK for Ryujinx Software Keyboard (optional; set for Switch sessions). */
+    std::shared_ptr<SoftKeyboardHostBridge> soft_keyboard;
 };
 
 const char* session_mode_name(GameSessionMode mode);

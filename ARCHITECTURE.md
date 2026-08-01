@@ -36,6 +36,20 @@ The CLI tools use `HostSessionService` and `ClientApp` as the current reusable s
 
 Clients send `ViewerHeartbeat` on the TCP control channel once per second after `SessionStarting`. This applies to player clients and viewer-only clients. The host monitors those heartbeats during gameplay and stops the session if a client disconnects or exceeds `--client-timeout` seconds without a heartbeat.
 
+`ViewerHeartbeat` also carries the client's wanted stream **quality** (`MediaQualityTier`: bitrate/FPS) and stream **size** (`MediaStreamSize`: 540p–1440p or Auto). Those are separate so a tall ultrawide client can request 1440p height without forcing “very high” bitrate, and vice versa. The host merges them into `VideoEncodeSettings` using the session capture resolution as the aspect-ratio source.
+
+## Code organization
+
+Shared helpers and session/protocol code own **what** happens and **when**. Platform translation units own **how** that step is done on this OS.
+
+Concrete shape:
+
+- Public headers declare a small portable API (`ChildProcess`, path helpers, discovery sockets, `raise_video_window`, session slot lease, launch environment).
+- CMake selects `posix_*.cpp` or `windows_*.cpp` implementations. Downstream code includes the public header, not the platform source.
+- Product/process logic stays **outside** the platform files: soft-keyboard policy, quality cutover, seat reconnect, Ryujinx profile naming, and similar belong in shared host/client modules. Platform code should still make sense if the product were renamed (`raise_window(pid)`, `kill_process_tree(pid)`, open a discovery socket).
+
+That keeps dual-OS bugs localized (Windows Job Objects vs `PR_SET_PDEATHSIG`, X11 restack vs `SetForegroundWindow`) without forking session behavior per platform.
+
 ## Game Metadata
 
 The scanner looks for metadata in a parallel tree next to the ROM tree. With the default ROM root `<Gaming>/ROMS/Games`, metadata defaults to `<Gaming>/ROMS/Meta`.
@@ -180,11 +194,11 @@ Clients can query active session state with `ActiveSessionInfoRequest`. The host
 
 ## Windows Direction
 
-Windows is a first-class target for both **client** and **host**. Ship the **Windows client first**: it clears most shared dependencies (sockets, process spawn, paths, packaging, SDL, GStreamer runtime, CMake) that a Windows host also needs. Host-only backends come after that.
+Windows is a first-class target for both **client** and **host**. The Windows client is shipped and in daily use; the Windows host path exists behind `-DARCHSTREAMER_BUILD_HOST=ON`.
 
-### Shared platform layer (client unlocks host basics)
+### Shared platform layer
 
-Platform-specific APIs stay behind compile-time platform objects. Downstream code includes the normal public headers and uses `ChildProcess`, `TcpStream`, `TcpListener`, and `UdpSocket`. `common/platform/default_platform.hpp` selects the concrete implementation once. On non-Windows that maps to the Posix types; on Windows it maps to Winsock2/`CreateProcess` implementations in `windows_socket` / `windows_process`. Portable cache/home/username helpers live in `common/platform/paths.hpp`.
+Platform-specific APIs stay behind compile-time platform objects. Downstream code includes the normal public headers and uses `ChildProcess`, `TcpStream`, `TcpListener`, and `UdpSocket`. `common/platform/default_platform.hpp` selects the concrete implementation once. On non-Windows that maps to the Posix types; on Windows it maps to Winsock2/`CreateProcess` implementations in `windows_socket` / `windows_process`. Portable cache/home/username helpers live in `common/platform/paths.hpp`, with `posix_paths.cpp` / `windows_paths.cpp` selected by CMake. Discovery sockets, process utilities, audio device enumeration, launch environment, video-window geometry, and session slot leases follow the same `posix_*` / `windows_*` split.
 
 Controller capture follows the same rule. Downstream code includes `client/controller_backend.hpp` and uses `ControllerBackend`. CMake selects the implementation with `ARCHSTREAMER_CONTROLLER_BACKEND`; the current supported value is `sdl2`, which aliases `ControllerBackend` to `Sdl2ControllerBackend`. On Windows, ship/copy `SDL2.dll` with the binary.
 
@@ -192,29 +206,29 @@ Also shared across client and host on Windows:
 
 - CMake `WIN32` source selection and dependency discovery (vcpkg / `find_package`, not Linux-only pkg-config)
 - App data paths under `%LOCALAPPDATA%` (cache, art, saves) instead of XDG/`HOME` layouts
-- LAN discovery without `getifaddrs` (`GetAdaptersAddresses` or equivalent)
+- LAN discovery via `GetAdaptersAddresses` (`windows_discovery_net.cpp`)
 - GStreamer installed and on `PATH` (`gst-launch-1.0` today; in-process pipelines later)
+- Child processes assigned to a Job Object with `KILL_ON_JOB_CLOSE` so orphaned `gst-launch` receivers die with the GUI
 
-### Windows client (first milestone)
+### Windows client
 
-Client responsibilities stay: TCP/UDP session protocol, SDL2 controller capture, catalog/art cache, GStreamer media receive, and (later) an embedded resizable video window.
+Client responsibilities: TCP/UDP session protocol, SDL2 controller capture, catalog/art cache, GStreamer media receive (`d3d11h264dec` / `d3d11videosink` preferred), pad on-screen keyboard, and remoted keyboard via Win32.
 
-Client-specific Windows work:
+Client-specific notes:
 
-- Platform sockets/process objects wired through `default_platform.hpp`
-- Video sinks suitable for Windows (`d3d11videosink` / `autovideosink`, not X11/Wayland)
-- Audio via WASAPI through `autoaudiosink` when GStreamer plugins are present
-- Optional Qt GUI build that does not require linking the Linux host stack (`ARCHSTREAMER_BUILD_HOST=OFF` or equivalent)
+- Video sinks: `d3d11videosink` with `qos=false` / `max-lateness=-1` so late-but-valid frames are not dropped under Wi‑Fi jitter
+- Audio via WASAPI (`wasapi2sink` / `autoaudiosink`) when GStreamer plugins are present
+- Optional Qt GUI without the Linux host stack (`ARCHSTREAMER_BUILD_HOST=OFF`)
 - Windows Firewall notes for inbound RTP media ports (same class of issue as Linux)
 
-### Windows host (after client)
+### Windows host
 
 Host interfaces already exist (`VirtualGamepadBus`, `RetroArchProcess`, `MediaServer` via `default_host_platform.hpp`). Linux fills them with uinput, gamescope/Xvfb/VirtualGL capture, and Pulse/PipeWire. Windows implementations:
 
 - **Virtual pads:** ViGEmBus (`ViGEmGamepadBus`, loads `ViGEmClient.dll` at runtime)
 - **Display capture:** GStreamer `d3d11screencapturesrc` (desktop) instead of gamescope PipeWire / Xvfb + `ximagesrc`
 - **Audio loopback:** GStreamer `wasapisrc loopback=true` instead of Pulse/PipeWire monitors
-- **Yuzu:** managed `%LOCALAPPDATA%\archstreamer\yuzu\yuzu.exe` (MSVC tree); RetroArch-on-Windows still follow-up
+- **Switch:** managed Yuzu/Ryujinx under `%LOCALAPPDATA%\archstreamer\`
 
 Enable with `-DARCHSTREAMER_BUILD_HOST=ON` / `.\build_windows.ps1 -BuildHost`. Deps: `deploy/windows/install-deps.ps1`.
 
@@ -222,15 +236,11 @@ Enable with `-DARCHSTREAMER_BUILD_HOST=ON` / `.\build_windows.ps1 -BuildHost`. D
 
 Flatpak GUI Host tab launches a **native** `host_runner` via `flatpak-spawn --host` (Settings → Native host_runner / `ARCHSTREAMER_HOST_RUNNER`). Gamescope/uinput/Yuzu stay on the host OS — not inside the KDE sandbox.
 
-### Near-term blockers
+### Remaining follow-ups
 
-- ~~Add Windows platform objects for `ChildProcess`, `TcpStream`, `TcpListener`, and `UdpSocket`~~
-- ~~Add Windows path helpers and CMake client-capable `WIN32` builds (`ARCHSTREAMER_BUILD_HOST=OFF`)~~
-- ~~Package/copy SDL2 (and document GStreamer) for Windows clients~~
-- ~~Client-only Qt GUI when `ARCHSTREAMER_BUILD_HOST=OFF`~~
-- ~~Windows host backends (ViGEm, d3d11 capture, WASAPI) + Flatpak native host_runner spawn~~
 - Embedded GUI media later needs platform-specific GStreamer window integration
-- RetroArch-on-Windows host parity (paths / joypad drivers) after Yuzu stream proof
+- RetroArch-on-Windows host parity (paths / joypad drivers) after Switch stream proof
+- Windows video-window geometry restore across cutovers (raise-to-front is implemented; full placement restore is still Linux-first)
 
 ## Save Profiles
 
@@ -241,7 +251,10 @@ Each username gets its own profile directory:
 ```text
 <save-root>/<username>/saves
 <save-root>/<username>/states
+<save-root>/<username>/system   # RetroArch system_directory (BIOS / shared system files, per user)
 ```
+
+Switch emulators additionally keep per-user Yuzu/Ryujinx config and NAND under the same username tree, with optional shared title saves synced across profiles where configured.
 
 The root also contains a `template` profile:
 
@@ -250,7 +263,7 @@ The root also contains a `template` profile:
 <save-root>/template/states
 ```
 
-When a username is seen for the first time, the host creates that user's profile by copying the contents of `template`. RetroArch is then launched with `savefile_directory` and `savestate_directory` pointing at that user's profile.
+When a username is seen for the first time, the host creates that user's profile by copying the contents of `template`. RetroArch is then launched with `savefile_directory`, `savestate_directory`, and `system_directory` pointing at that user's profile.
 
 ## Seat Assignment
 
@@ -285,12 +298,28 @@ host_runner --video --video-dest <client-ip> --video-port <udp-port>
 
 When video is enabled, capture depends on the emulator:
 
-- **Switch / Yuzu:** headless **gamescope** (managed wrapper under `~/.local/share/archstreamer/gamescope/` preferred). The host captures gamescope’s PipeWire Video/Source (`pipewiresrc`), not `ximagesrc`. Nested clients must load **Gamescope WSI** (`ENABLE_GAMESCOPE_WSI` + `VK_ADD_IMPLICIT_LAYER_PATH`); without it, dual-NVIDIA setups often only allow present on the boot GPU (“Device lacks a present queue” on the other card).
-- **RetroArch:** virtual X display + `ximagesrc` by default. `Xvfb` is preferred; `Xephyr` is the fallback. When a non-default NVIDIA GPU is selected for GL, **VirtualGL** (`vglrun`) renders via the real display’s PRIME providers while capture stays on `:99`.
+- **Switch (Ryujinx preferred / Yuzu):** headless **gamescope** (managed wrapper under `~/.local/share/archstreamer/gamescope/` preferred). The host captures gamescope’s PipeWire Video/Source (`pipewiresrc`), not `ximagesrc`. Nested clients must load **Gamescope WSI** (`ENABLE_GAMESCOPE_WSI` + `VK_ADD_IMPLICIT_LAYER_PATH`); without it, dual-NVIDIA setups often only allow present on the boot GPU (“Device lacks a present queue” on the other card). Ryujinx is preferred for LDN/link play; per-user profiles live under the save-root username tree.
+- **RetroArch:** virtual X display + `ximagesrc` by default. `Xvfb` is preferred; `Xephyr` is the fallback. When a non-default NVIDIA GPU is selected for GL, **VirtualGL** (`vglrun`) renders via the real display’s PRIME providers while capture stays on `:99`. Nintendo DS (melonDS) uses Hybrid Top layout with OpenGL renderer so R2 swaps both panes cleanly.
 
-Encode is H.264 (`nvh264enc` when CUDA/NVENC is available, else `x264enc`), packetized with `rtph264pay`, and fanned to Watch-local + remotes with `multiudpsink` (one capture/encode).
+Encode is H.264 (`nvh264enc` when CUDA/NVENC is available, else `x264enc`), packetized with `rtph264pay`, and fanned with `multiudpsink`. Clients that share identical `VideoEncodeSettings` share an encode branch; different size/quality combinations get separate branches off a capture `tee`.
 
-Clients request video by default and can opt out with `session_client --no-video`. If a `MediaEndpoint` is received, the client starts a GStreamer RTP/H.264 receiver and displays it through `autovideosink`.
+Stream size and quality are negotiated independently via `ViewerHeartbeat`:
+
+- `MediaStreamSize` — output height ladder (`Auto`, `540p`, `720p`, `1080p`, `1440p`)
+- `MediaQualityTier` — bitrate/FPS ladder (`Auto` can step up/down from host health signals)
+
+Host capture resolution (GUI: Stream tab → Host capture resolution) sets the gamescope/Xvfb framebuffer. Scaling the stream to the client's requested height without matching capture height still letterboxes inside the encode.
+
+Mid-session quality/size changes use a dual-stream cutover instead of tearing down the live path immediately:
+
+1. Host sends `MediaVideoPending` with the staging RTP URI.
+2. Client warms a second receiver (headless probe / staging pipeline) while the old sink keeps playing.
+3. Client replies `MediaVideoReady` when the staging stream is verified.
+4. Host swaps destinations, then tears down the old encode; the client switches sinks and restores window geometry when possible.
+
+On Linux, video-window geometry (position/size/maximized/fullscreen) is captured before cutover and reapplied to the new `gst-launch` window. Closing a host-requested pad OSK also raises the video window back above the Qt GUI.
+
+Clients request video by default and can opt out with `session_client --no-video`. Stream size/quality can be set with `--stream-size` / quality options or the GUI Stream tab. If a `MediaEndpoint` is received, the client starts a GStreamer RTP/H.264 receiver and displays it through the platform sink (`ximagesink` / `d3d11videosink` / `autovideosink`).
 
 Session launches use per-client fanout. `--video-port` is the base UDP video port, `--audio-port` is the base UDP audio port, and each media client gets incremented ports. If `--video-dest` is omitted, the host sends media to each client's TCP peer address. If `--video-dest` is supplied, every stream uses that address with separate ports, which is useful for local multi-client testing on one machine.
 
@@ -300,13 +329,15 @@ Audio is opt-in on the host:
 host_runner --audio --audio-source <source>
 ```
 
-The first audio path captures a PulseAudio/PipeWire source with `pulsesrc`, encodes Opus with `opusenc`, packetizes with `rtpopuspay`, and fans the **same** RTP packets to every destination with `multiudpsink` (Watch locally on `127.0.0.1` plus remotes). One capture/encode per session slot — not one `pulsesrc` per client. If `--audio-source` is omitted on a streaming host (Viewer), the host creates a dedicated null sink (`archstreamer` or `archstreamer-N` for concurrent slots) and captures its `.monitor` so RetroArch audio does not play on the host speakers unless **Watch stream locally** is enabled. Host Player keeps the default sink for local speakers. The client receives `rtp+opus://` endpoints with `udpsrc`, `rtpopusdepay`, `opusdec`, and `autoaudiosink`.
+The first audio path captures a PulseAudio/PipeWire source with `pulsesrc`, encodes Opus with `opusenc`, packetizes with `rtpopuspay`, and fans the **same** RTP packets to every destination with `multiudpsink` (Watch locally on `127.0.0.1` plus remotes). One capture/encode per session slot — not one `pulsesrc` per client. If `--audio-source` is omitted on a streaming host (Viewer), the host creates a dedicated null sink (`archstreamer` or `archstreamer-N` for concurrent slots) and captures its `.monitor` so RetroArch audio does not play on the host speakers unless **Watch stream locally** is enabled. Host Player keeps the default sink for local speakers. The client receives `rtp+opus://` endpoints with `udpsrc`, `rtpopusdepay`, `opusdec`, and `autoaudiosink` / WASAPI.
+
+Optional synced A/V mode runs video and audio in one GStreamer process so lip-sync survives stalls better; the GUI Stream tab can also request a mid-session A/V resync.
 
 Current limitations:
 
-- Fanout currently starts one video sender process and one audio sender process per media client.
-- Audio and video are separate RTP streams and are not synchronized beyond normal low-latency playback buffering.
-- The current receiver is a CLI process; the GUI should own the media view later.
+- Cutover still briefly dual-encodes; a fully seamless single-decoder switch is future work.
+- Separate (non-synced) A/V streams rely on receiver buffering rather than a shared clock.
+- The video sink is still an external `gst-launch` window; embedding into the Qt GUI is later.
 
 ## Input Direction
 
@@ -319,6 +350,8 @@ This path is the same for a bare-metal client and a VM client. The client uses S
 Each `ControllerState` carries a monotonic `timestamp_us` captured when the client sampled the physical controller. The host tracks the last accepted timestamp per `(client_id, local_player)` and ignores older or duplicate input packets. Remote UDP input is drained on a dedicated host thread so session heartbeats cannot stall pads.
 
 Client backends normalize controller input before transmission. Stick axes use signed `-32768..32767` values with a deadzone around center, so small Bluetooth/controller drift becomes zero. Triggers use unsigned `0..65535` values with a small lower deadzone. Clients send a packet only when controls change (after the first sample), while still polling at a high cadence.
+
+Face buttons use a fixed NESW letter map on the wire (`A`=South, `B`=East, `X`=West, `Y`=North). Optional client-side **Swap NW** / **Swap SE** checkboxes (Game Options) remapped those pairs before send so DualShock vs Xbox muscle memory can be corrected without host-side per-system remaps. The host stays a dumb relay for face bits.
 
 On Linux, the virtual gamepad implementation uses `uinput`. RetroArch can then see each assigned player as a normal controller. The process needs permission to open `/dev/uinput`, which usually means a udev rule, running with elevated privileges during early testing, or adding the user to the relevant device-access group depending on the distro setup.
 
@@ -344,6 +377,29 @@ Client key capture uses `RemotedKeyboardSource`:
 3. **X11 keymap** — last resort for pure X11 clients (SPICE VMs); not useful for native Wayland `gtksink` focus.
 
 `KeyboardPoller` is a thin helper that owns `make_default_remoted_keyboard_source()` and stamps sequence/timestamps for the wire. Flatpak clients should use `--socket=wayland` plus `--socket=x11` (XWayland available) and `--device=all`; see `deploy/flatpak/README.md`.
+
+### Soft keyboard (pad OSK)
+
+Some emulators (notably Ryujinx Avalonia swkbd) open a real text dialog on the capture display that cannot be typed with a gamepad alone. The host watches for a focused soft-keyboard dialog, publishes `SoftKeyboardRequest` on the control channel, and the client GUI opens a pad-driven on-screen keyboard. `SoftKeyboardResponse` carries the accepted text (or cancel); the host XTest-types it into the dialog (clearing any seeded nickname first).
+
+The watcher is session-scoped and re-arms after each dialog closes, so declining an in-game “is this name correct?” confirmation still prompts again. Closing a host-requested OSK raises the video sink window back to the foreground so the Qt GUI does not leave the game buried.
+
+## Concurrent sessions
+
+A persistent host lobby can run multiple singleplayer session slots. Each slot claims machine-wide exclusive resources through `SessionSlotLease` (display numbers, audio null-sink names, base media ports, uinput product-id offsets) so two simultaneous games do not steal each other's capture display or save/system paths. Multiplayer still uses one shared-emulator lobby.
+
+## GUI layout
+
+The Qt GUI tabs are organized by concern:
+
+- **Client** — connect/join, game picker, controllers, role/mode
+- **Host** — ports, lobby mode, stream toggles, advertise
+- **Stream** — client quality/size and A/V receive options; host capture resolution, GPU, renderer scales
+- **Game Options** — face-button swaps, pad OSK test button, per-game helpers
+- **Profile** — usernames / Steam account
+- **Settings** — art/ROM/meta roots, audio device refresh, lobby wait, log level
+
+Host and client last-selected games are persisted independently.
 
 ## RetroArch Direction
 

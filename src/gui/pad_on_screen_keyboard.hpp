@@ -90,6 +90,8 @@ private:
     void apply_pad_edges(
         std::uint32_t previous_buttons,
         std::uint32_t next_buttons,
+        std::uint16_t previous_l2,
+        std::uint16_t next_l2,
         std::uint16_t previous_r2,
         std::uint16_t next_r2);
     void ensure_pad_backend();
@@ -110,6 +112,7 @@ private:
 
     std::unique_ptr<archstreamer::Sdl2ControllerBackend> pad_backend_;
     std::uint32_t last_buttons_ = 0;
+    std::uint16_t last_l2_ = 0;
     std::uint16_t last_r2_ = 0;
     qint64 next_repeat_ms_ = 0;
     int held_nav_dx_ = 0;

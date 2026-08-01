@@ -118,7 +118,7 @@ void PadOnScreenKeyboard::build_ui() {
 
     hint_label_ = new QLabel(
         QStringLiteral(
-            "D-pad / stick: move · A: select · □/X: DEL · L1: Aa/aA · R2 / Start: OK · Back: cancel"),
+            "D-pad / stick: move · A: select · □/X: DEL · L2: Aa/aA · R2 / Start: OK · Back: cancel"),
         this);
     hint_label_->setWordWrap(true);
     root->addWidget(hint_label_);
@@ -396,8 +396,9 @@ void PadOnScreenKeyboard::poll_controllers() {
     }
 
     const auto buttons = state->buttons;
+    const auto l2 = state->left_trigger;
     const auto r2 = state->right_trigger;
-    apply_pad_edges(last_buttons_, buttons, last_r2_, r2);
+    apply_pad_edges(last_buttons_, buttons, last_l2_, l2, last_r2_, r2);
 
     int dx = 0;
     int dy = 0;
@@ -434,12 +435,15 @@ void PadOnScreenKeyboard::poll_controllers() {
     }
 
     last_buttons_ = buttons;
+    last_l2_ = l2;
     last_r2_ = r2;
 }
 
 void PadOnScreenKeyboard::apply_pad_edges(
     std::uint32_t previous_buttons,
     std::uint32_t next_buttons,
+    std::uint16_t previous_l2,
+    std::uint16_t next_l2,
     std::uint16_t previous_r2,
     std::uint16_t next_r2) {
     if (button_pressed(previous_buttons, next_buttons, ButtonA)) {
@@ -455,7 +459,7 @@ void PadOnScreenKeyboard::apply_pad_edges(
     if (button_pressed(previous_buttons, next_buttons, ButtonY)) {
         insert_character(QChar(' '));
     }
-    if (button_pressed(previous_buttons, next_buttons, ButtonLeftShoulder)) {
+    if (trigger_pressed(previous_l2, next_l2)) {
         toggle_case();
     }
     if (button_pressed(previous_buttons, next_buttons, ButtonStart) ||
@@ -470,6 +474,7 @@ void PadOnScreenKeyboard::apply_pad_edges(
 void PadOnScreenKeyboard::showEvent(QShowEvent* event) {
     QDialog::showEvent(event);
     last_buttons_ = 0;
+    last_l2_ = 0;
     last_r2_ = 0;
     held_nav_dx_ = 0;
     held_nav_dy_ = 0;

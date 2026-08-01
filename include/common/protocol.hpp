@@ -15,7 +15,7 @@
 namespace archstreamer {
 
 constexpr std::uint32_t ProtocolMagic = 0x41525354; // "ARST"
-constexpr std::uint16_t ProtocolVersion = 14;
+constexpr std::uint16_t ProtocolVersion = 16;
 constexpr std::uint8_t MaxRemoteClients = 2;
 constexpr std::uint8_t MaxPlayersPerClient = 2;
 constexpr std::uint8_t MaxRetroArchPorts = 5; // Ports 0-3 plus a host player if desired.
@@ -55,6 +55,10 @@ enum class PacketType : std::uint8_t {
     SoftKeyboardRequest = 24,
     // Client → host: typed text (or cancel) for SoftKeyboardRequest.
     SoftKeyboardResponse = 25,
+    // Host → client: warm a second video RTP receive path (quality cutover).
+    MediaVideoPending = 26,
+    // Client → host: staging video path is receiving; host may promote + tear down old.
+    MediaVideoReady = 27,
 };
 
 enum class ClientRole : std::uint8_t {
@@ -213,6 +217,15 @@ enum class MediaQualityTier : std::uint8_t {
     VeryHigh = 5,
 };
 
+/** Encode output height ladder (independent of bitrate/FPS quality). */
+enum class MediaStreamSize : std::uint8_t {
+    Auto = 0, // Client resolves from local screen height before send.
+    P540 = 1,
+    P720 = 2,
+    P1080 = 3,
+    P1440 = 4,
+};
+
 struct VideoEncodeSettings {
     std::uint16_t bitrate_kbps = 1500;
     std::uint8_t framerate = 30;
@@ -220,34 +233,126 @@ struct VideoEncodeSettings {
     // 0 = encode at capture resolution (no videoscale).
     std::uint16_t width = 0;
     std::uint16_t height = 0;
+
+    friend bool operator==(const VideoEncodeSettings& a, const VideoEncodeSettings& b) {
+        return a.bitrate_kbps == b.bitrate_kbps &&
+            a.framerate == b.framerate &&
+            a.key_int_max == b.key_int_max &&
+            a.width == b.width &&
+            a.height == b.height;
+    }
+
+    friend bool operator!=(const VideoEncodeSettings& a, const VideoEncodeSettings& b) {
+        return !(a == b);
+    }
 };
 
-inline VideoEncodeSettings video_encode_settings_for_tier(MediaQualityTier tier) {
-    // key_int_max ~0.5s so remotes get an IDR quickly after join / pipeline restart.
-    // Capture defaults to 1080p; lower tiers downscale in the encode branch.
-    switch (tier) {
-    case MediaQualityTier::Low:
-        return VideoEncodeSettings{800, 20, 10, 960, 540};
-    case MediaQualityTier::MediumHigh:
-        return VideoEncodeSettings{8000, 60, 30, 1280, 720};
-    case MediaQualityTier::High:
-        return VideoEncodeSettings{12000, 60, 30, 1920, 1080};
-    case MediaQualityTier::VeryHigh:
-        return VideoEncodeSettings{25000, 60, 30, 1920, 1080};
-    case MediaQualityTier::Medium:
-    case MediaQualityTier::Auto:
+inline std::uint16_t media_stream_size_height(MediaStreamSize size) {
+    switch (size) {
+    case MediaStreamSize::P540:
+        return 540;
+    case MediaStreamSize::P1080:
+        return 1080;
+    case MediaStreamSize::P1440:
+        return 1440;
+    case MediaStreamSize::P720:
+    case MediaStreamSize::Auto:
     default:
-        return VideoEncodeSettings{3500, 30, 15, 1280, 720};
+        return 720;
     }
 }
 
-// Map encode settings back to a ladder tier (used when clients reconfigure by settings).
+/** Pick a concrete size from local display height (client-side Auto resolution). */
+inline MediaStreamSize media_stream_size_for_display_height(int display_height) {
+    if (display_height >= 1440) {
+        return MediaStreamSize::P1440;
+    }
+    if (display_height >= 1080) {
+        return MediaStreamSize::P1080;
+    }
+    if (display_height >= 720) {
+        return MediaStreamSize::P720;
+    }
+    return MediaStreamSize::P540;
+}
+
+/** Compat: old combined-tier → size used before the split. */
+inline MediaStreamSize media_stream_size_for_legacy_tier(MediaQualityTier tier) {
+    switch (tier) {
+    case MediaQualityTier::Low:
+        return MediaStreamSize::P540;
+    case MediaQualityTier::High:
+    case MediaQualityTier::VeryHigh:
+        return MediaStreamSize::P1080;
+    case MediaQualityTier::MediumHigh:
+    case MediaQualityTier::Medium:
+    case MediaQualityTier::Auto:
+    default:
+        return MediaStreamSize::P720;
+    }
+}
+
+inline VideoEncodeSettings video_encode_settings_for_quality(MediaQualityTier quality) {
+    // key_int_max ~0.5s so remotes get an IDR quickly after join / pipeline restart.
+    switch (quality) {
+    case MediaQualityTier::Low:
+        return VideoEncodeSettings{800, 20, 10, 0, 0};
+    case MediaQualityTier::MediumHigh:
+        return VideoEncodeSettings{8000, 60, 30, 0, 0};
+    case MediaQualityTier::High:
+        return VideoEncodeSettings{12000, 60, 30, 0, 0};
+    case MediaQualityTier::VeryHigh:
+        return VideoEncodeSettings{25000, 60, 30, 0, 0};
+    case MediaQualityTier::Medium:
+    case MediaQualityTier::Auto:
+    default:
+        return VideoEncodeSettings{3500, 30, 15, 0, 0};
+    }
+}
+
+inline VideoEncodeSettings video_encode_settings(
+    MediaStreamSize size,
+    MediaQualityTier quality,
+    std::uint16_t capture_width = 1920,
+    std::uint16_t capture_height = 1080) {
+    auto settings = video_encode_settings_for_quality(quality);
+    if (size == MediaStreamSize::Auto) {
+        size = MediaStreamSize::P720;
+    }
+    if (capture_width == 0) {
+        capture_width = 1920;
+    }
+    if (capture_height == 0) {
+        capture_height = 1080;
+    }
+
+    std::uint16_t height = media_stream_size_height(size);
+    if (height > capture_height) {
+        height = capture_height;
+    }
+    // Preserve capture aspect; fall back to 16:9 if capture is nonsense.
+    std::uint32_t width =
+        (static_cast<std::uint32_t>(height) * capture_width + capture_height / 2) /
+        capture_height;
+    if (width < 2) {
+        width = (static_cast<std::uint32_t>(height) * 16) / 9;
+    }
+    width &= ~1u; // H.264-friendly even width.
+    height = static_cast<std::uint16_t>(height & ~1u);
+    settings.width = static_cast<std::uint16_t>(width);
+    settings.height = height;
+    return settings;
+}
+
+/** Legacy helper: combined tier maps to historical size+quality pairing. */
+inline VideoEncodeSettings video_encode_settings_for_tier(MediaQualityTier tier) {
+    return video_encode_settings(media_stream_size_for_legacy_tier(tier), tier);
+}
+
+// Map encode settings back to a quality ladder tier (bitrate/FPS only).
 inline MediaQualityTier media_quality_tier_for_settings(const VideoEncodeSettings& settings) {
-    if (settings.bitrate_kbps >= 18000 || settings.width >= 1920) {
-        if (settings.bitrate_kbps >= 18000) {
-            return MediaQualityTier::VeryHigh;
-        }
-        return MediaQualityTier::High;
+    if (settings.bitrate_kbps >= 18000) {
+        return MediaQualityTier::VeryHigh;
     }
     if (settings.bitrate_kbps >= 10000) {
         return MediaQualityTier::High;
@@ -259,6 +364,22 @@ inline MediaQualityTier media_quality_tier_for_settings(const VideoEncodeSetting
         return MediaQualityTier::Low;
     }
     return MediaQualityTier::Medium;
+}
+
+inline MediaStreamSize media_stream_size_for_settings(const VideoEncodeSettings& settings) {
+    if (settings.height >= 1440) {
+        return MediaStreamSize::P1440;
+    }
+    if (settings.height >= 1080) {
+        return MediaStreamSize::P1080;
+    }
+    if (settings.height >= 720) {
+        return MediaStreamSize::P720;
+    }
+    if (settings.height > 0) {
+        return MediaStreamSize::P540;
+    }
+    return MediaStreamSize::P720;
 }
 
 inline MediaQualityTier step_quality_tier_down(MediaQualityTier tier) {
@@ -310,7 +431,7 @@ inline MediaQualityTier select_video_tier(
         return tier;
     }
     while (tier != MediaQualityTier::Low &&
-           video_encode_settings_for_tier(tier).bitrate_kbps > max_bitrate_kbps) {
+           video_encode_settings_for_quality(tier).bitrate_kbps > max_bitrate_kbps) {
         tier = step_quality_tier_down(tier);
     }
     return tier;
@@ -334,6 +455,45 @@ inline const char* media_quality_tier_name(MediaQualityTier tier) {
     return "unknown";
 }
 
+inline const char* media_stream_size_name(MediaStreamSize size) {
+    switch (size) {
+    case MediaStreamSize::Auto:
+        return "auto";
+    case MediaStreamSize::P540:
+        return "540p";
+    case MediaStreamSize::P720:
+        return "720p";
+    case MediaStreamSize::P1080:
+        return "1080p";
+    case MediaStreamSize::P1440:
+        return "1440p";
+    }
+    return "unknown";
+}
+
+/** Parse "WxH" capture resolution; returns false and leaves outs unchanged on failure. */
+inline bool parse_video_resolution(
+    std::string_view text,
+    std::uint16_t& width,
+    std::uint16_t& height) {
+    const auto x = text.find('x');
+    if (x == std::string_view::npos || x == 0 || x + 1 >= text.size()) {
+        return false;
+    }
+    try {
+        const auto w = std::stoi(std::string(text.substr(0, x)));
+        const auto h = std::stoi(std::string(text.substr(x + 1)));
+        if (w < 2 || h < 2 || w > 7680 || h > 4320) {
+            return false;
+        }
+        width = static_cast<std::uint16_t>(w);
+        height = static_cast<std::uint16_t>(h);
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
 struct ViewerHeartbeat {
     ClientId client_id = 0;
     std::uint32_t sequence = 0;
@@ -347,6 +507,9 @@ struct ViewerHeartbeat {
     // Ask host to overlay a ticking RetroArch "Frames:" counter (debug; default off).
     // Trailing field — older peers omit it and it stays false.
     bool show_framecount = false;
+    // Encode height ladder (independent of wanted_tier). Trailing — older peers omit
+    // it and it stays Auto (host then keeps applied size / legacy Medium→720p).
+    MediaStreamSize wanted_size = MediaStreamSize::Auto;
 };
 
 struct ErrorPacket {
@@ -427,6 +590,16 @@ struct SoftKeyboardResponse {
     std::string text;
 };
 
+// Host → client: open a second video receive path; do not touch audio.
+struct MediaVideoPending {
+    std::string video_uri;
+};
+
+// Client → host: staging URI is up; echo uri so host can match in-flight cutovers.
+struct MediaVideoReady {
+    std::string video_uri;
+};
+
 using PacketPayload = std::variant<
     ClientHello,
     HostWelcome,
@@ -452,6 +625,8 @@ using PacketPayload = std::variant<
     LinkResponse,
     SoftKeyboardRequest,
     SoftKeyboardResponse,
+    MediaVideoPending,
+    MediaVideoReady,
     KeyboardInput>;
 
 ClientRole role_for_player_count(std::uint8_t requested_players);

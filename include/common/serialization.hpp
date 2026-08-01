@@ -79,6 +79,8 @@ ByteBuffer serialize_payload(const LinkRequest& payload);
 ByteBuffer serialize_payload(const LinkResponse& payload);
 ByteBuffer serialize_payload(const SoftKeyboardRequest& payload);
 ByteBuffer serialize_payload(const SoftKeyboardResponse& payload);
+ByteBuffer serialize_payload(const MediaVideoPending& payload);
+ByteBuffer serialize_payload(const MediaVideoReady& payload);
 
 PacketType packet_type_for(const ClientHello& payload);
 PacketType packet_type_for(const HostWelcome& payload);
@@ -105,6 +107,8 @@ PacketType packet_type_for(const LinkRequest& payload);
 PacketType packet_type_for(const LinkResponse& payload);
 PacketType packet_type_for(const SoftKeyboardRequest& payload);
 PacketType packet_type_for(const SoftKeyboardResponse& payload);
+PacketType packet_type_for(const MediaVideoPending& payload);
+PacketType packet_type_for(const MediaVideoReady& payload);
 
 ByteBuffer serialize_packet(const ClientHello& payload);
 ByteBuffer serialize_packet(const HostWelcome& payload);
@@ -131,6 +135,8 @@ ByteBuffer serialize_packet(const LinkRequest& payload);
 ByteBuffer serialize_packet(const LinkResponse& payload);
 ByteBuffer serialize_packet(const SoftKeyboardRequest& payload);
 ByteBuffer serialize_packet(const SoftKeyboardResponse& payload);
+ByteBuffer serialize_packet(const MediaVideoPending& payload);
+ByteBuffer serialize_packet(const MediaVideoReady& payload);
 
 PacketPayload deserialize_packet(std::span<const std::uint8_t> packet);
 

@@ -6,6 +6,7 @@
 #include "client/gstreamer_probe.hpp"
 
 #include <stdexcept>
+#include <string_view>
 
 namespace archstreamer {
 
@@ -53,6 +54,9 @@ void WindowsGStreamerMediaPlatform::append_video_branch(
     args.insert(args.end(), source.begin(), source.end());
     gst_append_h264parse_if_available(args);
     args.push_back(decoder.element);
+    if (std::string_view{decoder.element} == "avdec_h264") {
+        args.push_back("output-corrupt=false");
+    }
     args.push_back("!");
 
     if (decoder.d3d11_zero_copy && sink.kind == GstVideoSinkKind::D3D11) {
@@ -60,11 +64,15 @@ void WindowsGStreamerMediaPlatform::append_video_branch(
         // is a passthrough ANY-caps element: ~1 Hz log lines for "video flowing"
         // (used by video_frames_seen / heartbeats). It is not true FPS — Auto
         // step-down must not treat missing/coarse counts as loss (host side).
+        // Match gst_append_progress_video_sink: default qos=true lets
+        // d3d11videosink drop late Wi‑Fi frames and feels like stutter.
         args.push_back("progressreport");
         args.push_back("update-freq=1");
         args.push_back("!");
         args.push_back(sink.element);
         args.push_back(sync ? "sync=true" : "sync=false");
+        args.push_back("qos=false");
+        args.push_back("max-lateness=-1");
         return;
     }
 

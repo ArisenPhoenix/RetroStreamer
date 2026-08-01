@@ -143,6 +143,7 @@ archstreamer::ClientAppConfig MainWindow::client_config_from_fields() const {
     config.send_keyboard = client_send_keyboard_ != nullptr && client_send_keyboard_->isChecked();
     config.synced_av = client_synced_av_ != nullptr && client_synced_av_->isChecked();
     config.wanted_tier = selected_stream_quality();
+    config.wanted_size = selected_stream_size();
     config.show_framecount =
         settings_show_framecount_ != nullptr && settings_show_framecount_->isChecked();
 
@@ -157,6 +158,13 @@ archstreamer::MediaQualityTier MainWindow::selected_stream_quality() const {
         return archstreamer::MediaQualityTier::Auto;
     }
     return static_cast<archstreamer::MediaQualityTier>(client_stream_quality_->currentData().toInt());
+}
+
+archstreamer::MediaStreamSize MainWindow::selected_stream_size() const {
+    if (client_stream_size_ == nullptr || client_stream_size_->currentData().isNull()) {
+        return archstreamer::MediaStreamSize::Auto;
+    }
+    return static_cast<archstreamer::MediaStreamSize>(client_stream_size_->currentData().toInt());
 }
 
 void MainWindow::apply_client_host(const QString& address, int control_port, int input_port, const QString& label) {
@@ -446,6 +454,7 @@ void MainWindow::start_client() {
     {
         std::lock_guard lock(heartbeat_prefs_->mutex);
         heartbeat_prefs_->wanted_tier = config.wanted_tier;
+        heartbeat_prefs_->wanted_size = config.wanted_size;
         heartbeat_prefs_->max_bitrate_kbps = config.max_bitrate_kbps;
         heartbeat_prefs_->show_framecount = config.show_framecount;
     }
@@ -457,6 +466,7 @@ void MainWindow::start_client() {
             callbacks.link_control = link_control_;
             callbacks.soft_keyboard = soft_keyboard_;
             callbacks.heartbeat_prefs = heartbeat_prefs_;
+            callbacks.face_button_prefs = face_button_prefs_;
             callbacks.media_resync = media_resync_;
             callbacks.on_catalog = [this](const archstreamer::GameList& full, const archstreamer::GameList& filtered) {
                 append_log(client_log_, QString("Received %1 games; %2 after filters.")

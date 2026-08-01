@@ -37,6 +37,13 @@ struct SessionClientConnection {
     std::string disconnect_reason;
     MediaQualityTier wanted_tier = MediaQualityTier::Auto;
     MediaQualityTier applied_tier = MediaQualityTier::Medium;
+    MediaStreamSize wanted_size = MediaStreamSize::Auto;
+    MediaStreamSize applied_size = MediaStreamSize::P720;
+    /** Tier/size being warmed on a staging RTP path (cutover in flight). */
+    std::optional<MediaQualityTier> pending_tier;
+    std::optional<MediaStreamSize> pending_size;
+    std::optional<std::string> pending_video_uri;
+    std::chrono::steady_clock::time_point video_cutover_started = {};
     std::uint16_t max_bitrate_kbps = 0;
     bool show_framecount = false;
     std::uint8_t bad_health_streak = 0;

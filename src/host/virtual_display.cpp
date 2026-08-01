@@ -1,6 +1,7 @@
 #include "host/virtual_display.hpp"
 
 #include "common/platform/process_utils.hpp"
+#include "host/session_slot_lease.hpp"
 
 #include <chrono>
 #include <cstdlib>
@@ -9,6 +10,7 @@
 #include <iterator>
 #include <sstream>
 #include <stdexcept>
+#include <system_error>
 #include <thread>
 
 #include <unistd.h>
@@ -513,14 +515,59 @@ std::unique_ptr<VirtualDisplay> make_virtual_display(VirtualDisplayBackend backe
     return nullptr;
 }
 
+namespace {
+
+int x_display_number(const std::string& display) {
+    if (display.size() < 2 || display.front() != ':') {
+        return -1;
+    }
+    try {
+        return std::stoi(display.substr(1));
+    } catch (const std::exception&) {
+        return -1;
+    }
+}
+
+// Squatting on a live display is worse than failing: the emulator renders into
+// someone else's session and their capture streams both games.
+void require_free_display(const std::string& display, const char* server) {
+    if (slot_lock::display_number_free(x_display_number(display))) {
+        return;
+    }
+    throw std::runtime_error(
+        std::string{server} + " cannot use " + display +
+        ": an X server already owns it. Another ArchStreamer host is likely running on this "
+        "machine; start this one with a different --virtual-display.");
+}
+
+void await_display_ready(const std::string& display, const ChildProcess& process) {
+    const int number = x_display_number(display);
+    const auto socket = "/tmp/.X11-unix/X" + std::to_string(number);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::error_code error;
+        if (number >= 0 && std::filesystem::exists(socket, error)) {
+            return;
+        }
+        if (!process.running()) {
+            throw std::runtime_error("X server for " + display + " exited immediately");
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    throw std::runtime_error("X server for " + display + " did not finish starting");
+}
+
+} // namespace
+
 XvfbDisplay::~XvfbDisplay() {
     stop();
 }
 
 void XvfbDisplay::start(const std::string& display, const std::string& resolution) {
+    require_free_display(display, "Xvfb");
     display_ = display;
     process_.start({"Xvfb", display, "-screen", "0", resolution + "x24", "-nolisten", "tcp"});
-    std::this_thread::sleep_for(std::chrono::milliseconds(750));
+    await_display_ready(display, process_);
 }
 
 void XvfbDisplay::stop() {
@@ -540,9 +587,10 @@ XephyrDisplay::~XephyrDisplay() {
 }
 
 void XephyrDisplay::start(const std::string& display, const std::string& resolution) {
+    require_free_display(display, "Xephyr");
     display_ = display;
     process_.start({"Xephyr", display, "-screen", resolution, "-ac", "-noreset"});
-    std::this_thread::sleep_for(std::chrono::milliseconds(750));
+    await_display_ready(display, process_);
 }
 
 void XephyrDisplay::stop() {

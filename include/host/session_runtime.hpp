@@ -25,6 +25,11 @@ enum class SessionRuntimeKind : std::uint8_t {
  *
  * Single/Multi share one process. Link owns a logical-host process (promoted from
  * the prior shared runtime) and will own a second process for the logical client.
+ *
+ * Concrete runtimes stop every process they still own from their destructor.
+ * Prefer stop_emulator() for orderly teardown; destruction is the safety net when
+ * a slot is dropped mid-session. Link promotion uses release_emulator() so the
+ * old shell can die without killing the handed-off process.
  */
 class SessionRuntime {
 public:
@@ -81,6 +86,7 @@ struct LinkPromotionRequest {
 class SharedEmulatorRuntime : public SessionRuntime {
 public:
     explicit SharedEmulatorRuntime(HostLaunchPlan plan);
+    ~SharedEmulatorRuntime() override;
 
     bool uses_shared_emulator() const override { return true; }
     std::uint8_t emulator_instance_count() const override { return 1; }
@@ -104,7 +110,11 @@ public:
     RetroArchProcess& emulator() override;
     const RetroArchProcess& emulator() const override;
 
-    /** Move the live process out for Link promotion (may be null if never started). */
+    /**
+     * Move the live process out for Link promotion (may be null if never started).
+     * After this, ~SharedEmulatorRuntime will not stop that process — ownership
+     * transfers to the new LinkSessionRuntime.
+     */
     std::unique_ptr<HostRetroArchProcess> release_emulator();
 
 protected:
@@ -139,6 +149,7 @@ public:
         RetroArchLaunchConfig host_config,
         std::unique_ptr<HostRetroArchProcess> host_emulator,
         LinkPromotionRequest promotion);
+    ~LinkSessionRuntime() override;
 
     SessionRuntimeKind kind() const override { return SessionRuntimeKind::Link; }
     const char* kind_name() const override { return "Link"; }

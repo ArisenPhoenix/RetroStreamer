@@ -4,12 +4,9 @@
 #include "common/participant_role.hpp"
 #include "common/serialization.hpp"
 #include "client/controller_backend.hpp"
+#include "host/capture_platform.hpp"
 #include "host/game_catalog.hpp"
 #include "host/gpu_select.hpp"
-#ifndef _WIN32
-#include "host/gstreamer_media_server.hpp"
-#include "host/virtual_display.hpp"
-#endif
 #include "host/host_launch_planner.hpp"
 #include "host/host_session_helpers.hpp"
 #include "host/launch_environment.hpp"
@@ -58,6 +55,8 @@ bool should_use_slot_streaming_sink(const std::string& audio_source) {
     return StreamingAudioSink::is_streaming_sink_name(sink);
 }
 
+} // namespace
+
 int parse_virtual_display_number(const std::string& virtual_display) {
     if (virtual_display.empty() || virtual_display.front() != ':') {
         return 99;
@@ -68,8 +67,6 @@ int parse_virtual_display_number(const std::string& virtual_display) {
         return 99;
     }
 }
-
-} // namespace
 
 HostAppConfig slot_adjusted_config(HostAppConfig config, int slot_index) {
     const int display_num = parse_virtual_display_number(config.virtual_display);
@@ -330,9 +327,8 @@ void ActiveSessionSlot::run_session() {
     plan.system_key = system_key_;
 
     if (!launch_config.standalone && system_key_ == "ps2") {
-        stage_user_ps2_memcards(save_profile_);
         std::cout
-            << "session slot " << slot << ": PS2 memcards staged from "
+            << "session slot " << slot << ": PS2 memcards "
             << user_ps2_memcard_directory(save_profile_) << '\n';
     }
 
@@ -419,59 +415,13 @@ void ActiveSessionSlot::run_session() {
     }
     config.ignore_controller = ignore_devices;
 
-    use_virtual_capture_ = config.video;
-    const bool capture_fullscreen = config.video;
-    const std::string capture_display = config.virtual_display;
-    auto display_backend = config.display_backend;
-#ifndef _WIN32
-    if (launch_config.standalone && use_virtual_capture_ &&
-        display_backend == VirtualDisplayBackend::None) {
-        display_backend = VirtualDisplayBackend::Gamescope;
-    }
-    if (!launch_config.standalone && use_virtual_capture_ &&
-        (display_backend == VirtualDisplayBackend::None ||
-         display_backend == VirtualDisplayBackend::Xvfb) &&
-        core_needs_gl_on_virtual_display(launch_config.core_path) &&
-        find_vglrun().has_value() && command_available("Xvfb")) {
-        display_backend = VirtualDisplayBackend::VirtualGL;
-    } else if (!launch_config.standalone && use_virtual_capture_ &&
-               display_backend == VirtualDisplayBackend::VirtualGL &&
-               !core_needs_gl_on_virtual_display(launch_config.core_path)) {
-        std::cout << "session slot " << slot << ": plain Xvfb for software core (skipping VirtualGL)\n";
-        display_backend = VirtualDisplayBackend::Xvfb;
-    }
-    if (!launch_config.standalone && use_virtual_capture_ &&
-        !core_needs_gl_on_virtual_display(launch_config.core_path)) {
-        int width = 0;
-        int height = 0;
-        const auto x_pos = config.video_resolution.find('x');
-        if (x_pos != std::string::npos) {
-            try {
-                width = std::stoi(config.video_resolution.substr(0, x_pos));
-                height = std::stoi(config.video_resolution.substr(x_pos + 1));
-            } catch (const std::exception&) {
-            }
-        }
-        if (width > 1280 || height > 720) {
-            std::cout
-                << "session slot " << slot << ": capture resolution capped to 1280x720 for software core "
-                << "(was " << config.video_resolution << ")\n";
-            config.video_resolution = "1280x720";
-        }
-    }
-#endif
-    gamescope_capture_ =
-#ifndef _WIN32
-        use_virtual_capture_ && display_backend == VirtualDisplayBackend::Gamescope;
-#else
-        false;
-#endif
-    const bool virtualgl_capture =
-#ifndef _WIN32
-        use_virtual_capture_ && display_backend == VirtualDisplayBackend::VirtualGL;
-#else
-        false;
-#endif
+    const auto capture = resolve_capture_plan(config, launch_config);
+    use_virtual_capture_ = capture.use_virtual_capture;
+    const bool capture_fullscreen = capture.capture_fullscreen;
+    const std::string capture_display = capture.capture_display;
+    const auto display_backend = capture.display_backend;
+    gamescope_capture_ = capture.gamescope_capture;
+    const bool virtualgl_capture = capture.virtualgl_capture;
 
     EmulatorLaunchEnvRequest launch_env_request;
     launch_env_request.stream_media = config.audio || config.video;
@@ -667,16 +617,11 @@ void ActiveSessionSlot::run_session() {
                 << "session slot " << slot << ": Ryujinx (ldn_mitm)"
                 << " config=" << ryujinx_user.data_root
                 << " shared_saves=" << synced.size() << '\n';
-#ifndef _WIN32
-            if (!plan.soft_keyboard) {
-                plan.soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();
-            }
-            schedule_ryujinx_soft_keyboard(
+            ensure_ryujinx_soft_keyboard(
                 plan.soft_keyboard,
                 profile_name,
                 "What is your name?",
                 capture_display);
-#endif
         } else {
             int yuzu_vulkan_device = -1;
             if (resolved_gpu.has_value()) {
@@ -705,38 +650,7 @@ void ActiveSessionSlot::run_session() {
             }
         }
 
-        if (gamescope_capture_) {
-#ifndef _WIN32
-            const auto x_pos = config.video_resolution.find('x');
-            int width = 1280;
-            int height = 720;
-            if (x_pos != std::string::npos) {
-                try {
-                    width = std::stoi(config.video_resolution.substr(0, x_pos));
-                    height = std::stoi(config.video_resolution.substr(x_pos + 1));
-                } catch (const std::exception&) {
-                }
-            }
-            auto prefix = gamescope_command_prefix(width, height, gamescope_vk_device);
-            if (prefix.empty()) {
-                throw std::runtime_error(
-                    "Switch streaming requires gamescope. Install it or set ARCHSTREAMER_GAMESCOPE");
-            }
-            launch_config.command_prefix = std::move(prefix);
-            std::cout
-                << "session slot " << slot << ": Switch gamescope headless ("
-                << width << "x" << height << ")\n";
-#endif
-        } else if (virtualgl_capture) {
-#ifndef _WIN32
-            auto prefix = virtual_gl_command_prefix();
-            if (prefix.empty()) {
-                throw std::runtime_error(
-                    "VirtualGL (vglrun) not found; install VirtualGL or set ARCHSTREAMER_VGLRUN");
-            }
-            launch_config.command_prefix = std::move(prefix);
-#endif
-        }
+        apply_standalone_capture_prefix(launch_config, capture, config, gamescope_vk_device);
     } else {
         const auto runtime_override = write_retroarch_input_override(
             virtual_joypad_index_,
@@ -755,20 +669,7 @@ void ActiveSessionSlot::run_session() {
             plan.retroarch_netcmd_port);
         launch_config.extra_args.push_back("-c");
         launch_config.extra_args.push_back(runtime_override.string());
-        if (virtualgl_capture) {
-#ifndef _WIN32
-            auto prefix = virtual_gl_command_prefix();
-            if (prefix.empty()) {
-                throw std::runtime_error(
-                    "VirtualGL (vglrun) not found; install VirtualGL or set ARCHSTREAMER_VGLRUN");
-            }
-            prefix.insert(
-                prefix.end(),
-                launch_config.command_prefix.begin(),
-                launch_config.command_prefix.end());
-            launch_config.command_prefix = std::move(prefix);
-#endif
-        }
+        apply_retroarch_vgl_prefix(launch_config, capture, resolved_gpu);
     }
 
     {
@@ -785,11 +686,7 @@ void ActiveSessionSlot::run_session() {
     input_router_->set_seat_assignment(launch_plan.seats);
 
     if (config.audio || config.video) {
-#ifdef _WIN32
-        if (config.audio_backend == AudioCaptureBackend::Pulse) {
-            config.audio_backend = AudioCaptureBackend::Wasapi;
-        }
-#endif
+        normalize_audio_backend_for_platform(config);
         media_server_ = make_host_media_server(GStreamerMediaCaptureConfig{
             config.video,
             config.audio,
@@ -844,13 +741,18 @@ void ActiveSessionSlot::run_session() {
     send_session_starting_to_clients(plan);
 
     if (media_server_ != nullptr) {
+        std::uint16_t capture_w = 1920;
+        std::uint16_t capture_h = 1080;
+        parse_video_resolution(config.video_resolution, capture_w, capture_h);
         session_monitor_.emplace(
             plan,
             *input_router_,
             *media_server_,
             std::chrono::seconds(config.client_timeout_seconds),
             std::chrono::seconds(config.player_reconnect_timeout_seconds),
-            config_.hub);
+            config_.hub,
+            capture_w,
+            capture_h);
     }
 
     auto local_bridge = std::optional<LocalControllerBridge>{};
@@ -880,31 +782,11 @@ void ActiveSessionSlot::run_session() {
         throw std::runtime_error(message);
     }
 
-#ifndef _WIN32
-    if (auto* gst = dynamic_cast<GStreamerMediaServer*>(media_server_.get());
-        gst != nullptr && gst->video_deferred()) {
-        int expect_w = 1280;
-        int expect_h = 720;
-        const auto x_pos = config.video_resolution.find('x');
-        if (x_pos != std::string::npos) {
-            try {
-                expect_w = std::stoi(config.video_resolution.substr(0, x_pos));
-                expect_h = std::stoi(config.video_resolution.substr(x_pos + 1));
-            } catch (const std::exception&) {
-            }
-        }
-        const auto node = wait_for_gamescope_pipewire_node(
-            std::chrono::seconds(20),
-            expect_w,
-            expect_h,
-            session_runtime_->emulator().process_id().value_or(0));
-        if (!node.has_value()) {
-            throw std::runtime_error(
-                "gamescope did not publish a PipeWire Video/Source (media.name=gamescope)");
-        }
-        gst->start_pipewire_video(*node, media_streams);
-    }
-#endif
+    start_deferred_gamescope_video_if_needed(
+        media_server_.get(),
+        config,
+        media_streams,
+        session_runtime_->emulator().process_id().value_or(0));
 
     if (config.audio) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -1106,10 +988,10 @@ void ActiveSessionSlot::run_session() {
         session_end_reason = reason.str();
     }
 
+    // The runtime destructor also stops any process it still owns; stop here so
+    // teardown ordering stays predictable.
     session_runtime_->stop_emulator();
-    if (!session_runtime_->launch_config().standalone && system_key_ == "ps2") {
-        harvest_user_ps2_memcards(save_profile_);
-    }
+    session_runtime_.reset();
 
     // Drop XTest before tearing down Xvfb. Otherwise Xlib's fatal I/O handler
     // calls exit(1) and kills the whole host_runner lobby ("XIO: fatal IO error

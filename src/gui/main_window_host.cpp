@@ -65,8 +65,6 @@ QWidget* MainWindow::build_host_tab() {
     auto* form_box = new QGroupBox("Host Runner", page);
     auto* form = new QFormLayout(form_box);
 
-    host_rom_root_ = new QLineEdit(archstreamer::DefaultRomRoot, form_box);
-    host_meta_root_ = new QLineEdit(archstreamer::DefaultMetaRoot, form_box);
     host_control_port_ = new QSpinBox(form_box);
     host_control_port_->setRange(1, 65535);
     host_control_port_->setValue(45555);
@@ -110,8 +108,6 @@ QWidget* MainWindow::build_host_tab() {
     host_advertise_ = new QCheckBox("Advertise on LAN", form_box);
     host_advertise_->setChecked(true);
 
-    form->addRow("ROM root", host_rom_root_);
-    form->addRow("Meta root", host_meta_root_);
     form->addRow("Control port", host_control_port_);
     form->addRow("Input port", host_input_port_);
     form->addRow("Video port", host_video_port_);
@@ -151,12 +147,6 @@ QWidget* MainWindow::build_host_tab() {
     });
     connect(refresh_host_controllers_button, &QPushButton::clicked, this, [this] {
         refresh_host_controllers();
-    });
-    connect(host_rom_root_, &QLineEdit::editingFinished, this, [this] {
-        persist_settings_if_idle();
-    });
-    connect(host_meta_root_, &QLineEdit::editingFinished, this, [this] {
-        persist_settings_if_idle();
     });
     connect(host_video_port_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
         persist_settings_if_idle();
@@ -530,6 +520,7 @@ void MainWindow::start_host() {
         host_cfg.verbose = current_log_level() == GuiLogLevel::Verbose;
         host_cfg.video = host_video_->isChecked();
         host_cfg.video_port = static_cast<std::uint16_t>(host_video_port_->value());
+        host_cfg.video_resolution = selected_host_capture_resolution().toStdString();
         host_cfg.audio = host_audio_->isChecked();
         host_cfg.audio_port = static_cast<std::uint16_t>(host_audio_port_->value());
         if (bridge_index >= 0) {
@@ -537,13 +528,7 @@ void MainWindow::start_host() {
         }
         if (host_game_picker_->hasSelection()) {
             host_cfg.selector = *host_game_picker_->selectedGameId();
-            const auto selected_id = *host_cfg.selector;
-            persisted_host_game_id_ = QString::fromStdString(selected_id);
-            // Keep Client Join in sync for local host+client testing.
-            persisted_client_game_id_ = persisted_host_game_id_;
-            if (client_game_picker_ != nullptr) {
-                client_game_picker_->setSelectedGameId(selected_id);
-            }
+            persisted_host_game_id_ = QString::fromStdString(*host_cfg.selector);
         }
         persist_settings_if_idle();
 

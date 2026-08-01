@@ -31,6 +31,9 @@ std::filesystem::path write_retroarch_input_override(
     int slot_index = 0,
     std::uint16_t network_cmd_port = 55355);
 
+// Which face-button mapping write_retroarch_input_override() applies, for logging.
+std::string_view face_button_map_name(std::string_view system_key);
+
 // True for HW-rendered libretro cores that need gl + (usually) VirtualGL on Xvfb.
 // Software cores (gambatte, etc.) should use plain Xvfb + sdl2 — vglrun left remotes
 // stuck on static GB credits/title until continuous animation.

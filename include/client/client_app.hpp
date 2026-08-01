@@ -3,6 +3,7 @@
 #include "client/controller_manager.hpp"
 #include "client/game_filter.hpp"
 #include "client/session_service.hpp"
+#include "common/controller_state.hpp"
 #include "common/participant_role.hpp"
 #include "common/protocol.hpp"
 
@@ -25,6 +26,7 @@ using ClientParticipantRole = ParticipantRole;
 struct ClientHeartbeatPrefs {
     std::mutex mutex;
     MediaQualityTier wanted_tier = MediaQualityTier::Auto;
+    MediaStreamSize wanted_size = MediaStreamSize::Auto;
     std::uint16_t max_bitrate_kbps = 0;
     bool show_framecount = false;
 
@@ -33,16 +35,50 @@ struct ClientHeartbeatPrefs {
         wanted_tier = tier;
     }
 
+    void set_wanted_size(MediaStreamSize size) {
+        std::lock_guard lock(mutex);
+        wanted_size = size;
+    }
+
     void set_show_framecount(bool enabled) {
         std::lock_guard lock(mutex);
         show_framecount = enabled;
     }
 
-    void snapshot(MediaQualityTier& tier, std::uint16_t& max_bitrate, bool& framecount) {
+    void snapshot(
+        MediaQualityTier& tier,
+        MediaStreamSize& size,
+        std::uint16_t& max_bitrate,
+        bool& framecount) {
         std::lock_guard lock(mutex);
         tier = wanted_tier;
+        size = wanted_size;
         max_bitrate = max_bitrate_kbps;
         framecount = show_framecount;
+    }
+};
+
+// Live face-button transforms (NESW). Applied on the client before ControllerInput
+// is sent; the host maps South/East/West/North 1:1 onto the virtual pad.
+struct ClientFaceButtonPrefs {
+    std::mutex mutex;
+    bool swap_nw = false; // North ↔ West (Triangle ↔ Square / Y ↔ X)
+    bool swap_se = false; // South ↔ East (Cross ↔ Circle / A ↔ B)
+
+    void set_swap_nw(bool enabled) {
+        std::lock_guard lock(mutex);
+        swap_nw = enabled;
+    }
+
+    void set_swap_se(bool enabled) {
+        std::lock_guard lock(mutex);
+        swap_se = enabled;
+    }
+
+    void snapshot(bool& nw, bool& se) {
+        std::lock_guard lock(mutex);
+        nw = swap_nw;
+        se = swap_se;
     }
 };
 
@@ -175,6 +211,24 @@ struct MediaResyncBridge {
     }
 };
 
+/** Host → client: warm a second video path for quality cutover. */
+struct MediaVideoCutoverBridge {
+    std::mutex mutex;
+    std::optional<std::string> pending_uri;
+
+    void set_pending(std::string video_uri) {
+        std::lock_guard lock(mutex);
+        pending_uri = std::move(video_uri);
+    }
+
+    std::optional<std::string> take_pending() {
+        std::lock_guard lock(mutex);
+        auto value = pending_uri;
+        pending_uri.reset();
+        return value;
+    }
+};
+
 struct ClientAppConfig {
     std::string host = "127.0.0.1";
     std::uint16_t control_port = 45555;
@@ -195,6 +249,7 @@ struct ClientAppConfig {
     // Optional shared-clock pipeline is experimental; prefer Resync A/V for drift.
     bool synced_av = false;
     MediaQualityTier wanted_tier = MediaQualityTier::Auto;
+    MediaStreamSize wanted_size = MediaStreamSize::Auto;
     // 0 = use tier default bitrate cap on the host.
     std::uint16_t max_bitrate_kbps = 0;
     // Request host RetroArch "Frames:" OSD (default off). Prefer heartbeat_prefs for live updates.
@@ -225,7 +280,9 @@ struct ClientAppCallbacks {
     std::shared_ptr<LinkControlBridge> link_control;
     std::shared_ptr<SoftKeyboardBridge> soft_keyboard;
     std::shared_ptr<ClientHeartbeatPrefs> heartbeat_prefs;
+    std::shared_ptr<ClientFaceButtonPrefs> face_button_prefs;
     std::shared_ptr<MediaResyncBridge> media_resync;
+    std::shared_ptr<MediaVideoCutoverBridge> video_cutover;
 };
 
 struct ClientRunResult {

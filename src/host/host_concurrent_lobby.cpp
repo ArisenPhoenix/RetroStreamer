@@ -23,6 +23,13 @@
 #include <vector>
 
 namespace archstreamer {
+namespace {
+
+// Slot numbers are claimed machine-wide, so the span has to cover every host
+// process on the box, not just one lobby's max_slots.
+constexpr int kSlotLeaseSpan = 16;
+
+} // namespace
 
 int run_concurrent_session_host(
     HostAppConfig config,
@@ -53,7 +60,6 @@ int run_concurrent_session_host(
 
         TcpListener listener(*config.control_port);
         std::vector<std::unique_ptr<ActiveSessionSlot>> slots;
-        int next_slot_index = 0;
 
         const auto art_root = config.art_root.empty()
             ? (config.rom_root.parent_path() / "Art")
@@ -100,9 +106,19 @@ int run_concurrent_session_host(
             if (!config.ignore_controller.has_value()) {
                 config.ignore_controller = sdl_ignore_list_for_session(plan);
             }
+            auto lease = SessionSlotLease::claim(
+                kSlotLeaseSpan,
+                parse_virtual_display_number(config.virtual_display));
+            if (!lease.valid()) {
+                const std::string message =
+                    "no free session slot on this machine (another host is using them)";
+                send_error_to_session_clients(plan, message);
+                throw std::runtime_error(message);
+            }
             auto launch_plan = launch_plan_for_session(plan);
             ActiveSessionSlotConfig slot_cfg;
-            slot_cfg.slot_index = next_slot_index++;
+            slot_cfg.slot_index = lease.index();
+            slot_cfg.slot_lease = std::move(lease);
             slot_cfg.host_config = config;
             slot_cfg.plan = std::move(plan);
             slot_cfg.launch_plan = std::move(launch_plan);

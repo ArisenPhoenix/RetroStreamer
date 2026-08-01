@@ -5,6 +5,7 @@
 #include "client/input_sender.hpp"
 #include "client/keyboard_poller.hpp"
 #include "client/session_service.hpp"
+#include "client/video_window_geometry.hpp"
 #include "common/addresses.hpp"
 #include "common/link_capability.hpp"
 #include "common/platform/default_platform.hpp"
@@ -95,14 +96,20 @@ bool handle_control_message(TcpStream& stream, const ClientAppCallbacks& callbac
                      : (": " + soft_keyboard->prompt)));
         }
     }
-    // Mid-session MediaEndpoint = host restarted video (quality ladder). Audio may
-    // have free-run ahead of the new video timeline — request an audio realign.
-    if (std::get_if<MediaEndpoint>(&payload) != nullptr) {
-        if (callbacks.media_resync) {
-            callbacks.media_resync->request();
+    // Mid-session MediaEndpoint after a quality cutover updates the video URI only.
+    // Do not realign audio — Opus is still on the live timeline.
+    if (const auto* endpoint = std::get_if<MediaEndpoint>(&payload); endpoint != nullptr) {
+        result.media_endpoint = *endpoint;
+        if (callbacks.on_status) {
+            callbacks.on_status("Host media endpoint updated.");
+        }
+    }
+    if (const auto* pending = std::get_if<MediaVideoPending>(&payload); pending != nullptr) {
+        if (callbacks.video_cutover) {
+            callbacks.video_cutover->set_pending(pending->video_uri);
         }
         if (callbacks.on_status) {
-            callbacks.on_status("Host restarted video encode; realigning audio to video…");
+            callbacks.on_status("Host staging new video quality…");
         }
     }
 
@@ -305,6 +312,13 @@ ClientRunResult ClientApp::join_session(
     result.media_endpoint = start.media_endpoint;
 
     auto media_receiver = ClientMediaPlayback{};
+    auto video_cutover = callbacks.video_cutover;
+    if (!video_cutover) {
+        video_cutover = std::make_shared<MediaVideoCutoverBridge>();
+    }
+    // Ensure control-message handling can queue staging URIs for this session.
+    ClientAppCallbacks session_callbacks = callbacks;
+    session_callbacks.video_cutover = video_cutover;
     const bool expect_video =
         config.wants_video &&
         result.media_endpoint.has_value() &&
@@ -378,6 +392,20 @@ ClientRunResult ClientApp::join_session(
     auto input_socket = std::optional<UdpSocket>{};
     std::atomic<bool> input_stop{false};
     std::thread input_thread;
+    // Unwinding past a joinable std::thread calls std::terminate. The session loop below
+    // throws whenever the host drops mid-session, so the join cannot live only on the
+    // normal exit path. Declared after the thread so it runs before the thread's dtor,
+    // and before the backend/sender/socket the thread holds references to.
+    struct JoinInputThread {
+        std::atomic<bool>& stop;
+        std::thread& thread;
+        ~JoinInputThread() {
+            stop.store(true, std::memory_order_relaxed);
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+    } join_input_thread{input_stop, input_thread};
     const bool want_pads =
         config.input_port.has_value() &&
         config.filter.requested_players > 0 &&
@@ -420,6 +448,7 @@ ClientRunResult ClientApp::join_session(
             &input_socket,
             &config,
             want_pads,
+            face_button_prefs = callbacks.face_button_prefs,
             keyboard_poller = std::move(keyboard_poller)
         ]() mutable {
             std::array<ControllerState, MaxPlayersPerClient> last_sent{};
@@ -430,6 +459,11 @@ ClientRunResult ClientApp::join_session(
             constexpr int kChangeCopies = 3;
             while (!input_stop.load(std::memory_order_relaxed)) {
                 const auto tick_start = std::chrono::steady_clock::now();
+                bool swap_nw = false;
+                bool swap_se = false;
+                if (face_button_prefs) {
+                    face_button_prefs->snapshot(swap_nw, swap_se);
+                }
                 if (want_pads && controller_backend.has_value()) {
                     for (LocalPlayerIndex player = 0; player < config.filter.requested_players; ++player) {
                         const auto state = controller_backend->poll(player);
@@ -442,6 +476,7 @@ ClientRunResult ClientApp::join_session(
                         const int copies = changed ? kChangeCopies : 1;
                         for (int copy = 0; copy < copies; ++copy) {
                             auto sample = *state;
+                            apply_face_button_swaps(sample, swap_nw, swap_se);
                             // Distinct timestamps so host ordering accepts each UDP copy.
                             sample.timestamp_us =
                                 archstreamer::steady_timestamp_us() + static_cast<std::uint64_t>(copy);
@@ -508,9 +543,48 @@ ClientRunResult ClientApp::join_session(
     auto next_resync_allowed = std::chrono::steady_clock::now();
     int zero_frame_streak = 0;
     bool audio_realign_after_video_stall = false;
+    // Retry guard: a failed swap must not respin every loop iteration.
+    std::string attempted_video_switch;
     while (!should_stop()) {
-        if (!handle_control_message(joined_session.stream, callbacks, result)) {
+        if (!handle_control_message(joined_session.stream, session_callbacks, result)) {
             break;
+        }
+        if (const auto pending = video_cutover->take_pending(); pending.has_value()) {
+            if (media_receiver.begin_video_pending(*pending)) {
+                if (session_callbacks.on_status) {
+                    session_callbacks.on_status("Receiving staged video quality…");
+                }
+            } else if (session_callbacks.on_status) {
+                session_callbacks.on_status("Failed to open staged video path.");
+            }
+        }
+        if (const auto ready_uri = media_receiver.poll_video_cutover(); ready_uri.has_value()) {
+            try {
+                joined_session.stream.send_packet(serialize_packet(MediaVideoReady{*ready_uri}));
+                if (session_callbacks.on_status) {
+                    session_callbacks.on_status("Staged video verified; waiting for host to swap.");
+                }
+            } catch (const std::exception& error) {
+                if (session_callbacks.on_status) {
+                    session_callbacks.on_status(
+                        std::string("Failed to ACK video cutover: ") + error.what());
+                }
+            }
+        }
+        // The host publishes the promoted endpoint once it has torn the old
+        // encode down; moving before that would point us at a dead port.
+        if (result.media_endpoint.has_value() && media_receiver &&
+            !result.media_endpoint->video_uri.empty() &&
+            result.media_endpoint->video_uri != media_receiver.endpoint().video_uri &&
+            result.media_endpoint->video_uri != attempted_video_switch) {
+            attempted_video_switch = result.media_endpoint->video_uri;
+            if (media_receiver.switch_video(attempted_video_switch)) {
+                if (session_callbacks.on_status) {
+                    session_callbacks.on_status("Switched to new video quality.");
+                }
+            } else if (session_callbacks.on_status) {
+                session_callbacks.on_status("Failed to switch to new video quality.");
+            }
         }
         if (callbacks.disc_control) {
             if (const auto request = callbacks.disc_control->take_pending(); request.has_value()) {
@@ -660,10 +734,21 @@ ClientRunResult ClientApp::join_session(
                 }
             }
             auto wanted_tier = config.wanted_tier;
+            auto wanted_size = config.wanted_size;
             auto max_bitrate_kbps = config.max_bitrate_kbps;
             auto show_framecount = config.show_framecount;
             if (callbacks.heartbeat_prefs) {
-                callbacks.heartbeat_prefs->snapshot(wanted_tier, max_bitrate_kbps, show_framecount);
+                callbacks.heartbeat_prefs->snapshot(
+                    wanted_tier,
+                    wanted_size,
+                    max_bitrate_kbps,
+                    show_framecount);
+            }
+            if (wanted_size == MediaStreamSize::Auto) {
+                const int display_h = primary_display_height();
+                wanted_size = display_h > 0
+                    ? media_stream_size_for_display_height(display_h)
+                    : MediaStreamSize::P720;
             }
             joined_session.stream.send_packet(serialize_packet(ViewerHeartbeat{
                 *result.client_id,
@@ -673,6 +758,7 @@ ClientRunResult ClientApp::join_session(
                 wanted_tier,
                 max_bitrate_kbps,
                 show_framecount,
+                wanted_size,
             }));
             next_heartbeat = now + std::chrono::seconds(1);
         }

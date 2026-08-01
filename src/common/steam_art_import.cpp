@@ -642,10 +642,8 @@ std::string preferred_steam_or_username_display_name(
         persona.has_value() && !persona->empty()) {
         return *persona;
     }
-    if (const auto account = resolve_steam_account(steam_account_id, steam_dir_override);
-        account.has_value() && !account->account_id.empty()) {
-        return account->account_id;
-    }
+    // Never fall back to the numeric account id: this name is shown to players and
+    // is seeded into emulator profiles (Ryujinx Switch nickname, swkbd prefill).
     return std::string(fallback_username);
 }
 

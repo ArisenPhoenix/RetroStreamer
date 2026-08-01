@@ -50,6 +50,7 @@ public:
 
 private:
     QWidget* build_client_tab();
+    QWidget* build_stream_tab();
     QWidget* build_game_options_tab();
     QWidget* build_profile_tab();
     QWidget* build_settings_tab();
@@ -65,6 +66,7 @@ private:
     QString selected_graphics_api_id() const;
     int selected_yuzu_resolution_scale() const;
     int selected_retroarch_resolution_scale() const;
+    QString selected_host_capture_resolution() const;
 #endif
     void refresh_settings_audio_outputs(const QString& select_id = {});
     void apply_audio_output_from_settings();
@@ -97,11 +99,13 @@ private:
     void toggle_pad_on_screen_keyboard(bool open);
     void open_soft_keyboard_from_host(const archstreamer::SoftKeyboardRequest& request);
     void close_pad_on_screen_keyboard();
+    void restore_video_window_focus();
 
     GameFilter client_filter_from_fields() const;
     void refresh_filtered_client_games();
     ClientAppConfig client_config_from_fields() const;
     MediaQualityTier selected_stream_quality() const;
+    MediaStreamSize selected_stream_size() const;
     void apply_client_host(
         const QString& address,
         int control_port,
@@ -161,6 +165,7 @@ private:
     QCheckBox* client_audio_ = nullptr;
     QCheckBox* client_send_keyboard_ = nullptr;
     QComboBox* client_stream_quality_ = nullptr;
+    QComboBox* client_stream_size_ = nullptr;
     QCheckBox* client_synced_av_ = nullptr;
     QPushButton* client_resync_av_ = nullptr;
     QLabel* client_catalog_status_ = nullptr;
@@ -171,7 +176,11 @@ private:
     std::shared_ptr<LinkControlBridge> link_control_;
     std::shared_ptr<SoftKeyboardBridge> soft_keyboard_;
     std::shared_ptr<ClientHeartbeatPrefs> heartbeat_prefs_;
+    std::shared_ptr<ClientFaceButtonPrefs> face_button_prefs_;
     std::shared_ptr<MediaResyncBridge> media_resync_;
+    QCheckBox* game_options_swap_nw_ = nullptr;
+    QCheckBox* game_options_swap_se_ = nullptr;
+    QPushButton* game_options_pad_osk_ = nullptr;
     QLabel* game_options_status_ = nullptr;
     QComboBox* game_options_disc_ = nullptr;
     QPushButton* game_options_swap_ = nullptr;
@@ -198,6 +207,7 @@ private:
     QComboBox* host_mode_ = nullptr;
     QComboBox* host_bridge_controller_ = nullptr;
     QCheckBox* host_video_ = nullptr;
+    QComboBox* host_capture_resolution_ = nullptr;
     QCheckBox* host_audio_ = nullptr;
     QCheckBox* host_local_media_ = nullptr;
     QCheckBox* host_advertise_ = nullptr;
@@ -225,7 +235,6 @@ private:
     QComboBox* settings_retroarch_scale_ = nullptr;
 #endif
     QComboBox* settings_audio_out_ = nullptr;
-    QPushButton* settings_pad_osk_ = nullptr;
     PadOnScreenKeyboard* pad_osk_ = nullptr;
     std::uint32_t soft_keyboard_request_id_ = 0;
     QPlainTextEdit* settings_log_ = nullptr;

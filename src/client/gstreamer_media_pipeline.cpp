@@ -61,8 +61,8 @@ std::optional<std::pair<int, int>> detect_view_max_size() {
 }
 
 // Flatpak cannot set SO_RCVBUF above net.core.rmem_max without CAP_NET_ADMIN.
-// Default 0 = kernel default (safe everywhere). scripts/grant-flatpak-udp-buffers.sh
-// raises rmem_* and sets ARCHSTREAMER_UDP_RCVBUF for a larger Wi‑Fi-friendly buffer.
+// Prefer a modest non-zero default for Wi‑Fi IDR bursts when not in Flatpak.
+// scripts/grant-flatpak-udp-buffers.sh raises rmem_* and sets ARCHSTREAMER_UDP_RCVBUF.
 int udp_receive_buffer_bytes() {
     if (const char* env = std::getenv("ARCHSTREAMER_UDP_RCVBUF");
         env != nullptr && env[0] != '\0') {
@@ -74,7 +74,11 @@ int udp_receive_buffer_bytes() {
         } catch (const std::exception&) {
         }
     }
-    return 0;
+    if (std::getenv("FLATPAK_ID") != nullptr) {
+        return 0;
+    }
+    // 4 MiB absorbs large IDR RTP bursts better than the tiny kernel default.
+    return 4 * 1024 * 1024;
 }
 
 } // namespace
@@ -129,11 +133,12 @@ std::vector<std::string> gst_h264_rtp_source_args(std::uint16_t port) {
         "caps=application/x-rtp,media=video,encoding-name=H264,payload=96,clock-rate=90000",
         "!",
         "rtpjitterbuffer",
-        // Matched with audio. Keep this low: pad UDP is already ~ms-fast; felt
-        // "controller lag" is almost always this buffer delaying the picture of
-        // the press. drop-on-latency=true avoids freeze-then-burst backlog.
-        "latency=20",
+        // Slightly larger than the old 20 ms pad-feel default: Wi‑Fi IDR bursts
+        // were dropping late fragments (green/tile corruption) too aggressively.
+        // drop-on-latency=true still avoids freeze-then-burst backlog.
+        "latency=50",
         "drop-on-latency=true",
+        "do-lost=true",
         "!",
         "rtph264depay",
         "!",
@@ -141,8 +146,8 @@ std::vector<std::string> gst_h264_rtp_source_args(std::uint16_t port) {
 }
 
 std::vector<std::string> gst_opus_rtp_decode_args(std::uint16_t port, int jitter_latency_ms) {
-    // Match video jitter (20 ms) so dual gst-launch receivers stay lip-aligned.
-    const int latency = jitter_latency_ms > 0 ? jitter_latency_ms : 20;
+    // Match video jitter (50 ms) so dual gst-launch receivers stay lip-aligned.
+    const int latency = jitter_latency_ms > 0 ? jitter_latency_ms : 50;
     return {
         "udpsrc",
         "port=" + std::to_string(port),

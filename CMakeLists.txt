@@ -93,8 +93,6 @@ set(ARCHSTREAMER_CORE_SOURCES
     src/common/game_assets.cpp
     src/common/steam_art_import.cpp
     src/common/participant_role.cpp
-    src/common/platform/paths.cpp
-    src/common/platform/process_utils.cpp
     src/common/protocol.cpp
     src/common/serialization.cpp
     src/common/sha256.cpp
@@ -103,12 +101,18 @@ set(ARCHSTREAMER_CORE_SOURCES
 
 if(WIN32)
     list(APPEND ARCHSTREAMER_CORE_SOURCES
+        src/common/platform/windows_discovery_net.cpp
+        src/common/platform/windows_paths.cpp
         src/common/platform/windows_process.cpp
+        src/common/platform/windows_process_utils.cpp
         src/common/platform/windows_socket.cpp
     )
 else()
     list(APPEND ARCHSTREAMER_CORE_SOURCES
+        src/common/platform/posix_discovery_net.cpp
+        src/common/platform/posix_paths.cpp
         src/common/platform/posix_process.cpp
+        src/common/platform/posix_process_utils.cpp
         src/common/platform/posix_socket.cpp
     )
 endif()
@@ -196,12 +200,16 @@ add_library(archstreamer_client
 )
 if(WIN32)
     target_sources(archstreamer_client PRIVATE
+        src/client/windows_audio_playback_device.cpp
         src/client/windows_gstreamer_media_platform.cpp
+        src/client/windows_video_window_geometry.cpp
         src/client/win32_remoted_keyboard_source.cpp
     )
 else()
     target_sources(archstreamer_client PRIVATE
+        src/client/posix_audio_playback_device.cpp
         src/client/posix_gstreamer_media_platform.cpp
+        src/client/posix_video_window_geometry.cpp
         src/client/evdev_remoted_keyboard_source.cpp
         src/client/x11_keymap_remoted_keyboard_source.cpp
     )
@@ -243,6 +251,16 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/retroarch_resolve.cpp
         src/host/save_profile.cpp
         src/host/standalone_emulator.cpp
+        src/host/switch/switch_fs.cpp
+        src/host/switch/switch_system_defaults.cpp
+        src/host/switch/qt_ini_editor.cpp
+        src/host/switch/yuzu_user_profile.cpp
+        src/host/switch/yuzu_controls.cpp
+        src/host/switch/yuzu_launch_env.cpp
+        src/host/switch/ryujinx_user_profile.cpp
+        src/host/switch/ryujinx_controls.cpp
+        src/host/switch/ryujinx_launch_env.cpp
+        src/host/switch/switch_runtime.cpp
         src/host/switch_save_share.cpp
         src/host/link_coordinator.cpp
         src/host/link_cable_backend.cpp
@@ -251,22 +269,35 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/session_lobby.cpp
         src/host/session_runtime.cpp
         src/host/session_service.cpp
+        src/host/session_slot_lease.cpp
         src/host/virtual_joypad_resolve.cpp
     )
     if(WIN32)
         list(APPEND ARCHSTREAMER_HOST_SOURCES
+            src/host/windows_launch_environment.cpp
+            src/host/windows_session_slot_lease.cpp
             src/host/windows_retroarch_process.cpp
             src/host/windows_vigem_gamepad.cpp
             src/host/windows_media_server.cpp
             src/host/windows_capture_platform.cpp
+            src/host/windows_emulator_orphan_reaper.cpp
+            src/host/switch/windows_switch_paths.cpp
+            src/host/switch/windows_yuzu_runtime.cpp
+            src/host/switch/windows_ryujinx_runtime.cpp
         )
     else()
         list(APPEND ARCHSTREAMER_HOST_SOURCES
+            src/host/posix_launch_environment.cpp
+            src/host/posix_session_slot_lease.cpp
             src/host/gstreamer_media_server.cpp
             src/host/linux_uinput_gamepad.cpp
             src/host/posix_retroarch_process.cpp
             src/host/virtual_display.cpp
             src/host/linux_capture_platform.cpp
+            src/host/linux_emulator_orphan_reaper.cpp
+            src/host/switch/posix_switch_paths.cpp
+            src/host/switch/posix_yuzu_runtime.cpp
+            src/host/switch/posix_ryujinx_runtime.cpp
         )
     endif()
 

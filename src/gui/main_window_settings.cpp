@@ -28,6 +28,7 @@
 #include <QPixmapCache>
 #include <QProcess>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSpinBox>
@@ -168,6 +169,18 @@ int MainWindow::selected_yuzu_resolution_scale() const {
         return 1;
     }
     return qBound(settings_yuzu_scale_->currentData().toInt(), 1, 6);
+}
+
+QString MainWindow::selected_host_capture_resolution() const {
+    const auto fallback =
+        QString::fromStdString(archstreamer::HostAppConfig{}.video_resolution);
+    if (host_capture_resolution_ == nullptr) {
+        return fallback;
+    }
+    const auto text = host_capture_resolution_->currentText().trimmed();
+    // Free-form combo: only accept WxH so a typo cannot break the Xvfb launch.
+    static const QRegularExpression pattern(QStringLiteral("^(\\d{3,4})x(\\d{3,4})$"));
+    return pattern.match(text).hasMatch() ? text : fallback;
 }
 
 int MainWindow::selected_retroarch_resolution_scale() const {
@@ -391,10 +404,34 @@ void MainWindow::load_persisted_settings() {
         const auto index = client_stream_quality_->findData(tier);
         client_stream_quality_->setCurrentIndex(index >= 0 ? index : 0);
     }
+    if (client_stream_size_ != nullptr) {
+        const auto size = settings.value(
+            "client/streamSize",
+            static_cast<int>(archstreamer::MediaStreamSize::Auto)).toInt();
+        const QSignalBlocker blocker(client_stream_size_);
+        const auto index = client_stream_size_->findData(size);
+        client_stream_size_->setCurrentIndex(index >= 0 ? index : 0);
+    }
     if (settings_show_framecount_ != nullptr) {
         const QSignalBlocker blocker(settings_show_framecount_);
         settings_show_framecount_->setChecked(
             settings.value("client/showFramecount", false).toBool());
+    }
+    if (game_options_swap_nw_ != nullptr) {
+        const QSignalBlocker blocker(game_options_swap_nw_);
+        const bool enabled = settings.value("client/swapFaceNw", false).toBool();
+        game_options_swap_nw_->setChecked(enabled);
+        if (face_button_prefs_) {
+            face_button_prefs_->set_swap_nw(enabled);
+        }
+    }
+    if (game_options_swap_se_ != nullptr) {
+        const QSignalBlocker blocker(game_options_swap_se_);
+        const bool enabled = settings.value("client/swapFaceSe", false).toBool();
+        game_options_swap_se_->setChecked(enabled);
+        if (face_button_prefs_) {
+            face_button_prefs_->set_swap_se(enabled);
+        }
     }
 
 #ifdef ARCHSTREAMER_HAS_HOST
@@ -421,6 +458,12 @@ void MainWindow::load_persisted_settings() {
     if (host_audio_port_ != nullptr) {
         host_audio_port_->setValue(
             qBound(settings.value("host/audioPort", DefaultAudioPort).toInt(), 1, 65535));
+    }
+    if (host_capture_resolution_ != nullptr) {
+        const QSignalBlocker blocker(host_capture_resolution_);
+        host_capture_resolution_->setCurrentText(settings.value(
+            "host/captureResolution",
+            QString::fromStdString(archstreamer::HostAppConfig{}.video_resolution)).toString());
     }
     if (host_clients_ != nullptr) {
         host_clients_->setValue(qBound(settings.value("host/maxClients", 2).toInt(), 2, 4));
@@ -544,8 +587,17 @@ void MainWindow::save_persisted_settings() {
     if (client_stream_quality_ != nullptr) {
         settings.setValue("client/streamQuality", client_stream_quality_->currentData().toInt());
     }
+    if (client_stream_size_ != nullptr) {
+        settings.setValue("client/streamSize", client_stream_size_->currentData().toInt());
+    }
     if (settings_show_framecount_ != nullptr) {
         settings.setValue("client/showFramecount", settings_show_framecount_->isChecked());
+    }
+    if (game_options_swap_nw_ != nullptr) {
+        settings.setValue("client/swapFaceNw", game_options_swap_nw_->isChecked());
+    }
+    if (game_options_swap_se_ != nullptr) {
+        settings.setValue("client/swapFaceSe", game_options_swap_se_->isChecked());
     }
     if (client_game_picker_ != nullptr && client_game_picker_->hasSelection()) {
         persisted_client_game_id_ =
@@ -573,6 +625,9 @@ void MainWindow::save_persisted_settings() {
     }
     if (host_audio_port_ != nullptr) {
         settings.setValue("host/audioPort", host_audio_port_->value());
+    }
+    if (host_capture_resolution_ != nullptr) {
+        settings.setValue("host/captureResolution", selected_host_capture_resolution());
     }
     if (host_clients_ != nullptr) {
         settings.setValue("host/maxClients", host_clients_->value());

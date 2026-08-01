@@ -6,6 +6,7 @@
 #include "common/steam_art_import.hpp"
 #include "client/controller_backend.hpp"
 #include "host/capture_platform.hpp"
+#include "host/emulator_orphan_reaper.hpp"
 #include "host/game_catalog.hpp"
 #include "host/game_catalog_scanner.hpp"
 #include "host/gpu_select.hpp"
@@ -129,6 +130,9 @@ int HostApp::run_direct_session(
     bool host_plays_locally,
     const std::function<bool()>& should_stop) {
     auto session_plan = std::optional<SessionPlan>{};
+    // Soft-keyboard bridge for the no-session launch path. The watcher holds a weak
+    // reference, so this has to outlive the launch block or it retires immediately.
+    std::shared_ptr<SoftKeyboardHostBridge> standalone_soft_keyboard;
     std::optional<std::string> session_end_reason;
 
     // Direct (non-lobby) launch path — single local session, no control port.
@@ -173,10 +177,8 @@ int HostApp::run_direct_session(
         system_key = info->system_key;
     }
     if (!launch_config.standalone && system_key == "ps2") {
-        stage_user_ps2_memcards(save_profile);
         std::cout
-            << "PS2 memcards: staged from "
-            << user_ps2_memcard_directory(save_profile) << '\n';
+            << "PS2 memcards: " << user_ps2_memcard_directory(save_profile) << '\n';
     }
     // LRPS2/PCSX ReARMed stall badly under RetroArch's sdl2 joypad poll. Keep udev
     // for PlayStation even if a caller/GUI asked for sdl2.
@@ -556,24 +558,19 @@ int HostApp::run_direct_session(
                 const int scale = std::clamp(config.yuzu_resolution_scale, 1, 4);
                 std::cout << "Ryujinx resolution: " << scale << "x native\n";
             }
-#ifndef _WIN32
             if (session_plan.has_value()) {
-                if (!session_plan->soft_keyboard) {
-                    session_plan->soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();
-                }
-                schedule_ryujinx_soft_keyboard(
+                ensure_ryujinx_soft_keyboard(
                     session_plan->soft_keyboard,
                     profile_name,
                     "What is your name?",
                     capture_display);
             } else {
-                schedule_ryujinx_soft_keyboard(
-                    std::make_shared<SoftKeyboardHostBridge>(),
+                ensure_ryujinx_soft_keyboard(
+                    standalone_soft_keyboard,
                     profile_name,
                     "What is your name?",
                     capture_display);
             }
-#endif
         } else {
             // Yuzu ignores gamescope --prefer-vk-device for the child and sorts Vulkan
             // devices itself (3060 before 1660). Pin qt-config vulkan_device to that order.
@@ -644,12 +641,8 @@ int HostApp::run_direct_session(
                       << " (known cores via .opt)\n";
         }
         if (!system_key.empty()) {
-            std::cout << "Face buttons: system=" << system_key;
-            if (system_key == "ps1" || system_key == "ps2" || system_key == "psp") {
-                std::cout << " (PlayStation position map)\n";
-            } else {
-                std::cout << " (Nintendo/Xbox letter map)\n";
-            }
+            std::cout << "Face buttons: system=" << system_key
+                      << " (" << face_button_map_name(system_key) << ")\n";
         }
     }
 
@@ -753,12 +746,18 @@ int HostApp::run_direct_session(
     }
     auto session_monitor = std::optional<SessionControlMonitor>{};
     if (session_plan.has_value() && media_server) {
+        std::uint16_t capture_w = 1920;
+        std::uint16_t capture_h = 1080;
+        parse_video_resolution(config.video_resolution, capture_w, capture_h);
         session_monitor.emplace(
             *session_plan,
             input_router,
             *media_server,
             std::chrono::seconds(config.client_timeout_seconds),
-            std::chrono::seconds(config.player_reconnect_timeout_seconds));
+            std::chrono::seconds(config.player_reconnect_timeout_seconds),
+            nullptr,
+            capture_w,
+            capture_h);
     }
 
     auto local_bridge = std::optional<LocalControllerBridge>{};
@@ -1028,12 +1027,6 @@ int HostApp::run_direct_session(
     }
 
     session_runtime->stop_emulator();
-    if (!session_runtime->launch_config().standalone && system_key == "ps2") {
-        harvest_user_ps2_memcards(save_profile);
-        std::cout
-            << "PS2 memcards: harvested to "
-            << user_ps2_memcard_directory(save_profile) << '\n';
-    }
     if (const auto code = session_runtime->last_exit_code(); code.has_value()) {
         std::cout << "RetroArch exited with code " << *code << '\n';
         if (*code == 127) {
@@ -1067,6 +1060,10 @@ int HostApp::run(const std::function<bool()>& should_stop) {
     try {
         std::cout << std::unitbuf;
         std::cerr << std::unitbuf;
+
+        // Last resort only: SessionRuntime RAII owns kill for live sessions.
+        // This reaps leftovers from a prior host that never got to run destructors.
+        reap_orphaned_emulator_processes();
 
         auto config = config_;
         auto catalog = scan_game_catalog(config.rom_root, LibretroCoreRegistry::ubuntu_defaults(), config.meta_root);

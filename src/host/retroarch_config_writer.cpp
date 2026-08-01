@@ -47,21 +47,18 @@ std::string sanitize_device_name(std::string_view value) {
 // NOT the common SDL face order (2=WEST, 3=NORTH). Mixing those up swaps
 // Square/Triangle on PS (and X/Y on Nintendo) while leaving Cross/Circle OK.
 //
-// Nintendo / default: map by Xbox/SDL *letter* (physical A → RetroPad A).
-// PlayStation: map by *position* so DualShock Cross (south) hits RetroPad B
-// (PS Cross), Square (west) hits RetroPad Y, Triangle (north) hits RetroPad X.
+// Host is a dumb NESW relay: South→RetroPad A, East→RetroPad B, West→RetroPad Y,
+// North→RetroPad X (Xbox/SDL letter layout). Per-system or DualShock quirks are
+// fixed on the client via Swap NW / Swap SE — not here.
 struct FaceButtonIndices {
     const char* b = "1"; // EAST
     const char* a = "0"; // SOUTH
-    const char* y = "2"; // NORTH (letter Y) / overridden for PS → WEST
-    const char* x = "3"; // WEST  (letter X) / overridden for PS → NORTH
+    const char* y = "2"; // NORTH
+    const char* x = "3"; // WEST
+    const char* name = "NESW letter map";
 };
 
-FaceButtonIndices face_button_indices_for_system(std::string_view system_key) {
-    if (system_key == "ps1" || system_key == "ps2" || system_key == "psp") {
-        // b=SOUTH, a=EAST, y=WEST(Square), x=NORTH(Triangle)
-        return FaceButtonIndices{"0", "1", "3", "2"};
-    }
+FaceButtonIndices face_button_indices_for_system(std::string_view /*system_key*/) {
     return FaceButtonIndices{};
 }
 
@@ -314,6 +311,11 @@ void apply_retroarch_resolution_scale(
 // Stream-friendly DS layout: large main (top) screen with a smaller touchscreen
 // beside it. melonDS "Hybrid Top" + small=Bottom matches that; Top/Bottom stacks
 // both at equal size and wastes vertical space on the stream.
+//
+// R2 is the core's Swap Screens button. In the software renderer the small pane
+// ignores the swap (large flips, side stays fixed — often duplicating bottom).
+// The OpenGL path exchanges both panes; we already wrap melonDS in VirtualGL, so
+// enabling the core GL renderer is safe and makes R2 a real swap.
 void apply_nds_screen_layout(const std::filesystem::path& core_path) {
     if (core_path.empty()) {
         return;
@@ -330,10 +332,12 @@ void apply_nds_screen_layout(const std::filesystem::path& core_path) {
         write("melonDS", {
             {"melonds_screen_layout", "Hybrid Top"},
             {"melonds_hybrid_small_screen", "Bottom"},
-            // Soft-GL path still accepts this; OpenGL uses it for scale. 3 keeps
-            // the touchscreen readable but clearly secondary.
             {"melonds_hybrid_ratio", "3"},
             {"melonds_screen_gap", "0"},
+            {"melonds_swapscreen_mode", "Toggle"},
+            {"melonds_opengl_renderer", "enabled"},
+            // Layout buffer is still ≥4× native in-core; keep 3D scale modest.
+            {"melonds_opengl_resolution", "2x native (512x384)"},
         });
     }
 }
@@ -342,6 +346,10 @@ void apply_nds_screen_layout(const std::filesystem::path& core_path) {
 
 bool core_needs_gl_on_virtual_display(const std::filesystem::path& core_path) {
     return core_needs_gl_on_virtual_display_impl(core_path);
+}
+
+std::string_view face_button_map_name(std::string_view system_key) {
+    return face_button_indices_for_system(system_key).name;
 }
 
 VirtualGamepadIdentity identity_for_port(
@@ -399,10 +407,12 @@ std::filesystem::path write_retroarch_input_override(
         throw std::runtime_error("failed to write RetroArch input override");
     }
 
-    // Prefer the same BIOS/system tree RetroArch / ra.py use (PS1 SCPH*.bin, etc.).
-    std::filesystem::path system_directory;
-    if (const auto home = user_home_directory(); !home.empty()) {
-        system_directory = std::filesystem::path(home) / ".config/retroarch/system";
+    // Per-user mirror of the BIOS/system tree RetroArch / ra.py use (PS1 SCPH*.bin,
+    // etc.). Everything is symlinked back to the shared tree except pcsx2/memcards,
+    // so concurrent sessions cannot open each other's PS2 cards.
+    std::filesystem::path system_directory = save_profile.system_directory;
+    if (system_directory.empty()) {
+        system_directory = shared_retroarch_system_directory();
     }
 
     file

@@ -4,6 +4,7 @@
 #include "client/gstreamer_probe.hpp"
 
 #include <stdexcept>
+#include <string_view>
 
 namespace archstreamer {
 
@@ -41,6 +42,12 @@ void PosixGStreamerMediaPlatform::append_video_branch(
     args.insert(args.end(), source.begin(), source.end());
     gst_append_h264parse_if_available(args);
     args.push_back(decoder.element);
+    // Prefer dropping corrupt reconstructions over painting green/tile garbage
+    // until the next IDR (avdec property; ignored if the element lacks it would
+    // fail gst-launch — only set for avdec_h264 which supports it).
+    if (std::string_view{decoder.element} == "avdec_h264") {
+        args.push_back("output-corrupt=false");
+    }
     args.push_back("!");
     gst_append_progress_video_sink(args, sink, sync);
 }

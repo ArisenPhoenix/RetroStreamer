@@ -2,6 +2,8 @@
 
 #include <cstdlib>
 #include <stdexcept>
+#include <string_view>
+#include <system_error>
 
 namespace archstreamer {
 
@@ -72,6 +74,7 @@ SaveProfile prepare_save_profile(
     std::filesystem::create_directories(profile.savefile_directory);
     std::filesystem::create_directories(profile.savestate_directory);
     std::filesystem::create_directories(user_ps2_memcard_directory(profile));
+    profile.system_directory = prepare_user_system_directory(profile);
     return profile;
 }
 
@@ -79,64 +82,67 @@ std::filesystem::path user_ps2_memcard_directory(const SaveProfile& profile) {
     return profile.user_directory / "pcsx2" / "memcards";
 }
 
-std::filesystem::path shared_ps2_memcard_directory() {
+std::filesystem::path shared_retroarch_system_directory() {
     if (const char* home = std::getenv("HOME"); home != nullptr && *home != '\0') {
-        return std::filesystem::path(home) / ".config/retroarch/system/pcsx2/memcards";
+        return std::filesystem::path(home) / ".config/retroarch/system";
     }
-    return std::filesystem::path(".config/retroarch/system/pcsx2/memcards");
+    return std::filesystem::path(".config/retroarch/system");
 }
 
 namespace {
 
-void copy_ps2_memcards(
-    const std::filesystem::path& source_dir,
-    const std::filesystem::path& dest_dir) {
-    if (!std::filesystem::exists(source_dir)) {
+void link_into_mirror(
+    const std::filesystem::path& link,
+    const std::filesystem::path& target) {
+    std::error_code error;
+    if (std::filesystem::is_symlink(link, error)) {
+        if (std::filesystem::read_symlink(link, error) == target) {
+            return;
+        }
+        std::filesystem::remove(link, error);
+    } else if (std::filesystem::exists(link, error)) {
+        // Something real already sits there; never clobber a user's own files.
         return;
     }
-    std::filesystem::create_directories(dest_dir);
-    for (const auto& entry : std::filesystem::directory_iterator(source_dir)) {
-        if (!entry.is_regular_file()) {
-            continue;
-        }
+    std::filesystem::create_symlink(target, link, error);
+}
+
+void mirror_children(
+    const std::filesystem::path& source,
+    const std::filesystem::path& mirror,
+    std::string_view skip) {
+    std::error_code error;
+    if (!std::filesystem::is_directory(source, error)) {
+        return;
+    }
+    for (const auto& entry : std::filesystem::directory_iterator(source, error)) {
         const auto name = entry.path().filename().string();
-        if (name.size() < 4 || name.substr(name.size() - 4) != ".ps2") {
+        if (name == skip) {
             continue;
         }
-        const auto target = dest_dir / entry.path().filename();
-        std::filesystem::copy_file(
-            entry.path(),
-            target,
-            std::filesystem::copy_options::overwrite_existing);
+        link_into_mirror(mirror / name, entry.path());
     }
 }
 
 } // namespace
 
-void stage_user_ps2_memcards(const SaveProfile& profile) {
-    const auto user_cards = user_ps2_memcard_directory(profile);
-    const auto shared_cards = shared_ps2_memcard_directory();
-    std::filesystem::create_directories(user_cards);
-    std::filesystem::create_directories(shared_cards);
+std::filesystem::path prepare_user_system_directory(const SaveProfile& profile) {
+    const auto shared_system = shared_retroarch_system_directory();
+    const auto mirror = profile.user_directory / "retroarch-system";
+    std::error_code error;
+    std::filesystem::create_directories(mirror, error);
 
-    // First PS2 session for this user: seed from the shared RetroArch cards if empty.
-    bool user_has_card = false;
-    if (std::filesystem::exists(user_cards)) {
-        for (const auto& entry : std::filesystem::directory_iterator(user_cards)) {
-            if (entry.is_regular_file() && entry.path().extension() == ".ps2") {
-                user_has_card = true;
-                break;
-            }
-        }
-    }
-    if (!user_has_card) {
-        copy_ps2_memcards(shared_cards, user_cards);
-    }
-    copy_ps2_memcards(user_cards, shared_cards);
-}
+    // BIOS and databases stay shared; only the PS2 tree needs per-user identity.
+    mirror_children(shared_system, mirror, "pcsx2");
 
-void harvest_user_ps2_memcards(const SaveProfile& profile) {
-    copy_ps2_memcards(shared_ps2_memcard_directory(), user_ps2_memcard_directory(profile));
+    const auto pcsx2 = mirror / "pcsx2";
+    std::filesystem::create_directories(pcsx2, error);
+    mirror_children(shared_system / "pcsx2", pcsx2, "memcards");
+
+    const auto cards = user_ps2_memcard_directory(profile);
+    std::filesystem::create_directories(cards, error);
+    link_into_mirror(pcsx2 / "memcards", cards);
+    return mirror;
 }
 
 } // namespace archstreamer

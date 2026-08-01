@@ -547,7 +547,11 @@ void schedule_ryujinx_soft_keyboard(
         bridge = std::make_shared<SoftKeyboardHostBridge>();
     }
 
-    std::thread([bridge = std::move(bridge),
+    // Weak on purpose: the session owns the bridge, so the watcher retires when the
+    // session does instead of one more poller piling up per launch in a persistent lobby.
+    std::weak_ptr<SoftKeyboardHostBridge> weak_bridge = bridge;
+
+    std::thread([weak_bridge = std::move(weak_bridge),
                  fallback_text = std::move(fallback_text),
                  prompt = std::move(prompt),
                  preferred_display = std::move(preferred_display)]() {
@@ -560,96 +564,159 @@ void schedule_ryujinx_soft_keyboard(
         for (auto& name : soft_keyboard_display_candidates(preferred_display)) {
             probes.push_back({std::move(name), 0});
         }
+        // Once a dialog has been served somewhere, stay on that display. Sibling session
+        // slots run their own emulator on their own display and we must not answer theirs.
+        std::string pinned_display;
 
-        std::string found_display;
+        // Poll hard while a prompt is plausible, then relax so a long session is not
+        // paying for a tight X poll all evening.
+        constexpr auto kFastInterval = std::chrono::milliseconds(150);
+        constexpr auto kIdleInterval = std::chrono::milliseconds(500);
+        constexpr int kFastAttempts = 400; // ~60s
+        constexpr int kUnavailableBackoff = 13; // ~2s before re-probing a dead slot
+
         // Wait until a dialog is mapped *and* holding keyboard focus (wants typed text),
         // not merely present unmapped in the window tree (boot-time false positives).
-        // Most candidate slots are empty, so back those off: a tick then only pays for
-        // the one or two displays that exist and can run at a tight interval.
-        constexpr auto kPollInterval = std::chrono::milliseconds(150);
-        constexpr int kPollAttempts = 2400; // ~6 minutes
-        constexpr int kUnavailableBackoff = 13; // ~2s before re-probing a dead slot
-        for (int attempt = 0; attempt < kPollAttempts; ++attempt) {
+        // False once the session drops the bridge.
+        const auto wait_for_dialog = [&](std::string& out) {
             for (auto& probe : probes) {
-                if (attempt < probe.retry_at) {
-                    continue;
+                probe.retry_at = 0;
+            }
+            for (int attempt = 0;; ++attempt) {
+                if (weak_bridge.expired()) {
+                    return false;
                 }
-                try {
-                    const auto result = probe_text_dialog(probe.name);
-                    if (result == TextDialogProbe::Unavailable) {
-                        probe.retry_at = attempt + kUnavailableBackoff;
-                    } else if (result == TextDialogProbe::Ready) {
-                        found_display = probe.name;
-                        break;
+                if (!pinned_display.empty()) {
+                    const auto result = probe_text_dialog(pinned_display);
+                    if (result == TextDialogProbe::Ready) {
+                        out = pinned_display;
+                        return true;
                     }
-                } catch (...) {
-                    probe.retry_at = attempt + kUnavailableBackoff;
+                    if (result == TextDialogProbe::Unavailable) {
+                        // Emulator restarted onto a different display; rescan.
+                        pinned_display.clear();
+                    }
+                } else {
+                    // Most candidate slots are empty, so back those off: a tick then only
+                    // pays for the one or two displays that actually exist.
+                    for (auto& probe : probes) {
+                        if (attempt < probe.retry_at) {
+                            continue;
+                        }
+                        const auto result = probe_text_dialog(probe.name);
+                        if (result == TextDialogProbe::Unavailable) {
+                            probe.retry_at = attempt + kUnavailableBackoff;
+                        } else if (result == TextDialogProbe::Ready) {
+                            out = probe.name;
+                            return true;
+                        }
+                    }
                 }
+                std::this_thread::sleep_for(
+                    attempt < kFastAttempts ? kFastInterval : kIdleInterval);
             }
-            if (!found_display.empty()) {
-                break;
+        };
+
+        // False once the session drops the bridge.
+        const auto serve_dialog = [&](const std::string& display_name) {
+            SoftKeyboardRequest request;
+            {
+                auto bridge = weak_bridge.lock();
+                if (!bridge) {
+                    return false;
+                }
+                {
+                    std::lock_guard lock(bridge->mutex);
+                    // Blank field: the player is being asked to type a name, and
+                    // prefilling it just means erasing it on a pad keyboard first.
+                    // fallback_text is only for the no-answer path below.
+                    request = bridge->make_request(prompt, /*initial_text=*/{}, 12);
+                }
+                bridge->publish_request(request);
             }
-            std::this_thread::sleep_for(kPollInterval);
-        }
-        if (found_display.empty()) {
-            std::cerr << "Ryujinx Software Keyboard: timed out waiting for text-input dialog\n";
-            return;
-        }
+            std::cout
+                << "Ryujinx Software Keyboard: focused text dialog on " << display_name
+                << " — requesting pad OSK (id=" << request.request_id << ")\n";
 
-        SoftKeyboardRequest request;
-        {
-            std::lock_guard lock(bridge->mutex);
-            // Blank field: the player is being asked to type a name, and prefilling it
-            // just means erasing it on a pad keyboard first. fallback_text is only for
-            // the no-answer path below.
-            request = bridge->make_request(prompt, /*initial_text=*/{}, 12);
-        }
-        bridge->publish_request(request);
-        std::cout
-            << "Ryujinx Software Keyboard: focused text dialog on " << found_display
-            << " — requesting pad OSK (id=" << request.request_id << ")\n";
-
-        std::optional<SoftKeyboardResponse> response;
-        for (int wait = 0; wait < 360; ++wait) {
-            response = bridge->take_response();
-            if (response.has_value() && response->request_id == request.request_id) {
-                break;
+            std::optional<SoftKeyboardResponse> response;
+            for (int wait = 0; wait < 360; ++wait) {
+                auto bridge = weak_bridge.lock();
+                if (!bridge) {
+                    return false;
+                }
+                response = bridge->take_response();
+                if (response.has_value() && response->request_id == request.request_id) {
+                    break;
+                }
+                response.reset();
+                bridge.reset();
+                // Never re-publish while waiting: the request goes out over the TCP control
+                // stream, and a resend made the client tear down and rebuild the pad OSK
+                // every 5s, wiping whatever the player had typed.
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
             }
-            response.reset();
-            // Never re-publish while waiting: the request goes out over the TCP control
-            // stream, and a resend made the client tear down and rebuild the pad OSK
-            // every 5s, wiping whatever the player had typed.
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        }
 
-        std::string text = fallback_text;
-        if (response.has_value() && response->accepted && !response->text.empty()) {
-            text = response->text;
-            if (text.size() > 12) {
-                text.resize(12);
+            std::string text = fallback_text;
+            if (response.has_value() && response->accepted && !response->text.empty()) {
+                text = response->text;
+                if (text.size() > 12) {
+                    text.resize(12);
+                }
+            } else if (!response.has_value()) {
+                std::cerr
+                    << "Ryujinx Software Keyboard: no pad OSK response; using fallback \""
+                    << fallback_text << "\"\n";
+            } else {
+                std::cerr
+                    << "Ryujinx Software Keyboard: pad OSK cancelled; using fallback \""
+                    << fallback_text << "\"\n";
             }
-        } else if (!response.has_value()) {
-            std::cerr
-                << "Ryujinx Software Keyboard: no pad OSK response; using fallback \""
-                << fallback_text << "\"\n";
-        } else {
-            std::cerr
-                << "Ryujinx Software Keyboard: pad OSK cancelled; using fallback \""
-                << fallback_text << "\"\n";
-        }
 
-        for (int attempt = 0; attempt < 20; ++attempt) {
-            try {
-                if (try_autofill_on_display(found_display, text)) {
-                    bridge->clear();
+            bool injected = false;
+            for (int attempt = 0; attempt < 20 && !injected; ++attempt) {
+                if (try_autofill_on_display(display_name, text)) {
+                    injected = true;
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            }
+            if (!injected) {
+                std::cerr << "Ryujinx Software Keyboard: failed to inject text into dialog\n";
+            }
+            if (auto bridge = weak_bridge.lock()) {
+                bridge->clear();
+            }
+            return true;
+        };
+
+        // Re-arming while the answered dialog is still up would instantly re-prompt for
+        // the one we just filled in.
+        const auto wait_for_dialog_to_close = [&](const std::string& display_name) {
+            for (int attempt = 0; attempt < 400; ++attempt) { // ~60s
+                if (weak_bridge.expired() ||
+                    probe_text_dialog(display_name) != TextDialogProbe::Ready) {
                     return;
                 }
-            } catch (...) {
+                std::this_thread::sleep_for(kFastInterval);
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        };
+
+        // Games ask more than once: declining the "is this right?" confirmation reopens
+        // the same prompt, so keep serving dialogs for as long as the session lives.
+        try {
+            while (true) {
+                std::string found_display;
+                if (!wait_for_dialog(found_display)) {
+                    return;
+                }
+                pinned_display = found_display;
+                if (!serve_dialog(found_display)) {
+                    return;
+                }
+                wait_for_dialog_to_close(found_display);
+            }
+        } catch (...) {
         }
-        std::cerr << "Ryujinx Software Keyboard: failed to inject text into dialog\n";
-        bridge->clear();
     }).detach();
 }
 

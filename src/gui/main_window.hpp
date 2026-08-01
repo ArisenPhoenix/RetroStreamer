@@ -99,6 +99,7 @@ private:
     void toggle_pad_on_screen_keyboard(bool open);
     void open_soft_keyboard_from_host(const archstreamer::SoftKeyboardRequest& request);
     void close_pad_on_screen_keyboard();
+    void restore_video_window_focus();
 
     GameFilter client_filter_from_fields() const;
     void refresh_filtered_client_games();

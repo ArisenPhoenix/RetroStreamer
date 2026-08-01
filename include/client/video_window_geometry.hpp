@@ -32,6 +32,13 @@ bool apply_video_window_geometry(
     const VideoWindowGeometry& geometry,
     std::chrono::milliseconds timeout = std::chrono::milliseconds(2500));
 
+/**
+ * Put the video sink window back on top and give it input focus. Showing a Qt dialog
+ * pulls the whole GUI above the sink, which is a separate process the window manager
+ * does not restack for us. pid 0 falls back to locating the window by sink title.
+ */
+bool raise_video_window(int pid = 0);
+
 /** Primary screen height in pixels (0 if unavailable). Used for Auto stream size. */
 int primary_display_height();
 

@@ -130,6 +130,9 @@ int HostApp::run_direct_session(
     bool host_plays_locally,
     const std::function<bool()>& should_stop) {
     auto session_plan = std::optional<SessionPlan>{};
+    // Soft-keyboard bridge for the no-session launch path. The watcher holds a weak
+    // reference, so this has to outlive the launch block or it retires immediately.
+    std::shared_ptr<SoftKeyboardHostBridge> standalone_soft_keyboard;
     std::optional<std::string> session_end_reason;
 
     // Direct (non-lobby) launch path — single local session, no control port.
@@ -562,9 +565,8 @@ int HostApp::run_direct_session(
                     "What is your name?",
                     capture_display);
             } else {
-                auto bridge = std::make_shared<SoftKeyboardHostBridge>();
                 ensure_ryujinx_soft_keyboard(
-                    bridge,
+                    standalone_soft_keyboard,
                     profile_name,
                     "What is your name?",
                     capture_display);

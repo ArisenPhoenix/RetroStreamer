@@ -345,6 +345,40 @@ bool apply_video_window_geometry(
     return true;
 }
 
+bool raise_video_window(int pid) {
+    Display* display = open_display();
+    if (display == nullptr) {
+        return false;
+    }
+    const Window window = find_gst_video_window(display, pid);
+    if (window == None) {
+        XCloseDisplay(display);
+        return false;
+    }
+
+    // _NET_ACTIVE_WINDOW is the EWMH-sanctioned restack; XRaiseWindow alone is ignored
+    // by most window managers for windows we do not own.
+    XEvent event{};
+    event.xclient.type = ClientMessage;
+    event.xclient.window = window;
+    event.xclient.message_type = XInternAtom(display, "_NET_ACTIVE_WINDOW", False);
+    event.xclient.format = 32;
+    event.xclient.data.l[0] = 2; // pager / direct user action
+    event.xclient.data.l[1] = CurrentTime;
+    XSendEvent(
+        display,
+        DefaultRootWindow(display),
+        False,
+        SubstructureRedirectMask | SubstructureNotifyMask,
+        &event);
+
+    XRaiseWindow(display, window);
+    XSetInputFocus(display, window, RevertToParent, CurrentTime);
+    XFlush(display);
+    XCloseDisplay(display);
+    return true;
+}
+
 int primary_display_height() {
     Display* display = open_display();
     if (display == nullptr) {

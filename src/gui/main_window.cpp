@@ -15,6 +15,7 @@
 #include "client/client_media_playback.hpp"
 #include "client/game_filter.hpp"
 #include "client/audio_playback_device.hpp"
+#include "client/video_window_geometry.hpp"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -977,6 +978,8 @@ void MainWindow::open_soft_keyboard_from_host(const SoftKeyboardRequest& request
                     ? QStringLiteral("Sent pad keyboard text to host.")
                     : QStringLiteral("Cancelled pad keyboard."));
         }
+        // This dialog appeared over the game unprompted, so hand the screen back.
+        restore_video_window_focus();
     });
     pad_osk_->show();
     pad_osk_->raise();
@@ -986,6 +989,14 @@ void MainWindow::open_soft_keyboard_from_host(const SoftKeyboardRequest& request
         game_options_pad_osk_->setChecked(true);
     }
     append_log(client_log_, QStringLiteral("Pad keyboard opened: %1").arg(prompt));
+}
+
+void MainWindow::restore_video_window_focus() {
+    // Deferred: Qt is still tearing the dialog down and will hand focus back to this
+    // window, which would land on top of whatever we raise right now.
+    QTimer::singleShot(150, this, [] {
+        archstreamer::raise_video_window();
+    });
 }
 
 void MainWindow::close_pad_on_screen_keyboard() {

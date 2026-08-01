@@ -3,11 +3,16 @@
 
 #include "host/retroarch_netcmd.hpp"
 
+#include <chrono>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <utility>
+#include <vector>
 
 #include <X11/Xlib.h>
+#include <X11/Xatom.h>
 #include <X11/keysym.h>
 #include <X11/extensions/XTest.h>
 
@@ -236,6 +241,187 @@ void VirtualKeyboard::apply(const KeyboardState& state) {
 void VirtualKeyboard::release_all() {
     KeyboardState empty{};
     apply(empty);
+}
+
+namespace {
+
+std::string window_title(Display* display, Window window) {
+    Atom actual_type = None;
+    int actual_format = 0;
+    unsigned long item_count = 0;
+    unsigned long bytes_after = 0;
+    unsigned char* prop = nullptr;
+    if (XGetWindowProperty(
+            display,
+            window,
+            XInternAtom(display, "_NET_WM_NAME", False),
+            0,
+            256,
+            False,
+            AnyPropertyType,
+            &actual_type,
+            &actual_format,
+            &item_count,
+            &bytes_after,
+            &prop) == Success &&
+        prop != nullptr) {
+        std::string name(reinterpret_cast<char*>(prop));
+        XFree(prop);
+        return name;
+    }
+    char* legacy = nullptr;
+    if (XFetchName(display, window, &legacy) && legacy != nullptr) {
+        std::string name(legacy);
+        XFree(legacy);
+        return name;
+    }
+    return {};
+}
+
+void collect_windows(Display* display, Window window, std::vector<std::pair<Window, std::string>>& out) {
+    Window root = 0;
+    Window parent = 0;
+    Window* children = nullptr;
+    unsigned int child_count = 0;
+    if (!XQueryTree(display, window, &root, &parent, &children, &child_count) ||
+        children == nullptr) {
+        return;
+    }
+    for (unsigned int index = 0; index < child_count; ++index) {
+        const auto title = window_title(display, children[index]);
+        if (!title.empty()) {
+            out.emplace_back(children[index], title);
+        }
+        collect_windows(display, children[index], out);
+    }
+    XFree(children);
+}
+
+void xtest_key(Display* display, KeySym keysym, bool pressed) {
+    const KeyCode code = XKeysymToKeycode(display, keysym);
+    if (code == 0) {
+        return;
+    }
+    XTestFakeKeyEvent(display, code, pressed ? True : False, CurrentTime);
+    XFlush(display);
+}
+
+void xtest_type_ascii(Display* display, const std::string& text) {
+    for (char character : text) {
+        KeySym keysym = NoSymbol;
+        bool shift = false;
+        if (character >= 'A' && character <= 'Z') {
+            shift = true;
+            keysym = XStringToKeysym(std::string(1, static_cast<char>(character - 'A' + 'a')).c_str());
+        } else if (character >= 'a' && character <= 'z') {
+            keysym = XStringToKeysym(std::string(1, character).c_str());
+        } else if (character >= '0' && character <= '9') {
+            keysym = XStringToKeysym(std::string(1, character).c_str());
+        } else if (character == ' ' || character == '_' || character == '-') {
+            keysym = character == ' ' ? XK_space : XStringToKeysym(std::string(1, character).c_str());
+        }
+        if (keysym == NoSymbol) {
+            continue;
+        }
+        if (shift) {
+            xtest_key(display, XK_Shift_L, true);
+        }
+        xtest_key(display, keysym, true);
+        xtest_key(display, keysym, false);
+        if (shift) {
+            xtest_key(display, XK_Shift_L, false);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    }
+}
+
+bool try_autofill_on_display(const std::string& display_name, const std::string& text) {
+    Display* display = XOpenDisplay(display_name.c_str());
+    if (display == nullptr) {
+        return false;
+    }
+    XSetIOErrorExitHandler(
+        display,
+        [](Display*, void*) {},
+        nullptr);
+
+    std::vector<std::pair<Window, std::string>> windows;
+    collect_windows(display, DefaultRootWindow(display), windows);
+
+    Window target = 0;
+    for (const auto& [window, title] : windows) {
+        if (title.find("ContentDialogOverlayWindow") != std::string::npos ||
+            title.find("Software Keyboard") != std::string::npos) {
+            target = window;
+            break;
+        }
+    }
+    if (target == 0) {
+        XCloseDisplay(display);
+        return false;
+    }
+
+    XSetInputFocus(display, target, RevertToParent, CurrentTime);
+    XRaiseWindow(display, target);
+    XFlush(display);
+    // Give Avalonia a beat to focus the text box before the first glyph.
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+    xtest_type_ascii(display, text);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    xtest_key(display, XK_Return, true);
+    xtest_key(display, XK_Return, false);
+    XCloseDisplay(display);
+    std::cout
+        << "Ryujinx Software Keyboard: autofilled \"" << text
+        << "\" on display " << display_name << '\n';
+    return true;
+}
+
+} // namespace
+
+void schedule_ryujinx_name_dialog_autofill(std::string text) {
+    // Pokemon trainer names are 1–12 Latin characters.
+    if (text.size() > 12) {
+        text.resize(12);
+    }
+    if (text.empty()) {
+        text = "Player";
+    } else {
+        // Match Profiles.json title-case (e.g. "alina" → "Alina").
+        bool capitalize = true;
+        for (char& character : text) {
+            if (character == ' ' || character == '-' || character == '_') {
+                if (character == '_' || character == '-') {
+                    character = ' ';
+                }
+                capitalize = true;
+                continue;
+            }
+            if (capitalize && character >= 'a' && character <= 'z') {
+                character = static_cast<char>(character - 'a' + 'A');
+            } else if (!capitalize && character >= 'A' && character <= 'Z') {
+                character = static_cast<char>(character - 'A' + 'a');
+            }
+            capitalize = false;
+        }
+    }
+    std::thread([text = std::move(text)]() {
+        // Dialog appears well after boot (shader/cache); poll for ~3 minutes.
+        for (int attempt = 0; attempt < 360; ++attempt) {
+            for (int display_index = 1; display_index <= 10; ++display_index) {
+                const auto name = ":" + std::to_string(display_index);
+                try {
+                    if (try_autofill_on_display(name, text)) {
+                        return;
+                    }
+                } catch (...) {
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+        std::cerr << "Ryujinx Software Keyboard: autofill timed out waiting for dialog\n";
+    }).detach();
 }
 
 } // namespace archstreamer

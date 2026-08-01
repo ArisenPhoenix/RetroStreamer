@@ -57,4 +57,11 @@ private:
     std::uint32_t last_keys_ = 0;
 };
 
+#ifndef _WIN32
+// Ryujinx shows an Avalonia "Software Keyboard" ContentDialog for Switch swkbd
+// (e.g. Pokemon "What is your name?"). Under gamescope that dialog is in the
+// stream but not reachable with a pad — watch nested X displays and type `text`.
+void schedule_ryujinx_name_dialog_autofill(std::string text);
+#endif
+
 } // namespace archstreamer

@@ -378,6 +378,8 @@ if(Qt6Widgets_FOUND)
         src/gui/host_picker_widget.hpp
         src/gui/host_search_dialog.cpp
         src/gui/host_search_dialog.hpp
+        src/gui/pad_on_screen_keyboard.cpp
+        src/gui/pad_on_screen_keyboard.hpp
         src/gui/gui_logging.cpp
         src/gui/gui_logging.hpp
         src/gui/gui_util.cpp

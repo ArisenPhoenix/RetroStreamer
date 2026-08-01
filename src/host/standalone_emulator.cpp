@@ -1165,7 +1165,27 @@ std::string ryujinx_profile_display_name(const std::string& preferred) {
     while (!name.empty() && (name.back() == ' ' || name.back() == '\t')) {
         name.pop_back();
     }
-    return name.empty() ? std::string("Player") : name;
+    if (name.empty()) {
+        return "Player";
+    }
+    // Title-case for Profiles.json / trainer autofill (e.g. "alina" → "Alina").
+    bool capitalize = true;
+    for (char& character : name) {
+        if (character == ' ' || character == '-' || character == '_') {
+            if (character == '_' || character == '-') {
+                character = ' ';
+            }
+            capitalize = true;
+            continue;
+        }
+        if (capitalize && character >= 'a' && character <= 'z') {
+            character = static_cast<char>(character - 'a' + 'A');
+        } else if (!capitalize && character >= 'A' && character <= 'Z') {
+            character = static_cast<char>(character - 'A' + 'a');
+        }
+        capitalize = false;
+    }
+    return name;
 }
 
 // Default Ryujinx account id (unused for naming; kept for id comparisons if present).
@@ -1173,6 +1193,7 @@ std::string ryujinx_profile_display_name(const std::string& preferred) {
     "00000000000000010000000000000000";
 
 // Stable non-default user id so LDN sees a "custom" profile.
+// Ryujinx UserId is 16 bytes → exactly 32 hex digits (shorter fails parse → RyuPlayer).
 std::string ryujinx_custom_user_id(const std::string& save_username) {
     std::uint64_t hash = 14695981039346656037ull;
     for (unsigned char character : save_username) {
@@ -1183,9 +1204,10 @@ std::string ryujinx_custom_user_id(const std::string& save_username) {
     std::snprintf(
         buffer,
         sizeof(buffer),
-        "a5c57ea1%08x%08x",
+        "a5c57ea1%08x%08x%08x",
         static_cast<unsigned>(hash >> 32),
-        static_cast<unsigned>(hash));
+        static_cast<unsigned>(hash),
+        static_cast<unsigned>(hash ^ (hash >> 17)));
     return buffer;
 }
 

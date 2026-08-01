@@ -22,6 +22,7 @@
 #include "host/standalone_emulator.hpp"
 #include "host/switch_save_share.hpp"
 #include "host/virtual_joypad_resolve.hpp"
+#include "host/virtual_keyboard.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -661,6 +662,9 @@ void ActiveSessionSlot::run_session() {
                 << "session slot " << slot << ": Ryujinx (ldn_mitm)"
                 << " config=" << ryujinx_user.data_root
                 << " shared_saves=" << synced.size() << '\n';
+#ifndef _WIN32
+            schedule_ryujinx_name_dialog_autofill(profile_name);
+#endif
         } else {
             int yuzu_vulkan_device = -1;
             if (resolved_gpu.has_value()) {

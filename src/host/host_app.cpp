@@ -551,6 +551,9 @@ int HostApp::run_direct_session(
                 const int scale = std::clamp(config.yuzu_resolution_scale, 1, 4);
                 std::cout << "Ryujinx resolution: " << scale << "x native\n";
             }
+#ifndef _WIN32
+            schedule_ryujinx_name_dialog_autofill(profile_name);
+#endif
         } else {
             // Yuzu ignores gamescope --prefer-vk-device for the child and sorts Vulkan
             // devices itself (3060 before 1660). Pin qt-config vulkan_device to that order.

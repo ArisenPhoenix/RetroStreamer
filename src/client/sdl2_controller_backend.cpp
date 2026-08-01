@@ -7,6 +7,7 @@
 
 #include <charconv>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <system_error>
 #include <string>
@@ -18,6 +19,12 @@ namespace {
 constexpr std::uint16_t ArchStreamerVirtualVendorId = 0x1209;
 constexpr std::uint16_t ArchStreamerVirtualProductIdBase = 0xa517;
 constexpr auto kReopenBackoff = std::chrono::milliseconds(400);
+// Brief GetAttached glitches (flaky USB after hotplug, Windows re-enumeration) used to
+// close the pad and flood neutrals — that releases every button/stick and feels like the
+// game "undoes" the last action about once a second. Require sustained detach first.
+constexpr auto kDetachConfirm = std::chrono::milliseconds(250);
+// After a successful reclaim, ignore detach blips while HID finishes coming back.
+constexpr auto kAttachSettle = std::chrono::milliseconds(400);
 
 int parse_device_index(const std::string& id) {
     int value = 0;
@@ -105,6 +112,11 @@ struct Sdl2ControllerBackend::OpenController {
     std::string preferred_name;
     std::uint16_t preferred_vendor = 0;
     std::uint16_t preferred_product = 0;
+    // Last live sample — held across soft-detach so we do not emit neutrals on glitches.
+    ControllerState last_good{};
+    bool has_last_good = false;
+    std::optional<std::chrono::steady_clock::time_point> detach_since;
+    std::chrono::steady_clock::time_point attach_settle_until{};
 
     ~OpenController() {
         if (controller != nullptr) {
@@ -115,6 +127,9 @@ struct Sdl2ControllerBackend::OpenController {
 };
 
 Sdl2ControllerBackend::Sdl2ControllerBackend() {
+    // Without this, some Windows focus/compositor blips stop HID updates and axes snap
+    // to center until the next report — same "undo every second" symptom after hotplug.
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     if (SDL_Init(SDL_INIT_GAMECONTROLLER) != 0) {
         throw std::runtime_error(SDL_GetError());
     }
@@ -185,6 +200,8 @@ void Sdl2ControllerBackend::open_selected(const std::vector<std::string>& device
         opened->preferred_name = info.name;
         opened->preferred_vendor = info.vendor_id;
         opened->preferred_product = info.product_id;
+        opened->detach_since.reset();
+        opened->attach_settle_until = {};
         opened_.push_back(std::move(opened));
     }
 
@@ -221,6 +238,8 @@ void Sdl2ControllerBackend::close_slot(OpenController& slot, const char* reason)
         slot.controller = nullptr;
     }
     slot.instance_id = -1;
+    slot.detach_since.reset();
+    slot.attach_settle_until = {};
     push_hotplug_status(
         "Controller P" + std::to_string(static_cast<int>(slot.local_player) + 1) +
         " (" + name + ") " + reason +
@@ -259,6 +278,10 @@ bool Sdl2ControllerBackend::try_open_slot(OpenController& slot) {
         if (controller == nullptr) {
             return false;
         }
+        if (SDL_GameControllerGetAttached(controller) != SDL_TRUE) {
+            SDL_GameControllerClose(controller);
+            return false;
+        }
 
         slot.controller = controller;
         slot.instance_id = -1;
@@ -272,6 +295,8 @@ bool Sdl2ControllerBackend::try_open_slot(OpenController& slot) {
         slot.preferred_name = info.name;
         slot.preferred_vendor = info.vendor_id;
         slot.preferred_product = info.product_id;
+        slot.detach_since.reset();
+        slot.attach_settle_until = std::chrono::steady_clock::now() + kAttachSettle;
         push_hotplug_status(
             "Controller P" + std::to_string(static_cast<int>(slot.local_player) + 1) +
             " reconnected: " + info.name);
@@ -294,12 +319,31 @@ bool Sdl2ControllerBackend::try_open_slot(OpenController& slot) {
 
 void Sdl2ControllerBackend::refresh_hotplug() {
     // Drain the event queue so joystick hotplug updates SDL_NumJoysticks().
+    // Track REMOVED for our instance so we can start the detach debounce immediately.
     SDL_PumpEvents();
     SDL_Event event;
     while (SDL_PollEvent(&event) != 0) {
-        // Intentionally ignore payload — rescanning indexes is enough.
+        if (event.type != SDL_CONTROLLERDEVICEREMOVED && event.type != SDL_JOYDEVICEREMOVED) {
+            continue;
+        }
+        const SDL_JoystickID removed_id =
+            event.type == SDL_CONTROLLERDEVICEREMOVED
+                ? event.cdevice.which
+                : event.jdevice.which;
+        for (auto& opened : opened_) {
+            if (!opened || opened->controller == nullptr) {
+                continue;
+            }
+            if (opened->instance_id == removed_id) {
+                const auto now = std::chrono::steady_clock::now();
+                if (!opened->detach_since.has_value()) {
+                    opened->detach_since = now;
+                }
+            }
+        }
     }
 
+    const auto now = std::chrono::steady_clock::now();
     bool need_reopen = false;
     for (auto& opened : opened_) {
         if (!opened) {
@@ -309,17 +353,37 @@ void Sdl2ControllerBackend::refresh_hotplug() {
             need_reopen = true;
             continue;
         }
-        if (SDL_GameControllerGetAttached(opened->controller) != SDL_TRUE) {
-            close_slot(*opened, "disconnected");
-            need_reopen = true;
+
+        const bool attached = SDL_GameControllerGetAttached(opened->controller) == SDL_TRUE;
+        if (attached) {
+            opened->detach_since.reset();
+            continue;
         }
+
+        // Still settling after reclaim — keep the handle; poll() holds last-good.
+        if (now < opened->attach_settle_until) {
+            if (!opened->detach_since.has_value()) {
+                opened->detach_since = now;
+            }
+            continue;
+        }
+
+        if (!opened->detach_since.has_value()) {
+            opened->detach_since = now;
+            continue;
+        }
+        if (now - *opened->detach_since < kDetachConfirm) {
+            continue;
+        }
+
+        close_slot(*opened, "disconnected");
+        need_reopen = true;
     }
 
     if (!need_reopen) {
         return;
     }
 
-    const auto now = std::chrono::steady_clock::now();
     if (now < next_reopen_attempt_) {
         return;
     }
@@ -349,9 +413,24 @@ std::optional<ControllerState> Sdl2ControllerBackend::poll(LocalPlayerIndex loca
         return std::nullopt;
     }
 
-    // Keep sending neutrals while unplugged so the host uinput pad does not stick.
-    if (slot->controller == nullptr ||
-        SDL_GameControllerGetAttached(slot->controller) != SDL_TRUE) {
+    const bool live =
+        slot->controller != nullptr &&
+        SDL_GameControllerGetAttached(slot->controller) == SDL_TRUE;
+
+    // Confirmed unplug: neutrals so host uinput does not stick.
+    if (slot->controller == nullptr) {
+        return make_neutral_state(next_sequence_++);
+    }
+
+    // Soft-detach / settle: keep last-good (or neutral if we never had a sample)
+    // instead of releasing every button for a one-frame USB glitch.
+    if (!live) {
+        if (slot->has_last_good) {
+            auto held = slot->last_good;
+            held.sequence = next_sequence_++;
+            held.timestamp_us = steady_timestamp_us();
+            return held;
+        }
         return make_neutral_state(next_sequence_++);
     }
 
@@ -404,6 +483,8 @@ std::optional<ControllerState> Sdl2ControllerBackend::poll(LocalPlayerIndex loca
         }
     }
 
+    slot->last_good = state;
+    slot->has_last_good = true;
     return state;
 }
 

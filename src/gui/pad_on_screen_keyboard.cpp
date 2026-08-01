@@ -118,7 +118,7 @@ void PadOnScreenKeyboard::build_ui() {
 
     hint_label_ = new QLabel(
         QStringLiteral(
-            "D-pad / stick: move · A: select · □/X: DEL · R2 / Start: OK · Aa: case · Back: cancel"),
+            "D-pad / stick: move · A: select · □/X: DEL · L1: Aa/aA · R2 / Start: OK · Back: cancel"),
         this);
     hint_label_->setWordWrap(true);
     root->addWidget(hint_label_);
@@ -454,6 +454,9 @@ void PadOnScreenKeyboard::apply_pad_edges(
     }
     if (button_pressed(previous_buttons, next_buttons, ButtonY)) {
         insert_character(QChar(' '));
+    }
+    if (button_pressed(previous_buttons, next_buttons, ButtonLeftShoulder)) {
+        toggle_case();
     }
     if (button_pressed(previous_buttons, next_buttons, ButtonStart) ||
         trigger_pressed(previous_r2, next_r2)) {

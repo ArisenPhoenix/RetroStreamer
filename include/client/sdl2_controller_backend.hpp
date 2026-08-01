@@ -26,8 +26,9 @@ public:
     std::vector<ControllerDevice> list_devices() const;
     void open_selected(const std::vector<std::string>& device_ids);
     // Always returns a state for an opened local-player slot (live or neutral).
-    // Mid-session: drops dead pads, reopens the preferred GUID when possible,
-    // otherwise claims the next unused physical gamepad (hot-plug).
+    // Mid-session: drops dead pads, reopens the exact same device (path) when
+    // possible; otherwise claims the next free pad that produces input (never
+    // steals a pad already bound to another local player).
     std::optional<ControllerState> poll(LocalPlayerIndex local_player);
     // Non-empty when a pad was lost or (re)claimed since the last take.
     std::optional<std::string> take_hotplug_status();

@@ -61,13 +61,16 @@ private:
 };
 
 #ifndef _WIN32
-// Ryujinx Avalonia "Software Keyboard" under gamescope: detect the dialog, ask
-// the client pad OSK via SoftKeyboardHostBridge, then XTest-type the result.
+// Ryujinx Avalonia soft-keyboard under gamescope: wait until a dialog window is
+// mapped and holding keyboard focus (i.e. it wants typed text), ask the client
+// pad OSK via SoftKeyboardHostBridge, then XTest-type the result.
 // Falls back to `fallback_text` if no client responds in time.
+// `preferred_display` is tried first (session capture / nested Xwayland).
 void schedule_ryujinx_soft_keyboard(
     std::shared_ptr<SoftKeyboardHostBridge> bridge,
     std::string fallback_text,
-    std::string prompt = "The game is asking for text. Enter it with the pad.");
+    std::string prompt = "The game is asking for text. Enter it with the pad.",
+    std::string preferred_display = {});
 #endif
 
 } // namespace archstreamer

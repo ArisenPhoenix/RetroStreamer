@@ -9,7 +9,10 @@ namespace archstreamer {
 
 struct ArchStreamerSdlPad {
     std::size_t sdl_index = 0;
+    // CRC bytes zeroed — Yuzu/Ryujinx store/match GUIDs this way.
     std::string guid;
+    // Full SDL GUID (with name CRC) for SDL_GAMECONTROLLERCONFIG matching.
+    std::string mapping_guid;
     std::uint16_t product_id = 0;
 };
 

@@ -109,7 +109,19 @@ std::optional<std::string> SessionControlMonitor::poll() {
     const auto in_startup_grace = now - started_at_ < kStartupHeartbeatGrace;
 
     if (plan_.soft_keyboard) {
-        if (const auto request = plan_.soft_keyboard->take_unsent_request(); request.has_value()) {
+        // Only consume the request once somebody can actually receive it, otherwise it
+        // is marked sent and lost. This replaces the old timed re-publish.
+        const bool any_connected = std::any_of(
+            plan_.clients.begin(),
+            plan_.clients.end(),
+            [](const auto& client) {
+                return client.connection_state == SessionConnectionState::Connected;
+            });
+        std::optional<SoftKeyboardRequest> request;
+        if (any_connected) {
+            request = plan_.soft_keyboard->take_unsent_request();
+        }
+        if (request.has_value()) {
             for (auto& client : plan_.clients) {
                 if (client.connection_state != SessionConnectionState::Connected) {
                     continue;

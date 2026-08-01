@@ -650,11 +650,15 @@ void ActiveSessionSlot::run_session() {
                 config.yuzu_resolution_scale,
                 profile_name);
             std::vector<std::string> pad_guids;
+            std::vector<std::string> mapping_guids;
             pad_guids.reserve(resolved_pads.size());
+            mapping_guids.reserve(resolved_pads.size());
             for (const auto& pad : resolved_pads) {
                 pad_guids.push_back(pad.guid);
+                mapping_guids.push_back(
+                    pad.mapping_guid.empty() ? pad.guid : pad.mapping_guid);
             }
-            configure_ryujinx_archstreamer_controls(ryujinx_user, pad_guids);
+            configure_ryujinx_archstreamer_controls(ryujinx_user, pad_guids, mapping_guids);
             launch_env_request.ryujinx_profile = ryujinx_user;
             launch_config.standalone_args_before_content = {"--fullscreen"};
             launch_config.quiet_stdio = !config.verbose;
@@ -670,7 +674,8 @@ void ActiveSessionSlot::run_session() {
             schedule_ryujinx_soft_keyboard(
                 plan.soft_keyboard,
                 profile_name,
-                "What is your name?");
+                "What is your name?",
+                capture_display);
 #endif
         } else {
             int yuzu_vulkan_device = -1;
@@ -891,7 +896,8 @@ void ActiveSessionSlot::run_session() {
         const auto node = wait_for_gamescope_pipewire_node(
             std::chrono::seconds(20),
             expect_w,
-            expect_h);
+            expect_h,
+            session_runtime_->emulator().process_id().value_or(0));
         if (!node.has_value()) {
             throw std::runtime_error(
                 "gamescope did not publish a PipeWire Video/Source (media.name=gamescope)");

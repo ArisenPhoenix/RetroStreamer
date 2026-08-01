@@ -72,6 +72,19 @@ bool HostSessionHub::username_seated(std::string_view username, const GameId& ga
     return false;
 }
 
+bool HostSessionHub::save_profile_active(std::string_view username) const {
+    std::lock_guard lock(mutex_);
+    for (const auto* slot : slots_) {
+        if (slot == nullptr || slot->finished()) {
+            continue;
+        }
+        if (username_equal(slot->plan().save_username, username)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 ActiveSessionSlot* HostSessionHub::slot_for_client(ClientId client_id) {
     std::lock_guard lock(mutex_);
     for (auto* slot : slots_) {

@@ -390,18 +390,27 @@ std::optional<std::string> pci_vendor_device_id(const std::string& pci_bus) {
 std::optional<std::string> wait_for_gamescope_pipewire_node(
     std::chrono::milliseconds timeout,
     int expect_width,
-    int expect_height) {
+    int expect_height,
+    int owner_pid) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
-    // Prefer matching resolution + running + highest id. Avoid latching onto a stale
-    // leftover gamescope (e.g. a 640x360 probe) while the real 1280x720 session exists.
+    // Prefer: (1) PID/process-group match to this session's gamescope, (2) matching
+    // resolution, (3) running, (4) highest node id. Without the PID gate a stale
+    // leftover gamescope can win and the encoder dies when that process exits.
     const std::string py =
-        "import sys,json\n"
+        "import sys,json,os\n"
         "try:\n"
         " data=json.load(sys.stdin)\n"
         "except Exception:\n"
         " sys.exit(0)\n"
         "want_w=" + std::to_string(expect_width) + "\n"
         "want_h=" + std::to_string(expect_height) + "\n"
+        "want_pid=" + std::to_string(owner_pid) + "\n"
+        "def pgid(pid):\n"
+        " try:\n"
+        "  return os.getpgid(int(pid))\n"
+        " except Exception:\n"
+        "  return None\n"
+        "want_pgid=pgid(want_pid) if want_pid>0 else None\n"
         "cands=[]\n"
         "for o in data:\n"
         " info=o.get('info') or {}\n"
@@ -421,11 +430,26 @@ std::optional<std::string> wait_for_gamescope_pipewire_node(
         "   break\n"
         " match=(want_w<=0 or want_h<=0) or (w==want_w and h==want_h)\n"
         " if not match: continue\n"
+        " pid=None\n"
+        " for key in ('pipewire.sec.pid','application.process.id','node.pid'):\n"
+        "  if key in props:\n"
+        "   try: pid=int(props[key]); break\n"
+        "   except Exception: pass\n"
+        " owner=0\n"
+        " if want_pid>0 and pid is not None:\n"
+        "  if pid==want_pid: owner=2\n"
+        "  elif want_pgid is not None and pgid(pid)==want_pgid: owner=1\n"
         " state=str(info.get('state') or '')\n"
-        " score=(1 if state=='running' else 0, int(oid))\n"
+        " score=(owner, 1 if state=='running' else 0, int(oid))\n"
         " cands.append((score, oid))\n"
         "if cands:\n"
         " cands.sort()\n"
+        " # If an owner_pid was requested, refuse nodes that don't match it once any\n"
+        " # matching candidate exists; otherwise fall back to best remaining.\n"
+        " if want_pid>0:\n"
+        "  owned=[c for c in cands if c[0][0]>0]\n"
+        "  if owned:\n"
+        "   print(owned[-1][1]); sys.exit(0)\n"
         " print(cands[-1][1])\n";
     const std::string command = "pw-dump 2>/dev/null | python3 -c " + shell_single_quote(py);
 

@@ -27,6 +27,9 @@ public:
     void unregister_slot(ActiveSessionSlot* slot);
 
     bool username_seated(std::string_view username, const GameId& game_id) const;
+    // A persistent save/config profile must have only one live writer. Reconnects
+    // attach to that slot before new-session admission reaches this check.
+    bool save_profile_active(std::string_view username) const;
 
     ActiveSessionSlot* slot_for_client(ClientId client_id);
     const ActiveSessionSlot* slot_for_client(ClientId client_id) const;

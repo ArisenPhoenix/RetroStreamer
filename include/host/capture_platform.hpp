@@ -55,11 +55,13 @@ void apply_retroarch_vgl_prefix(
 /**
  * If media deferred PipeWire video (gamescope), wait for the node and start it.
  * No-op on Windows / when not deferred.
+ * owner_pid: gamescope wrapper pid when known; used to avoid latching a stale node.
  */
 void start_deferred_gamescope_video_if_needed(
     MediaServer* media_server,
     const HostAppConfig& config,
-    std::vector<MediaClientStream>& media_streams);
+    std::vector<MediaClientStream>& media_streams,
+    int owner_pid = 0);
 
 /** True when this platform supports Gamescope capture paths. */
 bool platform_supports_gamescope_capture();

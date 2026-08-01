@@ -823,6 +823,14 @@ void MainWindow::toggle_pad_on_screen_keyboard(bool open) {
 }
 
 void MainWindow::open_soft_keyboard_from_host(const SoftKeyboardRequest& request) {
+    // A repeat of the id we are already showing must not rebuild the dialog — that
+    // would discard what the player has typed so far.
+    if (pad_osk_ != nullptr && soft_keyboard_request_id_ == request.request_id) {
+        pad_osk_->raise();
+        pad_osk_->activateWindow();
+        return;
+    }
+
     if (pad_osk_ != nullptr) {
         pad_osk_->disconnect();
         pad_osk_->deleteLater();

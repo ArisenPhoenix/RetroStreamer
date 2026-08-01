@@ -246,6 +246,13 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
     }
 
     if (child == 0) {
+        // Own process group so stop() can SIGTERM/SIGKILL the whole tree
+        // (gamescope + nested Ryujinx/AppImage). Without this, SIGKILL on the
+        // wrapper alone orphans grandchildren that then hot-plug onto the next
+        // session's virtual pad and PipeWire node.
+        if (setsid() < 0) {
+            _exit(127);
+        }
         close_inherited_fds();
         if (config.quiet_stdio) {
             const int null_fd = open("/dev/null", O_RDWR);
@@ -287,32 +294,54 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
     }
 
     pid_ = child;
+    // The child calls setsid(), making its pid the process-group id. Keep this
+    // separately because the leader may exit before its descendants.
+    process_group_id_ = child;
 }
 
 void PosixRetroArchProcess::stop() {
-    if (!running()) {
-        pid_ = -1;
+    const pid_t group = process_group_id_;
+    if (group <= 0) {
+        // Reap/update a leader if one exists, then there is nothing else owned.
+        (void)running();
         return;
     }
 
-    kill(pid_, SIGTERM);
-    for (int i = 0; i < 20; ++i) {
-        int status = 0;
-        const pid_t result = waitpid(pid_, &status, WNOHANG);
-        if (result == pid_) {
-            record_status(status);
-            pid_ = -1;
+    // Negative pid targets the whole setsid-created group. Crucially, this still
+    // runs when running() has already reaped the gamescope leader: nested
+    // Ryujinx/AppImage descendants can remain alive in that same group.
+    if (kill(-group, SIGTERM) != 0 && pid_ > 0) {
+        kill(pid_, SIGTERM);
+    }
+    for (int i = 0; i < 40; ++i) {
+        if (pid_ > 0) {
+            int status = 0;
+            const pid_t result = waitpid(pid_, &status, WNOHANG);
+            if (result == pid_) {
+                record_status(status);
+                pid_ = -1;
+            } else if (result < 0 && errno == ECHILD) {
+                pid_ = -1;
+            }
+        }
+        if (kill(-group, 0) != 0 && errno == ESRCH) {
+            process_group_id_ = -1;
             return;
         }
-
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
-    kill(pid_, SIGKILL);
-    int status = 0;
-    waitpid(pid_, &status, 0);
-    record_status(status);
+    if (kill(-group, SIGKILL) != 0 && pid_ > 0) {
+        kill(pid_, SIGKILL);
+    }
+    if (pid_ > 0) {
+        int status = 0;
+        if (waitpid(pid_, &status, 0) == pid_) {
+            record_status(status);
+        }
+    }
     pid_ = -1;
+    process_group_id_ = -1;
 }
 
 bool PosixRetroArchProcess::running() const {
@@ -346,6 +375,13 @@ std::optional<int> PosixRetroArchProcess::last_exit_code() const {
 
 std::string PosixRetroArchProcess::last_stderr_tail() const {
     return last_stderr_tail_;
+}
+
+std::optional<int> PosixRetroArchProcess::process_id() const {
+    if (pid_ <= 0) {
+        return std::nullopt;
+    }
+    return static_cast<int>(pid_);
 }
 
 void PosixRetroArchProcess::record_status(int status) const {

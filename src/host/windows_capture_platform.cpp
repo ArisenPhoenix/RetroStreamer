@@ -54,7 +54,8 @@ void apply_retroarch_vgl_prefix(
 void start_deferred_gamescope_video_if_needed(
     MediaServer* /*media_server*/,
     const HostAppConfig& /*config*/,
-    std::vector<MediaClientStream>& /*media_streams*/) {
+    std::vector<MediaClientStream>& /*media_streams*/,
+    int /*owner_pid*/) {
     // Gamescope PipeWire path is Linux-only.
 }
 

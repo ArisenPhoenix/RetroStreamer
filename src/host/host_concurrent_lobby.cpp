@@ -85,6 +85,14 @@ int run_concurrent_session_host(
 
         auto start_slot = [&](SessionPlan plan) {
             erase_finished();
+            if (!plan.save_username.empty() &&
+                hub.save_profile_active(plan.save_username)) {
+                const std::string message =
+                    "user " + plan.save_username +
+                    " already has an active session; reconnect to it or end it first";
+                send_error_to_session_clients(plan, message);
+                throw std::runtime_error(message);
+            }
             if (live_count() >= max_slots) {
                 send_error_to_session_clients(plan, "host is at max concurrent sessions");
                 throw std::runtime_error("host is at max concurrent sessions");

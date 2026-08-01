@@ -114,9 +114,13 @@ RyujinxUserProfile prepare_ryujinx_user_profile(
 
 // Bind Player1…N to ArchStreamer uinput pads (GamepadSDL2 + GUID) and build an
 // SDL_GAMECONTROLLERCONFIG mapping so Ryujinx can open those pads under gamescope.
+// sdl_guids: CRC-zeroed GUIDs for Ryujinx Config.json matching.
+// mapping_guids: full SDL GUIDs (with name CRC) for SDL_GAMECONTROLLERCONFIG; when
+// empty/shorter, falls back to sdl_guids.
 void configure_ryujinx_archstreamer_controls(
     RyujinxUserProfile& profile,
-    const std::vector<std::string>& sdl_guids);
+    const std::vector<std::string>& sdl_guids,
+    const std::vector<std::string>& mapping_guids = {});
 
 std::vector<std::pair<std::string, std::string>> ryujinx_launch_environment(
     const RyujinxUserProfile& profile);

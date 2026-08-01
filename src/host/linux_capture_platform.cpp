@@ -163,7 +163,8 @@ void apply_retroarch_vgl_prefix(
 void start_deferred_gamescope_video_if_needed(
     MediaServer* media_server,
     const HostAppConfig& config,
-    std::vector<MediaClientStream>& media_streams) {
+    std::vector<MediaClientStream>& media_streams,
+    int owner_pid) {
     auto* gst = dynamic_cast<GStreamerMediaServer*>(media_server);
     if (gst == nullptr || !gst->video_deferred()) {
         return;
@@ -177,7 +178,8 @@ void start_deferred_gamescope_video_if_needed(
     const auto node = wait_for_gamescope_pipewire_node(
         std::chrono::seconds(20),
         expect_w,
-        expect_h);
+        expect_h,
+        owner_pid);
     if (!node.has_value()) {
         throw std::runtime_error(
             "gamescope did not publish a PipeWire Video/Source (media.name=gamescope)");

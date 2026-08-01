@@ -131,6 +131,7 @@ std::vector<ArchStreamerSdlPad> find_archstreamer_sdl_pads(
             ArchStreamerSdlPad{
                 static_cast<std::size_t>(index),
                 yuzu_filtered_sdl_guid(guid_string_for_index(index)),
+                guid_string_for_index(index),
                 product,
             },
         });

@@ -535,11 +535,15 @@ int HostApp::run_direct_session(
                 config.yuzu_resolution_scale,
                 profile_name);
             std::vector<std::string> pad_guids;
+            std::vector<std::string> mapping_guids;
             pad_guids.reserve(resolved_pads.size());
+            mapping_guids.reserve(resolved_pads.size());
             for (const auto& pad : resolved_pads) {
                 pad_guids.push_back(pad.guid);
+                mapping_guids.push_back(
+                    pad.mapping_guid.empty() ? pad.guid : pad.mapping_guid);
             }
-            configure_ryujinx_archstreamer_controls(ryujinx_user, pad_guids);
+            configure_ryujinx_archstreamer_controls(ryujinx_user, pad_guids, mapping_guids);
             launch_env_request.ryujinx_profile = ryujinx_user;
             launch_config.standalone_args_before_content = {"--fullscreen"};
             launch_config.quiet_stdio = !config.verbose;
@@ -560,12 +564,14 @@ int HostApp::run_direct_session(
                 schedule_ryujinx_soft_keyboard(
                     session_plan->soft_keyboard,
                     profile_name,
-                    "What is your name?");
+                    "What is your name?",
+                    capture_display);
             } else {
                 schedule_ryujinx_soft_keyboard(
                     std::make_shared<SoftKeyboardHostBridge>(),
                     profile_name,
-                    "What is your name?");
+                    "What is your name?",
+                    capture_display);
             }
 #endif
         } else {
@@ -845,7 +851,11 @@ int HostApp::run_direct_session(
         }
         throw std::runtime_error(message);
     }
-    start_deferred_gamescope_video_if_needed(media_server.get(), config, media_streams);
+    start_deferred_gamescope_video_if_needed(
+        media_server.get(),
+        config,
+        media_streams,
+        session_runtime->emulator().process_id().value_or(0));
     if (config.audio) {
         // Pulse connects asynchronously; re-park after the sink-input appears.
         std::this_thread::sleep_for(std::chrono::milliseconds(500));

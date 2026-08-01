@@ -300,6 +300,97 @@ void collect_windows(Display* display, Window window, std::vector<std::pair<Wind
     XFree(children);
 }
 
+bool window_is_viewable(Display* display, Window window) {
+    XWindowAttributes attrs{};
+    if (!XGetWindowAttributes(display, window, &attrs)) {
+        return false;
+    }
+    return attrs.map_state == IsViewable && attrs.width >= 64 && attrs.height >= 64;
+}
+
+bool window_is_focus_target(Display* display, Window candidate, Window focus) {
+    if (candidate == 0 || focus == 0 || focus == PointerRoot || focus == None) {
+        return false;
+    }
+    Window current = focus;
+    for (int depth = 0; depth < 64; ++depth) {
+        if (current == candidate) {
+            return true;
+        }
+        Window root = 0;
+        Window parent = 0;
+        Window* children = nullptr;
+        unsigned int child_count = 0;
+        if (!XQueryTree(display, current, &root, &parent, &children, &child_count)) {
+            return false;
+        }
+        if (children != nullptr) {
+            XFree(children);
+        }
+        if (parent == 0 || parent == current || parent == root) {
+            return false;
+        }
+        current = parent;
+    }
+    return false;
+}
+
+bool is_soft_keyboard_dialog_title(const std::string& title) {
+    // Avalonia hosts swkbd in ContentDialogOverlayWindow (Title is hard-coded in
+    // Ryujinx XAML). GTK builds use a real "Software Keyboard" window title.
+    return title.find("Software Keyboard") != std::string::npos ||
+        title.find("ContentDialogOverlayWindow") != std::string::npos;
+}
+
+// A dialog that has opened and is accepting typed input: viewable + keyboard focus.
+std::optional<Window> find_focused_text_dialog(Display* display) {
+    Window focus = 0;
+    int revert = RevertToNone;
+    XGetInputFocus(display, &focus, &revert);
+    if (focus == 0 || focus == None || focus == PointerRoot) {
+        return std::nullopt;
+    }
+
+    std::vector<std::pair<Window, std::string>> windows;
+    collect_windows(display, DefaultRootWindow(display), windows);
+
+    // Prefer an explicit Software Keyboard title when both are present.
+    Window overlay = 0;
+    for (const auto& [window, title] : windows) {
+        if (!is_soft_keyboard_dialog_title(title) || !window_is_viewable(display, window)) {
+            continue;
+        }
+        if (!window_is_focus_target(display, window, focus)) {
+            continue;
+        }
+        if (title.find("Software Keyboard") != std::string::npos) {
+            return window;
+        }
+        if (overlay == 0) {
+            overlay = window;
+        }
+    }
+    if (overlay != 0) {
+        return overlay;
+    }
+    return std::nullopt;
+}
+
+bool text_dialog_ready_on_display(const std::string& display_name) {
+    Display* display = XOpenDisplay(display_name.c_str());
+    if (display == nullptr) {
+        return false;
+    }
+    XSetIOErrorExitHandler(
+        display,
+        [](Display*, void*) {},
+        nullptr);
+
+    const bool ready = find_focused_text_dialog(display).has_value();
+    XCloseDisplay(display);
+    return ready;
+}
+
 void xtest_key(Display* display, KeySym keysym, bool pressed) {
     const KeyCode code = XKeysymToKeycode(display, keysym);
     if (code == 0) {
@@ -338,30 +429,6 @@ void xtest_type_ascii(Display* display, const std::string& text) {
     }
 }
 
-bool dialog_present_on_display(const std::string& display_name) {
-    Display* display = XOpenDisplay(display_name.c_str());
-    if (display == nullptr) {
-        return false;
-    }
-    XSetIOErrorExitHandler(
-        display,
-        [](Display*, void*) {},
-        nullptr);
-
-    std::vector<std::pair<Window, std::string>> windows;
-    collect_windows(display, DefaultRootWindow(display), windows);
-    bool found = false;
-    for (const auto& [window, title] : windows) {
-        if (title.find("ContentDialogOverlayWindow") != std::string::npos ||
-            title.find("Software Keyboard") != std::string::npos) {
-            found = true;
-            break;
-        }
-    }
-    XCloseDisplay(display);
-    return found;
-}
-
 bool try_autofill_on_display(const std::string& display_name, const std::string& text) {
     Display* display = XOpenDisplay(display_name.c_str());
     if (display == nullptr) {
@@ -372,15 +439,18 @@ bool try_autofill_on_display(const std::string& display_name, const std::string&
         [](Display*, void*) {},
         nullptr);
 
-    std::vector<std::pair<Window, std::string>> windows;
-    collect_windows(display, DefaultRootWindow(display), windows);
-
     Window target = 0;
-    for (const auto& [window, title] : windows) {
-        if (title.find("ContentDialogOverlayWindow") != std::string::npos ||
-            title.find("Software Keyboard") != std::string::npos) {
-            target = window;
-            break;
+    if (const auto focused = find_focused_text_dialog(display); focused.has_value()) {
+        target = *focused;
+    } else {
+        // Dialog may still be up but focus briefly moved; fall back to any viewable match.
+        std::vector<std::pair<Window, std::string>> windows;
+        collect_windows(display, DefaultRootWindow(display), windows);
+        for (const auto& [window, title] : windows) {
+            if (is_soft_keyboard_dialog_title(title) && window_is_viewable(display, window)) {
+                target = window;
+                break;
+            }
         }
     }
     if (target == 0) {
@@ -431,12 +501,37 @@ std::string title_case_fallback(std::string text) {
     return text;
 }
 
+std::vector<std::string> soft_keyboard_display_candidates(const std::string& preferred) {
+    std::vector<std::string> names;
+    auto add = [&](std::string name) {
+        if (name.empty()) {
+            return;
+        }
+        for (const auto& existing : names) {
+            if (existing == name) {
+                return;
+            }
+        }
+        names.push_back(std::move(name));
+    };
+    add(preferred);
+    // Gamescope nested Xwayland commonly lands on low display numbers; Xvfb slots on :99+.
+    for (int display_index = 0; display_index <= 10; ++display_index) {
+        add(":" + std::to_string(display_index));
+    }
+    for (int display_index = 99; display_index <= 110; ++display_index) {
+        add(":" + std::to_string(display_index));
+    }
+    return names;
+}
+
 } // namespace
 
 void schedule_ryujinx_soft_keyboard(
     std::shared_ptr<SoftKeyboardHostBridge> bridge,
     std::string fallback_text,
-    std::string prompt) {
+    std::string prompt,
+    std::string preferred_display) {
     fallback_text = title_case_fallback(std::move(fallback_text));
     if (prompt.empty()) {
         prompt = "The game is asking for text. Enter it with the pad.";
@@ -447,13 +542,16 @@ void schedule_ryujinx_soft_keyboard(
 
     std::thread([bridge = std::move(bridge),
                  fallback_text = std::move(fallback_text),
-                 prompt = std::move(prompt)]() {
+                 prompt = std::move(prompt),
+                 preferred_display = std::move(preferred_display)]() {
+        const auto displays = soft_keyboard_display_candidates(preferred_display);
         std::string found_display;
-        for (int attempt = 0; attempt < 360; ++attempt) {
-            for (int display_index = 1; display_index <= 10; ++display_index) {
-                const auto name = ":" + std::to_string(display_index);
+        // Wait until a dialog is mapped *and* holding keyboard focus (wants typed text),
+        // not merely present unmapped in the window tree (boot-time false positives).
+        for (int attempt = 0; attempt < 720; ++attempt) {
+            for (const auto& name : displays) {
                 try {
-                    if (dialog_present_on_display(name)) {
+                    if (text_dialog_ready_on_display(name)) {
                         found_display = name;
                         break;
                     }
@@ -466,7 +564,7 @@ void schedule_ryujinx_soft_keyboard(
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
         if (found_display.empty()) {
-            std::cerr << "Ryujinx Software Keyboard: timed out waiting for dialog\n";
+            std::cerr << "Ryujinx Software Keyboard: timed out waiting for text-input dialog\n";
             return;
         }
 
@@ -477,7 +575,7 @@ void schedule_ryujinx_soft_keyboard(
         }
         bridge->publish_request(request);
         std::cout
-            << "Ryujinx Software Keyboard: dialog on " << found_display
+            << "Ryujinx Software Keyboard: focused text dialog on " << found_display
             << " — requesting pad OSK (id=" << request.request_id << ")\n";
 
         std::optional<SoftKeyboardResponse> response;
@@ -487,13 +585,9 @@ void schedule_ryujinx_soft_keyboard(
                 break;
             }
             response.reset();
-            if (wait > 0 && wait % 10 == 0) {
-                std::lock_guard lock(bridge->mutex);
-                if (bridge->pending_to_clients.has_value() &&
-                    bridge->pending_to_clients->request_id == request.request_id) {
-                    bridge->pending_to_clients_sent = false;
-                }
-            }
+            // Never re-publish while waiting: the request goes out over the TCP control
+            // stream, and a resend made the client tear down and rebuild the pad OSK
+            // every 5s, wiping whatever the player had typed.
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
 

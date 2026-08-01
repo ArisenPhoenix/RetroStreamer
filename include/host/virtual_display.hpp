@@ -118,9 +118,12 @@ std::unique_ptr<VirtualDisplay> make_virtual_display(VirtualDisplayBackend backe
 // Wait until PipeWire publishes a Video/Source with media.name=gamescope; return node id.
 // When width/height > 0, prefer a node advertising that size (avoids latching onto a stale
 // leftover gamescope from a prior probe/session).
+// When owner_pid > 0, prefer a node whose pipewire.sec.pid / application.process.id is that
+// pid or shares its process group (the gamescope wrapper after setsid).
 [[nodiscard]] std::optional<std::string> wait_for_gamescope_pipewire_node(
     std::chrono::milliseconds timeout,
     int expect_width = 0,
-    int expect_height = 0);
+    int expect_height = 0,
+    int owner_pid = 0);
 
 } // namespace archstreamer

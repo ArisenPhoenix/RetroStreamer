@@ -6,6 +6,7 @@
 #include <SDL.h>
 
 #include <charconv>
+#include <cstdlib>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -99,6 +100,35 @@ ControllerState make_neutral_state(std::uint32_t sequence) {
     state.sequence = sequence;
     state.timestamp_us = steady_timestamp_us();
     return state;
+}
+
+bool controller_has_activity(SDL_GameController* controller) {
+    if (controller == nullptr) {
+        return false;
+    }
+    for (int button = SDL_CONTROLLER_BUTTON_A; button < SDL_CONTROLLER_BUTTON_MAX; ++button) {
+        if (SDL_GameControllerGetButton(
+                controller,
+                static_cast<SDL_GameControllerButton>(button)) != 0) {
+            return true;
+        }
+    }
+    const auto stick_active = [](std::int16_t value) {
+        return std::abs(static_cast<int>(value)) > DefaultStickDeadzone;
+    };
+    if (stick_active(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTX)) ||
+        stick_active(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_LEFTY)) ||
+        stick_active(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTX)) ||
+        stick_active(SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_RIGHTY))) {
+        return true;
+    }
+    if (SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERLEFT) >
+            DefaultTriggerDeadzone ||
+        SDL_GameControllerGetAxis(controller, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) >
+            DefaultTriggerDeadzone) {
+        return true;
+    }
+    return false;
 }
 
 } // namespace
@@ -240,10 +270,13 @@ void Sdl2ControllerBackend::close_slot(OpenController& slot, const char* reason)
     slot.instance_id = -1;
     slot.detach_since.reset();
     slot.attach_settle_until = {};
+    // Do not replay a pre-drop D-pad/stick after reclaim — that feels like menu "undo".
+    slot.has_last_good = false;
+    slot.last_good = {};
     push_hotplug_status(
         "Controller P" + std::to_string(static_cast<int>(slot.local_player) + 1) +
         " (" + name + ") " + reason +
-        ". Plug it back in (or another pad) — no host reconnect needed.");
+        ". Press a button on your pad to reclaim — no host reconnect needed.");
 }
 
 bool Sdl2ControllerBackend::try_open_slot(OpenController& slot) {
@@ -253,25 +286,15 @@ bool Sdl2ControllerBackend::try_open_slot(OpenController& slot) {
     }
 
     const auto used = used_instance_ids();
-    auto try_index = [&](int index, bool require_preferred_match) -> bool {
+    auto claim_index = [&](int index, const ControllerDevice& info, const char* how) -> bool {
         if (index < 0 || index >= count || index_in_use(used, index)) {
             return false;
         }
         if (SDL_IsGameController(index) != SDL_TRUE) {
             return false;
         }
-        const auto info = device_at_index(index);
         if (is_archstreamer_virtual_device(info)) {
             return false;
-        }
-        if (require_preferred_match) {
-            const bool guid_match =
-                !slot.preferred_guid.empty() && info.guid == slot.preferred_guid;
-            const bool path_match =
-                !slot.preferred_path.empty() && info.path == slot.preferred_path;
-            if (!guid_match && !path_match) {
-                return false;
-            }
         }
 
         SDL_GameController* controller = SDL_GameControllerOpen(index);
@@ -297,22 +320,73 @@ bool Sdl2ControllerBackend::try_open_slot(OpenController& slot) {
         slot.preferred_product = info.product_id;
         slot.detach_since.reset();
         slot.attach_settle_until = std::chrono::steady_clock::now() + kAttachSettle;
+        slot.has_last_good = false;
+        slot.last_good = {};
         push_hotplug_status(
             "Controller P" + std::to_string(static_cast<int>(slot.local_player) + 1) +
-            " reconnected: " + info.name);
+            " reconnected: " + info.name + " (" + how + ")");
         return true;
     };
 
-    // Prefer the originally selected pad (same GUID/path), then any free pad.
-    for (int index = 0; index < count; ++index) {
-        if (try_index(index, true)) {
-            return true;
+    // 1) Exact match: same OS device path (USB vs BT siblings share GUID but not path).
+    if (!slot.preferred_path.empty()) {
+        for (int index = 0; index < count; ++index) {
+            if (index_in_use(used, index) || SDL_IsGameController(index) != SDL_TRUE) {
+                continue;
+            }
+            const auto info = device_at_index(index);
+            if (info.path == slot.preferred_path && claim_index(index, info, "same device")) {
+                return true;
+            }
         }
     }
+
+    // 2) Otherwise claim the next free pad that is producing input. Identical-GUID
+    // siblings (two DS4s) stay unbound until the player presses something, and pads
+    // already owned by another local player are skipped via used_instance_ids().
+    SDL_GameControllerUpdate();
     for (int index = 0; index < count; ++index) {
-        if (try_index(index, false)) {
-            return true;
+        if (index_in_use(used, index) || SDL_IsGameController(index) != SDL_TRUE) {
+            continue;
         }
+        const auto info = device_at_index(index);
+        if (is_archstreamer_virtual_device(info)) {
+            continue;
+        }
+
+        SDL_GameController* probe = SDL_GameControllerOpen(index);
+        if (probe == nullptr) {
+            continue;
+        }
+        if (SDL_GameControllerGetAttached(probe) != SDL_TRUE) {
+            SDL_GameControllerClose(probe);
+            continue;
+        }
+        const bool active = controller_has_activity(probe);
+        if (!active) {
+            SDL_GameControllerClose(probe);
+            continue;
+        }
+
+        // Transfer the already-open handle into the slot (avoid double-open).
+        slot.controller = probe;
+        slot.instance_id = -1;
+        if (SDL_Joystick* joystick = SDL_GameControllerGetJoystick(probe); joystick != nullptr) {
+            slot.instance_id = SDL_JoystickInstanceID(joystick);
+        }
+        slot.preferred_guid = info.guid;
+        slot.preferred_path = info.path;
+        slot.preferred_name = info.name;
+        slot.preferred_vendor = info.vendor_id;
+        slot.preferred_product = info.product_id;
+        slot.detach_since.reset();
+        slot.attach_settle_until = std::chrono::steady_clock::now() + kAttachSettle;
+        slot.has_last_good = false;
+        slot.last_good = {};
+        push_hotplug_status(
+            "Controller P" + std::to_string(static_cast<int>(slot.local_player) + 1) +
+            " reconnected: " + info.name + " (input)");
+        return true;
     }
     return false;
 }

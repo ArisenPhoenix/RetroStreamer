@@ -1332,6 +1332,9 @@ RyujinxUserProfile prepare_ryujinx_user_profile(
     int resolution_scale,
     std::string_view profile_display_name) {
     RyujinxUserProfile profile;
+    // One persistent Ryujinx home per ArchStreamer user. The save profile root
+    // already isolates users, and returning to this same path preserves their
+    // emulator preferences and game data across later sessions.
     profile.xdg_config_home = save_profile.user_directory / "ryujinx" / "xdg-config";
     profile.data_root = profile.xdg_config_home / "Ryujinx";
     profile.keys_directory = profile.data_root / "system";
@@ -1356,10 +1359,42 @@ RyujinxUserProfile prepare_ryujinx_user_profile(
 
     ensure_ryujinx_firmware(profile.data_root);
 
-    ensure_ryujinx_config(
-        profile.data_root / "Config.json",
-        enable_ldn_mitm,
-        resolution_scale);
+    // The save-root template is the administrator-editable baseline. Create a
+    // managed baseline only when it does not exist. prepare_save_profile copies
+    // this tree for new users; this fallback also repairs an individually
+    // missing user Config.json without replacing any existing user config.
+    const auto template_config =
+        save_profile.root_directory /
+        "template" /
+        "ryujinx" /
+        "xdg-config" /
+        "Ryujinx" /
+        "Config.json";
+    if (!std::filesystem::is_regular_file(template_config)) {
+        ensure_ryujinx_config(
+            template_config,
+            /*enable_ldn_mitm=*/true,
+            /*resolution_scale=*/1);
+    }
+
+    const auto user_config = profile.data_root / "Config.json";
+    if (!std::filesystem::is_regular_file(user_config)) {
+        std::error_code ec;
+        std::filesystem::copy_file(
+            template_config,
+            user_config,
+            std::filesystem::copy_options::skip_existing,
+            ec);
+        if (ec) {
+            throw std::runtime_error(
+                "failed to seed user Ryujinx Config.json from template: " +
+                ec.message());
+        }
+    }
+
+    // Merge ArchStreamer-required values into the user's persisted document;
+    // unrelated user choices remain untouched.
+    ensure_ryujinx_config(user_config, enable_ldn_mitm, resolution_scale);
     const std::string display =
         profile_display_name.empty() ? save_profile.username : std::string(profile_display_name);
     ensure_ryujinx_profiles_json(profile.data_root, save_profile.username, display);
@@ -1447,22 +1482,27 @@ nlohmann::json ryujinx_pro_controller_sdl_binding(
     return entry;
 }
 
-// Matches linux_uinput button registration order (SOUTH…DPAD_RIGHT) + ABS axes.
+// Matches linux_uinput BTN_* / ABS_* registration order as seen by SDL's joydev
+// enumerator (button indices follow sorted kernel codes; axes follow ABS bit order).
 std::string archstreamer_sdl_gamecontroller_mapping(
     const std::string& sdl_guid,
     const std::string& name) {
     return sdl_guid + "," + name +
-        ",platform:Linux,a:b0,b:b1,x:b2,y:b3,back:b4,guide:b5,start:b6,"
-        "leftstick:b7,rightstick:b8,leftshoulder:b9,rightshoulder:b10,"
+        ",platform:Linux,"
+        "a:b0,b:b1,y:b2,x:b3,"
+        "leftshoulder:b4,rightshoulder:b5,"
+        "back:b6,start:b7,guide:b8,"
+        "leftstick:b9,rightstick:b10,"
         "dpup:b11,dpdown:b12,dpleft:b13,dpright:b14,"
-        "leftx:a0,lefty:a1,rightx:a2,righty:a3,lefttrigger:a4,righttrigger:a5";
+        "leftx:a0,lefty:a1,lefttrigger:a2,rightx:a3,righty:a4,righttrigger:a5";
 }
 
 } // namespace
 
 void configure_ryujinx_archstreamer_controls(
     RyujinxUserProfile& profile,
-    const std::vector<std::string>& sdl_guids) {
+    const std::vector<std::string>& sdl_guids,
+    const std::vector<std::string>& mapping_guids) {
     if (sdl_guids.empty()) {
         std::cerr << "Warning: no ArchStreamer SDL GUIDs; Ryujinx input_config left unchanged.\n";
         return;
@@ -1491,10 +1531,13 @@ void configure_ryujinx_archstreamer_controls(
         const auto name =
             i == 0 ? std::string("ArchStreamer") : ("ArchStreamer_P" + std::to_string(i + 1));
         input.push_back(ryujinx_pro_controller_sdl_binding(i, sdl_guids[i], name));
+        const std::string& map_guid =
+            (i < mapping_guids.size() && !mapping_guids[i].empty()) ? mapping_guids[i]
+                                                                   : sdl_guids[i];
         if (!mappings.empty()) {
             mappings.push_back('\n');
         }
-        mappings += archstreamer_sdl_gamecontroller_mapping(sdl_guids[i], name);
+        mappings += archstreamer_sdl_gamecontroller_mapping(map_guid, name);
     }
     cfg["input_config"] = std::move(input);
     cfg["use_input_global_config"] = false;

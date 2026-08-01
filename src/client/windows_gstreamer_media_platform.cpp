@@ -6,6 +6,7 @@
 #include "client/gstreamer_probe.hpp"
 
 #include <stdexcept>
+#include <string_view>
 
 namespace archstreamer {
 
@@ -53,6 +54,9 @@ void WindowsGStreamerMediaPlatform::append_video_branch(
     args.insert(args.end(), source.begin(), source.end());
     gst_append_h264parse_if_available(args);
     args.push_back(decoder.element);
+    if (std::string_view{decoder.element} == "avdec_h264") {
+        args.push_back("output-corrupt=false");
+    }
     args.push_back("!");
 
     if (decoder.d3d11_zero_copy && sink.kind == GstVideoSinkKind::D3D11) {

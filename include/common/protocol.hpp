@@ -15,7 +15,7 @@
 namespace archstreamer {
 
 constexpr std::uint32_t ProtocolMagic = 0x41525354; // "ARST"
-constexpr std::uint16_t ProtocolVersion = 14;
+constexpr std::uint16_t ProtocolVersion = 15;
 constexpr std::uint8_t MaxRemoteClients = 2;
 constexpr std::uint8_t MaxPlayersPerClient = 2;
 constexpr std::uint8_t MaxRetroArchPorts = 5; // Ports 0-3 plus a host player if desired.
@@ -55,6 +55,10 @@ enum class PacketType : std::uint8_t {
     SoftKeyboardRequest = 24,
     // Client → host: typed text (or cancel) for SoftKeyboardRequest.
     SoftKeyboardResponse = 25,
+    // Host → client: warm a second video RTP receive path (quality cutover).
+    MediaVideoPending = 26,
+    // Client → host: staging video path is receiving; host may promote + tear down old.
+    MediaVideoReady = 27,
 };
 
 enum class ClientRole : std::uint8_t {
@@ -427,6 +431,16 @@ struct SoftKeyboardResponse {
     std::string text;
 };
 
+// Host → client: open a second video receive path; do not touch audio.
+struct MediaVideoPending {
+    std::string video_uri;
+};
+
+// Client → host: staging URI is up; echo uri so host can match in-flight cutovers.
+struct MediaVideoReady {
+    std::string video_uri;
+};
+
 using PacketPayload = std::variant<
     ClientHello,
     HostWelcome,
@@ -452,6 +466,8 @@ using PacketPayload = std::variant<
     LinkResponse,
     SoftKeyboardRequest,
     SoftKeyboardResponse,
+    MediaVideoPending,
+    MediaVideoReady,
     KeyboardInput>;
 
 ClientRole role_for_player_count(std::uint8_t requested_players);

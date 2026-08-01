@@ -5,7 +5,9 @@
 #include "host/host_launch_planner.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace archstreamer {
@@ -25,8 +27,22 @@ public:
         bool wants_video,
         bool wants_audio) = 0;
     virtual void remove_client(ClientId client_id) = 0;
-    // Restart that client's video gst-launch with new encode settings. Returns false if no video sender.
-    virtual bool reconfigure_client_video(ClientId client_id, const VideoEncodeSettings& settings) = 0;
+
+    /**
+     * Warm a dedicated encode for the new tier on a staging port without stopping
+     * the client's current RTP. Returns the staging video URI, or nullopt if the
+     * request is a no-op / busy / unsupported.
+     */
+    virtual std::optional<std::string> begin_video_tier_cutover(
+        ClientId client_id,
+        const VideoEncodeSettings& settings) = 0;
+    /** Promote staging to active and tear down the previous encode path. */
+    virtual bool complete_video_tier_cutover(
+        ClientId client_id,
+        std::string_view staging_video_uri) = 0;
+    virtual void abort_video_tier_cutover(ClientId client_id) = 0;
+    virtual bool video_cutover_in_flight(ClientId client_id) const = 0;
+
     virtual void stop() = 0;
 };
 

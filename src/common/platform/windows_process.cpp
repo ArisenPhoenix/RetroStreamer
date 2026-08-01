@@ -312,6 +312,13 @@ bool WindowsChildProcess::running() const {
     return WaitForSingleObject(process_info_.hProcess, 0) == WAIT_TIMEOUT;
 }
 
+int WindowsChildProcess::pid() const {
+    if (!running()) {
+        return -1;
+    }
+    return static_cast<int>(process_info_.dwProcessId);
+}
+
 void WindowsChildProcess::close_handles() {
     if (process_info_.hProcess != nullptr) {
         CloseHandle(process_info_.hProcess);

@@ -73,4 +73,14 @@ void schedule_ryujinx_soft_keyboard(
     std::string preferred_display = {});
 #endif
 
+/**
+ * Platform-neutral entry for session launch paths. Creates `bridge` when null,
+ * then schedules the Linux soft-keyboard watcher. No-op on Windows.
+ */
+void ensure_ryujinx_soft_keyboard(
+    std::shared_ptr<SoftKeyboardHostBridge>& bridge,
+    std::string fallback_text,
+    std::string prompt = "The game is asking for text. Enter it with the pad.",
+    std::string preferred_display = {});
+
 } // namespace archstreamer

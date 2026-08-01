@@ -10,7 +10,9 @@
 #include <algorithm>
 #include <chrono>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -280,8 +282,20 @@ void WindowsMediaServer::remove_client(ClientId client_id) {
     restart_audio();
 }
 
-bool WindowsMediaServer::reconfigure_client_video(ClientId, const VideoEncodeSettings&) {
+bool WindowsMediaServer::complete_video_tier_cutover(ClientId, std::string_view) {
     return false;
+}
+
+void WindowsMediaServer::abort_video_tier_cutover(ClientId) {}
+
+bool WindowsMediaServer::video_cutover_in_flight(ClientId) const {
+    return false;
+}
+
+std::optional<std::string> WindowsMediaServer::begin_video_tier_cutover(
+    ClientId,
+    const VideoEncodeSettings&) {
+    return std::nullopt;
 }
 
 void WindowsMediaServer::stop() {

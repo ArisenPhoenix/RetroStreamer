@@ -10,6 +10,7 @@
 #include "host/session_control_monitor.hpp"
 #include "host/session_lobby.hpp"
 #include "host/session_runtime.hpp"
+#include "host/session_slot_lease.hpp"
 #include "host/streaming_audio_sink.hpp"
 #include "host/virtual_keyboard.hpp"
 #include "host/platform/default_host_platform.hpp"
@@ -36,6 +37,8 @@ class ControllerDevice;
 
 struct ActiveSessionSlotConfig {
     int slot_index = 0;
+    /** Holds slot_index against every other host process for the slot's lifetime. */
+    SessionSlotLease slot_lease;
     HostAppConfig host_config;
     SessionPlan plan;
     HostLaunchPlan launch_plan;
@@ -136,6 +139,9 @@ inline std::uint8_t clamp_max_session_slots(std::uint8_t clients) {
 
 /** Apply per-slot display / media / netcmd offsets onto a config copy. */
 HostAppConfig slot_adjusted_config(HostAppConfig config, int slot_index);
+
+/** Display number out of a `:N` string; 99 when unparseable. */
+int parse_virtual_display_number(const std::string& virtual_display);
 
 /** Offset virtual pad product ids so concurrent slots do not collide. */
 void apply_slot_product_id_offset(std::vector<VirtualGamepadIdentity>& identities, int slot_index);

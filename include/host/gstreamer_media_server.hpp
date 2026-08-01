@@ -6,17 +6,18 @@
 #include "host/media_server.hpp"
 #include "host/virtual_display.hpp"
 
+#include <chrono>
 #include <cstdint>
-#include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace archstreamer {
 
-// Encode ladder: one capture tee into quality-tier branches; each client is
-// assigned to one tier's multiudpsink (same receive port, different encode).
+// Encode ladder: one capture tee into quality-tier branches for clients still on
+// the shared process. Tier moves use a dedicated staging ChildProcess + cutover.
 class GStreamerVideoFanout {
 public:
     ~GStreamerVideoFanout();
@@ -33,8 +34,14 @@ public:
         const std::string& display,
         const MediaStreamRequest& destination,
         const VideoEncodeSettings& settings = {});
-    // Move client onto the ladder tier matching settings (selector); rebuild sinks.
-    bool reconfigure_client(ClientId client_id, const VideoEncodeSettings& settings);
+
+    std::optional<std::string> begin_tier_cutover(
+        ClientId client_id,
+        const VideoEncodeSettings& settings);
+    bool complete_tier_cutover(ClientId client_id, std::string_view staging_video_uri);
+    void abort_tier_cutover(ClientId client_id);
+    bool cutover_in_flight(ClientId client_id) const;
+
     void stop();
     void stop_client(ClientId client_id);
 
@@ -42,11 +49,33 @@ private:
     struct Destination {
         ClientId client_id = 0;
         std::string host;
+        /** Originally assigned media_index port (low half of the slot block). */
+        std::uint16_t base_port = 0;
+        /** Port the client currently receives on. */
         std::uint16_t port = 0;
         MediaQualityTier tier = MediaQualityTier::Medium;
+        /** When running, this client is off the shared tee. */
+        ChildProcess dedicated;
+        ChildProcess staging;
+        bool staging_active = false;
+        std::uint16_t staging_port = 0;
+        MediaQualityTier staging_tier = MediaQualityTier::Medium;
+        std::chrono::steady_clock::time_point staging_started{};
     };
 
+    Destination* find_destination(ClientId client_id);
+    const Destination* find_destination(ClientId client_id) const;
     void restart_pipeline();
+    std::vector<std::string> build_single_encode_args(
+        MediaQualityTier tier,
+        const std::string& host,
+        std::uint16_t port) const;
+    void apply_nvenc_environment(
+        ChildProcess& process,
+        std::vector<std::string> args,
+        const std::optional<std::string>& stderr_path = std::nullopt);
+    /** Staging encodes log to a file so a failed cutover is diagnosable. */
+    static std::string staging_encode_log_path();
 
     enum class SourceKind { X11, PipeWire };
     SourceKind source_kind_ = SourceKind::X11;
@@ -106,7 +135,14 @@ public:
         bool wants_video,
         bool wants_audio) override;
     void remove_client(ClientId client_id) override;
-    bool reconfigure_client_video(ClientId client_id, const VideoEncodeSettings& settings) override;
+    std::optional<std::string> begin_video_tier_cutover(
+        ClientId client_id,
+        const VideoEncodeSettings& settings) override;
+    bool complete_video_tier_cutover(
+        ClientId client_id,
+        std::string_view staging_video_uri) override;
+    void abort_video_tier_cutover(ClientId client_id) override;
+    bool video_cutover_in_flight(ClientId client_id) const override;
     void stop() override;
 
     // Gamescope: video fanout is deferred until the PipeWire node appears after launch.

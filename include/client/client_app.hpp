@@ -175,6 +175,24 @@ struct MediaResyncBridge {
     }
 };
 
+/** Host → client: warm a second video path for quality cutover. */
+struct MediaVideoCutoverBridge {
+    std::mutex mutex;
+    std::optional<std::string> pending_uri;
+
+    void set_pending(std::string video_uri) {
+        std::lock_guard lock(mutex);
+        pending_uri = std::move(video_uri);
+    }
+
+    std::optional<std::string> take_pending() {
+        std::lock_guard lock(mutex);
+        auto value = pending_uri;
+        pending_uri.reset();
+        return value;
+    }
+};
+
 struct ClientAppConfig {
     std::string host = "127.0.0.1";
     std::uint16_t control_port = 45555;
@@ -226,6 +244,7 @@ struct ClientAppCallbacks {
     std::shared_ptr<SoftKeyboardBridge> soft_keyboard;
     std::shared_ptr<ClientHeartbeatPrefs> heartbeat_prefs;
     std::shared_ptr<MediaResyncBridge> media_resync;
+    std::shared_ptr<MediaVideoCutoverBridge> video_cutover;
 };
 
 struct ClientRunResult {

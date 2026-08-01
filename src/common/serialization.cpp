@@ -439,6 +439,18 @@ ByteBuffer serialize_payload(const SoftKeyboardResponse& payload) {
     return writer.take();
 }
 
+ByteBuffer serialize_payload(const MediaVideoPending& payload) {
+    Writer writer;
+    writer.write_string(payload.video_uri);
+    return writer.take();
+}
+
+ByteBuffer serialize_payload(const MediaVideoReady& payload) {
+    Writer writer;
+    writer.write_string(payload.video_uri);
+    return writer.take();
+}
+
 PacketType packet_type_for(const ClientHello&) { return PacketType::ClientHello; }
 PacketType packet_type_for(const HostWelcome&) { return PacketType::HostWelcome; }
 PacketType packet_type_for(const ClientConfig&) { return PacketType::ClientConfig; }
@@ -464,6 +476,8 @@ PacketType packet_type_for(const LinkRequest&) { return PacketType::LinkRequest;
 PacketType packet_type_for(const LinkResponse&) { return PacketType::LinkResponse; }
 PacketType packet_type_for(const SoftKeyboardRequest&) { return PacketType::SoftKeyboardRequest; }
 PacketType packet_type_for(const SoftKeyboardResponse&) { return PacketType::SoftKeyboardResponse; }
+PacketType packet_type_for(const MediaVideoPending&) { return PacketType::MediaVideoPending; }
+PacketType packet_type_for(const MediaVideoReady&) { return PacketType::MediaVideoReady; }
 
 template <typename Payload>
 ByteBuffer serialize_packet_impl(const Payload& payload) {
@@ -577,6 +591,14 @@ ByteBuffer serialize_packet(const SoftKeyboardRequest& payload) {
 }
 
 ByteBuffer serialize_packet(const SoftKeyboardResponse& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const MediaVideoPending& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const MediaVideoReady& payload) {
     return serialize_packet_impl(payload);
 }
 
@@ -826,6 +848,14 @@ SoftKeyboardResponse read_soft_keyboard_response(Reader& reader) {
     return payload;
 }
 
+MediaVideoPending read_media_video_pending(Reader& reader) {
+    return MediaVideoPending{reader.read_string()};
+}
+
+MediaVideoReady read_media_video_ready(Reader& reader) {
+    return MediaVideoReady{reader.read_string()};
+}
+
 PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
     Reader header_reader(packet);
     const auto magic = header_reader.read_pod<std::uint32_t>();
@@ -897,6 +927,10 @@ PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
             return read_soft_keyboard_request(payload_reader);
         case PacketType::SoftKeyboardResponse:
             return read_soft_keyboard_response(payload_reader);
+        case PacketType::MediaVideoPending:
+            return read_media_video_pending(payload_reader);
+        case PacketType::MediaVideoReady:
+            return read_media_video_ready(payload_reader);
     }
 
     throw std::runtime_error("unknown packet type");

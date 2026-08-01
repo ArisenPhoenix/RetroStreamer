@@ -27,6 +27,8 @@ public:
         const std::optional<std::string>& stderr_path = std::nullopt);
     void stop();
     bool running() const;
+    /** OS process id while running; -1 when stopped. */
+    int pid() const;
 
 private:
     mutable pid_t pid_ = -1;

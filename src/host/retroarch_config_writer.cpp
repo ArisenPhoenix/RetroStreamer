@@ -399,10 +399,12 @@ std::filesystem::path write_retroarch_input_override(
         throw std::runtime_error("failed to write RetroArch input override");
     }
 
-    // Prefer the same BIOS/system tree RetroArch / ra.py use (PS1 SCPH*.bin, etc.).
-    std::filesystem::path system_directory;
-    if (const auto home = user_home_directory(); !home.empty()) {
-        system_directory = std::filesystem::path(home) / ".config/retroarch/system";
+    // Per-user mirror of the BIOS/system tree RetroArch / ra.py use (PS1 SCPH*.bin,
+    // etc.). Everything is symlinked back to the shared tree except pcsx2/memcards,
+    // so concurrent sessions cannot open each other's PS2 cards.
+    std::filesystem::path system_directory = save_profile.system_directory;
+    if (system_directory.empty()) {
+        system_directory = shared_retroarch_system_directory();
     }
 
     file

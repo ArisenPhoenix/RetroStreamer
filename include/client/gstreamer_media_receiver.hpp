@@ -6,6 +6,8 @@
 
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <optional>
 #include <string>
 
 namespace archstreamer {
@@ -26,8 +28,19 @@ public:
     /** Restart Opus only — used when video lagged and audio free-ran ahead. */
     bool restart_audio();
 
+    /**
+     * Point video at a new RTP port, leaving audio on its live timeline.
+     * Only call once the host confirms it is publishing there.
+     */
+    bool switch_video(const std::string& video_uri);
+
 private:
     void start_audio_pipeline(bool wait_for_ready);
+    void start_video_process(
+        ChildProcess& process,
+        std::uint16_t port,
+        const std::filesystem::path& log_path,
+        bool wait_for_ready);
 
     ChildProcess video_process_;
     ChildProcess audio_process_;

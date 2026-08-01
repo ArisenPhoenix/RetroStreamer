@@ -34,7 +34,14 @@ public:
         bool wants_video,
         bool wants_audio) override;
     void remove_client(ClientId client_id) override;
-    bool reconfigure_client_video(ClientId client_id, const VideoEncodeSettings& settings) override;
+    std::optional<std::string> begin_video_tier_cutover(
+        ClientId client_id,
+        const VideoEncodeSettings& settings) override;
+    bool complete_video_tier_cutover(
+        ClientId client_id,
+        std::string_view staging_video_uri) override;
+    void abort_video_tier_cutover(ClientId client_id) override;
+    bool video_cutover_in_flight(ClientId client_id) const override;
     void stop() override;
 
 private:

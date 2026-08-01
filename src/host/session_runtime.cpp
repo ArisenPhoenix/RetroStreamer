@@ -8,6 +8,11 @@ SharedEmulatorRuntime::SharedEmulatorRuntime(HostLaunchPlan plan)
     : launch_plan_(std::move(plan)),
       emulator_(std::make_unique<HostRetroArchProcess>()) {}
 
+SharedEmulatorRuntime::~SharedEmulatorRuntime() {
+    // Idempotent with an earlier stop_emulator(); no-op after release_emulator().
+    stop_emulator();
+}
+
 void SharedEmulatorRuntime::bind_launch_config(RetroArchLaunchConfig config) {
     launch_config_ = std::move(config);
     launch_config_bound_ = true;
@@ -93,6 +98,10 @@ LinkSessionRuntime::LinkSessionRuntime(
         " client=" + promotion_.logical_client_username +
         " (" + promotion_.system_key +
         "). Primary emulator kept; peer instance not started yet.";
+}
+
+LinkSessionRuntime::~LinkSessionRuntime() {
+    stop_emulator();
 }
 
 std::uint8_t LinkSessionRuntime::emulator_instance_count() const {

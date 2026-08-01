@@ -622,6 +622,21 @@ void schedule_ryujinx_soft_keyboard(
     }).detach();
 }
 
+void ensure_ryujinx_soft_keyboard(
+    std::shared_ptr<SoftKeyboardHostBridge>& bridge,
+    std::string fallback_text,
+    std::string prompt,
+    std::string preferred_display) {
+    if (!bridge) {
+        bridge = std::make_shared<SoftKeyboardHostBridge>();
+    }
+    schedule_ryujinx_soft_keyboard(
+        bridge,
+        std::move(fallback_text),
+        std::move(prompt),
+        std::move(preferred_display));
+}
+
 } // namespace archstreamer
 
 #else
@@ -641,6 +656,17 @@ void VirtualKeyboard::plug() {}
 void VirtualKeyboard::unplug() {}
 void VirtualKeyboard::apply(const KeyboardState&) {}
 void VirtualKeyboard::release_all() {}
+
+void ensure_ryujinx_soft_keyboard(
+    std::shared_ptr<SoftKeyboardHostBridge>& bridge,
+    std::string fallback_text,
+    std::string prompt,
+    std::string preferred_display) {
+    (void)bridge;
+    (void)fallback_text;
+    (void)prompt;
+    (void)preferred_display;
+}
 
 } // namespace archstreamer
 

@@ -15,10 +15,12 @@ namespace {
 
 constexpr auto kStartupHeartbeatGrace = std::chrono::seconds(15);
 constexpr auto kMinReconfigureInterval = std::chrono::seconds(5);
-// After a pipeline restart the remote often reports 0 decoded frames until the next IDR.
-// Without this grace, Auto flaps High↔Medium every few seconds and freezes the stream.
+// After cutover promote the remote may briefly report 0 decoded frames until IDR.
 constexpr auto kPostReconfigureGrace = std::chrono::seconds(12);
-// After a failed High stay, wait before retrying — High restarts the shared capture tee.
+// The client only ACKs after proving the staging port really carries video, so
+// this has to cover probe startup plus a couple of seconds of confirmed frames.
+constexpr auto kVideoCutoverTimeout = std::chrono::seconds(12);
+// After a failed High stay, wait before retrying — High is heavier on Wi‑Fi.
 constexpr auto kHighTierFailureCooldown = std::chrono::seconds(180);
 constexpr std::uint8_t kBadHealthThreshold = 3;
 // Demote from High only after a longer bad streak; brief decode stalls are common at 60fps.
@@ -29,9 +31,9 @@ constexpr std::uint16_t kHighLossPermille = 100;
 // Require sustained decode rate before climbing (heartbeats are ~1 Hz).
 constexpr std::uint16_t kMinFramesForStepUp = 8;
 constexpr std::uint16_t kMinFramesForHighStepUp = 20;
-// Auto must not walk into High/Very-High: each step restarts the shared encode
-// tee (~1s full-screen freeze). 1080p60@12–25 Mbps also overloads many Wi‑Fi
-// clients. Players can still pick High/Very-High explicitly in the client UI.
+// Auto must not walk into High/Very-High: each step still costs a dual-stream
+// cutover. 1080p60@12–25 Mbps also overloads many Wi‑Fi clients. Players can
+// still pick High/Very-High explicitly in the client UI.
 constexpr MediaQualityTier kAutoMaxTier = MediaQualityTier::MediumHigh;
 constexpr auto kFramecountOsdInterval = std::chrono::milliseconds(500);
 
@@ -216,6 +218,37 @@ std::optional<std::string> SessionControlMonitor::poll() {
                         << " accepted=" << (soft_keyboard->accepted ? "yes" : "no")
                         << " from " << client_label(client) << '\n';
                 }
+            } else if (const auto* video_ready = std::get_if<MediaVideoReady>(&payload);
+                       video_ready != nullptr) {
+                if (client.pending_video_uri.has_value() &&
+                    video_ready->video_uri == *client.pending_video_uri) {
+                    if (media_server_.complete_video_tier_cutover(
+                            client.client_id,
+                            video_ready->video_uri)) {
+                        if (client.pending_tier.has_value()) {
+                            client.applied_tier = *client.pending_tier;
+                        }
+                        if (client.media_endpoint.has_value()) {
+                            client.media_endpoint->video_uri = video_ready->video_uri;
+                            try {
+                                client.stream.send_packet(serialize_packet(*client.media_endpoint));
+                            } catch (const std::exception&) {
+                            }
+                        }
+                        client.last_video_reconfigure = now;
+                        std::cout
+                            << "Video cutover ready from " << client_label(client)
+                            << " -> " << media_quality_tier_name(client.applied_tier) << '\n';
+                    } else {
+                        media_server_.abort_video_tier_cutover(client.client_id);
+                        std::cerr
+                            << "Video cutover complete failed for "
+                            << client_label(client) << '\n';
+                    }
+                    client.pending_video_uri.reset();
+                    client.pending_tier.reset();
+                    client.video_cutover_started = {};
+                }
             } else if (const auto* link_request = std::get_if<LinkRequest>(&payload);
                        link_request != nullptr) {
                 std::vector<LinkOutbound> outbound;
@@ -344,6 +377,19 @@ std::optional<std::string> SessionControlMonitor::poll() {
             continue;
         }
 
+        if (client.pending_video_uri.has_value() &&
+            client.video_cutover_started.time_since_epoch().count() != 0 &&
+            now - client.video_cutover_started >= kVideoCutoverTimeout) {
+            media_server_.abort_video_tier_cutover(client.client_id);
+            std::cerr
+                << "Video cutover timed out for " << client_label(client)
+                << "; keeping " << media_quality_tier_name(client.applied_tier) << '\n';
+            client.pending_video_uri.reset();
+            client.pending_tier.reset();
+            client.video_cutover_started = {};
+            client.last_video_reconfigure = now;
+        }
+
         if (client.stream.peer_closed()) {
             if (remove_viewer(i, "disconnected")) {
                 continue;
@@ -406,6 +452,11 @@ void SessionControlMonitor::handle_heartbeat(
     client.show_framecount = heartbeat.show_framecount;
 
     if (!client.hello.wants_video) {
+        return;
+    }
+
+    if (client.pending_video_uri.has_value() ||
+        media_server_.video_cutover_in_flight(client.client_id)) {
         return;
     }
 
@@ -516,6 +567,10 @@ void SessionControlMonitor::apply_video_tier(
     MediaQualityTier tier,
     std::string_view reason) {
     const auto now = std::chrono::steady_clock::now();
+    if (client.pending_video_uri.has_value() ||
+        media_server_.video_cutover_in_flight(client.client_id)) {
+        return;
+    }
     if (client.last_video_reconfigure.time_since_epoch().count() != 0 &&
         now - client.last_video_reconfigure < kMinReconfigureInterval) {
         return;
@@ -524,24 +579,30 @@ void SessionControlMonitor::apply_video_tier(
     // Selector: map wanted/auto step onto a ladder branch, capped by client max bitrate.
     const auto resolved = select_video_tier(tier, client.applied_tier, client.max_bitrate_kbps);
     const auto settings = video_encode_settings_for_tier(resolved);
-    if (!media_server_.reconfigure_client_video(client.client_id, settings)) {
+    const auto staging_uri = media_server_.begin_video_tier_cutover(client.client_id, settings);
+    if (!staging_uri.has_value()) {
         return;
     }
 
-    client.applied_tier = resolved;
-    client.last_video_reconfigure = now;
+    client.pending_tier = resolved;
+    client.pending_video_uri = *staging_uri;
+    client.video_cutover_started = now;
     client.bad_health_streak = 0;
     client.good_health_streak = 0;
-    // Hint the client to one-shot resync A/V (same URIs; video encoder restarted).
-    if (client.media_endpoint.has_value() &&
-        client.connection_state == SessionConnectionState::Connected) {
+
+    if (client.connection_state == SessionConnectionState::Connected) {
         try {
-            client.stream.send_packet(serialize_packet(*client.media_endpoint));
+            client.stream.send_packet(serialize_packet(MediaVideoPending{*staging_uri}));
         } catch (const std::exception&) {
+            media_server_.abort_video_tier_cutover(client.client_id);
+            client.pending_tier.reset();
+            client.pending_video_uri.reset();
+            client.video_cutover_started = {};
+            return;
         }
     }
     std::cerr
-        << "Adapted video for " << client_label(client)
+        << "Staging video for " << client_label(client)
         << " -> " << media_quality_tier_name(resolved)
         << " (" << settings.bitrate_kbps << " kbps, "
         << static_cast<int>(settings.framerate) << " fps";

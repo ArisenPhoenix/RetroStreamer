@@ -155,4 +155,8 @@ bool PosixChildProcess::running() const {
     return true;
 }
 
+int PosixChildProcess::pid() const {
+    return running() ? static_cast<int>(pid_) : -1;
+}
+
 } // namespace archstreamer

@@ -3,6 +3,7 @@
 #include "client/audio_playback_device.hpp"
 #include "client/gstreamer_media_pipeline.hpp"
 #include "client/gstreamer_media_platform.hpp"
+#include "client/video_window_geometry.hpp"
 #include "common/addresses.hpp"
 
 #include <chrono>
@@ -42,6 +43,30 @@ void GStreamerMediaReceiver::start_audio_pipeline(bool wait_for_ready) {
     }
 }
 
+void GStreamerMediaReceiver::start_video_process(
+    ChildProcess& process,
+    std::uint16_t port,
+    const std::filesystem::path& log_path,
+    bool wait_for_ready) {
+    const auto decoder = GStreamerMediaPlatform::choose_h264_decoder();
+    const auto sink = GStreamerMediaPlatform::choose_video_sink(decoder.d3d11_zero_copy);
+    video_pipeline_info_ = std::string("decoder=") + decoder.element + " sink=" + sink.element +
+        " log=" + log_path.string();
+
+    auto environment = std::vector<std::pair<std::string, std::string>>{};
+    auto unset = std::vector<std::string>{};
+    GStreamerMediaPlatform::configure_display_for_sink(sink, environment, unset);
+
+    process.start(
+        GStreamerMediaPlatform::standalone_video_pipeline(port, decoder, sink, false),
+        environment,
+        unset,
+        log_path.string());
+    if (wait_for_ready) {
+        ensure_gst_child_stayed_up(process, "Video", log_path);
+    }
+}
+
 void GStreamerMediaReceiver::connect(const MediaEndpoint& endpoint) {
     disconnect();
     endpoint_ = endpoint;
@@ -60,22 +85,7 @@ void GStreamerMediaReceiver::connect(const MediaEndpoint& endpoint) {
 
     if (!endpoint_.video_uri.empty()) {
         const auto port = video_port_from_endpoint(endpoint_);
-        const auto decoder = GStreamerMediaPlatform::choose_h264_decoder();
-        const auto sink = GStreamerMediaPlatform::choose_video_sink(decoder.d3d11_zero_copy);
-        const auto log_path = gst_video_receiver_log_path();
-        video_pipeline_info_ = std::string("decoder=") + decoder.element + " sink=" + sink.element +
-            " log=" + log_path.string();
-
-        auto environment = std::vector<std::pair<std::string, std::string>>{};
-        auto unset = std::vector<std::string>{};
-        GStreamerMediaPlatform::configure_display_for_sink(sink, environment, unset);
-
-        video_process_.start(
-            GStreamerMediaPlatform::standalone_video_pipeline(port, decoder, sink, false),
-            environment,
-            unset,
-            log_path.string());
-        ensure_gst_child_stayed_up(video_process_, "Video", log_path);
+        start_video_process(video_process_, port, gst_video_receiver_log_path(), true);
     }
 }
 
@@ -88,6 +98,32 @@ void GStreamerMediaReceiver::disconnect() {
     pending_audio_device_streak_ = 0;
     audio_pipeline_info_.clear();
     video_pipeline_info_.clear();
+}
+
+bool GStreamerMediaReceiver::switch_video(const std::string& video_uri) {
+    if (video_uri.empty()) {
+        return false;
+    }
+    MediaEndpoint next = endpoint_;
+    next.video_uri = video_uri;
+    const auto port = video_port_from_endpoint(next);
+    if (port == 0) {
+        return false;
+    }
+
+    // Snapshot before tear-down so the replacement window can land in the same place.
+    const auto geometry = capture_video_window_geometry(video_process_.pid());
+    video_process_.stop();
+    try {
+        start_video_process(video_process_, port, gst_video_receiver_log_path(), true);
+    } catch (const std::exception&) {
+        return false;
+    }
+    if (geometry.valid) {
+        apply_video_window_geometry(video_process_.pid(), geometry);
+    }
+    endpoint_.video_uri = video_uri;
+    return video_process_.running();
 }
 
 bool GStreamerMediaReceiver::poll() {

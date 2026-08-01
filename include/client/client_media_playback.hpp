@@ -2,9 +2,12 @@
 
 #include "client/media_receiver.hpp"
 #include "common/media.hpp"
+#include "common/platform/default_platform.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace archstreamer {
@@ -57,12 +60,36 @@ public:
     const std::string& video_pipeline_info() const;
     const std::string& audio_pipeline_info() const;
 
+    const MediaEndpoint& endpoint() const { return endpoint_; }
+
+    /**
+     * Start a headless probe on the host's staging RTP port. The playing
+     * pipeline is left completely alone: a cutover must never cost the picture
+     * we already have.
+     */
+    bool begin_video_pending(const std::string& video_uri);
+    /**
+     * Returns the staging URI to ACK once the probe proves the host is really
+     * publishing there, and nothing until then. Gives up silently on timeout.
+     */
+    std::optional<std::string> poll_video_cutover();
+    bool video_cutover_pending() const;
+
+    /** Move the playing video to a new port after the host confirms the swap. */
+    bool switch_video(const std::string& video_uri);
+
     explicit operator bool() const { return active(); }
 
 private:
+    void end_staging_probe();
+
     Strategy strategy_ = Strategy::Legacy;
     MediaEndpoint endpoint_{};
     bool has_endpoint_ = false;
+    ChildProcess staging_probe_;
+    std::string pending_video_uri_;
+    std::chrono::steady_clock::time_point staging_started_{};
+    bool staging_active_ = false;
     std::unique_ptr<GStreamerMediaReceiver> legacy_;
     std::unique_ptr<GStreamerSyncedMediaReceiver> synced_;
 };

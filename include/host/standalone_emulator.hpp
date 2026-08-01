@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -108,7 +109,8 @@ std::string switch_runtime_unavailable_message();
 RyujinxUserProfile prepare_ryujinx_user_profile(
     const SaveProfile& save_profile,
     bool enable_ldn_mitm = true,
-    int resolution_scale = 1);
+    int resolution_scale = 1,
+    std::string_view profile_display_name = {});
 
 // Bind Player1…N to ArchStreamer uinput pads (GamepadSDL2 + GUID) and build an
 // SDL_GAMECONTROLLERCONFIG mapping so Ryujinx can open those pads under gamescope.

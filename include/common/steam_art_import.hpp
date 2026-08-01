@@ -30,6 +30,18 @@ struct SteamAccountInfo {
     std::size_t score = 0;
 };
 
+// Resolve Steam PersonaName (friendly name) for an account. Empty account_id = auto.
+// Falls back to nullopt when loginusers.vdf is missing or has no matching user.
+std::optional<std::string> resolve_steam_persona_name(
+    std::string_view account_id = {},
+    const std::filesystem::path& steam_dir_override = {});
+
+// Prefer Steam persona, then Steam account id, then fallback_username.
+std::string preferred_steam_or_username_display_name(
+    std::string_view fallback_username,
+    std::string_view steam_account_id = {},
+    const std::filesystem::path& steam_dir_override = {});
+
 struct SteamArtImportOptions {
     // Full path to .../userdata/<id>/config. If empty, resolved from account id / discovery.
     std::filesystem::path steam_config_dir;

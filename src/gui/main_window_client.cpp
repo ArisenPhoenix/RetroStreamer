@@ -132,7 +132,9 @@ archstreamer::ClientAppConfig MainWindow::client_config_from_fields() const {
     config.control_port = static_cast<std::uint16_t>(client_port_->value());
     config.input_port = static_cast<std::uint16_t>(client_input_port_->value());
     config.username = profile_client_username();
-    config.display_name = config.username;
+    config.display_name = archstreamer::preferred_steam_or_username_display_name(
+        config.username,
+        steam_account_id_text());
     config.role = selected_client_role(client_role_);
     config.session_mode = selected_mode(client_mode_);
     config.filter = client_filter_from_fields();

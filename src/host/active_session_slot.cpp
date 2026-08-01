@@ -628,10 +628,25 @@ void ActiveSessionSlot::run_session() {
             core_name.find("ryujinx") != std::string::npos;
 
         if (use_ryujinx) {
+            std::string profile_name = save_profile_.username;
+            if (plan.host_hello.has_value() &&
+                plan.host_hello->username == save_profile_.username &&
+                !plan.host_hello->display_name.empty()) {
+                profile_name = plan.host_hello->display_name;
+            } else {
+                for (const auto& client : plan.clients) {
+                    if (client.hello.username == save_profile_.username &&
+                        !client.hello.display_name.empty()) {
+                        profile_name = client.hello.display_name;
+                        break;
+                    }
+                }
+            }
             auto ryujinx_user = prepare_ryujinx_user_profile(
                 save_profile_,
                 /*enable_ldn_mitm=*/true,
-                config.yuzu_resolution_scale);
+                config.yuzu_resolution_scale,
+                profile_name);
             std::vector<std::string> pad_guids;
             pad_guids.reserve(resolved_pads.size());
             for (const auto& pad : resolved_pads) {

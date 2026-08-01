@@ -6,6 +6,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -144,6 +147,35 @@ void ensure_switch_system_defaults() {
             copy_key_files(source, keys_dir);
             if (std::filesystem::is_regular_file(keys_dir / "prod.keys")) {
                 std::cout << "Switch keys: installed into " << keys_dir << " (from " << source << ")\n";
+                break;
+            }
+        }
+    }
+
+    // Seed a Ryujinx Profiles.json template (avatar + structure) once so per-user
+    // profiles can be created without the first-run name dialog.
+    const auto profiles_template = switch_system_defaults_root() / "ryujinx_Profiles.json";
+    if (!std::filesystem::is_regular_file(profiles_template)) {
+        const auto home = home_dir();
+        const std::filesystem::path candidates[] = {
+            home / ".config" / "Ryujinx" / "system" / "Profiles.json",
+#ifdef _WIN32
+            home / "AppData" / "Local" / "Ryujinx" / "system" / "Profiles.json",
+#endif
+        };
+        for (const auto& source : candidates) {
+            if (!std::filesystem::is_regular_file(source)) {
+                continue;
+            }
+            std::error_code ec;
+            std::filesystem::create_directories(profiles_template.parent_path(), ec);
+            std::filesystem::copy_file(
+                source,
+                profiles_template,
+                std::filesystem::copy_options::skip_existing,
+                ec);
+            if (std::filesystem::is_regular_file(profiles_template)) {
+                std::cout << "Ryujinx profile template: seeded from " << source << '\n';
                 break;
             }
         }
@@ -1096,6 +1128,10 @@ void ensure_ryujinx_config(
     cfg["update_checker_type"] = "Disabled";
     cfg["show_confirm_exit"] = false;
     cfg["skip_user_profiles"] = true;
+    // Software keyboard (swkbd) is rendered into the guest framebuffer as a virtual
+    // keyboard. Under gamescope/streaming it blocks LDN/name entry with no usable
+    // host dialog — auto-complete applets with Ryujinx defaults instead.
+    cfg["ignore_applet"] = true;
     cfg["enable_discord_integration"] = false;
     cfg["disable_input_when_out_of_focus"] = false;
 
@@ -1110,12 +1146,169 @@ void ensure_ryujinx_config(
     out << cfg.dump(2) << '\n';
 }
 
+// Switch nickname for LDN / profile UI. Prefer an explicit display name (Steam /
+// ClientHello), otherwise the ArchStreamer username — never "RyuPlayer".
+std::string ryujinx_profile_display_name(const std::string& preferred) {
+    std::string name;
+    // Ryujinx MaxProfileNameLength is 0x20.
+    name.reserve(std::min<std::size_t>(preferred.size(), 32));
+    for (char character : preferred) {
+        if (name.size() >= 32) {
+            break;
+        }
+        const auto code = static_cast<unsigned char>(character);
+        if (code < 0x20 || code == 0x7f) {
+            continue;
+        }
+        name.push_back(character);
+    }
+    while (!name.empty() && (name.back() == ' ' || name.back() == '\t')) {
+        name.pop_back();
+    }
+    return name.empty() ? std::string("Player") : name;
+}
+
+// Default Ryujinx account id (unused for naming; kept for id comparisons if present).
+[[maybe_unused]] constexpr const char* kRyujinxDefaultUserId =
+    "00000000000000010000000000000000";
+
+// Stable non-default user id so LDN sees a "custom" profile.
+std::string ryujinx_custom_user_id(const std::string& save_username) {
+    std::uint64_t hash = 14695981039346656037ull;
+    for (unsigned char character : save_username) {
+        hash ^= character;
+        hash *= 1099511628211ull;
+    }
+    char buffer[33] = {};
+    std::snprintf(
+        buffer,
+        sizeof(buffer),
+        "a5c57ea1%08x%08x",
+        static_cast<unsigned>(hash >> 32),
+        static_cast<unsigned>(hash));
+    return buffer;
+}
+
+/** Seed a custom Open profile named for the client (Steam / username). */
+void ensure_ryujinx_profiles_json(
+    const std::filesystem::path& data_root,
+    const std::string& save_username,
+    const std::string& preferred_display_name) {
+    const auto profiles_path = data_root / "system" / "Profiles.json";
+    std::filesystem::create_directories(profiles_path.parent_path());
+
+    nlohmann::json cfg = nlohmann::json::object();
+    const auto try_load = [&](const std::filesystem::path& path) {
+        if (!std::filesystem::is_regular_file(path)) {
+            return false;
+        }
+        try {
+            std::ifstream in(path);
+            auto parsed = nlohmann::json::parse(in, nullptr, /*allow_exceptions=*/true);
+            if (!parsed.is_object()) {
+                return false;
+            }
+            cfg = std::move(parsed);
+            return true;
+        } catch (const nlohmann::json::exception&) {
+            return false;
+        }
+    };
+
+    if (!try_load(profiles_path)) {
+        (void)try_load(switch_system_defaults_root() / "ryujinx_Profiles.json");
+    }
+
+    const auto source =
+        !preferred_display_name.empty() ? preferred_display_name : save_username;
+    const auto display_name = ryujinx_profile_display_name(source);
+    const auto custom_id = ryujinx_custom_user_id(save_username);
+    const auto now = static_cast<std::int64_t>(
+        std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count());
+
+    if (!cfg.contains("profiles") || !cfg["profiles"].is_array()) {
+        cfg["profiles"] = nlohmann::json::array();
+    }
+    auto& profiles = cfg["profiles"];
+
+    std::string avatar_image;
+    for (const auto& entry : profiles) {
+        if (entry.is_object() && entry.contains("image") && entry["image"].is_string()) {
+            const auto& image = entry["image"].get_ref<const std::string&>();
+            if (!image.empty()) {
+                avatar_image = image;
+                break;
+            }
+        }
+    }
+
+    nlohmann::json* custom = nullptr;
+    for (auto& entry : profiles) {
+        if (!entry.is_object()) {
+            continue;
+        }
+        if (entry.value("user_id", "") == custom_id) {
+            custom = &entry;
+            break;
+        }
+    }
+
+    if (custom == nullptr) {
+        profiles.push_back({
+            {"user_id", custom_id},
+            {"name", display_name},
+            {"account_state", "Open"},
+            // Idle default; Ryujinx opens this at runtime when a game starts online play.
+            // Closed here does NOT block LDN / local-wireless trading.
+            {"online_play_state", "Closed"},
+            {"last_modified_timestamp", now},
+            {"image", avatar_image},
+        });
+        custom = &profiles.back();
+    } else {
+        (*custom)["name"] = display_name;
+        (*custom)["last_modified_timestamp"] = now;
+        if ((!custom->contains("image") || !(*custom)["image"].is_string() ||
+             custom->at("image").get<std::string>().empty()) &&
+            !avatar_image.empty()) {
+            (*custom)["image"] = avatar_image;
+        }
+    }
+
+    for (auto& entry : profiles) {
+        if (!entry.is_object()) {
+            continue;
+        }
+        const auto id = entry.value("user_id", "");
+        if (id == custom_id) {
+            entry["account_state"] = "Open";
+            entry["name"] = display_name;
+        } else {
+            entry["account_state"] = "Closed";
+        }
+        // Leave online_play_state alone on other profiles; keep ours Closed at rest.
+        if (id == custom_id) {
+            entry["online_play_state"] = "Closed";
+        }
+    }
+
+    std::ofstream out(profiles_path, std::ios::trunc);
+    if (!out) {
+        throw std::runtime_error("failed to write Ryujinx Profiles.json: " + profiles_path.string());
+    }
+    out << cfg.dump(2) << '\n';
+    std::cout << "Ryujinx Profiles: Open user \"" << display_name << "\"\n";
+}
+
 } // namespace
 
 RyujinxUserProfile prepare_ryujinx_user_profile(
     const SaveProfile& save_profile,
     bool enable_ldn_mitm,
-    int resolution_scale) {
+    int resolution_scale,
+    std::string_view profile_display_name) {
     RyujinxUserProfile profile;
     profile.xdg_config_home = save_profile.user_directory / "ryujinx" / "xdg-config";
     profile.data_root = profile.xdg_config_home / "Ryujinx";
@@ -1145,6 +1338,9 @@ RyujinxUserProfile prepare_ryujinx_user_profile(
         profile.data_root / "Config.json",
         enable_ldn_mitm,
         resolution_scale);
+    const std::string display =
+        profile_display_name.empty() ? save_profile.username : std::string(profile_display_name);
+    ensure_ryujinx_profiles_json(profile.data_root, save_profile.username, display);
     return profile;
 }
 
@@ -1213,10 +1409,12 @@ nlohmann::json ryujinx_pro_controller_sdl_binding(
           {"button_zr", "RightTrigger"},
           {"button_sl", "Unbound"},
           {"button_sr", "Unbound"},
-          {"button_x", "Y"},
-          {"button_b", "A"},
-          {"button_y", "X"},
-          {"button_a", "B"}}},
+          // Match Yuzu / Xbox muscle memory: south(A)=Switch A (confirm), east(B)=Switch B.
+          // Default Nintendo layout left these swapped (south→B, east→A / X↔O on DualShock).
+          {"button_x", "X"},
+          {"button_b", "B"},
+          {"button_y", "Y"},
+          {"button_a", "A"}}},
         {"version", 1},
         {"backend", "GamepadSDL2"},
         {"id", ryujinx_device_id_from_sdl_guid(player_index, sdl_guid)},

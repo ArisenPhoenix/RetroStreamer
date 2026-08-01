@@ -463,6 +463,192 @@ std::optional<SteamAccountInfo> resolve_steam_account(
     return std::nullopt;
 }
 
+namespace {
+
+constexpr std::uint64_t kSteamId64Base = 76561197960265728ull;
+
+std::optional<std::string> account_id_from_steamid64(std::string_view steamid64) {
+    if (steamid64.empty() ||
+        !std::all_of(steamid64.begin(), steamid64.end(), [](unsigned char c) {
+            return std::isdigit(c) != 0;
+        })) {
+        return std::nullopt;
+    }
+    try {
+        const auto value = std::stoull(std::string(steamid64));
+        if (value < kSteamId64Base) {
+            return std::nullopt;
+        }
+        return std::to_string(value - kSteamId64Base);
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+struct LoginUserEntry {
+    std::string account_id;
+    std::string persona_name;
+    bool most_recent = false;
+};
+
+std::vector<LoginUserEntry> parse_loginusers_vdf(const std::filesystem::path& path) {
+    std::ifstream input(path);
+    if (!input) {
+        return {};
+    }
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+    const auto text = buffer.str();
+
+    std::vector<LoginUserEntry> users;
+    LoginUserEntry current;
+    bool in_user = false;
+    std::string pending_key;
+
+    // loginusers.vdf is text KeyValues: "key" "value" or "key" { ... }
+    for (std::size_t index = 0; index < text.size();) {
+        while (index < text.size() &&
+               (text[index] == ' ' || text[index] == '\t' || text[index] == '\r' ||
+                text[index] == '\n')) {
+            ++index;
+        }
+        if (index >= text.size()) {
+            break;
+        }
+        if (text[index] == '{') {
+            ++index;
+            continue;
+        }
+        if (text[index] == '}') {
+            if (in_user && !current.account_id.empty()) {
+                users.push_back(std::move(current));
+            }
+            current = {};
+            in_user = false;
+            pending_key.clear();
+            ++index;
+            continue;
+        }
+        if (text[index] != '"') {
+            ++index;
+            continue;
+        }
+        const auto start = index + 1;
+        auto end = start;
+        while (end < text.size() && text[end] != '"') {
+            ++end;
+        }
+        if (end >= text.size()) {
+            break;
+        }
+        const auto token = text.substr(start, end - start);
+        index = end + 1;
+
+        if (pending_key.empty()) {
+            pending_key = token;
+            // A quoted SteamID64 starts a user block (next non-ws is '{').
+            std::size_t look = index;
+            while (look < text.size() &&
+                   (text[look] == ' ' || text[look] == '\t' || text[look] == '\r' ||
+                    text[look] == '\n')) {
+                ++look;
+            }
+            if (look < text.size() && text[look] == '{') {
+                if (const auto account = account_id_from_steamid64(pending_key);
+                    account.has_value()) {
+                    if (in_user && !current.account_id.empty()) {
+                        users.push_back(std::move(current));
+                    }
+                    current = {};
+                    current.account_id = *account;
+                    in_user = true;
+                }
+                pending_key.clear();
+            }
+            continue;
+        }
+
+        if (in_user) {
+            if (pending_key == "PersonaName") {
+                current.persona_name = token;
+            } else if (pending_key == "MostRecent") {
+                current.most_recent = (token == "1");
+            }
+        }
+        pending_key.clear();
+    }
+    if (in_user && !current.account_id.empty()) {
+        users.push_back(std::move(current));
+    }
+    return users;
+}
+
+std::vector<std::filesystem::path> loginusers_candidates(
+    const std::filesystem::path& steam_dir_override) {
+    std::vector<std::filesystem::path> out;
+    if (!steam_dir_override.empty()) {
+        out.push_back(steam_dir_override / "config" / "loginusers.vdf");
+    }
+    for (const auto& userdata_root : steam_userdata_roots(steam_dir_override)) {
+        out.push_back(userdata_root.parent_path() / "config" / "loginusers.vdf");
+    }
+    return out;
+}
+
+} // namespace
+
+std::optional<std::string> resolve_steam_persona_name(
+    std::string_view account_id,
+    const std::filesystem::path& steam_dir_override) {
+    std::string wanted(account_id);
+    if (wanted.empty()) {
+        if (const auto account = resolve_steam_account({}, steam_dir_override);
+            account.has_value()) {
+            wanted = account->account_id;
+        }
+    }
+
+    for (const auto& path : loginusers_candidates(steam_dir_override)) {
+        const auto users = parse_loginusers_vdf(path);
+        if (users.empty()) {
+            continue;
+        }
+        if (!wanted.empty()) {
+            for (const auto& user : users) {
+                if (user.account_id == wanted && !user.persona_name.empty()) {
+                    return user.persona_name;
+                }
+            }
+        }
+        for (const auto& user : users) {
+            if (user.most_recent && !user.persona_name.empty()) {
+                return user.persona_name;
+            }
+        }
+        for (const auto& user : users) {
+            if (!user.persona_name.empty()) {
+                return user.persona_name;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+std::string preferred_steam_or_username_display_name(
+    std::string_view fallback_username,
+    std::string_view steam_account_id,
+    const std::filesystem::path& steam_dir_override) {
+    if (const auto persona = resolve_steam_persona_name(steam_account_id, steam_dir_override);
+        persona.has_value() && !persona->empty()) {
+        return *persona;
+    }
+    if (const auto account = resolve_steam_account(steam_account_id, steam_dir_override);
+        account.has_value() && !account->account_id.empty()) {
+        return account->account_id;
+    }
+    return std::string(fallback_username);
+}
+
 std::optional<std::filesystem::path> discover_steam_config_dir(
     std::string_view account_id,
     const std::filesystem::path& steam_dir_override) {

@@ -3,6 +3,7 @@
 #include "common/participant_role.hpp"
 #include "common/platform/default_platform.hpp"
 #include "common/platform/process_utils.hpp"
+#include "common/steam_art_import.hpp"
 #include "client/controller_backend.hpp"
 #include "host/capture_platform.hpp"
 #include "host/game_catalog.hpp"
@@ -525,10 +526,13 @@ int HostApp::run_direct_session(
             core_name.find("ryujinx") != std::string::npos;
 
         if (use_ryujinx) {
+            const auto profile_name =
+                preferred_steam_or_username_display_name(save_profile.username);
             auto ryujinx_user = prepare_ryujinx_user_profile(
                 save_profile,
                 /*enable_ldn_mitm=*/true,
-                config.yuzu_resolution_scale);
+                config.yuzu_resolution_scale,
+                profile_name);
             std::vector<std::string> pad_guids;
             pad_guids.reserve(resolved_pads.size());
             for (const auto& pad : resolved_pads) {

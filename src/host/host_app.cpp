@@ -27,6 +27,7 @@
 #include "host/retroarch_resolve.hpp"
 #include "host/save_profile.hpp"
 #include "host/session_launch_assemble.hpp"
+#include "host/session_run_helpers.hpp"
 #include "host/standalone_emulator.hpp"
 #include "host/session_lobby.hpp"
 #include "host/session_runtime.hpp"
@@ -546,7 +547,7 @@ int HostApp::run_direct_session(
 
     // Pin Viewer RetroArch to the capture null sink (speakers stay quiet unless Watch-local).
     if (config.audio) {
-        streaming_audio.park_game_audio();
+        park_session_game_audio(&streaming_audio);
     }
 
     InputRouter input_router(gamepads, &keyboard);
@@ -564,46 +565,20 @@ int HostApp::run_direct_session(
         network_receiver.emplace(*config.input_port, input_router);
     }
 
-    auto media_server = std::unique_ptr<MediaServer>{};
-    if (config.audio || config.video) {
-        normalize_audio_backend_for_platform(config);
-        media_server = make_host_media_server(GStreamerMediaCaptureConfig{
-            config.video,
-            config.audio,
-            capture_display,
-            config.video_resolution,
-            display_backend,
-            config.audio_backend,
-            config.audio_source,
-            config.verbose,
-            nvenc_cuda_device_id,
-        });
-        media_server->start(media_config, media_destinations, media_streams);
-    }
+    auto media_server = start_host_media_server_if_needed(HostMediaStartRequest{
+        config,
+        capture_display,
+        display_backend,
+        nvenc_cuda_device_id,
+        media_config,
+        media_destinations,
+        media_streams,
+    });
     // Plug after Xvfb/Xephyr is up. Soft-fail so a keyboard issue never kills the session.
-    if (use_virtual_capture && !gamescope_capture) {
-        bool keyboard_ready = false;
-        for (int attempt = 0; attempt < 20; ++attempt) {
-            try {
-                keyboard.plug();
-                keyboard_ready = true;
-                break;
-            } catch (const std::exception& error) {
-                if (attempt == 19) {
-                    std::cerr << "Warning: virtual keyboard unavailable: " << error.what() << '\n';
-                } else {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                }
-            }
-        }
-        if (!keyboard_ready) {
+    if (!plug_virtual_keyboard_with_retry(
+            keyboard, use_virtual_capture, gamescope_capture)) {
+        if (use_virtual_capture && !gamescope_capture) {
             std::cerr << "Warning: continuing without remoted keyboard (pads still work).\n";
-        }
-    } else if (!use_virtual_capture) {
-        try {
-            keyboard.plug();
-        } catch (const std::exception& error) {
-            std::cerr << "Warning: virtual keyboard unavailable: " << error.what() << '\n';
         }
     }
 
@@ -670,48 +645,17 @@ int HostApp::run_direct_session(
             std::cout << "Launching RetroArch...\nCommand: " << command << '\n';
         }
     }
-    session_runtime->start_emulator();
-    // Flatpak RetroArch can take a moment; failed exec exits almost immediately.
-    for (int i = 0; i < 10 && session_runtime->emulator_running(); ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
-    if (!session_runtime->emulator_running()) {
-        const auto code = session_runtime->last_exit_code().value_or(127);
-        const auto stderr_tail = session_runtime->last_stderr_tail();
-        if (session_runtime->launch_config().standalone) {
-            std::string message =
-                "Standalone emulator exited immediately (code " + std::to_string(code) + "). "
-                "Check Ryujinx/Yuzu install and keys under ~/.local/share/archstreamer/ "
-                "(ryujinx/ or yuzu/) and per-user data under the save profile Switch dirs.";
-            if (!stderr_tail.empty()) {
-                message += "\n\n" + stderr_tail;
-            }
-            throw std::runtime_error(message);
-        }
-        std::string message =
-            "RetroArch exited immediately (code " + std::to_string(code) + "). "
-            "Common causes: missing BIOS/firmware under ~/.config/retroarch/system "
-            "(PS2 needs files in system/pcsx2/bios), a broken core, or RetroArch not runnable.";
-        if (!stderr_tail.empty()) {
-            message += "\n\n" + stderr_tail;
-        }
-        throw std::runtime_error(message);
-    }
-    start_deferred_gamescope_video_if_needed(
+    start_emulator_and_verify(*session_runtime, EmulatorStartFailDetail::DirectCli);
+    post_emulator_start_warmup(
         media_server.get(),
         config,
         media_streams,
-        session_runtime->emulator().process_id().value_or(0));
-    if (config.audio) {
-        // Pulse connects asynchronously; re-park after the sink-input appears.
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        streaming_audio.park_game_audio();
-    }
-
-    if (config.pulse_input && launch_plan.players > 0) {
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-        pulse_virtual_pad_a(gamepads);
-    }
+        *session_runtime,
+        &streaming_audio,
+        std::nullopt,
+        gamepads,
+        launch_plan.players,
+        config.pulse_input);
 
     // Start UDP input after the optional A-pulse so it does not race uinput updates.
     if (network_receiver.has_value()) {
@@ -726,7 +670,7 @@ int HostApp::run_direct_session(
         if (config.audio) {
             const auto now = std::chrono::steady_clock::now();
             if (now >= next_audio_park) {
-                streaming_audio.park_game_audio();
+                park_session_game_audio(&streaming_audio);
                 next_audio_park = now + std::chrono::seconds(3);
             }
         }
@@ -760,22 +704,21 @@ int HostApp::run_direct_session(
         network_receiver->stop();
     }
 
-    session_runtime->stop_emulator();
-    if (const auto code = session_runtime->last_exit_code(); code.has_value()) {
-        std::cout << "RetroArch exited with code " << *code << '\n';
-        if (*code == 127) {
-            std::cerr
-                << "hint: exit 127 usually means the RetroArch launcher was not found. "
-                << "On Bazzite install: flatpak install flathub org.libretro.RetroArch\n";
+    stop_session_runtime(session_runtime);
+    if (session_runtime != nullptr) {
+        if (const auto code = session_runtime->last_exit_code(); code.has_value()) {
+            std::cout << "RetroArch exited with code " << *code << '\n';
+            if (*code == 127) {
+                std::cerr
+                    << "hint: exit 127 usually means the RetroArch launcher was not found. "
+                    << "On Bazzite install: flatpak install flathub org.libretro.RetroArch\n";
+            }
         }
     }
     sync_and_log_post_exit_switch_saves(save_profile, std::nullopt, switch_backend.get());
     // Close XTest before Xvfb so Xlib does not abort the process.
-    keyboard.unplug();
-    if (media_server) {
-        media_server->stop();
-        media_server.reset();
-    }
+    unplug_session_keyboard(&keyboard);
+    stop_session_media(media_server);
     if (config.audio) {
         streaming_audio.restore_default_sink();
     }

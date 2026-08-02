@@ -270,6 +270,7 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/seat_manager.cpp
         src/host/session_control_monitor.cpp
         src/host/session_launch_assemble.cpp
+        src/host/session_run_helpers.cpp
         src/host/session_lobby.cpp
         src/host/session_runtime.cpp
         src/host/session_slot_lease.cpp

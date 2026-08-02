@@ -17,6 +17,7 @@
 #include "host/retroarch_resolve.hpp"
 #include "host/session_lobby.hpp"
 #include "host/session_launch_assemble.hpp"
+#include "host/session_run_helpers.hpp"
 #include "host/standalone_emulator.hpp"
 #include "host/switch/switch_backend.hpp"
 #include "host/virtual_joypad_resolve.hpp"
@@ -34,16 +35,6 @@
 
 namespace archstreamer {
 namespace {
-
-std::mutex audio_park_mutex;
-
-void park_game_audio_locked(StreamingAudioSink* sink, int slot_index) {
-    if (sink == nullptr) {
-        return;
-    }
-    std::lock_guard lock(audio_park_mutex);
-    sink->park_game_audio_for_slot(slot_index);
-}
 
 bool should_use_slot_streaming_sink(const std::string& audio_source) {
     if (audio_source.empty()) {
@@ -169,10 +160,7 @@ void ActiveSessionSlot::unregister_input_clients() {
 }
 
 void ActiveSessionSlot::shutdown_media_and_clients(const std::string& end_reason) {
-    if (media_server_ != nullptr) {
-        media_server_->stop();
-        media_server_.reset();
-    }
+    stop_session_media(media_server_);
     send_session_ended_to_clients(config_.plan, end_reason);
 }
 
@@ -625,55 +613,31 @@ void ActiveSessionSlot::run_session() {
         launch_env_request);
 
     if (config.audio) {
-        park_game_audio_locked(config_.streaming_audio, slot);
+        park_session_game_audio(config_.streaming_audio, slot);
     }
 
     input_router_ = std::make_unique<InputRouter>(*gamepads_, keyboard_.get());
     input_router_->set_seat_assignment(launch_plan.seats);
 
-    if (config.audio || config.video) {
-        normalize_audio_backend_for_platform(config);
-        media_server_ = make_host_media_server(GStreamerMediaCaptureConfig{
-            config.video,
-            config.audio,
-            capture_display,
-            config.video_resolution,
-            display_backend,
-            config.audio_backend,
-            config.audio_source,
-            config.verbose,
-            nvenc_cuda_device_id,
-        });
+    media_server_ = start_host_media_server_if_needed(HostMediaStartRequest{
+        config,
+        capture_display,
+        display_backend,
+        nvenc_cuda_device_id,
+        media_config,
+        media_destinations,
+        media_streams,
+    });
+    if (media_server_ != nullptr) {
         media_index_ = media_destinations.size();
-        media_server_->start(media_config, media_destinations, media_streams);
     }
 
-    if (use_virtual_capture_ && !gamescope_capture_) {
-        bool keyboard_ready = false;
-        for (int attempt = 0; attempt < 20; ++attempt) {
-            try {
-                keyboard_->plug();
-                keyboard_ready = true;
-                break;
-            } catch (const std::exception& error) {
-                if (attempt == 19) {
-                    std::cerr
-                        << "session slot " << slot << ": warning: virtual keyboard unavailable: "
-                        << error.what() << '\n';
-                } else {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                }
-            }
-        }
-    } else if (!use_virtual_capture_) {
-        try {
-            keyboard_->plug();
-        } catch (const std::exception& error) {
-            std::cerr
-                << "session slot " << slot << ": warning: virtual keyboard unavailable: "
-                << error.what() << '\n';
-        }
-    }
+    const auto slot_prefix = "session slot " + std::to_string(slot) + ": ";
+    plug_virtual_keyboard_with_retry(
+        *keyboard_,
+        use_virtual_capture_,
+        gamescope_capture_,
+        slot_prefix);
 
     for (const auto& stream : media_streams) {
         if (stream.client_id == HostClientId) {
@@ -712,37 +676,17 @@ void ActiveSessionSlot::run_session() {
         << "session slot " << slot << ": launching "
         << session_runtime_->kind_name() << '\n';
 
-    session_runtime_->start_emulator();
-    for (int i = 0; i < 10 && session_runtime_->emulator_running(); ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
-    if (!session_runtime_->emulator_running()) {
-        const auto code = session_runtime_->last_exit_code().value_or(127);
-        const auto stderr_tail = session_runtime_->last_stderr_tail();
-        std::string message = session_runtime_->launch_config().standalone
-            ? "Standalone emulator exited immediately (code " + std::to_string(code) + ")"
-            : "RetroArch exited immediately (code " + std::to_string(code) + ")";
-        if (!stderr_tail.empty()) {
-            message += "\n\n" + stderr_tail;
-        }
-        throw std::runtime_error(message);
-    }
-
-    start_deferred_gamescope_video_if_needed(
+    start_emulator_and_verify(*session_runtime_, EmulatorStartFailDetail::Brief);
+    post_emulator_start_warmup(
         media_server_.get(),
         config,
         media_streams,
-        session_runtime_->emulator().process_id().value_or(0));
-
-    if (config.audio) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        park_game_audio_locked(config_.streaming_audio, slot);
-    }
-
-    if (config.pulse_input && launch_plan.players > 0) {
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-        pulse_virtual_pad_a(*gamepads_);
-    }
+        *session_runtime_,
+        config_.streaming_audio,
+        slot,
+        *gamepads_,
+        launch_plan.players,
+        config.pulse_input);
 
     register_input_clients();
 
@@ -887,7 +831,7 @@ void ActiveSessionSlot::run_session() {
         if (config.audio) {
             const auto now = std::chrono::steady_clock::now();
             if (now >= next_audio_park) {
-                park_game_audio_locked(config_.streaming_audio, slot);
+                park_session_game_audio(config_.streaming_audio, slot);
                 next_audio_park = now + std::chrono::seconds(3);
             }
         }
@@ -908,8 +852,7 @@ void ActiveSessionSlot::run_session() {
 
     // The runtime destructor also stops any process it still owns; stop here so
     // teardown ordering stays predictable.
-    session_runtime_->stop_emulator();
-    session_runtime_.reset();
+    stop_session_runtime(session_runtime_, /*reset=*/true);
 
     // Pull Ryujinx/Yuzu Switch saves into the shared canonical tree after exit.
     // (Launch already synced; in-session Ryujinx writes stay in bis until now.)
@@ -922,10 +865,8 @@ void ActiveSessionSlot::run_session() {
         unregister_input_clients();
         input_router_.reset();
     }
-    if (keyboard_ != nullptr) {
-        keyboard_->unplug();
-        keyboard_.reset();
-    }
+    unplug_session_keyboard(keyboard_.get());
+    keyboard_.reset();
 
     const std::string end_reason = should_stop()
         ? "host stopped"

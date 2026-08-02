@@ -515,8 +515,8 @@ void MainWindow::start_host() {
         } else {
             host_cfg.graphics_api = archstreamer::GraphicsApiPreference::Auto;
         }
-        host_cfg.yuzu_resolution_scale = selected_yuzu_resolution_scale();
-        host_cfg.retroarch_resolution_scale = selected_retroarch_resolution_scale();
+        host_cfg.resolution.switch_scale = selected_switch_resolution_scale();
+        host_cfg.resolution.retroarch_scale = selected_retroarch_resolution_scale();
         host_cfg.verbose = current_log_level() == GuiLogLevel::Verbose;
         host_cfg.video = host_video_->isChecked();
         host_cfg.video_port = static_cast<std::uint16_t>(host_video_port_->value());

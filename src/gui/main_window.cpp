@@ -424,18 +424,19 @@ QWidget* MainWindow::build_stream_tab() {
         "Auto: Vulkan on gamescope, OpenGL on VirtualGL.\n"
         "Ignored for RetroArch cores.");
 
-    settings_yuzu_scale_ = new QComboBox(host_box);
-    settings_yuzu_scale_->addItem("1x native", 1);
-    settings_yuzu_scale_->addItem("2x native", 2);
-    settings_yuzu_scale_->addItem("3x native", 3);
-    settings_yuzu_scale_->addItem("4x native", 4);
-    settings_yuzu_scale_->addItem("5x native", 5);
-    settings_yuzu_scale_->addItem("6x native", 6);
-    settings_yuzu_scale_->setCurrentIndex(0);
-    settings_yuzu_scale_->setToolTip(
-        "Yuzu internal resolution scale (docked native ≈ 1080p).\n"
+    settings_switch_scale_ = new QComboBox(host_box);
+    settings_switch_scale_->addItem("1x native", 1);
+    settings_switch_scale_->addItem("2x native", 2);
+    settings_switch_scale_->addItem("3x native", 3);
+    settings_switch_scale_->addItem("4x native", 4);
+    settings_switch_scale_->addItem("5x native", 5);
+    settings_switch_scale_->addItem("6x native", 6);
+    settings_switch_scale_->setCurrentIndex(0);
+    settings_switch_scale_->setToolTip(
+        "Switch standalone internal resolution scale (docked native ≈ 1080p).\n"
+        "Applied to Ryujinx and Yuzu profiles on Host start.\n"
         "2x/3x supersamples into the stream capture — sharper image, more GPU load.\n"
-        "Applied to the per-user Yuzu profile on Host start. Ignored for RetroArch.");
+        "Ignored for RetroArch.");
 
     settings_retroarch_scale_ = new QComboBox(host_box);
     settings_retroarch_scale_->addItem("1x native", 1);
@@ -448,14 +449,14 @@ QWidget* MainWindow::build_stream_tab() {
     settings_retroarch_scale_->setToolTip(
         "RetroArch internal resolution scale for cores that support it\n"
         "(LRPS2, SwanStation, PPSSPP, Dolphin, Citra, Mupen64Plus-Next, Beetle PSX HW).\n"
-        "Written to that core's .opt on Host start. Ignored for Yuzu / other cores.");
+        "Written to that core's .opt on Host start. Ignored for Switch / other cores.");
 
     host_form->addRow("Capture resolution", host_capture_resolution_);
     host_form->addRow("Host GPU", settings_gpu_);
     host_form->addRow("", settings_separate_render_gpu_);
     host_form->addRow("Render GPU", settings_render_gpu_);
     host_form->addRow("Standalone renderer", settings_renderer_);
-    host_form->addRow("Yuzu resolution", settings_yuzu_scale_);
+    host_form->addRow("Switch resolution", settings_switch_scale_);
     host_form->addRow("RetroArch resolution", settings_retroarch_scale_);
     refresh_settings_gpus();
 
@@ -476,7 +477,7 @@ QWidget* MainWindow::build_stream_tab() {
     connect(settings_renderer_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
         persist_settings_if_idle();
     });
-    connect(settings_yuzu_scale_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+    connect(settings_switch_scale_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
         persist_settings_if_idle();
     });
     connect(settings_retroarch_scale_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {

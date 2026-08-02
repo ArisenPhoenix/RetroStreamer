@@ -76,10 +76,10 @@ std::vector<std::string> host_app_config_to_argv(const HostAppConfig& config) {
     }
     args.push_back("--renderer");
     args.push_back(graphics_api_name(config.graphics_api));
-    args.push_back("--yuzu-resolution");
-    args.push_back(std::to_string(config.yuzu_resolution_scale));
+    args.push_back("--switch-resolution");
+    args.push_back(std::to_string(config.resolution.switch_scale));
     args.push_back("--retroarch-resolution");
-    args.push_back(std::to_string(config.retroarch_resolution_scale));
+    args.push_back(std::to_string(config.resolution.retroarch_scale));
 
     if (config.verbose) {
         args.push_back("--verbose");

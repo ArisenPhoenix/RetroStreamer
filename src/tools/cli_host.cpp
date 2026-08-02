@@ -129,9 +129,9 @@ void HostRunnerCli::print_usage() const {
         << "                      Use --render-gpu for RetroArch/Yuzu (PRIME); --gpu stays encode.\n"
         << "  --render-gpu <auto|id|name>\n"
         << "                      Game render GPU when --separate-render-gpu is set.\n"
-        << "  --yuzu-resolution <1-6>\n"
-        << "                      Yuzu internal resolution multiplier (1x…6x native).\n"
-        << "                      Default: 1. Ignored for RetroArch.\n"
+        << "  --switch-resolution <1-6>\n"
+        << "                      Switch standalone internal resolution (1x…6x native).\n"
+        << "                      Applied to Ryujinx/Yuzu. Default: 1. Ignored for RetroArch.\n"
         << "  --retroarch-resolution <1-6>\n"
         << "                      RetroArch internal resolution multiplier (1x…6x).\n"
         << "                      Applied to known cores' .opt on launch. Default: 1.\n";
@@ -249,12 +249,12 @@ HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
         } else if (arg == "--renderer") {
             if_throw(i, "--renderer requires auto, opengl, or vulkan");
             args.graphics_api = parse_graphics_api(argv[i]);
-        } else if (arg == "--yuzu-resolution") {
-            if_throw(i, "--yuzu-resolution requires an integer 1-6");
-            args.yuzu_resolution_scale = std::clamp(std::stoi(argv[i]), 1, 6);
+        } else if (arg == "--switch-resolution") {
+            if_throw(i, "--switch-resolution requires an integer 1-6");
+            args.resolution.switch_scale = std::clamp(std::stoi(argv[i]), 1, 6);
         } else if (arg == "--retroarch-resolution") {
             if_throw(i, "--retroarch-resolution requires an integer 1-6");
-            args.retroarch_resolution_scale = std::clamp(std::stoi(argv[i]), 1, 6);
+            args.resolution.retroarch_scale = std::clamp(std::stoi(argv[i]), 1, 6);
         } else if (arg == "--bridge-controller") {
             if_throw(i, "--bridge-controller requires a controller index");
             args.bridge_controller_index = static_cast<std::size_t>(std::stoul(argv[i]));

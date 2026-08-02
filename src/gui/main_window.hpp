@@ -64,7 +64,7 @@ private:
     std::string selected_encode_gpu_id() const;
     std::string selected_render_gpu_id() const;
     QString selected_graphics_api_id() const;
-    int selected_yuzu_resolution_scale() const;
+    int selected_switch_resolution_scale() const;
     int selected_retroarch_resolution_scale() const;
     QString selected_host_capture_resolution() const;
 #endif
@@ -231,7 +231,7 @@ private:
     QCheckBox* settings_separate_render_gpu_ = nullptr;
     QComboBox* settings_render_gpu_ = nullptr;
     QComboBox* settings_renderer_ = nullptr;
-    QComboBox* settings_yuzu_scale_ = nullptr;
+    QComboBox* settings_switch_scale_ = nullptr;
     QComboBox* settings_retroarch_scale_ = nullptr;
 #endif
     QComboBox* settings_audio_out_ = nullptr;

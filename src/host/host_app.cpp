@@ -27,8 +27,8 @@
 #include "host/retroarch_netcmd.hpp"
 #include "host/retroarch_resolve.hpp"
 #include "host/save_profile.hpp"
+#include "host/session_launch_assemble.hpp"
 #include "host/standalone_emulator.hpp"
-#include "host/switch_save_share.hpp"
 #include "host/session_control_monitor.hpp"
 #include "host/session_lobby.hpp"
 #include "host/session_runtime.hpp"
@@ -499,138 +499,98 @@ int HostApp::run_direct_session(
     }
 
     if (launch_config.standalone) {
-        // Controller GUID binding for standalone Switch (Yuzu + Ryujinx).
-        if (resolved_pads.empty()) {
-            resolved_pads = find_archstreamer_sdl_pads(
-                launch_plan.players,
-                config.ignore_controller.value_or(""),
-                config.verbose);
-        }
-        bool force_opengl = false;
-        bool force_vulkan = false;
-        if (config.graphics_api == GraphicsApiPreference::OpenGL) {
-            force_opengl = true;
-        } else if (config.graphics_api == GraphicsApiPreference::Vulkan) {
-            if (virtualgl_capture) {
-                std::cerr << "Warning: VirtualGL path cannot present Vulkan; using OpenGL.\n";
-                force_opengl = true;
-            } else {
-                force_vulkan = true;
-            }
-        } else if (virtualgl_capture) {
-            force_opengl = true;
-        } else if (gamescope_capture) {
-            force_vulkan = true;
-        }
-
-        const auto core_name = launch_config.core_path.filename().string();
-        const bool use_ryujinx =
-            core_name.find("Ryujinx") != std::string::npos ||
-            core_name.find("ryujinx") != std::string::npos;
-
-        if (use_ryujinx) {
-            const auto profile_name =
-                preferred_steam_or_username_display_name(save_profile.username);
-            auto ryujinx_user = prepare_ryujinx_user_profile(
+        const auto profile_name =
+            preferred_steam_or_username_display_name(save_profile.username);
+        auto switch_prep = prepare_switch_standalone(
+            launch_config,
+            SwitchStandalonePrepInput{
                 save_profile,
-                /*enable_ldn_mitm=*/true,
-                config.yuzu_resolution_scale,
-                profile_name);
-            const auto ryujinx_pads = resolve_exclusive_archstreamer_pads(
-                launch_plan.players, config.verbose, /*product_id_base=*/0, resolved_pads);
-            configure_ryujinx_archstreamer_controls(
-                ryujinx_user, ryujinx_pads.pads, ryujinx_pads.sdl_device_filter);
-            launch_env_request.ryujinx_profile = ryujinx_user;
-            launch_config.standalone_args_before_content = {"--fullscreen"};
-            launch_config.quiet_stdio = !config.verbose;
-            const auto synced = sync_switch_shared_saves_for_profile(save_profile);
+                launch_plan.players,
+                config.verbose,
+                /*product_id_base=*/0,
+                config.ignore_controller.value_or(""),
+                config.graphics_api,
+                virtualgl_capture,
+                gamescope_capture,
+                config.resolution.switch_scale,
+                &resolved_gpu,
+                profile_name,
+                std::move(resolved_pads),
+            });
+        resolved_pads = std::move(switch_prep.resolved_pads);
+        if (switch_prep.use_ryujinx) {
+            launch_env_request.ryujinx_profile = std::move(switch_prep.ryujinx_profile);
+            const auto& ryujinx_user = *launch_env_request.ryujinx_profile;
             std::cout
                 << "Ryujinx (ldn_mitm) config: " << ryujinx_user.data_root
                 << "\nRyujinx keys:            " << ryujinx_user.keys_directory
-                << "\nShared Switch saves:     " << synced.size() << " title(s)\n";
+                << "\nShared Switch saves:     " << switch_prep.synced_title_count
+                << " title(s)\n";
             {
-                const int scale = std::clamp(config.yuzu_resolution_scale, 1, 4);
+                const int scale = std::clamp(config.resolution.switch_scale, 1, 4);
                 std::cout << "Ryujinx resolution: " << scale << "x native\n";
             }
-            if (session_plan.has_value()) {
-                ensure_ryujinx_soft_keyboard(
-                    session_plan->soft_keyboard,
-                    profile_name,
-                    "What is your name?",
-                    capture_display);
-            } else {
-                ensure_ryujinx_soft_keyboard(
-                    standalone_soft_keyboard,
-                    profile_name,
-                    "What is your name?",
-                    capture_display);
-            }
         } else {
-            // Yuzu ignores gamescope --prefer-vk-device for the child and sorts Vulkan
-            // devices itself (3060 before 1660). Pin qt-config vulkan_device to that order.
-            int yuzu_vulkan_device = -1;
-            if (resolved_gpu.has_value()) {
-                yuzu_vulkan_device = yuzu_vulkan_device_index(*resolved_gpu);
-            }
-            const auto yuzu_user = prepare_yuzu_user_profile(
-                save_profile,
-                force_opengl,
-                force_vulkan,
-                yuzu_vulkan_device,
-                config.yuzu_resolution_scale);
-            std::vector<std::string> pad_guids;
-            pad_guids.reserve(resolved_pads.size());
-            for (const auto& pad : resolved_pads) {
-                pad_guids.push_back(pad.guid);
-            }
-            configure_yuzu_archstreamer_controls(yuzu_user, pad_guids);
-            launch_env_request.yuzu_profile = yuzu_user;
-            launch_config.standalone_args_before_content = {"-f", "-g"};
-            launch_config.quiet_stdio = !config.verbose;
-            sync_switch_shared_saves_for_profile(save_profile);
+            launch_env_request.yuzu_profile = std::move(switch_prep.yuzu_profile);
+            const auto& yuzu_user = *launch_env_request.yuzu_profile;
             std::cout
                 << "Yuzu renderer: "
-                << (force_opengl ? "OpenGL" : force_vulkan ? "Vulkan" : "default");
-            if (yuzu_vulkan_device >= 0 && resolved_gpu.has_value()) {
+                << (switch_prep.force_opengl
+                        ? "OpenGL"
+                        : switch_prep.force_vulkan ? "Vulkan" : "default");
+            if (switch_prep.yuzu_vulkan_device >= 0 && resolved_gpu.has_value()) {
                 std::cout
-                    << " (vulkan_device=" << yuzu_vulkan_device
+                    << " (vulkan_device=" << switch_prep.yuzu_vulkan_device
                     << " → " << resolved_gpu->name << ")";
             }
             std::cout << '\n';
             {
-                const int scale = std::clamp(config.yuzu_resolution_scale, 1, 6);
-                std::cout << "Yuzu resolution: " << scale << "x native"
+                const int scale = std::clamp(config.resolution.switch_scale, 1, 6);
+                std::cout << "Switch resolution: " << scale << "x native"
                           << " (resolution_setup=" << (scale + 1) << ")\n";
             }
             std::cout
                 << "Yuzu user data: " << yuzu_user.xdg_data_home
                 << "\nYuzu keys:      " << yuzu_user.keys_directory << '\n';
         }
+        if (switch_prep.enable_soft_keyboard) {
+            if (session_plan.has_value()) {
+                ensure_soft_keyboard(
+                    session_plan->soft_keyboard,
+                    profile_name,
+                    "What is your name?",
+                    capture_display);
+            } else {
+                ensure_soft_keyboard(
+                    standalone_soft_keyboard,
+                    profile_name,
+                    "What is your name?",
+                    capture_display);
+            }
+        }
 
-        apply_standalone_capture_prefix(launch_config, capture, config, gamescope_vk_device);
     } else {
-        const auto runtime_override = write_retroarch_input_override(
-            virtual_joypad_index,
-            launch_plan.virtual_identities,
-            config.retroarch_joypad_driver,
-            launch_plan.players,
-            save_profile,
-            config.audio || config.video,
-            capture_fullscreen && use_virtual_capture,
-            config.video_resolution,
-            (!use_virtual_capture && resolved_gpu.has_value()) ? resolved_gpu->vulkan_index : -1,
-            system_key,
-            launch_config.core_path,
-            config.retroarch_resolution_scale);
-        launch_config.extra_args.push_back("-c");
-        launch_config.extra_args.push_back(runtime_override.string());
-        apply_retroarch_vgl_prefix(launch_config, capture, resolved_gpu);
+        RetroArchOverrideParams override_params;
+        override_params.first_virtual_joypad_index = virtual_joypad_index;
+        override_params.identities = &launch_plan.virtual_identities;
+        override_params.joypad_driver = config.retroarch_joypad_driver;
+        override_params.players = launch_plan.players;
+        override_params.save_profile = &save_profile;
+        override_params.realtime_pacing = config.audio || config.video;
+        override_params.capture_fullscreen = capture_fullscreen && use_virtual_capture;
+        override_params.capture_resolution = config.video_resolution;
+        override_params.vulkan_gpu_index =
+            (!use_virtual_capture && resolved_gpu.has_value()) ? resolved_gpu->vulkan_index : -1;
+        override_params.system_key = system_key;
+        override_params.core_path = launch_config.core_path;
+        override_params.resolution_scale = config.resolution.retroarch_scale;
+        const auto runtime_override = apply_retroarch_override(launch_config, override_params);
         std::cout
             << "RetroArch config: " << runtime_override
             << "\nVirtual joypad index: " << virtual_joypad_index
             << " (driver=" << config.retroarch_joypad_driver << ")\n";
         {
-            const int scale = std::clamp(config.retroarch_resolution_scale, 1, 6);
+            const int scale = std::clamp(config.resolution.retroarch_scale, 1, 6);
             std::cout << "RetroArch resolution: " << scale << "x native"
                       << " (known cores via .opt)\n";
         }
@@ -640,12 +600,13 @@ int HostApp::run_direct_session(
         }
     }
 
-    // Single composition point: audio → input → gpu → capture → emulator profile.
-    {
-        const auto launch_env = build_emulator_launch_environment(launch_env_request);
-        launch_config.environment = launch_env.entries;
-        launch_config.unset_environment = launch_env.unset;
-    }
+    apply_capture_and_launch_environment(
+        launch_config,
+        capture,
+        config,
+        gamescope_vk_device,
+        resolved_gpu,
+        launch_env_request);
 
     if (capture_fullscreen) {
         std::cout
@@ -931,39 +892,24 @@ int HostApp::run_direct_session(
                 auto& launch_config = session_runtime->launch_config();
                 launch_config.core_path = *link_core;
                 LinkCableBackend::write_dual_gb_core_options();
-                const auto runtime_override = write_retroarch_input_override(
-                    virtual_joypad_index,
-                    launch_plan.virtual_identities,
-                    config.retroarch_joypad_driver,
-                    std::max<RetroArchPort>(launch_plan.players, 2),
-                    save_profile,
-                    config.audio || config.video,
-                    capture_fullscreen && use_virtual_capture,
-                    config.video_resolution,
+                RetroArchOverrideParams override_params;
+                override_params.first_virtual_joypad_index = virtual_joypad_index;
+                override_params.identities = &launch_plan.virtual_identities;
+                override_params.joypad_driver = config.retroarch_joypad_driver;
+                override_params.players = std::max<RetroArchPort>(launch_plan.players, 2);
+                override_params.save_profile = &save_profile;
+                override_params.realtime_pacing = config.audio || config.video;
+                override_params.capture_fullscreen = capture_fullscreen && use_virtual_capture;
+                override_params.capture_resolution = config.video_resolution;
+                override_params.vulkan_gpu_index =
                     (!use_virtual_capture && resolved_gpu.has_value())
                         ? resolved_gpu->vulkan_index
-                        : -1,
-                    system_key,
-                    launch_config.core_path,
-                    config.retroarch_resolution_scale);
-                // Replace prior -c path if present; otherwise append.
-                bool replaced_c = false;
-                for (std::size_t i = 0; i + 1 < launch_config.extra_args.size(); ++i) {
-                    if (launch_config.extra_args[i] == "-c") {
-                        launch_config.extra_args[i + 1] = runtime_override.string();
-                        replaced_c = true;
-                        break;
-                    }
-                }
-                if (!replaced_c) {
-                    launch_config.extra_args.push_back("-c");
-                    launch_config.extra_args.push_back(runtime_override.string());
-                }
-                {
-                    const auto launch_env = build_emulator_launch_environment(launch_env_request);
-                    launch_config.environment = launch_env.entries;
-                    launch_config.unset_environment = launch_env.unset;
-                }
+                        : -1;
+                override_params.system_key = system_key;
+                override_params.core_path = launch_config.core_path;
+                override_params.resolution_scale = config.resolution.retroarch_scale;
+                apply_retroarch_override_and_env(
+                    launch_config, override_params, launch_env_request);
                 session_runtime->start_emulator();
                 for (int i = 0; i < 10 && session_runtime->emulator_running(); ++i) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -1029,12 +975,7 @@ int HostApp::run_direct_session(
                 << "On Bazzite install: flatpak install flathub org.libretro.RetroArch\n";
         }
     }
-    {
-        const auto synced = sync_switch_shared_saves_for_profile(save_profile);
-        if (!synced.empty()) {
-            std::cout << "Post-exit Switch save sync: " << synced.size() << " title(s)\n";
-        }
-    }
+    sync_and_log_post_exit_switch_saves(save_profile);
     // Close XTest before Xvfb so Xlib does not abort the process.
     keyboard.unplug();
     if (media_server) {

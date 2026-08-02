@@ -15,6 +15,15 @@
 
 namespace archstreamer {
 
+/** Internal-resolution multipliers for Switch standalone and RetroArch cores. */
+struct ResolutionSettings {
+    // Switch standalone IR (Yuzu qt-config + Ryujinx res_scale). Clamp 1–6 at write;
+    // Ryujinx caps at 4 internally.
+    int switch_scale = 1;
+    // RetroArch IR via known cores' .opt files (1–6).
+    int retroarch_scale = 1;
+};
+
 struct HostAppConfig {
     std::filesystem::path rom_root = DefaultRomRoot;
     std::filesystem::path meta_root;
@@ -57,16 +66,10 @@ struct HostAppConfig {
     bool separate_render_gpu = false;
     // Used when separate_render_gpu is true; otherwise encode_gpu is used for render too.
     std::string render_gpu = "auto";
-    // Preferred API for Yuzu/standalone. Auto = backend default (Vulkan on gamescope,
+    // Preferred API for Switch standalone. Auto = backend default (Vulkan on gamescope,
     // OpenGL on VirtualGL). Ignored for RetroArch.
     GraphicsApiPreference graphics_api = GraphicsApiPreference::Auto;
-    // Yuzu internal resolution multiplier (1–6 → 1x…6x native). Written to qt-config
-    // resolution_setup. Ignored for RetroArch.
-    int yuzu_resolution_scale = 1;
-    // RetroArch internal resolution multiplier (1–6). Applied to known cores' .opt files
-    // on launch (LRPS2, SwanStation, PPSSPP, Dolphin, Citra, Mupen64Plus-Next, Beetle PSX HW).
-    // Ignored for Yuzu / cores without an IR option.
-    int retroarch_resolution_scale = 1;
+    ResolutionSettings resolution;
 };
 
 // GPU id used for RetroArch/Yuzu PRIME / Vulkan device selection.

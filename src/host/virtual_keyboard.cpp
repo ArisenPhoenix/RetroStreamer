@@ -552,7 +552,7 @@ std::vector<std::string> soft_keyboard_display_candidates(const std::string& pre
 
 } // namespace
 
-void schedule_ryujinx_soft_keyboard(
+void schedule_soft_keyboard(
     std::shared_ptr<SoftKeyboardHostBridge> bridge,
     std::string fallback_text,
     std::string prompt,
@@ -818,7 +818,7 @@ void schedule_ryujinx_soft_keyboard(
     }).detach();
 }
 
-void ensure_ryujinx_soft_keyboard(
+void ensure_soft_keyboard(
     std::shared_ptr<SoftKeyboardHostBridge>& bridge,
     std::string fallback_text,
     std::string prompt,
@@ -826,7 +826,7 @@ void ensure_ryujinx_soft_keyboard(
     if (!bridge) {
         bridge = std::make_shared<SoftKeyboardHostBridge>();
     }
-    schedule_ryujinx_soft_keyboard(
+    schedule_soft_keyboard(
         bridge,
         std::move(fallback_text),
         std::move(prompt),
@@ -853,7 +853,7 @@ void VirtualKeyboard::unplug() {}
 void VirtualKeyboard::apply(const KeyboardState&) {}
 void VirtualKeyboard::release_all() {}
 
-void ensure_ryujinx_soft_keyboard(
+void ensure_soft_keyboard(
     std::shared_ptr<SoftKeyboardHostBridge>& bridge,
     std::string fallback_text,
     std::string prompt,

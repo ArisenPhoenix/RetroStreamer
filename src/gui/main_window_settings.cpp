@@ -164,11 +164,11 @@ QString MainWindow::selected_graphics_api_id() const {
     return id.isEmpty() ? QStringLiteral("auto") : id;
 }
 
-int MainWindow::selected_yuzu_resolution_scale() const {
-    if (settings_yuzu_scale_ == nullptr || settings_yuzu_scale_->currentData().isNull()) {
+int MainWindow::selected_switch_resolution_scale() const {
+    if (settings_switch_scale_ == nullptr || settings_switch_scale_->currentData().isNull()) {
         return 1;
     }
-    return qBound(settings_yuzu_scale_->currentData().toInt(), 1, 6);
+    return qBound(settings_switch_scale_->currentData().toInt(), 1, 6);
 }
 
 QString MainWindow::selected_host_capture_resolution() const {
@@ -323,11 +323,11 @@ void MainWindow::load_persisted_settings() {
         const auto index = settings_renderer_->findData(renderer);
         settings_renderer_->setCurrentIndex(index >= 0 ? index : 0);
     }
-    if (settings_yuzu_scale_ != nullptr) {
-        const auto scale = qBound(settings.value("graphics/yuzuResolutionScale", 1).toInt(), 1, 6);
-        const QSignalBlocker blocker(settings_yuzu_scale_);
-        const auto index = settings_yuzu_scale_->findData(scale);
-        settings_yuzu_scale_->setCurrentIndex(index >= 0 ? index : 0);
+    if (settings_switch_scale_ != nullptr) {
+        const auto scale = qBound(settings.value("graphics/switchResolutionScale", 1).toInt(), 1, 6);
+        const QSignalBlocker blocker(settings_switch_scale_);
+        const auto index = settings_switch_scale_->findData(scale);
+        settings_switch_scale_->setCurrentIndex(index >= 0 ? index : 0);
     }
     if (settings_retroarch_scale_ != nullptr) {
         const auto scale =
@@ -540,8 +540,8 @@ void MainWindow::save_persisted_settings() {
     if (settings_renderer_ != nullptr) {
         settings.setValue("graphics/renderer", selected_graphics_api_id());
     }
-    if (settings_yuzu_scale_ != nullptr) {
-        settings.setValue("graphics/yuzuResolutionScale", selected_yuzu_resolution_scale());
+    if (settings_switch_scale_ != nullptr) {
+        settings.setValue("graphics/switchResolutionScale", selected_switch_resolution_scale());
     }
     if (settings_retroarch_scale_ != nullptr) {
         settings.setValue(

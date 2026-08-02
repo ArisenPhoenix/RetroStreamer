@@ -55,6 +55,9 @@ std::uint32_t remoted_keys_from_evdev_state(const unsigned char* bits) {
     if (key_bit_set(bits, KEY_F1)) {
         keys |= KeyF1;
     }
+    if (key_bit_set(bits, KEY_F8)) {
+        keys |= KeyF8;
+    }
     if (key_bit_set(bits, KEY_P)) {
         keys |= KeyP;
     }
@@ -99,6 +102,8 @@ std::uint32_t bit_for_evdev_code(int code) {
         return KeyBackspace;
     case KEY_F1:
         return KeyF1;
+    case KEY_F8:
+        return KeyF8;
     case KEY_P:
         return KeyP;
     default:

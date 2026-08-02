@@ -219,10 +219,17 @@ std::optional<std::string> SessionControlMonitor::poll() {
                        soft_keyboard != nullptr) {
                 if (plan_.soft_keyboard) {
                     plan_.soft_keyboard->submit_response(*soft_keyboard);
-                    std::cout
-                        << "Soft keyboard response id=" << soft_keyboard->request_id
-                        << " accepted=" << (soft_keyboard->accepted ? "yes" : "no")
-                        << " from " << client_label(client) << '\n';
+                    if (soft_keyboard->request_id == 0) {
+                        std::cout
+                            << "Soft keyboard manual inject"
+                            << " accepted=" << (soft_keyboard->accepted ? "yes" : "no")
+                            << " from " << client_label(client) << '\n';
+                    } else {
+                        std::cout
+                            << "Soft keyboard response id=" << soft_keyboard->request_id
+                            << " accepted=" << (soft_keyboard->accepted ? "yes" : "no")
+                            << " from " << client_label(client) << '\n';
+                    }
                 }
             } else if (const auto* video_ready = std::get_if<MediaVideoReady>(&payload);
                        video_ready != nullptr) {

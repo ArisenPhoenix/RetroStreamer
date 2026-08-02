@@ -29,6 +29,8 @@ constexpr RemotedKeyBinding kDefaultBindings[] = {
     {KeySpace, RemotedKeyAction::XTestHold, nullptr},
     {KeyP, RemotedKeyAction::NetcmdPress, "PAUSE_TOGGLE"},
     {KeyF1, RemotedKeyAction::NetcmdPress, "MENU_TOGGLE"},
+    // Yuzu: Toggle Framerate Limit (continuous uncapped speed). Bound in qt-config.
+    {KeyF8, RemotedKeyAction::XTestHold, nullptr},
     {KeyUp, RemotedKeyAction::XTestHold, nullptr},
     {KeyDown, RemotedKeyAction::XTestHold, nullptr},
     {KeyLeft, RemotedKeyAction::XTestHold, nullptr},
@@ -43,6 +45,8 @@ KeySym xtest_keysym(RemotedKey key) {
     switch (key) {
     case KeySpace:
         return XK_space;
+    case KeyF8:
+        return XK_F8;
     case KeyUp:
         return XK_Up;
     case KeyDown:
@@ -128,7 +132,7 @@ void VirtualKeyboard::plug() {
     last_keys_ = 0;
     std::cout
         << "Virtual keyboard ready on " << capture_display_
-        << " (Space→XTest hold-FF, P→pause, F1→menu; arrows/Enter/Esc→XTest)\n";
+        << " (Space→XTest hold-FF, F8→Yuzu continuous FF, P→pause, F1→menu; arrows/Enter/Esc→XTest)\n";
 }
 
 void VirtualKeyboard::unplug() {
@@ -425,7 +429,10 @@ void xtest_type_ascii(Display* display, const std::string& text) {
     }
 }
 
-bool try_autofill_on_display(const std::string& display_name, const std::string& text) {
+bool try_autofill_on_display(
+    const std::string& display_name,
+    const std::string& text,
+    bool allow_any_focused = false) {
     install_x_error_guard();
     Display* display = XOpenDisplay(display_name.c_str());
     if (display == nullptr) {
@@ -448,6 +455,17 @@ bool try_autofill_on_display(const std::string& display_name, const std::string&
                 target = window;
                 break;
             }
+        }
+    }
+    // Manual pad-OSK escape hatch: second prompts (e.g. Pokemon nickname confirmations)
+    // sometimes use a different Avalonia title than the ones we auto-detect.
+    if (target == 0 && allow_any_focused) {
+        Window focus = 0;
+        int revert = RevertToNone;
+        XGetInputFocus(display, &focus, &revert);
+        if (focus != 0 && focus != None && focus != PointerRoot &&
+            window_is_viewable(display, focus)) {
+            target = focus;
         }
     }
     if (target == 0) {
@@ -575,9 +593,65 @@ void schedule_ryujinx_soft_keyboard(
         constexpr int kFastAttempts = 400; // ~60s
         constexpr int kUnavailableBackoff = 13; // ~2s before re-probing a dead slot
 
+        const auto try_manual_inject = [&](const std::string& text) {
+            std::string trimmed = text;
+            if (trimmed.size() > 12) {
+                trimmed.resize(12);
+            }
+            std::cout
+                << "Ryujinx Software Keyboard: manual pad OSK text \"" << trimmed
+                << "\" — looking for a dialog to fill\n";
+
+            std::vector<std::string> displays;
+            if (!pinned_display.empty()) {
+                displays.push_back(pinned_display);
+            }
+            for (const auto& probe : probes) {
+                bool seen = false;
+                for (const auto& existing : displays) {
+                    if (existing == probe.name) {
+                        seen = true;
+                        break;
+                    }
+                }
+                if (!seen) {
+                    displays.push_back(probe.name);
+                }
+            }
+
+            for (const auto& display_name : displays) {
+                for (int attempt = 0; attempt < 8; ++attempt) {
+                    if (try_autofill_on_display(
+                            display_name, trimmed, /*allow_any_focused=*/true)) {
+                        pinned_display = display_name;
+                        return true;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+                }
+            }
+            std::cerr
+                << "Ryujinx Software Keyboard: manual inject failed — no usable dialog found\n";
+            return false;
+        };
+
+        const auto drain_manual_inject = [&]() {
+            auto bridge = weak_bridge.lock();
+            if (!bridge) {
+                return false;
+            }
+            auto text = bridge->take_manual_inject();
+            bridge.reset();
+            if (!text.has_value()) {
+                return false;
+            }
+            try_manual_inject(*text);
+            return true;
+        };
+
         // Wait until a dialog is mapped *and* holding keyboard focus (wants typed text),
         // not merely present unmapped in the window tree (boot-time false positives).
         // False once the session drops the bridge.
+        // Also services manual pad-OSK injects so the escape hatch works while idle.
         const auto wait_for_dialog = [&](std::string& out) {
             for (auto& probe : probes) {
                 probe.retry_at = 0;
@@ -585,6 +659,10 @@ void schedule_ryujinx_soft_keyboard(
             for (int attempt = 0;; ++attempt) {
                 if (weak_bridge.expired()) {
                     return false;
+                }
+                if (drain_manual_inject()) {
+                    // Inject may have dismissed the dialog; keep waiting for the next one.
+                    continue;
                 }
                 if (!pinned_display.empty()) {
                     const auto result = probe_text_dialog(pinned_display);
@@ -639,16 +717,23 @@ void schedule_ryujinx_soft_keyboard(
                 << " — requesting pad OSK (id=" << request.request_id << ")\n";
 
             std::optional<SoftKeyboardResponse> response;
+            std::optional<std::string> manual_text;
             for (int wait = 0; wait < 360; ++wait) {
                 auto bridge = weak_bridge.lock();
                 if (!bridge) {
                     return false;
                 }
+                // Prefer an explicit answer to this host-driven prompt; otherwise accept a
+                // concurrent manual pad-OSK submit as the typed value.
                 response = bridge->take_response();
                 if (response.has_value() && response->request_id == request.request_id) {
                     break;
                 }
                 response.reset();
+                manual_text = bridge->take_manual_inject();
+                if (manual_text.has_value()) {
+                    break;
+                }
                 bridge.reset();
                 // Never re-publish while waiting: the request goes out over the TCP control
                 // stream, and a resend made the client tear down and rebuild the pad OSK
@@ -657,12 +742,14 @@ void schedule_ryujinx_soft_keyboard(
             }
 
             std::string text = fallback_text;
-            if (response.has_value() && response->accepted && !response->text.empty()) {
+            if (manual_text.has_value() && !manual_text->empty()) {
+                text = *manual_text;
+                std::cout
+                    << "Ryujinx Software Keyboard: using manual pad OSK text for id="
+                    << request.request_id << '\n';
+            } else if (response.has_value() && response->accepted && !response->text.empty()) {
                 text = response->text;
-                if (text.size() > 12) {
-                    text.resize(12);
-                }
-            } else if (!response.has_value()) {
+            } else if (!response.has_value() && !manual_text.has_value()) {
                 std::cerr
                     << "Ryujinx Software Keyboard: no pad OSK response; using fallback \""
                     << fallback_text << "\"\n";
@@ -671,10 +758,14 @@ void schedule_ryujinx_soft_keyboard(
                     << "Ryujinx Software Keyboard: pad OSK cancelled; using fallback \""
                     << fallback_text << "\"\n";
             }
+            if (text.size() > 12) {
+                text.resize(12);
+            }
 
             bool injected = false;
             for (int attempt = 0; attempt < 20 && !injected; ++attempt) {
-                if (try_autofill_on_display(display_name, text)) {
+                if (try_autofill_on_display(
+                        display_name, text, /*allow_any_focused=*/manual_text.has_value())) {
                     injected = true;
                     break;
                 }
@@ -690,11 +781,18 @@ void schedule_ryujinx_soft_keyboard(
         };
 
         // Re-arming while the answered dialog is still up would instantly re-prompt for
-        // the one we just filled in.
+        // the one we just filled in. Still accept manual injects here — a follow-up
+        // prompt (Pokemon nickname confirm / retry) may need the escape hatch before
+        // the previous overlay fully disappears from our title probe.
         const auto wait_for_dialog_to_close = [&](const std::string& display_name) {
             for (int attempt = 0; attempt < 400; ++attempt) { // ~60s
-                if (weak_bridge.expired() ||
-                    probe_text_dialog(display_name) != TextDialogProbe::Ready) {
+                if (weak_bridge.expired()) {
+                    return;
+                }
+                if (drain_manual_inject()) {
+                    continue;
+                }
+                if (probe_text_dialog(display_name) != TextDialogProbe::Ready) {
                     return;
                 }
                 std::this_thread::sleep_for(kFastInterval);

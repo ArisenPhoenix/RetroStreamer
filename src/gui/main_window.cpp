@@ -188,7 +188,7 @@ QWidget* MainWindow::build_client_tab() {
     client_send_keyboard_->setChecked(true);
     client_send_keyboard_->setToolTip(
         "Forwards Space, P, arrows, Enter, Esc, Tab, Backspace, and F1 to the host.\n"
-        "Space = fast-forward (hold), P = pause, F1 = RetroArch menu.\n"
+        "Space = fast-forward (hold), F8 = Yuzu continuous FF, P = pause, F1 = RetroArch menu.\n"
         "Works even when the video window has focus (not only this GUI).");
     connect(client_port_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
         update_client_host_summary(client_host_label_);
@@ -525,8 +525,11 @@ QWidget* MainWindow::build_game_options_tab() {
     game_options_pad_osk_ = new QPushButton(QStringLiteral("Pad on-screen keyboard"), page);
     game_options_pad_osk_->setCheckable(true);
     game_options_pad_osk_->setToolTip(
-        QStringLiteral("Opens a controller-friendly letter keyboard for testing.\n"
-                       "Done / Cancel closes it; click this button again to close."));
+        QStringLiteral(
+            "Opens a controller-friendly letter keyboard.\n"
+            "During a Switch session, Done sends the text to the host so it can fill "
+            "any open software-keyboard dialog (escape hatch if auto-prompt misses).\n"
+            "Cancel closes without sending; click this button again to close."));
     connect(game_options_pad_osk_, &QPushButton::toggled, this, [this](bool checked) {
         toggle_pad_on_screen_keyboard(checked);
     });
@@ -910,15 +913,30 @@ void MainWindow::toggle_pad_on_screen_keyboard(bool open) {
     soft_keyboard_request_id_ = 0;
     PadOnScreenKeyboard::Options options;
     options.title = QStringLiteral("Pad on-screen keyboard");
-    options.prompt = QStringLiteral("Test the controller letter keyboard.");
+    options.prompt = soft_keyboard_
+        ? QStringLiteral("Type text for the host to inject into any open dialog.")
+        : QStringLiteral("Test the controller letter keyboard.");
     options.max_length = 12;
     pad_osk_ = new PadOnScreenKeyboard(std::move(options), this);
     pad_osk_->setAttribute(Qt::WA_DeleteOnClose);
-    connect(pad_osk_, &QDialog::finished, this, [this](int) {
+    connect(pad_osk_, &QDialog::finished, this, [this](int result) {
+        const QString text = pad_osk_ != nullptr ? pad_osk_->text() : QString{};
         pad_osk_ = nullptr;
         if (game_options_pad_osk_ != nullptr) {
             const QSignalBlocker blocker(game_options_pad_osk_);
             game_options_pad_osk_->setChecked(false);
+        }
+        // Unsolicited inject: request_id 0 tells the host to find a dialog itself.
+        if (result == QDialog::Accepted && soft_keyboard_ && !text.trimmed().isEmpty()) {
+            SoftKeyboardResponse response;
+            response.request_id = 0;
+            response.accepted = true;
+            response.text = text.trimmed().toStdString();
+            soft_keyboard_->submit_response(std::move(response));
+            append_log(
+                client_log_,
+                QStringLiteral("Sent manual pad keyboard text to host."));
+            restore_video_window_focus();
         }
     });
     pad_osk_->show();

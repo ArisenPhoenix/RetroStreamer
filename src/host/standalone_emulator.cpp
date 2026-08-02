@@ -90,9 +90,9 @@ RyujinxUserProfile prepare_ryujinx_user_profile(
 
 void configure_ryujinx_archstreamer_controls(
     RyujinxUserProfile& profile,
-    const std::vector<std::string>& sdl_guids,
-    const std::vector<std::string>& mapping_guids) {
-    RyujinxControls::configure_archstreamer_controls(profile, sdl_guids, mapping_guids);
+    const std::vector<ArchStreamerSdlPad>& pads,
+    const std::string& sdl_device_filter) {
+    RyujinxControls::configure_archstreamer_controls(profile, pads, sdl_device_filter);
 }
 
 std::vector<std::pair<std::string, std::string>> ryujinx_launch_environment(

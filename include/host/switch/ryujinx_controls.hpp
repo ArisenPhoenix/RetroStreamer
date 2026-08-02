@@ -1,6 +1,7 @@
 #pragma once
 
 #include "host/standalone_emulator.hpp"
+#include "host/virtual_joypad_resolve.hpp"
 
 #include <string>
 #include <vector>
@@ -11,8 +12,8 @@ class RyujinxControls {
 public:
     static void configure_archstreamer_controls(
         RyujinxUserProfile& profile,
-        const std::vector<std::string>& sdl_guids,
-        const std::vector<std::string>& mapping_guids = {});
+        const std::vector<ArchStreamerSdlPad>& pads,
+        const std::string& sdl_device_filter = {});
 };
 
 } // namespace archstreamer

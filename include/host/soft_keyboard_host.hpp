@@ -18,6 +18,9 @@ struct SoftKeyboardHostBridge {
     std::optional<SoftKeyboardRequest> pending_to_clients;
     bool pending_to_clients_sent = false;
     std::optional<SoftKeyboardResponse> pending_from_client;
+    // request_id == 0: client opened the pad OSK manually and wants the host to
+    // find any open text dialog and type this in (escape hatch for missed prompts).
+    std::optional<std::string> pending_manual_inject;
     std::uint32_t next_request_id = 1;
 
     SoftKeyboardRequest make_request(
@@ -53,6 +56,12 @@ struct SoftKeyboardHostBridge {
 
     void submit_response(SoftKeyboardResponse response) {
         std::lock_guard lock(mutex);
+        if (response.request_id == 0) {
+            if (response.accepted && !response.text.empty()) {
+                pending_manual_inject = std::move(response.text);
+            }
+            return;
+        }
         pending_from_client = std::move(response);
     }
 
@@ -63,11 +72,19 @@ struct SoftKeyboardHostBridge {
         return response;
     }
 
+    std::optional<std::string> take_manual_inject() {
+        std::lock_guard lock(mutex);
+        auto text = pending_manual_inject;
+        pending_manual_inject.reset();
+        return text;
+    }
+
     void clear() {
         std::lock_guard lock(mutex);
         pending_to_clients.reset();
         pending_to_clients_sent = false;
         pending_from_client.reset();
+        pending_manual_inject.reset();
     }
 };
 

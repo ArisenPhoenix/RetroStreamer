@@ -24,7 +24,7 @@ std::string ryujinx_device_id_from_sdl_guid(std::size_t index, const std::string
 
 nlohmann::json ryujinx_pro_controller_sdl_binding(
     std::size_t player_index,
-    const std::string& sdl_guid,
+    const ArchStreamerSdlPad& pad,
     const std::string& pad_name) {
     return {
         {"left_joycon_stick",
@@ -77,7 +77,9 @@ nlohmann::json ryujinx_pro_controller_sdl_binding(
           {"button_a", "A"}}},
         {"version", 1},
         {"backend", "GamepadSDL2"},
-        {"id", ryujinx_device_id_from_sdl_guid(player_index, sdl_guid)},
+        // Ryujinx keys gamepads on "<SDL joystick index>-<GUID>", so the index has to be
+        // the one its SDL enumeration will hand out, not the player slot.
+        {"id", ryujinx_device_id_from_sdl_guid(pad.sdl_index, pad.guid)},
         {"name", pad_name},
         {"controller_type", "ProController"},
         {"player_index", "Player" + std::to_string(player_index + 1)},
@@ -99,10 +101,10 @@ std::string archstreamer_sdl_gamecontroller_mapping(const std::string& sdl_guid,
 
 void RyujinxControls::configure_archstreamer_controls(
     RyujinxUserProfile& profile,
-    const std::vector<std::string>& sdl_guids,
-    const std::vector<std::string>& mapping_guids) {
-    if (sdl_guids.empty()) {
-        std::cerr << "Warning: no ArchStreamer SDL GUIDs; Ryujinx input_config left unchanged.\n";
+    const std::vector<ArchStreamerSdlPad>& pads,
+    const std::string& sdl_device_filter) {
+    if (pads.empty()) {
+        std::cerr << "Warning: no ArchStreamer SDL pads; Ryujinx input_config left unchanged.\n";
         return;
     }
 
@@ -122,19 +124,19 @@ void RyujinxControls::configure_archstreamer_controls(
 
     nlohmann::json input = nlohmann::json::array();
     std::string mappings;
-    for (std::size_t i = 0; i < sdl_guids.size() && i < 8; ++i) {
-        if (sdl_guids[i].empty()) {
+    for (std::size_t i = 0; i < pads.size() && i < 8; ++i) {
+        const auto& pad = pads[i];
+        if (pad.guid.empty()) {
             continue;
         }
         const auto name =
             i == 0 ? std::string("ArchStreamer") : ("ArchStreamer_P" + std::to_string(i + 1));
-        input.push_back(ryujinx_pro_controller_sdl_binding(i, sdl_guids[i], name));
-        const std::string& map_guid =
-            (i < mapping_guids.size() && !mapping_guids[i].empty()) ? mapping_guids[i] : sdl_guids[i];
+        input.push_back(ryujinx_pro_controller_sdl_binding(i, pad, name));
         if (!mappings.empty()) {
             mappings.push_back('\n');
         }
-        mappings += archstreamer_sdl_gamecontroller_mapping(map_guid, name);
+        mappings += archstreamer_sdl_gamecontroller_mapping(
+            pad.mapping_guid.empty() ? pad.guid : pad.mapping_guid, name);
     }
     cfg["input_config"] = std::move(input);
     cfg["use_input_global_config"] = false;
@@ -146,8 +148,11 @@ void RyujinxControls::configure_archstreamer_controls(
     }
     out << cfg.dump(2) << '\n';
     profile.sdl_gamecontroller_config = std::move(mappings);
-    std::cout << "Ryujinx Controls: bound " << sdl_guids.size()
-              << " ArchStreamer pad(s) via GamepadSDL2 (+ SDL_GAMECONTROLLERCONFIG)\n";
+    profile.sdl_device_filter = sdl_device_filter;
+    std::cout << "Ryujinx Controls: bound " << pads.size()
+              << " ArchStreamer pad(s) via GamepadSDL2 (+ SDL_GAMECONTROLLERCONFIG), sdl index "
+              << pads.front().sdl_index << (sdl_device_filter.empty() ? " (unfiltered)" : " (exclusive)")
+              << '\n';
 }
 
 } // namespace archstreamer

@@ -584,6 +584,7 @@ struct SoftKeyboardRequest {
 };
 
 // Client returns the pad-OSK result (accepted=false → cancelled).
+// request_id == 0: unsolicited / manual pad OSK — host should find a dialog and inject.
 struct SoftKeyboardResponse {
     std::uint32_t request_id = 0;
     bool accepted = false;

@@ -4,11 +4,11 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
-#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <system_error>
 #include <unordered_set>
+#include <vector>
 
 namespace archstreamer {
 namespace {
@@ -22,7 +22,7 @@ bool looks_like_title_id(std::string_view value) {
             return false;
         }
     }
-    return value.size() == 16 && value.rfind("0100", 0) == 0;
+    return value.rfind("0100", 0) == 0;
 }
 
 std::optional<std::uint64_t> read_le_u64(const std::filesystem::path& path, std::size_t offset) {
@@ -45,8 +45,189 @@ std::string title_id_from_u64(std::uint64_t value) {
     return normalize_switch_title_id(buf);
 }
 
+bool source_should_replace_dest(
+    const std::filesystem::path& src,
+    const std::filesystem::path& dst) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(src, ec)) {
+        return false;
+    }
+    if (!std::filesystem::exists(dst, ec) || !std::filesystem::is_regular_file(dst, ec)) {
+        return true;
+    }
+    const auto src_time = std::filesystem::last_write_time(src, ec);
+    if (ec) {
+        return false;
+    }
+    const auto dst_time = std::filesystem::last_write_time(dst, ec);
+    if (ec) {
+        return true;
+    }
+    if (src_time > dst_time) {
+        return true;
+    }
+    if (src_time < dst_time) {
+        return false;
+    }
+    // Equal mtime: prefer the larger file (more complete write).
+    const auto src_size = std::filesystem::file_size(src, ec);
+    if (ec) {
+        return false;
+    }
+    const auto dst_size = std::filesystem::file_size(dst, ec);
+    if (ec) {
+        return true;
+    }
+    return src_size > dst_size;
+}
+
+bool copy_file_overwrite_preserve_mtime(
+    const std::filesystem::path& src,
+    const std::filesystem::path& dst) {
+    std::error_code ec;
+    std::filesystem::create_directories(dst.parent_path(), ec);
+    std::filesystem::copy_file(
+        src,
+        dst,
+        std::filesystem::copy_options::overwrite_existing,
+        ec);
+    if (ec) {
+        std::cerr << "switch save share: copy failed " << src << " -> " << dst
+                  << ": " << ec.message() << '\n';
+        return false;
+    }
+    const auto src_time = std::filesystem::last_write_time(src, ec);
+    if (!ec) {
+        std::filesystem::last_write_time(dst, src_time, ec);
+    }
+    return true;
+}
+
+/** Bidirectional newer-wins mirror of regular files between two directories. */
+int mirror_files_newer_wins(
+    const std::filesystem::path& left,
+    const std::filesystem::path& right) {
+    std::error_code ec;
+    std::filesystem::create_directories(left, ec);
+    std::filesystem::create_directories(right, ec);
+
+    std::unordered_set<std::string> names;
+    for (const auto* root : {&left, &right}) {
+        if (!std::filesystem::is_directory(*root, ec)) {
+            continue;
+        }
+        for (const auto& entry : std::filesystem::directory_iterator(*root, ec)) {
+            if (ec) {
+                break;
+            }
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            names.insert(entry.path().filename().string());
+        }
+    }
+
+    int changes = 0;
+    for (const auto& name : names) {
+        const auto left_path = left / name;
+        const auto right_path = right / name;
+        const bool left_ok = std::filesystem::is_regular_file(left_path, ec);
+        const bool right_ok = std::filesystem::is_regular_file(right_path, ec);
+        if (left_ok && right_ok) {
+            if (source_should_replace_dest(left_path, right_path)) {
+                if (copy_file_overwrite_preserve_mtime(left_path, right_path)) {
+                    ++changes;
+                }
+            } else if (source_should_replace_dest(right_path, left_path)) {
+                if (copy_file_overwrite_preserve_mtime(right_path, left_path)) {
+                    ++changes;
+                }
+            }
+        } else if (left_ok) {
+            if (copy_file_overwrite_preserve_mtime(left_path, right_path)) {
+                ++changes;
+            }
+        } else if (right_ok) {
+            if (copy_file_overwrite_preserve_mtime(right_path, left_path)) {
+                ++changes;
+            }
+        }
+    }
+    return changes;
+}
+
+/**
+ * If leaf is a directory symlink (legacy ArchStreamer layout), replace it with a
+ * real directory containing copies of the target's files. LibHac Commit must be
+ * able to delete/recreate this path.
+ */
+bool materialize_directory_if_symlink(const std::filesystem::path& leaf) {
+    std::error_code ec;
+    if (!std::filesystem::is_symlink(leaf, ec)) {
+        if (!std::filesystem::exists(leaf, ec)) {
+            std::filesystem::create_directories(leaf, ec);
+        }
+        return !ec || std::filesystem::is_directory(leaf, ec);
+    }
+
+    auto target = std::filesystem::read_symlink(leaf, ec);
+    if (ec) {
+        std::cerr << "switch save share: read_symlink failed " << leaf
+                  << ": " << ec.message() << '\n';
+        return false;
+    }
+    if (!target.is_absolute()) {
+        target = leaf.parent_path() / target;
+    }
+
+    const auto staging =
+        leaf.parent_path() / (leaf.filename().string() + ".archstreamer-materialize");
+    std::filesystem::remove_all(staging, ec);
+    std::filesystem::create_directories(staging, ec);
+    if (ec) {
+        std::cerr << "switch save share: staging mkdir failed " << staging
+                  << ": " << ec.message() << '\n';
+        return false;
+    }
+
+    if (std::filesystem::is_directory(target, ec)) {
+        for (const auto& entry : std::filesystem::directory_iterator(target, ec)) {
+            if (ec) {
+                break;
+            }
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+            copy_file_overwrite_preserve_mtime(entry.path(), staging / entry.path().filename());
+        }
+    }
+
+    std::filesystem::remove(leaf, ec); // symlink only
+    if (ec) {
+        std::cerr << "switch save share: remove symlink failed " << leaf
+                  << ": " << ec.message() << '\n';
+        std::filesystem::remove_all(staging, ec);
+        return false;
+    }
+    std::filesystem::rename(staging, leaf, ec);
+    if (ec) {
+        std::cerr << "switch save share: materialize rename failed " << staging
+                  << " -> " << leaf << ": " << ec.message() << '\n';
+        return false;
+    }
+    std::cerr << "switch save share: materialized journal dir " << leaf
+              << " (was symlink -> " << target << ")\n";
+    return true;
+}
+
+/**
+ * Replace path with a symlink to target. Any existing real directory is
+ * newer-wins merged into target first so files are never discarded.
+ */
 bool replace_with_symlink(const std::filesystem::path& link_path, const std::filesystem::path& target) {
     std::error_code ec;
+    std::filesystem::create_directories(target, ec);
+
     if (std::filesystem::is_symlink(link_path, ec)) {
         const auto current = std::filesystem::read_symlink(link_path, ec);
         if (!ec && current == target) {
@@ -54,22 +235,8 @@ bool replace_with_symlink(const std::filesystem::path& link_path, const std::fil
         }
         std::filesystem::remove(link_path, ec);
     } else if (std::filesystem::exists(link_path, ec)) {
-        if (std::filesystem::is_directory(link_path) && std::filesystem::is_empty(link_path, ec)) {
-            std::filesystem::remove(link_path, ec);
-        } else if (std::filesystem::is_directory(link_path)) {
-            // Move any residual files into target first, then remove.
-            for (const auto& entry : std::filesystem::directory_iterator(link_path, ec)) {
-                if (ec) {
-                    break;
-                }
-                if (!entry.is_regular_file()) {
-                    continue;
-                }
-                const auto dest = target / entry.path().filename();
-                if (!std::filesystem::exists(dest)) {
-                    std::filesystem::rename(entry.path(), dest, ec);
-                }
-            }
+        if (std::filesystem::is_directory(link_path, ec)) {
+            mirror_files_newer_wins(link_path, target);
             std::filesystem::remove_all(link_path, ec);
         } else {
             std::filesystem::remove(link_path, ec);
@@ -103,7 +270,6 @@ std::filesystem::path yuzu_title_save_directory(
         if (std::filesystem::exists(title_dir) || std::filesystem::is_symlink(title_dir)) {
             return title_dir;
         }
-        // Case-insensitive match for existing folders.
         for (const auto& title : std::filesystem::directory_iterator(user_dir.path())) {
             if (!title.is_directory() && !title.is_symlink()) {
                 continue;
@@ -113,7 +279,6 @@ std::filesystem::path yuzu_title_save_directory(
             }
         }
     }
-    // Default location under first/only user hash if present, else create placeholder hash dir.
     for (const auto& user_dir : std::filesystem::directory_iterator(nand_save)) {
         if (user_dir.is_directory()) {
             return user_dir.path() / want;
@@ -149,16 +314,7 @@ std::filesystem::path ensure_canonical_switch_save(
     const auto yuzu_dir = yuzu_title_save_directory(profile, title_id);
     if (!yuzu_dir.empty() && std::filesystem::is_directory(yuzu_dir) &&
         !std::filesystem::is_symlink(yuzu_dir)) {
-        for (const auto& entry : std::filesystem::directory_iterator(yuzu_dir)) {
-            if (!entry.is_regular_file()) {
-                continue;
-            }
-            const auto dest = canon / entry.path().filename();
-            if (!std::filesystem::exists(dest)) {
-                std::error_code ec;
-                std::filesystem::copy_file(entry.path(), dest, ec);
-            }
-        }
+        mirror_files_newer_wins(yuzu_dir, canon);
     }
     return canon;
 }
@@ -173,7 +329,7 @@ bool link_yuzu_save_to_canonical(const SaveProfile& profile, std::string_view ti
     return replace_with_symlink(yuzu_dir, canon);
 }
 
-int link_ryujinx_saves_to_canonical(
+int mirror_ryujinx_saves_with_canonical(
     const std::filesystem::path& ryujinx_bis_user_save,
     const SaveProfile& profile,
     std::string_view title_id) {
@@ -182,7 +338,7 @@ int link_ryujinx_saves_to_canonical(
     }
     const auto want = normalize_switch_title_id(title_id);
     const auto canon = ensure_canonical_switch_save(profile, title_id);
-    int linked = 0;
+    int mirrored = 0;
     for (const auto& entry : std::filesystem::directory_iterator(ryujinx_bis_user_save)) {
         if (!entry.is_directory()) {
             continue;
@@ -200,12 +356,27 @@ int link_ryujinx_saves_to_canonical(
         if (!kind.has_value() || (*kind & 0xffull) != 1ull) {
             continue;
         }
-        const auto leaf = entry.path() / "0";
-        if (replace_with_symlink(leaf, canon)) {
-            ++linked;
+
+        const auto slot0 = entry.path() / "0";
+        const auto slot1 = entry.path() / "1";
+        if (!materialize_directory_if_symlink(slot0)) {
+            continue;
         }
+        if (std::filesystem::is_symlink(slot1)) {
+            materialize_directory_if_symlink(slot1);
+        }
+        std::error_code ec;
+        std::filesystem::create_directories(slot0, ec);
+        std::filesystem::create_directories(slot1, ec);
+
+        // Working journal may be ahead of committed after a crash; promote first.
+        mirror_files_newer_wins(slot0, slot1);
+        mirror_files_newer_wins(slot0, canon);
+        // Keep working aligned with committed for the next EnsureSaveData.
+        mirror_files_newer_wins(slot0, slot1);
+        ++mirrored;
     }
-    return linked;
+    return mirrored;
 }
 
 std::vector<std::string> sync_switch_shared_saves(
@@ -244,7 +415,6 @@ std::vector<std::string> sync_switch_shared_saves(
         }
     }
 
-    // Also pick up titles already under canonical.
     const auto canon_root = profile.user_directory / "switch" / "saves";
     if (std::filesystem::is_directory(canon_root)) {
         for (const auto& entry : std::filesystem::directory_iterator(canon_root)) {
@@ -263,7 +433,7 @@ std::vector<std::string> sync_switch_shared_saves(
     for (const auto& title : titles) {
         ensure_canonical_switch_save(profile, title);
         link_yuzu_save_to_canonical(profile, title);
-        link_ryujinx_saves_to_canonical(ryujinx_bis_user_save, profile, title);
+        mirror_ryujinx_saves_with_canonical(ryujinx_bis_user_save, profile, title);
         synced.push_back(title);
     }
     std::sort(synced.begin(), synced.end());

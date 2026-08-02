@@ -536,16 +536,10 @@ int HostApp::run_direct_session(
                 /*enable_ldn_mitm=*/true,
                 config.yuzu_resolution_scale,
                 profile_name);
-            std::vector<std::string> pad_guids;
-            std::vector<std::string> mapping_guids;
-            pad_guids.reserve(resolved_pads.size());
-            mapping_guids.reserve(resolved_pads.size());
-            for (const auto& pad : resolved_pads) {
-                pad_guids.push_back(pad.guid);
-                mapping_guids.push_back(
-                    pad.mapping_guid.empty() ? pad.guid : pad.mapping_guid);
-            }
-            configure_ryujinx_archstreamer_controls(ryujinx_user, pad_guids, mapping_guids);
+            const auto ryujinx_pads = resolve_exclusive_archstreamer_pads(
+                launch_plan.players, config.verbose, /*product_id_base=*/0, resolved_pads);
+            configure_ryujinx_archstreamer_controls(
+                ryujinx_user, ryujinx_pads.pads, ryujinx_pads.sdl_device_filter);
             launch_env_request.ryujinx_profile = ryujinx_user;
             launch_config.standalone_args_before_content = {"--fullscreen"};
             launch_config.quiet_stdio = !config.verbose;
@@ -1033,6 +1027,12 @@ int HostApp::run_direct_session(
             std::cerr
                 << "hint: exit 127 usually means the RetroArch launcher was not found. "
                 << "On Bazzite install: flatpak install flathub org.libretro.RetroArch\n";
+        }
+    }
+    {
+        const auto synced = sync_switch_shared_saves_for_profile(save_profile);
+        if (!synced.empty()) {
+            std::cout << "Post-exit Switch save sync: " << synced.size() << " title(s)\n";
         }
     }
     // Close XTest before Xvfb so Xlib does not abort the process.

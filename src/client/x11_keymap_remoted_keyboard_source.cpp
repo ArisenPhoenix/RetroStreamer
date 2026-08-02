@@ -93,6 +93,9 @@ public:
         if (down(XK_F1)) {
             keys |= KeyF1;
         }
+        if (down(XK_F8)) {
+            keys |= KeyF8;
+        }
         if (down(XK_p) || down(XK_P)) {
             keys |= KeyP;
         }

@@ -56,6 +56,9 @@ public:
         if (win_down(VK_F1)) {
             keys |= KeyF1;
         }
+        if (win_down(VK_F8)) {
+            keys |= KeyF8;
+        }
         if (win_down('P')) {
             keys |= KeyP;
         }

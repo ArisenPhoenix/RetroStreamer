@@ -55,18 +55,41 @@ std::string yuzu_filtered_sdl_guid(std::string guid) {
     return guid;
 }
 
+// Must match the child's environment: filtered-out pads disappear from SDL's joystick
+// list and renumber the remaining devices (often moving ArchStreamer from 2 → 0).
+// Use process hints only for the scan — never setenv, or the host bridge can no longer
+// open the real pad afterward.
+struct SdlJoystickFilterHints {
+    SdlJoystickFilterHints(const std::string& ignore_devices, const std::string& only_devices) {
+        SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES, ignore_devices.c_str());
+        SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT, only_devices.c_str());
+    }
+    ~SdlJoystickFilterHints() {
+        SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES, "");
+        SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT, "");
+    }
+    SdlJoystickFilterHints(const SdlJoystickFilterHints&) = delete;
+    SdlJoystickFilterHints& operator=(const SdlJoystickFilterHints&) = delete;
+};
+
+std::vector<ArchStreamerSdlPad> scan_archstreamer_sdl_pads(
+    std::size_t players,
+    const std::string& ignore_devices,
+    const std::string& only_devices,
+    bool verbose,
+    std::uint16_t product_id_base);
+
 } // namespace
 
-std::string sdl_archstreamer_pad_whitelist(std::size_t players) {
+std::string sdl_archstreamer_pad_whitelist(std::size_t players, std::uint16_t product_id_base) {
+    const auto base = product_id_base != 0 ? product_id_base : kVirtualProductIdBase;
     const auto count = std::max<std::size_t>(players, 1);
     std::string result;
     for (std::size_t port = 0; port < count && port < MaxRetroArchPorts; ++port) {
         if (!result.empty()) {
             result += ",";
         }
-        result += hex_vid_pid(
-            kVirtualVendorId,
-            static_cast<std::uint16_t>(kVirtualProductIdBase + port));
+        result += hex_vid_pid(kVirtualVendorId, static_cast<std::uint16_t>(base + port));
     }
     return result;
 }
@@ -76,15 +99,33 @@ std::vector<ArchStreamerSdlPad> find_archstreamer_sdl_pads(
     const std::string& ignore_devices,
     bool verbose,
     std::uint16_t product_id_base) {
-    // Must match RetroArch's environment: ignored pads disappear from SDL's joystick
-    // list and renumber remaining devices (often moving ArchStreamer from 2 → 0).
-    // Use a process hint only for this scan — never setenv, or the host bridge can no
-    // longer open the real pad afterward.
-    if (!ignore_devices.empty()) {
-        SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES, ignore_devices.c_str());
-    } else {
-        SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES, "");
+    return scan_archstreamer_sdl_pads(
+        players, ignore_devices, /*only_devices=*/{}, verbose, product_id_base);
+}
+
+ArchStreamerPadBinding resolve_exclusive_archstreamer_pads(
+    std::size_t players,
+    bool verbose,
+    std::uint16_t product_id_base,
+    std::vector<ArchStreamerSdlPad> fallback) {
+    auto filter = sdl_archstreamer_pad_whitelist(players, product_id_base);
+    auto pads = scan_archstreamer_sdl_pads(
+        players, /*ignore_devices=*/{}, filter, verbose, product_id_base);
+    if (pads.empty()) {
+        return {std::move(fallback), {}};
     }
+    return {std::move(pads), std::move(filter)};
+}
+
+namespace {
+
+std::vector<ArchStreamerSdlPad> scan_archstreamer_sdl_pads(
+    std::size_t players,
+    const std::string& ignore_devices,
+    const std::string& only_devices,
+    bool verbose,
+    std::uint16_t product_id_base) {
+    const SdlJoystickFilterHints hints{ignore_devices, only_devices};
 
     if (SDL_WasInit(SDL_INIT_JOYSTICK) != 0) {
         SDL_QuitSubSystem(SDL_INIT_JOYSTICK);
@@ -95,7 +136,6 @@ std::vector<ArchStreamerSdlPad> find_archstreamer_sdl_pads(
     if (SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) != 0) {
         std::cerr << "Warning: SDL joystick init failed while resolving virtual pads: "
                   << SDL_GetError() << '\n';
-        SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES, "");
         return {};
     }
 
@@ -104,7 +144,6 @@ std::vector<ArchStreamerSdlPad> find_archstreamer_sdl_pads(
     if (count < 0) {
         std::cerr << "Warning: SDL_NumJoysticks failed: " << SDL_GetError() << '\n';
         SDL_QuitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER);
-        SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES, "");
         return {};
     }
 
@@ -148,9 +187,10 @@ std::vector<ArchStreamerSdlPad> find_archstreamer_sdl_pads(
     }
 
     SDL_QuitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER);
-    SDL_SetHint(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES, "");
     return pads;
 }
+
+} // namespace
 
 std::vector<std::size_t> find_archstreamer_sdl_joypad_indices(
     std::size_t players,

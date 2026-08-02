@@ -11,6 +11,9 @@ std::vector<std::pair<std::string, std::string>> RyujinxLaunchEnv::launch_enviro
     if (!profile.sdl_gamecontroller_config.empty()) {
         env.emplace_back("SDL_GAMECONTROLLERCONFIG", profile.sdl_gamecontroller_config);
     }
+    if (!profile.sdl_device_filter.empty()) {
+        env.emplace_back("SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT", profile.sdl_device_filter);
+    }
     return env;
 }
 

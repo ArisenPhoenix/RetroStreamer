@@ -17,8 +17,8 @@ std::filesystem::path canonical_switch_save_directory(
     std::string_view title_id);
 
 /**
- * Ensure canonical dir exists. If a Yuzu title save has real files, migrate them in.
- * Returns the canonical path.
+ * Ensure canonical dir exists. If a Yuzu title save has real files, migrate them in
+ * with newer-wins. Returns the canonical path.
  */
 std::filesystem::path ensure_canonical_switch_save(
     const SaveProfile& profile,
@@ -30,17 +30,21 @@ bool link_yuzu_save_to_canonical(
     std::string_view title_id);
 
 /**
- * Scan Ryujinx bis/user/save entries' ExtraData0 for title_id (user saves) and symlink
- * each matching .../0 directory to the canonical leaf.
+ * Mirror Ryujinx account saves for title_id with the canonical leaf.
+ *
+ * LibHac uses .../save/<id>/{0,1} as a dual-bank journal. Symlinking only `0`
+ * breaks Commit (it deletes/recreates that directory). This keeps `0`/`1` as
+ * real directories and copies regular files newer-wins against canonical.
  */
-int link_ryujinx_saves_to_canonical(
+int mirror_ryujinx_saves_with_canonical(
     const std::filesystem::path& ryujinx_bis_user_save,
     const SaveProfile& profile,
     std::string_view title_id);
 
 /**
  * Discover title IDs from existing Yuzu nand saves and/or Ryujinx ExtraData,
- * migrate + link both emulators to canonical leaves. Returns titles synced.
+ * migrate + share both emulators with canonical leaves. Returns titles synced.
+ * Safe to call at session start and again after the emulator exits.
  */
 std::vector<std::string> sync_switch_shared_saves(
     const SaveProfile& profile,

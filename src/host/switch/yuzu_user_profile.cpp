@@ -130,6 +130,24 @@ void YuzuUserProfileService::ensure_qt_config(
         set_qt_ini_group_value(contents, "Renderer", "resolution_setup\\default", "false");
     }
 
+    // Continuous fast-forward: this Yuzu build exposes "Toggle Framerate Limit" (no
+    // hold-turbo / Toggle Speed Limit hotkey). Remoted F8 toggles it on/off.
+    // Free F8 from Change Adapting Filter so the shortcut is unambiguous.
+    set_qt_ini_group_value(
+        contents, "UI", "Shortcuts\\Main%20Window\\Toggle%20Framerate%20Limit\\KeySeq", "F8");
+    set_qt_ini_group_value(
+        contents,
+        "UI",
+        "Shortcuts\\Main%20Window\\Toggle%20Framerate%20Limit\\KeySeq\\default",
+        "false");
+    set_qt_ini_group_value(
+        contents, "UI", "Shortcuts\\Main%20Window\\Change%20Adapting%20Filter\\KeySeq", "");
+    set_qt_ini_group_value(
+        contents,
+        "UI",
+        "Shortcuts\\Main%20Window\\Change%20Adapting%20Filter\\KeySeq\\default",
+        "false");
+
     std::ofstream out(config_path, std::ios::trunc);
     if (!out) {
         throw std::runtime_error("failed to write Yuzu qt-config.ini: " + config_path.string());

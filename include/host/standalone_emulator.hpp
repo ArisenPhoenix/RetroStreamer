@@ -1,6 +1,7 @@
 #pragma once
 
 #include "host/save_profile.hpp"
+#include "host/virtual_joypad_resolve.hpp"
 
 #include <filesystem>
 #include <optional>
@@ -32,6 +33,9 @@ struct RyujinxUserProfile {
     std::filesystem::path keys_directory;
     // Injected into the Ryujinx child so ArchStreamer uinput pads show up as SDL GameControllers.
     std::string sdl_gamecontroller_config;
+    // Hides every joystick except this session's pads, so the SDL indices baked into
+    // Config.json stay valid no matter what else is plugged in or which other sessions run.
+    std::string sdl_device_filter;
 };
 
 // ArchStreamer-owned shared data (not personal ~/.config/Ryujinx or ~/.local/share/yuzu).
@@ -114,13 +118,12 @@ RyujinxUserProfile prepare_ryujinx_user_profile(
 
 // Bind Player1…N to ArchStreamer uinput pads (GamepadSDL2 + GUID) and build an
 // SDL_GAMECONTROLLERCONFIG mapping so Ryujinx can open those pads under gamescope.
-// sdl_guids: CRC-zeroed GUIDs for Ryujinx Config.json matching.
-// mapping_guids: full SDL GUIDs (with name CRC) for SDL_GAMECONTROLLERCONFIG; when
-// empty/shorter, falls back to sdl_guids.
+// pads must carry the SDL joystick indices the Ryujinx child will see; pass the
+// sdl_device_filter that guarantees it (see resolve_exclusive_archstreamer_pads).
 void configure_ryujinx_archstreamer_controls(
     RyujinxUserProfile& profile,
-    const std::vector<std::string>& sdl_guids,
-    const std::vector<std::string>& mapping_guids = {});
+    const std::vector<ArchStreamerSdlPad>& pads,
+    const std::string& sdl_device_filter = {});
 
 std::vector<std::pair<std::string, std::string>> ryujinx_launch_environment(
     const RyujinxUserProfile& profile);

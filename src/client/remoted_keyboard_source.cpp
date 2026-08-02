@@ -117,6 +117,8 @@ std::uint32_t remoted_key_bit_from_qt_key(int qt_key) {
         return KeyP;
     case 0x01000030: // Qt::Key_F1
         return KeyF1;
+    case 0x01000037: // Qt::Key_F8
+        return KeyF8;
     default:
         return 0;
     }

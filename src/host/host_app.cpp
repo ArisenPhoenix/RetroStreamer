@@ -30,6 +30,7 @@
 #include "host/standalone_emulator.hpp"
 #include "host/session_lobby.hpp"
 #include "host/session_runtime.hpp"
+#include "host/switch/switch_backend.hpp"
 #include "host/virtual_joypad_resolve.hpp"
 
 #include <algorithm>
@@ -129,6 +130,7 @@ int HostApp::run_direct_session(
     // Soft-keyboard bridge for the no-session launch path. The watcher holds a weak
     // reference, so this has to outlive the launch block or it retires immediately.
     std::shared_ptr<SoftKeyboardHostBridge> standalone_soft_keyboard;
+    std::unique_ptr<SwitchBackend> switch_backend;
     std::optional<std::string> session_end_reason;
 
     // Direct (non-lobby) launch path — single local session, no control port.
@@ -455,14 +457,18 @@ int HostApp::run_direct_session(
         launch_config.standalone = true;
         launch_config.core_path = runtime->path;
         launch_config.standalone_args_before_content = runtime->args_before_content;
+        switch_backend = make_switch_backend(*runtime);
     }
 
     if (launch_config.standalone) {
+        if (!switch_backend) {
+            throw std::runtime_error("Switch standalone launch missing backend");
+        }
         const auto profile_name =
             preferred_steam_or_username_display_name(save_profile.username);
-        auto switch_prep = prepare_switch_standalone(
+        auto switch_prep = switch_backend->prepare(
             launch_config,
-            SwitchStandalonePrepInput{
+            SwitchBackendPrepContext{
                 save_profile,
                 launch_plan.players,
                 config.verbose,
@@ -477,42 +483,14 @@ int HostApp::run_direct_session(
                 std::move(resolved_pads),
             });
         resolved_pads = std::move(switch_prep.resolved_pads);
-        if (switch_prep.use_ryujinx) {
-            launch_env_request.ryujinx_profile = std::move(switch_prep.ryujinx_profile);
-            const auto& ryujinx_user = *launch_env_request.ryujinx_profile;
-            std::cout
-                << "Ryujinx (ldn_mitm) config: " << ryujinx_user.data_root
-                << "\nRyujinx keys:            " << ryujinx_user.keys_directory
-                << "\nShared Switch saves:     " << switch_prep.synced_title_count
-                << " title(s)\n";
-            {
-                const int scale = std::clamp(config.resolution.switch_scale, 1, 4);
-                std::cout << "Ryujinx resolution: " << scale << "x native\n";
-            }
-        } else {
-            launch_env_request.yuzu_profile = std::move(switch_prep.yuzu_profile);
-            const auto& yuzu_user = *launch_env_request.yuzu_profile;
-            std::cout
-                << "Yuzu renderer: "
-                << (switch_prep.force_opengl
-                        ? "OpenGL"
-                        : switch_prep.force_vulkan ? "Vulkan" : "default");
-            if (switch_prep.yuzu_vulkan_device >= 0 && resolved_gpu.has_value()) {
-                std::cout
-                    << " (vulkan_device=" << switch_prep.yuzu_vulkan_device
-                    << " → " << resolved_gpu->name << ")";
-            }
-            std::cout << '\n';
-            {
-                const int scale = std::clamp(config.resolution.switch_scale, 1, 6);
-                std::cout << "Switch resolution: " << scale << "x native"
-                          << " (resolution_setup=" << (scale + 1) << ")\n";
-            }
-            std::cout
-                << "Yuzu user data: " << yuzu_user.xdg_data_home
-                << "\nYuzu keys:      " << yuzu_user.keys_directory << '\n';
-        }
-        if (switch_prep.enable_soft_keyboard) {
+        switch_backend->assign_launch_env_profile(launch_env_request, switch_prep);
+        log_switch_backend_prep(
+            *switch_backend,
+            launch_env_request,
+            switch_prep,
+            config.resolution.switch_scale,
+            resolved_gpu);
+        if (switch_backend->enable_soft_keyboard()) {
             ensure_soft_keyboard(
                 standalone_soft_keyboard,
                 profile_name,
@@ -791,7 +769,7 @@ int HostApp::run_direct_session(
                 << "On Bazzite install: flatpak install flathub org.libretro.RetroArch\n";
         }
     }
-    sync_and_log_post_exit_switch_saves(save_profile);
+    sync_and_log_post_exit_switch_saves(save_profile, std::nullopt, switch_backend.get());
     // Close XTest before Xvfb so Xlib does not abort the process.
     keyboard.unplug();
     if (media_server) {

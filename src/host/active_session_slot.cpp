@@ -18,6 +18,7 @@
 #include "host/session_lobby.hpp"
 #include "host/session_launch_assemble.hpp"
 #include "host/standalone_emulator.hpp"
+#include "host/switch/switch_backend.hpp"
 #include "host/virtual_joypad_resolve.hpp"
 #include "host/virtual_keyboard.hpp"
 #include "host/soft_keyboard_host.hpp"
@@ -283,6 +284,7 @@ void ActiveSessionSlot::run_session() {
     auto& config = slot_config_;
     auto& launch_plan = config_.launch_plan;
     auto& plan = config_.plan;
+    std::unique_ptr<SwitchBackend> switch_backend;
 
     // Concurrent slots each get archstreamer-N so pulsesrc does not mix sessions.
     if (config.audio && config_.streaming_audio != nullptr &&
@@ -548,9 +550,13 @@ void ActiveSessionSlot::run_session() {
         launch_config.standalone = true;
         launch_config.core_path = runtime->path;
         launch_config.standalone_args_before_content = runtime->args_before_content;
+        switch_backend = make_switch_backend(*runtime);
     }
 
     if (launch_config.standalone) {
+        if (!switch_backend) {
+            throw std::runtime_error("Switch standalone launch missing backend");
+        }
         std::vector<ClientHello> client_hellos;
         client_hellos.reserve(plan.clients.size());
         for (const auto& client : plan.clients) {
@@ -558,9 +564,9 @@ void ActiveSessionSlot::run_session() {
         }
         const auto profile_name = resolve_switch_profile_display_name(
             save_profile_.username, plan.host_hello, client_hellos);
-        auto switch_prep = prepare_switch_standalone(
+        auto switch_prep = switch_backend->prepare(
             launch_config,
-            SwitchStandalonePrepInput{
+            SwitchBackendPrepContext{
                 save_profile_,
                 launch_plan.players,
                 config.verbose,
@@ -575,21 +581,15 @@ void ActiveSessionSlot::run_session() {
                 std::move(resolved_pads),
             });
         resolved_pads = std::move(switch_prep.resolved_pads);
-        if (switch_prep.use_ryujinx) {
-            launch_env_request.ryujinx_profile = std::move(switch_prep.ryujinx_profile);
-            std::cout
-                << "session slot " << slot << ": Ryujinx (ldn_mitm)"
-                << " config=" << launch_env_request.ryujinx_profile->data_root
-                << " shared_saves=" << switch_prep.synced_title_count << '\n';
-        } else {
-            launch_env_request.yuzu_profile = std::move(switch_prep.yuzu_profile);
-            if (switch_prep.synced_title_count > 0) {
-                std::cout
-                    << "session slot " << slot << ": Yuzu fallback; synced "
-                    << switch_prep.synced_title_count << " Switch save title(s)\n";
-            }
-        }
-        if (switch_prep.enable_soft_keyboard) {
+        switch_backend->assign_launch_env_profile(launch_env_request, switch_prep);
+        log_switch_backend_prep(
+            *switch_backend,
+            launch_env_request,
+            switch_prep,
+            config.resolution.switch_scale,
+            resolved_gpu,
+            slot);
+        if (switch_backend->enable_soft_keyboard()) {
             ensure_soft_keyboard(
                 plan.soft_keyboard,
                 profile_name,
@@ -913,7 +913,7 @@ void ActiveSessionSlot::run_session() {
 
     // Pull Ryujinx/Yuzu Switch saves into the shared canonical tree after exit.
     // (Launch already synced; in-session Ryujinx writes stay in bis until now.)
-    sync_and_log_post_exit_switch_saves(save_profile_, slot);
+    sync_and_log_post_exit_switch_saves(save_profile_, slot, switch_backend.get());
 
     // Drop XTest before tearing down Xvfb. Otherwise Xlib's fatal I/O handler
     // calls exit(1) and kills the whole host_runner lobby ("XIO: fatal IO error

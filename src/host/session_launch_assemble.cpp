@@ -27,8 +27,11 @@ void apply_capture_and_launch_environment(
 
 void sync_and_log_post_exit_switch_saves(
     const SaveProfile& profile,
-    std::optional<int> slot_index) {
-    const auto synced = sync_switch_shared_saves_for_profile(profile);
+    std::optional<int> slot_index,
+    const SwitchBackend* backend) {
+    const auto synced = backend != nullptr
+        ? backend->post_exit_sync(profile)
+        : sync_switch_shared_saves_for_profile(profile);
     if (synced.empty()) {
         return;
     }

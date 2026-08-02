@@ -260,6 +260,9 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/switch/ryujinx_user_profile.cpp
         src/host/switch/ryujinx_controls.cpp
         src/host/switch/ryujinx_launch_env.cpp
+        src/host/switch/switch_backend.cpp
+        src/host/switch/ryujinx_backend.cpp
+        src/host/switch/yuzu_backend.cpp
         src/host/switch/switch_runtime.cpp
         src/host/switch_save_share.cpp
         src/host/link_coordinator.cpp

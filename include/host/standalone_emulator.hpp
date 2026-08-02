@@ -142,43 +142,4 @@ std::string resolve_switch_profile_display_name(
     const std::optional<ClientHello>& host_hello,
     const std::vector<ClientHello>& client_hellos);
 
-/** Inputs for shared Ryujinx/Yuzu standalone session preparation. */
-struct SwitchStandalonePrepInput {
-    const SaveProfile& save_profile;
-    std::size_t players = 1;
-    bool verbose = false;
-    std::uint16_t product_id_base = 0;
-    std::string ignore_controller;
-    GraphicsApiPreference graphics_api = GraphicsApiPreference::Auto;
-    bool virtualgl_capture = false;
-    bool gamescope_capture = false;
-    int resolution_scale = 1;
-    const std::optional<GpuDevice>* resolved_gpu = nullptr;
-    /** Caller-resolved Ryujinx profile name (Steam persona or session hello). */
-    std::string profile_display_name;
-    std::vector<ArchStreamerSdlPad> resolved_pads;
-};
-
-struct SwitchStandalonePrepResult {
-    bool use_ryujinx = false;
-    /** Backend-optional pad OSK; Ryujinx sets true, Yuzu leaves false. */
-    bool enable_soft_keyboard = false;
-    bool force_opengl = false;
-    bool force_vulkan = false;
-    int yuzu_vulkan_device = -1;
-    std::size_t synced_title_count = 0;
-    std::optional<RyujinxUserProfile> ryujinx_profile;
-    std::optional<YuzuUserProfile> yuzu_profile;
-    std::vector<ArchStreamerSdlPad> resolved_pads;
-};
-
-/**
- * Shared Switch standalone prep used by direct host and lobby session slots.
- * Assumes launch_config.core_path is already set by resolve_switch_runtime.
- * Sets standalone_args_before_content and quiet_stdio; runs save sync.
- */
-SwitchStandalonePrepResult prepare_switch_standalone(
-    RetroArchLaunchConfig& launch_config,
-    SwitchStandalonePrepInput input);
-
 } // namespace archstreamer

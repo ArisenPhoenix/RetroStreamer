@@ -5,6 +5,7 @@
 #include "host/launch_environment.hpp"
 #include "host/retroarch_process.hpp"
 #include "host/save_profile.hpp"
+#include "host/switch/switch_backend.hpp"
 #include "host/virtual_gamepad.hpp"
 
 #include <cstdint>
@@ -32,11 +33,13 @@ void apply_capture_and_launch_environment(
 
 /**
  * Sync Switch shared saves after emulator exit and log when any titles moved.
+ * When backend is set, uses backend->post_exit_sync; otherwise syncs directly.
  * When slot_index is set, uses the lobby slot-prefixed log line.
  */
 void sync_and_log_post_exit_switch_saves(
     const SaveProfile& profile,
-    std::optional<int> slot_index = std::nullopt);
+    std::optional<int> slot_index = std::nullopt,
+    const SwitchBackend* backend = nullptr);
 
 /** Replace an existing RetroArch -c path, or append -c <path> if missing. */
 void rewrite_retroarch_config_arg(

@@ -1,6 +1,7 @@
 #include "host/session_run_helpers.hpp"
 
 #include "host/capture_platform.hpp"
+#include "host/input_router.hpp"
 #include "host/local_controller_bridge.hpp"
 #include "host/platform/default_host_platform.hpp"
 
@@ -95,14 +96,18 @@ void park_session_game_audio(
     audio->park_game_audio();
 }
 
+bool wait_emulator_running(SessionRuntime& runtime, int settle_attempts) {
+    for (int i = 0; i < settle_attempts && runtime.emulator_running(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return runtime.emulator_running();
+}
+
 void start_emulator_and_verify(
     SessionRuntime& runtime,
     EmulatorStartFailDetail fail_detail) {
     runtime.start_emulator();
-    for (int i = 0; i < 10 && runtime.emulator_running(); ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
-    if (runtime.emulator_running()) {
+    if (wait_emulator_running(runtime)) {
         return;
     }
 
@@ -130,6 +135,37 @@ void start_emulator_and_verify(
         message += "\n\n" + stderr_tail;
     }
     throw std::runtime_error(message);
+}
+
+SessionLoopCadence::SessionLoopCadence(
+    LocalControllerBridge* bridge,
+    InputRouter* router,
+    StreamingAudioSink* audio,
+    std::optional<int> audio_slot_index,
+    bool audio_enabled)
+    : bridge_(bridge)
+    , router_(router)
+    , audio_(audio)
+    , audio_slot_index_(audio_slot_index)
+    , audio_enabled_(audio_enabled)
+    , next_audio_park_(std::chrono::steady_clock::now()) {}
+
+void SessionLoopCadence::tick() {
+    if (bridge_ != nullptr && router_ != nullptr) {
+        bridge_->update(*router_);
+    }
+    if (audio_enabled_) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= next_audio_park_) {
+            park_session_game_audio(audio_, audio_slot_index_);
+            next_audio_park_ = now + std::chrono::seconds(3);
+        }
+    }
+    if (bridge_ != nullptr) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } else {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
 }
 
 void post_emulator_start_warmup(

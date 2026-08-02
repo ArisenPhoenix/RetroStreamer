@@ -9,6 +9,7 @@
 #include "host/virtual_gamepad.hpp"
 #include "host/virtual_keyboard.hpp"
 
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
@@ -16,6 +17,9 @@
 #include <vector>
 
 namespace archstreamer {
+
+class InputRouter;
+class LocalControllerBridge;
 
 /** Soft-fail keyboard plug: retry on virtual Xvfb/Xephyr; single try on host. */
 bool plug_virtual_keyboard_with_retry(
@@ -46,6 +50,9 @@ enum class EmulatorStartFailDetail {
     DirectCli,
 };
 
+/** Wait settle_attempts × 50ms; true if emulator is still running. */
+bool wait_emulator_running(SessionRuntime& runtime, int settle_attempts = 10);
+
 void start_emulator_and_verify(
     SessionRuntime& runtime,
     EmulatorStartFailDetail fail_detail);
@@ -69,6 +76,30 @@ void post_emulator_start_warmup(
 void park_session_game_audio(
     StreamingAudioSink* audio,
     std::optional<int> audio_slot_index = std::nullopt);
+
+/**
+ * Per-session loop cadence: local bridge poll, periodic audio park, sleep.
+ * Owns the park deadline; call tick() once per loop iteration.
+ */
+class SessionLoopCadence {
+public:
+    SessionLoopCadence(
+        LocalControllerBridge* bridge,
+        InputRouter* router,
+        StreamingAudioSink* audio,
+        std::optional<int> audio_slot_index,
+        bool audio_enabled);
+
+    void tick();
+
+private:
+    LocalControllerBridge* bridge_ = nullptr;
+    InputRouter* router_ = nullptr;
+    StreamingAudioSink* audio_ = nullptr;
+    std::optional<int> audio_slot_index_;
+    bool audio_enabled_ = false;
+    std::chrono::steady_clock::time_point next_audio_park_{};
+};
 
 void stop_session_runtime(
     std::unique_ptr<SessionRuntime>& runtime,

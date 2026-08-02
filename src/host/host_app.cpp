@@ -662,25 +662,14 @@ int HostApp::run_direct_session(
         network_receiver->start();
     }
 
-    auto next_audio_park = std::chrono::steady_clock::now();
+    SessionLoopCadence loop_cadence(
+        local_bridge.has_value() ? &*local_bridge : nullptr,
+        &input_router,
+        &streaming_audio,
+        std::nullopt,
+        config.audio);
     while (!should_stop() && session_runtime->emulator_running()) {
-        if (local_bridge.has_value()) {
-            local_bridge->update(input_router);
-        }
-        if (config.audio) {
-            const auto now = std::chrono::steady_clock::now();
-            if (now >= next_audio_park) {
-                park_session_game_audio(&streaming_audio);
-                next_audio_park = now + std::chrono::seconds(3);
-            }
-        }
-
-        // Network pads run on their own thread. Local bridge still needs a short cadence.
-        if (local_bridge.has_value()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        } else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
+        loop_cadence.tick();
     }
 
     if (!should_stop() && !session_end_reason.has_value() && !session_runtime->emulator_running()) {

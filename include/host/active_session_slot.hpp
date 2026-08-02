@@ -4,10 +4,12 @@
 #include "host/host_session_hub.hpp"
 #include "host/input_router.hpp"
 #include "host/input_router_demux.hpp"
+#include "host/launch_environment.hpp"
 #include "host/media_server.hpp"
 #include "host/network_input_receiver.hpp"
 #include "host/save_profile.hpp"
 #include "host/session_control_monitor.hpp"
+#include "host/session_launch_assemble.hpp"
 #include "host/session_lobby.hpp"
 #include "host/session_runtime.hpp"
 #include "host/session_slot_lease.hpp"
@@ -20,6 +22,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -34,6 +37,7 @@ namespace archstreamer {
 class GameCatalog;
 struct LocalControllerBridge;
 class ControllerDevice;
+struct GpuDevice;
 
 struct ActiveSessionSlotConfig {
     int slot_index = 0;
@@ -99,6 +103,24 @@ private:
     void unregister_input_clients();
     void shutdown_media_and_clients(const std::string& end_reason);
     std::optional<GbaNetplayRelaunchRequest> consume_gba_netplay_relaunch();
+
+    /** Locals needed by mid-session RetroArch relaunches (GB link / GBA netplay). */
+    struct RelaunchContext {
+        bool capture_fullscreen = false;
+        const std::optional<GpuDevice>* resolved_gpu = nullptr;
+        EmulatorLaunchEnvRequest* launch_env_request = nullptr;
+    };
+
+    RetroArchOverrideParams make_relaunch_override_params(
+        RetroArchPort players,
+        const std::filesystem::path& core_path,
+        const RelaunchContext& ctx) const;
+
+    /** nullopt = keep running; set = end session with this reason. */
+    std::optional<std::string> poll_session_monitor_stop();
+    std::optional<std::string> handle_pending_link_promotion();
+    std::optional<std::string> handle_gb_link_relaunch(const RelaunchContext& ctx);
+    std::optional<std::string> handle_gba_netplay_relaunch(const RelaunchContext& ctx);
 
     ActiveSessionSlotConfig config_;
     std::thread worker_;

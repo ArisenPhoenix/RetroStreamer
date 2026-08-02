@@ -122,6 +122,164 @@ std::optional<GbaNetplayRelaunchRequest> ActiveSessionSlot::consume_gba_netplay_
     return request;
 }
 
+RetroArchOverrideParams ActiveSessionSlot::make_relaunch_override_params(
+    RetroArchPort players,
+    const std::filesystem::path& core_path,
+    const RelaunchContext& ctx) const {
+    RetroArchOverrideParams override_params;
+    override_params.first_virtual_joypad_index = virtual_joypad_index_;
+    override_params.identities = &config_.launch_plan.virtual_identities;
+    override_params.joypad_driver = slot_config_.retroarch_joypad_driver;
+    override_params.players = players;
+    override_params.save_profile = &save_profile_;
+    override_params.realtime_pacing = slot_config_.audio || slot_config_.video;
+    override_params.capture_fullscreen = ctx.capture_fullscreen && use_virtual_capture_;
+    override_params.capture_resolution = slot_config_.video_resolution;
+    const bool have_gpu = ctx.resolved_gpu != nullptr && ctx.resolved_gpu->has_value();
+    override_params.vulkan_gpu_index =
+        (!use_virtual_capture_ && have_gpu) ? (*ctx.resolved_gpu)->vulkan_index : -1;
+    override_params.system_key = system_key_;
+    override_params.core_path = core_path;
+    override_params.resolution_scale = slot_config_.resolution.retroarch_scale;
+    override_params.slot_index = config_.slot_index;
+    override_params.network_cmd_port = config_.plan.retroarch_netcmd_port;
+    return override_params;
+}
+
+std::optional<std::string> ActiveSessionSlot::poll_session_monitor_stop() {
+    if (!session_monitor_.has_value()) {
+        return std::nullopt;
+    }
+    if (const auto reason = session_monitor_->poll(); reason.has_value()) {
+        std::cerr
+            << "session slot " << config_.slot_index << ": stopping: " << *reason << '\n';
+        return reason;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> ActiveSessionSlot::handle_pending_link_promotion() {
+    auto& plan = config_.plan;
+    if (!plan.pending_link_promotion) {
+        return std::nullopt;
+    }
+    plan.pending_link_promotion = false;
+    LinkPromotionRequest promotion;
+    promotion.logical_host_client_id = plan.pending_link_host_client_id;
+    promotion.logical_client_client_id = plan.pending_link_client_client_id;
+    promotion.logical_host_username = plan.pending_link_host_username;
+    promotion.logical_client_username = plan.pending_link_client_username;
+    promotion.system_key = plan.system_key;
+
+    auto link_runtime = promote_to_link_runtime(std::move(session_runtime_), std::move(promotion));
+    if (!link_runtime) {
+        return "link promotion failed";
+    }
+    std::cout
+        << "session slot " << config_.slot_index << ": link runtime "
+        << link_runtime->kind_name() << '\n';
+    send_retroarch_netcmd(
+        "SHOW_MSG Link runtime: peer instance pending",
+        plan.retroarch_netcmd_port);
+    session_runtime_ = std::move(link_runtime);
+    return std::nullopt;
+}
+
+std::optional<std::string> ActiveSessionSlot::handle_gb_link_relaunch(const RelaunchContext& ctx) {
+    auto& plan = config_.plan;
+    if (session_runtime_ == nullptr ||
+        session_runtime_->launch_config().standalone ||
+        !plan.link_cable.consume_relaunch_request()) {
+        return std::nullopt;
+    }
+#if defined(ARCHSTREAMER_DEBUG_GB_LINK)
+    const auto link_core = plan.link_cable.pending_core_path();
+    if (!link_core.has_value()) {
+        return std::nullopt;
+    }
+    if (ctx.launch_env_request == nullptr) {
+        return "link cable relaunch failed (missing launch env)";
+    }
+    session_runtime_->stop_emulator();
+    auto& relaunch_config = session_runtime_->launch_config();
+    relaunch_config.core_path = *link_core;
+    LinkCableBackend::write_dual_gb_core_options();
+    apply_retroarch_override_and_env(
+        relaunch_config,
+        make_relaunch_override_params(
+            std::max<RetroArchPort>(config_.launch_plan.players, 2),
+            relaunch_config.core_path,
+            ctx),
+        *ctx.launch_env_request);
+    session_runtime_->start_emulator();
+    if (!wait_emulator_running(*session_runtime_)) {
+        return "link cable relaunch failed (RetroArch exited immediately)";
+    }
+    send_retroarch_netcmd(
+        "SHOW_MSG Link cable active — Cable Club",
+        plan.retroarch_netcmd_port);
+#else
+    (void)ctx;
+    std::cerr
+        << "session slot " << config_.slot_index
+        << ": link cable relaunch ignored (debug off)\n";
+#endif
+    return std::nullopt;
+}
+
+std::optional<std::string> ActiveSessionSlot::handle_gba_netplay_relaunch(const RelaunchContext& ctx) {
+    const auto gba = consume_gba_netplay_relaunch();
+    if (!gba.has_value()) {
+        return std::nullopt;
+    }
+    if (session_runtime_ == nullptr || session_runtime_->launch_config().standalone) {
+        std::cerr
+            << "session slot " << config_.slot_index
+            << ": GBA netplay ignored (standalone emulator)\n";
+        return std::nullopt;
+    }
+    if (ctx.launch_env_request == nullptr) {
+        return "GBA netplay relaunch failed (missing launch env)";
+    }
+
+    // Client connects after host has time to bind --host.
+    if (!gba->is_host) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    }
+    std::cout
+        << "session slot " << config_.slot_index << ": GBA netplay relaunch as "
+        << (gba->is_host ? "host" : "client")
+        << " port=" << gba->port
+        << " core=" << gba->core_path << '\n';
+    session_runtime_->stop_emulator();
+    auto& relaunch_config = session_runtime_->launch_config();
+    if (!gba->core_path.empty()) {
+        relaunch_config.core_path = gba->core_path;
+    }
+    LinkCableBackend::apply_netplay_launch_args(
+        relaunch_config.extra_args,
+        gba->is_host,
+        gba->port,
+        gba->nick);
+    apply_retroarch_override_and_env(
+        relaunch_config,
+        make_relaunch_override_params(
+            config_.launch_plan.players,
+            relaunch_config.core_path,
+            ctx),
+        *ctx.launch_env_request);
+    session_runtime_->start_emulator();
+    if (!wait_emulator_running(*session_runtime_, 20)) {
+        return "GBA netplay relaunch failed (RetroArch exited immediately)";
+    }
+    send_retroarch_netcmd(
+        gba->is_host
+            ? "SHOW_MSG GBA cable host ready — Cable Club"
+            : "SHOW_MSG GBA cable connected — Cable Club",
+        config_.plan.retroarch_netcmd_port);
+    return std::nullopt;
+}
+
 void ActiveSessionSlot::thread_main() {
     try {
         run_session();
@@ -691,156 +849,37 @@ void ActiveSessionSlot::run_session() {
     register_input_clients();
 
     std::optional<std::string> session_end_reason;
-    auto next_audio_park = std::chrono::steady_clock::now();
+    const RelaunchContext relaunch_ctx{
+        capture_fullscreen,
+        &resolved_gpu,
+        &launch_env_request,
+    };
+    SessionLoopCadence loop_cadence(
+        local_bridge.has_value() ? &*local_bridge : nullptr,
+        input_router_.get(),
+        config_.streaming_audio,
+        slot,
+        config.audio);
+
     while (!should_stop() && session_runtime_->emulator_running()) {
-        if (local_bridge.has_value()) {
-            local_bridge->update(*input_router_);
-        }
         drain_pending_joins();
-        if (session_monitor_.has_value()) {
-            if (const auto reason = session_monitor_->poll(); reason.has_value()) {
-                std::cerr << "session slot " << slot << ": stopping: " << *reason << '\n';
-                session_end_reason = *reason;
-                break;
-            }
+        if (const auto reason = poll_session_monitor_stop(); reason.has_value()) {
+            session_end_reason = reason;
+            break;
         }
-        if (plan.pending_link_promotion) {
-            plan.pending_link_promotion = false;
-            LinkPromotionRequest promotion;
-            promotion.logical_host_client_id = plan.pending_link_host_client_id;
-            promotion.logical_client_client_id = plan.pending_link_client_client_id;
-            promotion.logical_host_username = plan.pending_link_host_username;
-            promotion.logical_client_username = plan.pending_link_client_username;
-            promotion.system_key = plan.system_key;
-
-            auto link_runtime = promote_to_link_runtime(std::move(session_runtime_), std::move(promotion));
-            if (!link_runtime) {
-                session_end_reason = "link promotion failed";
-                break;
-            }
-            std::cout
-                << "session slot " << slot << ": link runtime "
-                << link_runtime->kind_name() << '\n';
-            send_retroarch_netcmd(
-                "SHOW_MSG Link runtime: peer instance pending",
-                plan.retroarch_netcmd_port);
-            session_runtime_ = std::move(link_runtime);
+        if (const auto reason = handle_pending_link_promotion(); reason.has_value()) {
+            session_end_reason = reason;
+            break;
         }
-        if (!session_runtime_->launch_config().standalone &&
-            plan.link_cable.consume_relaunch_request()) {
-#if defined(ARCHSTREAMER_DEBUG_GB_LINK)
-            const auto link_core = plan.link_cable.pending_core_path();
-            if (link_core.has_value()) {
-                session_runtime_->stop_emulator();
-                auto& relaunch_config = session_runtime_->launch_config();
-                relaunch_config.core_path = *link_core;
-                LinkCableBackend::write_dual_gb_core_options();
-                RetroArchOverrideParams override_params;
-                override_params.first_virtual_joypad_index = virtual_joypad_index_;
-                override_params.identities = &launch_plan.virtual_identities;
-                override_params.joypad_driver = config.retroarch_joypad_driver;
-                override_params.players = std::max<RetroArchPort>(launch_plan.players, 2);
-                override_params.save_profile = &save_profile_;
-                override_params.realtime_pacing = config.audio || config.video;
-                override_params.capture_fullscreen = capture_fullscreen && use_virtual_capture_;
-                override_params.capture_resolution = config.video_resolution;
-                override_params.vulkan_gpu_index =
-                    (!use_virtual_capture_ && resolved_gpu.has_value()) ? resolved_gpu->vulkan_index : -1;
-                override_params.system_key = system_key_;
-                override_params.core_path = relaunch_config.core_path;
-                override_params.resolution_scale = config.resolution.retroarch_scale;
-                override_params.slot_index = slot;
-                override_params.network_cmd_port = plan.retroarch_netcmd_port;
-                apply_retroarch_override_and_env(
-                    relaunch_config, override_params, launch_env_request);
-                session_runtime_->start_emulator();
-                for (int i = 0; i < 10 && session_runtime_->emulator_running(); ++i) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                }
-                if (!session_runtime_->emulator_running()) {
-                    session_end_reason = "link cable relaunch failed (RetroArch exited immediately)";
-                    break;
-                }
-                send_retroarch_netcmd(
-                    "SHOW_MSG Link cable active — Cable Club",
-                    plan.retroarch_netcmd_port);
-            }
-#else
-            std::cerr << "session slot " << slot << ": link cable relaunch ignored (debug off)\n";
-#endif
+        if (const auto reason = handle_gb_link_relaunch(relaunch_ctx); reason.has_value()) {
+            session_end_reason = reason;
+            break;
         }
-        if (const auto gba = consume_gba_netplay_relaunch(); gba.has_value()) {
-            if (session_runtime_->launch_config().standalone) {
-                std::cerr
-                    << "session slot " << slot
-                    << ": GBA netplay ignored (standalone emulator)\n";
-            } else {
-                // Client connects after host has time to bind --host.
-                if (!gba->is_host) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-                }
-                std::cout
-                    << "session slot " << slot << ": GBA netplay relaunch as "
-                    << (gba->is_host ? "host" : "client")
-                    << " port=" << gba->port
-                    << " core=" << gba->core_path << '\n';
-                session_runtime_->stop_emulator();
-                auto& relaunch_config = session_runtime_->launch_config();
-                if (!gba->core_path.empty()) {
-                    relaunch_config.core_path = gba->core_path;
-                }
-                LinkCableBackend::apply_netplay_launch_args(
-                    relaunch_config.extra_args,
-                    gba->is_host,
-                    gba->port,
-                    gba->nick);
-                RetroArchOverrideParams override_params;
-                override_params.first_virtual_joypad_index = virtual_joypad_index_;
-                override_params.identities = &launch_plan.virtual_identities;
-                override_params.joypad_driver = config.retroarch_joypad_driver;
-                override_params.players = launch_plan.players;
-                override_params.save_profile = &save_profile_;
-                override_params.realtime_pacing = config.audio || config.video;
-                override_params.capture_fullscreen = capture_fullscreen && use_virtual_capture_;
-                override_params.capture_resolution = config.video_resolution;
-                override_params.vulkan_gpu_index =
-                    (!use_virtual_capture_ && resolved_gpu.has_value()) ? resolved_gpu->vulkan_index : -1;
-                override_params.system_key = system_key_;
-                override_params.core_path = relaunch_config.core_path;
-                override_params.resolution_scale = config.resolution.retroarch_scale;
-                override_params.slot_index = slot;
-                override_params.network_cmd_port = plan.retroarch_netcmd_port;
-                apply_retroarch_override_and_env(
-                    relaunch_config, override_params, launch_env_request);
-                session_runtime_->start_emulator();
-                for (int i = 0; i < 20 && session_runtime_->emulator_running(); ++i) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                }
-                if (!session_runtime_->emulator_running()) {
-                    session_end_reason =
-                        "GBA netplay relaunch failed (RetroArch exited immediately)";
-                    break;
-                }
-                send_retroarch_netcmd(
-                    gba->is_host
-                        ? "SHOW_MSG GBA cable host ready — Cable Club"
-                        : "SHOW_MSG GBA cable connected — Cable Club",
-                    plan.retroarch_netcmd_port);
-            }
+        if (const auto reason = handle_gba_netplay_relaunch(relaunch_ctx); reason.has_value()) {
+            session_end_reason = reason;
+            break;
         }
-        if (config.audio) {
-            const auto now = std::chrono::steady_clock::now();
-            if (now >= next_audio_park) {
-                park_session_game_audio(config_.streaming_audio, slot);
-                next_audio_park = now + std::chrono::seconds(3);
-            }
-        }
-
-        if (local_bridge.has_value()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        } else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
+        loop_cadence.tick();
     }
 
     if (!should_stop() && !session_end_reason.has_value() && !session_runtime_->emulator_running()) {

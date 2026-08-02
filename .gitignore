@@ -9,3 +9,9 @@ scripts/.flatpak-builder/
 *.flatpak
 logs
 windows_log_ssh.sh
+
+# Android client (see also mobile/android/.gitignore)
+mobile/android/.gradle/
+mobile/android/**/build/
+mobile/android/local.properties
+mobile/android/.idea/

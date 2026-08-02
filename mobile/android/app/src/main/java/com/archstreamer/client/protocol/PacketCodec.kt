@@ -1,0 +1,293 @@
+package com.archstreamer.client.protocol
+
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.charset.StandardCharsets
+
+/** Little-endian reader/writer matching src/common/serialization.cpp */
+class WireReader(private val bytes: ByteArray, private var offset: Int = 0) {
+    fun remaining(): Int = bytes.size - offset
+
+    fun readU8(): Int {
+        require(1)
+        return bytes[offset++].toInt() and 0xff
+    }
+
+    fun readU16(): Int {
+        require(2)
+        val value = (bytes[offset].toInt() and 0xff) or
+            ((bytes[offset + 1].toInt() and 0xff) shl 8)
+        offset += 2
+        return value
+    }
+
+    fun readU32(): Long {
+        require(4)
+        var value = 0L
+        for (i in 0 until 4) {
+            value = value or ((bytes[offset + i].toLong() and 0xff) shl (i * 8))
+        }
+        offset += 4
+        return value
+    }
+
+    fun readI16(): Short {
+        return readU16().toShort()
+    }
+
+    fun readU64(): Long {
+        require(8)
+        var value = 0L
+        for (i in 0 until 8) {
+            value = value or ((bytes[offset + i].toLong() and 0xff) shl (i * 8))
+        }
+        offset += 8
+        return value
+    }
+
+    fun readBool(): Boolean = readU8() != 0
+
+    fun readString(): String {
+        val size = readU16()
+        require(size)
+        val text = String(bytes, offset, size, StandardCharsets.UTF_8)
+        offset += size
+        return text
+    }
+
+    fun readOptionalString(): String? {
+        if (!readBool()) return null
+        return readString()
+    }
+
+    private fun require(count: Int) {
+        if (offset + count > bytes.size) {
+            error("truncated protocol packet (need $count at offset $offset, size ${bytes.size})")
+        }
+    }
+}
+
+class WireWriter {
+    private val out = ArrayList<Byte>(256)
+
+    fun writeU8(value: Int) {
+        out.add((value and 0xff).toByte())
+    }
+
+    fun writeU16(value: Int) {
+        out.add((value and 0xff).toByte())
+        out.add(((value ushr 8) and 0xff).toByte())
+    }
+
+    fun writeU32(value: Long) {
+        var v = value
+        repeat(4) {
+            out.add((v and 0xff).toByte())
+            v = v ushr 8
+        }
+    }
+
+    fun writeI16(value: Short) {
+        writeU16(value.toInt() and 0xffff)
+    }
+
+    fun writeU64(value: Long) {
+        var v = value
+        repeat(8) {
+            out.add((v and 0xff).toByte())
+            v = v ushr 8
+        }
+    }
+
+    fun writeBool(value: Boolean) {
+        writeU8(if (value) 1 else 0)
+    }
+
+    fun writeString(value: String) {
+        val utf8 = value.toByteArray(StandardCharsets.UTF_8)
+        check(utf8.size <= 0xffff) { "string too large for protocol packet" }
+        writeU16(utf8.size)
+        utf8.forEach { out.add(it) }
+    }
+
+    fun writeOptionalString(value: String?) {
+        writeBool(value != null)
+        if (value != null) writeString(value)
+    }
+
+    fun toByteArray(): ByteArray = out.toByteArray()
+}
+
+object PacketCodec {
+    fun wrap(type: PacketType, payload: ByteArray): ByteArray {
+        val writer = WireWriter()
+        writer.writeU32(Protocol.MAGIC.toLong() and 0xffffffffL)
+        writer.writeU16(Protocol.VERSION)
+        writer.writeU8(type.id)
+        writer.writeU32(payload.size.toLong())
+        return writer.toByteArray() + payload
+    }
+
+    fun parseHeader(bytes: ByteArray): Triple<Int, PacketType, Int> {
+        val reader = WireReader(bytes)
+        val magic = reader.readU32().toInt()
+        check(magic == Protocol.MAGIC) {
+            "bad magic 0x${magic.toString(16)} (expected ARST)"
+        }
+        val version = reader.readU16()
+        check(version == Protocol.VERSION) {
+            "unsupported protocol version $version (need ${Protocol.VERSION})"
+        }
+        val type = PacketType.fromId(reader.readU8())
+        val payloadSize = reader.readU32().toInt()
+        return Triple(version, type, payloadSize)
+    }
+
+    fun gameListRequest(revision: Long = 0L): ByteArray {
+        val payload = WireWriter().apply { writeU64(revision) }.toByteArray()
+        return wrap(PacketType.GameListRequest, payload)
+    }
+
+    fun clientHello(
+        username: String,
+        displayName: String,
+        selectedGameId: String?,
+        sessionMode: GameSessionMode,
+        requestedPlayers: Int,
+        controllers: List<ControllerInfo>,
+        wantsVideo: Boolean = true,
+        wantsAudio: Boolean = true,
+    ): ByteArray {
+        val payload = WireWriter().apply {
+            writeString(username)
+            writeString(displayName)
+            writeOptionalString(selectedGameId)
+            writeU8(sessionMode.id)
+            writeU8(requestedPlayers)
+            writeU8(controllers.size)
+            for (c in controllers) {
+                writeU8(c.localPlayer)
+                writeString(c.name)
+                writeString(c.guid)
+                writeU16(c.vendorId)
+                writeU16(c.productId)
+            }
+            writeBool(wantsVideo)
+            writeBool(wantsAudio)
+        }.toByteArray()
+        return wrap(PacketType.ClientHello, payload)
+    }
+
+    fun controllerInput(
+        clientId: Int,
+        localPlayer: Int,
+        state: ControllerState,
+    ): ByteArray {
+        val payload = WireWriter().apply {
+            writeU8(clientId)
+            writeU8(localPlayer)
+            writeU32(state.sequence)
+            writeU64(state.timestampUs)
+            writeU32(state.buttons.toLong() and 0xffffffffL)
+            writeI16(state.leftX)
+            writeI16(state.leftY)
+            writeI16(state.rightX)
+            writeI16(state.rightY)
+            writeU16(state.leftTrigger)
+            writeU16(state.rightTrigger)
+        }.toByteArray()
+        return wrap(PacketType.ControllerInput, payload)
+    }
+
+    fun clientSessionLeave(clientId: Int, reason: String): ByteArray {
+        val payload = WireWriter().apply {
+            writeU8(clientId)
+            writeString(reason)
+        }.toByteArray()
+        return wrap(PacketType.ClientSessionLeave, payload)
+    }
+
+    fun decode(type: PacketType, payload: ByteArray): IncomingPacket {
+        val reader = WireReader(payload)
+        return when (type) {
+            PacketType.GameList -> IncomingPacket.Catalog(readGameList(reader))
+            PacketType.HostWelcome -> IncomingPacket.Welcome(
+                HostWelcome(
+                    clientId = reader.readU8(),
+                    maxPlayersForClient = reader.readU8(),
+                    hostIsPlayer = reader.readBool(),
+                ),
+            )
+            PacketType.SeatAssignment -> {
+                val count = reader.readU8()
+                val seats = List(count) {
+                    PlayerSeat(
+                        clientId = reader.readU8(),
+                        localPlayer = reader.readU8(),
+                        retroarchPort = reader.readU8(),
+                    )
+                }
+                IncomingPacket.Seats(SeatAssignment(seats))
+            }
+            PacketType.SessionReady -> IncomingPacket.Ready(
+                SessionReady(
+                    selectedGameId = reader.readString(),
+                    sessionMode = modeFromId(reader.readU8()),
+                    playerCount = reader.readU8(),
+                ),
+            )
+            PacketType.SessionStarting -> IncomingPacket.Starting(
+                SessionStarting(
+                    selectedGameId = reader.readString(),
+                    sessionMode = modeFromId(reader.readU8()),
+                    playerCount = reader.readU8(),
+                ),
+            )
+            PacketType.SessionEnded -> IncomingPacket.Ended(SessionEnded(reader.readString()))
+            PacketType.MediaEndpoint -> IncomingPacket.Media(
+                MediaEndpoint(
+                    videoUri = reader.readString(),
+                    audioUri = reader.readString(),
+                ),
+            )
+            PacketType.Error -> IncomingPacket.Error(ErrorPacket(reader.readString()))
+            else -> IncomingPacket.Unknown(type)
+        }
+    }
+
+    private fun modeFromId(id: Int): GameSessionMode =
+        GameSessionMode.entries.firstOrNull { it.id == id } ?: GameSessionMode.SinglePlayer
+
+    private fun readGameList(reader: WireReader): GameList {
+        val revision = reader.readU64()
+        val full = reader.readBool()
+        val gameCount = reader.readU16()
+        val games = List(gameCount) {
+            GameInfo(
+                id = reader.readString(),
+                identityKey = reader.readString(),
+                assetKey = reader.readString(),
+                displayName = reader.readString(),
+                systemName = reader.readString(),
+                systemKey = reader.readString(),
+                coreName = reader.readString(),
+                canonicalName = reader.readString(),
+                version = reader.readString(),
+                language = reader.readString(),
+                region = reader.readString(),
+                supportsSingleplayer = reader.readBool(),
+                supportsMultiplayer = reader.readBool(),
+                minPlayers = reader.readU8(),
+                maxPlayers = reader.readU8(),
+                updatedAt = reader.readU64(),
+                playlistDiscs = List(reader.readU16()) { reader.readString() },
+            )
+        }
+        val deleted = List(reader.readU16()) { reader.readString() }
+        return GameList(revision, full, games, deleted)
+    }
+}
+
+/** Convenience for unit-style checks without Android deps. */
+fun byteBufferLe(capacity: Int): ByteBuffer =
+    ByteBuffer.allocate(capacity).order(ByteOrder.LITTLE_ENDIAN)

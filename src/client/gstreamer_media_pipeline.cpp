@@ -87,6 +87,10 @@ std::filesystem::path gst_video_receiver_log_path() {
     return cache_log_path("gst-video-receiver.log");
 }
 
+std::filesystem::path gst_audio_receiver_log_path() {
+    return cache_log_path("gst-audio-receiver.log");
+}
+
 std::filesystem::path gst_synced_receiver_log_path() {
     return cache_log_path("gst-synced-media-receiver.log");
 }

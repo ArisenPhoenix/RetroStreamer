@@ -69,11 +69,12 @@ void GStreamerMediaReceiver::start_audio_pipeline(bool wait_for_ready) {
     pending_audio_device_streak_ = 0;
     audio_pipeline_info_ = sink.description;
     audio_args.insert(audio_args.end(), sink.gst_args.begin(), sink.gst_args.end());
-    // Redirect away from the terminal — otherwise Ctrl+C leaves a stuck gst status line
-    // and teardown contends with a foreground gst-launch on the same TTY.
-    audio_process_.start(audio_args, {}, {}, gst_video_receiver_log_path().string());
+    // Separate log from video — Windows CreateFile refuses a second exclusive writer
+    // on the same path (and that showed up as "failed to open child stderr path").
+    const auto audio_log = gst_audio_receiver_log_path();
+    audio_process_.start(audio_args, {}, {}, audio_log.string());
     if (wait_for_ready) {
-        ensure_gst_child_stayed_up(audio_process_, "Audio", gst_video_receiver_log_path());
+        ensure_gst_child_stayed_up(audio_process_, "Audio", audio_log);
     }
 }
 

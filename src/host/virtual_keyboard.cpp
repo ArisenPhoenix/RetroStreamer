@@ -5,6 +5,7 @@
 #include "host/retroarch_netcmd.hpp"
 
 #include <chrono>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -75,8 +76,6 @@ Display* as_display(void* ptr) {
 bool bit_down(std::uint32_t keys, RemotedKey key) {
     return (keys & static_cast<std::uint32_t>(key)) != 0;
 }
-
-void focus_emulator_window(Display* display);
 
 } // namespace
 
@@ -199,7 +198,7 @@ void VirtualKeyboard::apply_xtest_edges(std::uint32_t previous, std::uint32_t ne
             continue;
         }
         if (need_focus) {
-            focus_emulator_window(display);
+            focus_emulator_window(false);
             need_focus = false;
         }
         XTestFakeKeyEvent(display, code, is_down ? True : False, CurrentTime);
@@ -212,81 +211,6 @@ void VirtualKeyboard::apply_xtest_edges(std::uint32_t previous, std::uint32_t ne
 
 void VirtualKeyboard::apply_xtest_space_autorepeat() {
     // Unused — Space is edge-tapped for Ryujinx toggle turbo (see apply()).
-}
-
-void VirtualKeyboard::apply(const KeyboardState& state) {
-    if (!plugged_) {
-        return;
-    }
-
-    const std::uint32_t previous = has_last_ ? last_keys_ : 0;
-    const std::uint32_t next = state.keys;
-
-    std::size_t count = 0;
-    const auto* bindings = default_remoted_key_bindings(count);
-    for (std::size_t i = 0; i < count; ++i) {
-        const auto& binding = bindings[i];
-        const bool was_down = bit_down(previous, binding.key);
-        const bool is_down = bit_down(next, binding.key);
-        if (was_down == is_down) {
-            continue;
-        }
-
-        switch (binding.action) {
-        case RemotedKeyAction::NetcmdEdgeToggle:
-            if (binding.netcmd != nullptr) {
-                send_retroarch_netcmd(binding.netcmd);
-            }
-            break;
-        case RemotedKeyAction::NetcmdPress:
-            if (is_down && binding.netcmd != nullptr) {
-                if (send_retroarch_netcmd(binding.netcmd)) {
-                    std::cout
-                        << "Keyboard netcmd: "
-                        << (binding.key == KeyP ? "P" : binding.key == KeyF1 ? "F1" : "?")
-                        << " → " << binding.netcmd << '\n';
-                }
-            }
-            break;
-        case RemotedKeyAction::XTestHold:
-            if (binding.key == KeySpace && is_down && !logged_ff_) {
-                logged_ff_ = true;
-                std::cout
-                    << "Fast-forward: Space tap via XTest on " << capture_display_
-                    << " (Ryujinx turbo toggle on press/release)\n";
-            }
-            break;
-        case RemotedKeyAction::Ignored:
-            break;
-        }
-    }
-
-    if (previous != next) {
-        apply_xtest_edges(previous, next);
-    }
-
-    // Ryujinx turbo_mode_while_held=false: each Space tap toggles turbo. Remoted hold
-    // becomes tap-on-press + tap-on-release (turbo on while the client holds Space).
-    const bool space_down = bit_down(next, KeySpace);
-    const bool space_was = bit_down(previous, KeySpace);
-    if (space_down != space_was && display_ != nullptr) {
-        Display* display = as_display(display_);
-        const KeyCode code = XKeysymToKeycode(display, XK_space);
-        if (code != 0) {
-            focus_emulator_window(display);
-            XTestFakeKeyEvent(display, code, True, CurrentTime);
-            XTestFakeKeyEvent(display, code, False, CurrentTime);
-            XFlush(display);
-        }
-    }
-
-    last_keys_ = next;
-    has_last_ = true;
-}
-
-void VirtualKeyboard::release_all() {
-    KeyboardState empty{};
-    apply(empty);
 }
 
 namespace {
@@ -374,33 +298,146 @@ bool title_looks_like_emulator(const std::string& title) {
         lower.find("retroarch") != std::string::npos;
 }
 
-/** Soft-kbd works because it focuses the Avalonia window before XTest. Gamescope's
- *  nested Xwayland often leaves focus on steamcompmgr; Space then vanishes. */
-void focus_emulator_window(Display* display) {
-    if (display == nullptr) {
-        return;
-    }
-    install_x_error_guard();
-    Window focus = 0;
-    int revert = RevertToNone;
-    XGetInputFocus(display, &focus, &revert);
-    if (focus != 0 && focus != None && focus != PointerRoot) {
-        if (title_looks_like_emulator(window_title(display, focus)) &&
-            window_is_viewable(display, focus)) {
-            return;
+std::optional<int> window_pid(Display* display, Window window) {
+    Atom actual_type = None;
+    int actual_format = 0;
+    unsigned long item_count = 0;
+    unsigned long bytes_after = 0;
+    unsigned char* prop = nullptr;
+    if (XGetWindowProperty(
+            display,
+            window,
+            XInternAtom(display, "_NET_WM_PID", False),
+            0,
+            1,
+            False,
+            XA_CARDINAL,
+            &actual_type,
+            &actual_format,
+            &item_count,
+            &bytes_after,
+            &prop) != Success ||
+        prop == nullptr ||
+        item_count < 1) {
+        if (prop != nullptr) {
+            XFree(prop);
         }
+        return std::nullopt;
     }
+    const auto pid = static_cast<int>(*reinterpret_cast<unsigned long*>(prop));
+    XFree(prop);
+    return pid > 0 ? std::optional<int>{pid} : std::nullopt;
+}
+
+bool pid_in_process_tree(int candidate_pid, int root_pid) {
+    if (root_pid <= 0 || candidate_pid <= 0) {
+        return false;
+    }
+    if (candidate_pid == root_pid) {
+        return true;
+    }
+    // Walk candidate's parents toward init — covers AppImage wrappers under gamescope.
+    int current = candidate_pid;
+    for (int depth = 0; depth < 64 && current > 1; ++depth) {
+        std::ifstream in("/proc/" + std::to_string(current) + "/stat");
+        std::string ignore;
+        int pid = 0;
+        char state = 0;
+        int ppid = 0;
+        if (!(in >> pid >> ignore >> state >> ppid)) {
+            break;
+        }
+        if (ppid == root_pid) {
+            return true;
+        }
+        if (ppid <= 1 || ppid == current) {
+            break;
+        }
+        current = ppid;
+    }
+    // Also: candidate may be an ancestor of root (gamescope leader vs nested Ryujinx).
+    current = root_pid;
+    for (int depth = 0; depth < 64 && current > 1; ++depth) {
+        if (current == candidate_pid) {
+            return true;
+        }
+        std::ifstream in("/proc/" + std::to_string(current) + "/stat");
+        std::string ignore;
+        int pid = 0;
+        char state = 0;
+        int ppid = 0;
+        if (!(in >> pid >> ignore >> state >> ppid)) {
+            break;
+        }
+        if (ppid <= 1 || ppid == current) {
+            break;
+        }
+        current = ppid;
+    }
+    return false;
+}
+
+void activate_x_window(Display* display, Window window) {
+    // Match raise_video_window: _NET_ACTIVE_WINDOW is what gamescope/steamcompmgr honor.
+    XEvent event{};
+    event.xclient.type = ClientMessage;
+    event.xclient.window = window;
+    event.xclient.message_type = XInternAtom(display, "_NET_ACTIVE_WINDOW", False);
+    event.xclient.format = 32;
+    event.xclient.data.l[0] = 2;
+    event.xclient.data.l[1] = static_cast<long>(CurrentTime);
+    XSendEvent(
+        display,
+        DefaultRootWindow(display),
+        False,
+        SubstructureRedirectMask | SubstructureNotifyMask,
+        &event);
+    XRaiseWindow(display, window);
+    XSetInputFocus(display, window, RevertToParent, CurrentTime);
+    XFlush(display);
+}
+
+Window find_emulator_window(Display* display, int target_pid) {
     std::vector<std::pair<Window, std::string>> windows;
     collect_windows(display, DefaultRootWindow(display), windows);
+
+    Window best = None;
+    int best_area = 0;
     for (const auto& [window, title] : windows) {
-        if (!title_looks_like_emulator(title) || !window_is_viewable(display, window)) {
+        if (!window_is_viewable(display, window)) {
             continue;
         }
-        XSetInputFocus(display, window, RevertToParent, CurrentTime);
-        XRaiseWindow(display, window);
-        XFlush(display);
-        return;
+        bool match = false;
+        if (target_pid > 0) {
+            if (const auto pid = window_pid(display, window); pid && pid_in_process_tree(*pid, target_pid)) {
+                match = true;
+            }
+        }
+        if (!match && title_looks_like_emulator(title)) {
+            match = true;
+        }
+        // Never treat gamescope's compositor shell as the game.
+        auto lower = title;
+        for (char& character : lower) {
+            character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+        }
+        if (lower.find("steamcompmgr") != std::string::npos) {
+            continue;
+        }
+        if (!match) {
+            continue;
+        }
+        XWindowAttributes attrs{};
+        if (!XGetWindowAttributes(display, window, &attrs)) {
+            continue;
+        }
+        const int area = attrs.width * attrs.height;
+        if (area > best_area) {
+            best_area = area;
+            best = window;
+        }
     }
+    return best;
 }
 
 bool is_soft_keyboard_dialog_title(const std::string& title) {
@@ -606,6 +643,139 @@ std::string title_case_fallback(std::string text) {
 }
 
 } // namespace
+
+bool VirtualKeyboard::focus_emulator_window(bool settle) {
+    if (display_ == nullptr) {
+        return false;
+    }
+    Display* display = as_display(display_);
+    install_x_error_guard();
+
+    auto focused_is_emulator = [&]() -> bool {
+        Window focus = 0;
+        int revert = RevertToNone;
+        XGetInputFocus(display, &focus, &revert);
+        if (focus == 0 || focus == None || focus == PointerRoot) {
+            return false;
+        }
+        if (target_pid_ > 0) {
+            if (const auto pid = window_pid(display, focus); pid && *pid > 0) {
+                if (pid_in_process_tree(*pid, target_pid_)) {
+                    return window_is_viewable(display, focus);
+                }
+            }
+        }
+        const auto title = window_title(display, focus);
+        auto lower = title;
+        for (char& character : lower) {
+            character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+        }
+        if (lower.find("steamcompmgr") != std::string::npos) {
+            return false;
+        }
+        return title_looks_like_emulator(title) && window_is_viewable(display, focus);
+    };
+
+    if (focused_is_emulator()) {
+        return true;
+    }
+
+    const Window target = find_emulator_window(display, target_pid_);
+    if (target == None) {
+        if (!logged_focus_miss_) {
+            logged_focus_miss_ = true;
+            std::cerr
+                << "Virtual keyboard: no Ryujinx/yuzu window on " << capture_display_
+                << " (pid=" << target_pid_ << ") — Space/FF will not reach the emulator\n";
+        }
+        return false;
+    }
+
+    activate_x_window(display, target);
+    if (settle) {
+        // Soft-kbd uses ~250ms; shorter is enough once _NET_ACTIVE_WINDOW has fired.
+        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+    }
+    return true;
+}
+
+void VirtualKeyboard::apply(const KeyboardState& state) {
+    if (!plugged_) {
+        return;
+    }
+
+    const std::uint32_t previous = has_last_ ? last_keys_ : 0;
+    const std::uint32_t next = state.keys;
+
+    std::size_t count = 0;
+    const auto* bindings = default_remoted_key_bindings(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto& binding = bindings[i];
+        const bool was_down = bit_down(previous, binding.key);
+        const bool is_down = bit_down(next, binding.key);
+        if (was_down == is_down) {
+            continue;
+        }
+
+        switch (binding.action) {
+        case RemotedKeyAction::NetcmdEdgeToggle:
+            if (binding.netcmd != nullptr) {
+                send_retroarch_netcmd(binding.netcmd);
+            }
+            break;
+        case RemotedKeyAction::NetcmdPress:
+            if (is_down && binding.netcmd != nullptr) {
+                if (send_retroarch_netcmd(binding.netcmd)) {
+                    std::cout
+                        << "Keyboard netcmd: "
+                        << (binding.key == KeyP ? "P" : binding.key == KeyF1 ? "F1" : "?")
+                        << " → " << binding.netcmd << '\n';
+                }
+            }
+            break;
+        case RemotedKeyAction::XTestHold:
+            if (binding.key == KeySpace && is_down && !logged_ff_) {
+                logged_ff_ = true;
+                std::cout
+                    << "Fast-forward: Space tap via XTest on " << capture_display_
+                    << " (focused Ryujinx window; turbo toggle on press/release)\n";
+            }
+            break;
+        case RemotedKeyAction::Ignored:
+            break;
+        }
+    }
+
+    if (previous != next) {
+        apply_xtest_edges(previous, next);
+    }
+
+    // Ryujinx turbo_mode_while_held=false: each Space tap toggles turbo. Remoted hold
+    // becomes tap-on-press + tap-on-release (turbo on while the client holds Space).
+    const bool space_down = bit_down(next, KeySpace);
+    const bool space_was = bit_down(previous, KeySpace);
+    if (space_down != space_was && display_ != nullptr) {
+        Display* display = as_display(display_);
+        const KeyCode code = XKeysymToKeycode(display, XK_space);
+        if (code != 0) {
+            focus_emulator_window(/*settle=*/true);
+            XTestFakeKeyEvent(display, code, True, CurrentTime);
+            XFlush(display);
+            // Avalonia can drop a same-flush press/release pair.
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+            XTestFakeKeyEvent(display, code, False, CurrentTime);
+            XFlush(display);
+        }
+    }
+
+    last_keys_ = next;
+    has_last_ = true;
+}
+
+void VirtualKeyboard::release_all() {
+    KeyboardState empty{};
+    apply(empty);
+}
 
 std::vector<std::string> xtest_display_candidates(const std::string& preferred) {
     std::vector<std::string> names;

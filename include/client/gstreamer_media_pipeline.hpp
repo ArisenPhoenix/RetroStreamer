@@ -15,6 +15,7 @@ namespace archstreamer {
 // Shared gst-launch fragments — no platform branching.
 
 std::filesystem::path gst_video_receiver_log_path();
+std::filesystem::path gst_audio_receiver_log_path();
 std::filesystem::path gst_synced_receiver_log_path();
 
 void ensure_gst_child_stayed_up(

@@ -247,6 +247,9 @@ bool plug_gamescope_virtual_keyboard_after_start(
         if (is_host_desktop_display(keyboard.capture_display())) {
             keyboard.unplug();
         } else {
+            if (emulator_pid.has_value()) {
+                keyboard.set_target_pid(*emulator_pid);
+            }
             return true;
         }
     }
@@ -256,6 +259,9 @@ bool plug_gamescope_virtual_keyboard_after_start(
         for (const auto& name : candidates) {
             try {
                 keyboard.rebind_display(name);
+                if (emulator_pid.has_value()) {
+                    keyboard.set_target_pid(*emulator_pid);
+                }
                 keyboard.plug();
                 if (is_host_desktop_display(keyboard.capture_display())) {
                     keyboard.unplug();

@@ -51,6 +51,9 @@ public:
     void rebind_display(std::string capture_display);
     const std::string& capture_display() const { return capture_display_; }
 
+    /** Emulator/gamescope leader PID — used to focus the right X window via _NET_WM_PID. */
+    void set_target_pid(int pid) { target_pid_ = pid; }
+
     void apply(const KeyboardState& state);
     void release_all();
 
@@ -58,12 +61,15 @@ private:
     void apply_xtest_edges(std::uint32_t previous, std::uint32_t next);
     void apply_xtest_space_autorepeat();
     void ensure_xtest_display();
+    bool focus_emulator_window(bool settle);
 
     std::string capture_display_;
     void* display_ = nullptr; // Display*
     bool plugged_ = false;
     bool has_last_ = false;
     bool logged_ff_ = false;
+    bool logged_focus_miss_ = false;
+    int target_pid_ = 0;
     std::uint32_t last_keys_ = 0;
     std::chrono::steady_clock::time_point last_space_repeat_{};
 };

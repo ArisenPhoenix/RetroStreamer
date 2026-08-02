@@ -3,6 +3,7 @@
 #include "client/controller_manager.hpp"
 #include "client/game_filter.hpp"
 #include "client/session_service.hpp"
+#include "client/video_embed_bridge.hpp"
 #include "common/controller_state.hpp"
 #include "common/participant_role.hpp"
 #include "common/protocol.hpp"
@@ -254,6 +255,13 @@ struct ClientAppConfig {
     std::uint16_t max_bitrate_kbps = 0;
     // Request host RetroArch "Frames:" OSD (default off). Prefer heartbeat_prefs for live updates.
     bool show_framecount = false;
+    /**
+     * When non-zero (or video_embed set), Legacy video uses in-process appsink
+     * into the Qt surface. session_client leaves 0 for a standalone gst-launch window.
+     */
+    std::uint64_t video_embed_xid = 0;
+    /** Live Qt surface: appsink frames + emergency stop on window close. */
+    std::shared_ptr<VideoEmbedBridge> video_embed;
 };
 
 struct ClientConnectionInfo {

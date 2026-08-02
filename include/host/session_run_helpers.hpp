@@ -21,11 +21,25 @@ namespace archstreamer {
 class InputRouter;
 class LocalControllerBridge;
 
-/** Soft-fail keyboard plug: retry on virtual Xvfb/Xephyr; single try on host. */
+/** Soft-fail keyboard plug: retry on virtual Xvfb/Xephyr; single try on host.
+ *  Gamescope: deferred — call plug_gamescope_virtual_keyboard_after_start once
+ *  nested Xwayland exists (after emulator/gamescope launch).
+ */
 bool plug_virtual_keyboard_with_retry(
     VirtualKeyboard& keyboard,
     bool use_virtual_capture,
     bool gamescope_capture,
+    std::string_view log_prefix = {});
+
+/**
+ * Discover gamescope nested Xwayland and plug remoted Space/F8 XTest there.
+ * Retries briefly while gamescope comes up. Prefer emulator/gamescope process
+ * DISPLAY over the host desktop. No-op if already plugged.
+ */
+bool plug_gamescope_virtual_keyboard_after_start(
+    VirtualKeyboard& keyboard,
+    const std::string& preferred_display,
+    std::optional<int> emulator_pid = std::nullopt,
     std::string_view log_prefix = {});
 
 struct HostMediaStartRequest {
@@ -70,7 +84,11 @@ void post_emulator_start_warmup(
     std::optional<int> audio_slot_index,
     VirtualGamepadBus& pads,
     RetroArchPort players,
-    bool pulse_input);
+    bool pulse_input,
+    VirtualKeyboard* keyboard = nullptr,
+    bool gamescope_capture = false,
+    const std::string& preferred_display = {},
+    std::string_view log_prefix = {});
 
 /** Shared park for concurrent slots (mutex) or direct global park. */
 void park_session_game_audio(

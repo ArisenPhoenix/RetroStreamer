@@ -1,6 +1,7 @@
 #pragma once
 
 #include "client/media_receiver.hpp"
+#include "client/video_embed_bridge.hpp"
 #include "common/media.hpp"
 #include "common/platform/default_platform.hpp"
 
@@ -36,6 +37,16 @@ public:
 
     void connect(const MediaEndpoint& endpoint) override;
     void connect(const MediaEndpoint& endpoint, Strategy strategy);
+    /** Legacy GUI path: paint into Qt surface via appsink (0 = standalone gst window). */
+    void connect(
+        const MediaEndpoint& endpoint,
+        Strategy strategy,
+        std::uint64_t video_embed_xid);
+    void connect(
+        const MediaEndpoint& endpoint,
+        Strategy strategy,
+        std::uint64_t video_embed_xid,
+        std::shared_ptr<VideoEmbedBridge> video_embed);
     void disconnect() override;
     bool poll() override;
 
@@ -63,33 +74,38 @@ public:
     const MediaEndpoint& endpoint() const { return endpoint_; }
 
     /**
-     * Start a headless probe on the host's staging RTP port. The playing
-     * pipeline is left completely alone: a cutover must never cost the picture
-     * we already have.
+     * Warm (Legacy) or probe (Synced) the host staging RTP port. The playing
+     * pipeline is left alone until switch_video promotes or reconnects.
      */
     bool begin_video_pending(const std::string& video_uri);
     /**
-     * Returns the staging URI to ACK once the probe proves the host is really
-     * publishing there, and nothing until then. Gives up silently on timeout.
+     * Returns the staging URI to ACK once the pending path proves the host is
+     * publishing there. Legacy keeps the warm display running; Synced frees the
+     * headless probe so the later reconnect can bind the port.
      */
     std::optional<std::string> poll_video_cutover();
     bool video_cutover_pending() const;
 
-    /** Move the playing video to a new port after the host confirms the swap. */
+    /** Promote warm pending (Legacy) or cold-move video to the new port. */
     bool switch_video(const std::string& video_uri);
+
+    /** Push Qt widget size into the in-process overlay (no-op if not embedding). */
+    void apply_video_overlay_geometry(int width, int height);
+    void expose_video_overlay();
 
     explicit operator bool() const { return active(); }
 
 private:
-    void end_staging_probe();
+    void end_synced_staging_probe();
 
     Strategy strategy_ = Strategy::Legacy;
     MediaEndpoint endpoint_{};
     bool has_endpoint_ = false;
-    ChildProcess staging_probe_;
-    std::string pending_video_uri_;
-    std::chrono::steady_clock::time_point staging_started_{};
-    bool staging_active_ = false;
+    // Synced-only headless probe (Legacy pending lives on GStreamerMediaReceiver).
+    ChildProcess synced_staging_probe_;
+    std::string synced_pending_video_uri_;
+    std::chrono::steady_clock::time_point synced_staging_started_{};
+    bool synced_staging_active_ = false;
     std::unique_ptr<GStreamerMediaReceiver> legacy_;
     std::unique_ptr<GStreamerSyncedMediaReceiver> synced_;
 };

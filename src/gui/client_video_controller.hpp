@@ -1,0 +1,69 @@
+#pragma once
+
+#include "archstreamer_video_surface.hpp"
+
+#include "client/client_app.hpp"
+
+#include <QObject>
+#include <QString>
+
+#include <cstdint>
+#include <memory>
+
+class QTimer;
+class QWidget;
+
+namespace archstreamer::gui {
+
+enum class ClientVideoMode {
+    Embedded,   // reparent into a Client tab (future default dock)
+    TopLevel,   // separate window (ships first)
+    FullScreen, // top-level + showFullScreen
+};
+
+/**
+ * Owns ArchStreamerVideoSurface placement and title. Session code reads embedXid()
+ * for in-process GstVideoOverlay; close → userClosed for clean Stop ordering.
+ */
+class ClientVideoController final : public QObject {
+    Q_OBJECT
+
+public:
+    explicit ClientVideoController(QObject* parent = nullptr);
+    ~ClientVideoController() override;
+
+    void setMode(ClientVideoMode mode);
+    ClientVideoMode mode() const { return mode_; }
+
+    void setTitleFromGame(const QString& system_name, const QString& game_name);
+    void setEmbedParent(QWidget* parent); // Embedded mode host (nullable until tab exists)
+
+    /** Shares live widget size with the session/media thread. */
+    void setVideoEmbedBridge(std::shared_ptr<archstreamer::VideoEmbedBridge> bridge);
+
+    /** Show/raise the surface for a live session; creates native window handle. */
+    void prepareForSession();
+    /** Hide and force-close after gst has been stopped. */
+    void endSession();
+
+    std::uint64_t embedXid() const;
+    void raiseVideo();
+
+    ArchStreamerVideoSurface* surface() const { return surface_.get(); }
+
+signals:
+    void userClosed();
+
+private:
+    void applyMode();
+    void pushGeometryToBridge(int width, int height);
+
+    ClientVideoMode mode_ = ClientVideoMode::TopLevel;
+    QString title_ = QStringLiteral("ArchStreamer");
+    QWidget* embed_parent_ = nullptr;
+    std::shared_ptr<archstreamer::VideoEmbedBridge> embed_bridge_;
+    std::unique_ptr<ArchStreamerVideoSurface> surface_;
+    QTimer* refresh_timer_ = nullptr;
+};
+
+} // namespace archstreamer::gui

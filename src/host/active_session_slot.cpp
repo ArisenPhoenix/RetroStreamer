@@ -844,7 +844,11 @@ void ActiveSessionSlot::run_session() {
         slot,
         *gamepads_,
         launch_plan.players,
-        config.pulse_input);
+        config.pulse_input,
+        keyboard_.get(),
+        gamescope_capture_,
+        capture_display,
+        slot_prefix);
 
     register_input_clients();
 

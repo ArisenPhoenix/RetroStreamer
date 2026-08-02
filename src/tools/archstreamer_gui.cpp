@@ -56,6 +56,9 @@ int main(int argc, char** argv) {
     write_to_log_file("[" + log_timestamp().toStdString() + "] === archstreamer_gui started ===");
     write_to_log_file("[" + log_timestamp().toStdString() + "] Log file: " + gui_log_path().string());
 
+    // Qt installs a SIGINT handler that calls quit(); keep that. Avoid anything that
+    // would run heavy GStreamer teardown on the signal itself.
+
     QApplication app(argc, argv);
     RemotedKeyboardEventFilter keyboard_filter;
     app.installEventFilter(&keyboard_filter);

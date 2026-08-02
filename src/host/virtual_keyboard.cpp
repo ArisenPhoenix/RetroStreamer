@@ -76,6 +76,8 @@ bool bit_down(std::uint32_t keys, RemotedKey key) {
     return (keys & static_cast<std::uint32_t>(key)) != 0;
 }
 
+void focus_emulator_window(Display* display);
+
 } // namespace
 
 const RemotedKeyBinding* default_remoted_key_bindings(std::size_t& count) {
@@ -89,6 +91,11 @@ VirtualKeyboard::VirtualKeyboard(std::string capture_display)
 
 VirtualKeyboard::~VirtualKeyboard() {
     unplug();
+}
+
+void VirtualKeyboard::rebind_display(std::string capture_display) {
+    unplug();
+    capture_display_ = std::move(capture_display);
 }
 
 void VirtualKeyboard::ensure_xtest_display() {
@@ -165,6 +172,7 @@ void VirtualKeyboard::apply_xtest_edges(std::uint32_t previous, std::uint32_t ne
     }
     Display* display = as_display(display_);
     bool any = false;
+    bool need_focus = false;
     std::size_t count = 0;
     const auto* bindings = default_remoted_key_bindings(count);
     for (std::size_t i = 0; i < count; ++i) {
@@ -172,11 +180,16 @@ void VirtualKeyboard::apply_xtest_edges(std::uint32_t previous, std::uint32_t ne
         if (binding.action != RemotedKeyAction::XTestHold) {
             continue;
         }
+        // Space hold/release is handled in apply() (focus + refresh while held).
+        if (binding.key == KeySpace) {
+            continue;
+        }
         const bool was_down = bit_down(previous, binding.key);
         const bool is_down = bit_down(next, binding.key);
         if (was_down == is_down) {
             continue;
         }
+        need_focus = true;
         const KeySym sym = xtest_keysym(binding.key);
         if (sym == NoSymbol) {
             continue;
@@ -185,12 +198,20 @@ void VirtualKeyboard::apply_xtest_edges(std::uint32_t previous, std::uint32_t ne
         if (code == 0) {
             continue;
         }
+        if (need_focus) {
+            focus_emulator_window(display);
+            need_focus = false;
+        }
         XTestFakeKeyEvent(display, code, is_down ? True : False, CurrentTime);
         any = true;
     }
     if (any) {
         XFlush(display);
     }
+}
+
+void VirtualKeyboard::apply_xtest_space_autorepeat() {
+    // Unused — Space is edge-tapped for Ryujinx toggle turbo (see apply()).
 }
 
 void VirtualKeyboard::apply(const KeyboardState& state) {
@@ -230,7 +251,9 @@ void VirtualKeyboard::apply(const KeyboardState& state) {
         case RemotedKeyAction::XTestHold:
             if (binding.key == KeySpace && is_down && !logged_ff_) {
                 logged_ff_ = true;
-                std::cout << "Fast-forward: Space held via XTest (input_hold_fast_forward)\n";
+                std::cout
+                    << "Fast-forward: Space tap via XTest on " << capture_display_
+                    << " (Ryujinx turbo toggle on press/release)\n";
             }
             break;
         case RemotedKeyAction::Ignored:
@@ -240,6 +263,21 @@ void VirtualKeyboard::apply(const KeyboardState& state) {
 
     if (previous != next) {
         apply_xtest_edges(previous, next);
+    }
+
+    // Ryujinx turbo_mode_while_held=false: each Space tap toggles turbo. Remoted hold
+    // becomes tap-on-press + tap-on-release (turbo on while the client holds Space).
+    const bool space_down = bit_down(next, KeySpace);
+    const bool space_was = bit_down(previous, KeySpace);
+    if (space_down != space_was && display_ != nullptr) {
+        Display* display = as_display(display_);
+        const KeyCode code = XKeysymToKeycode(display, XK_space);
+        if (code != 0) {
+            focus_emulator_window(display);
+            XTestFakeKeyEvent(display, code, True, CurrentTime);
+            XTestFakeKeyEvent(display, code, False, CurrentTime);
+            XFlush(display);
+        }
     }
 
     last_keys_ = next;
@@ -322,6 +360,47 @@ bool window_is_viewable(Display* display, Window window) {
         return false;
     }
     return attrs.map_state == IsViewable && attrs.width >= 64 && attrs.height >= 64;
+}
+
+bool title_looks_like_emulator(const std::string& title) {
+    auto lower = title;
+    for (char& character : lower) {
+        character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+    }
+    return lower.find("ryujinx") != std::string::npos ||
+        lower.find("yuzu") != std::string::npos ||
+        lower.find("suyu") != std::string::npos ||
+        lower.find("sudachi") != std::string::npos ||
+        lower.find("retroarch") != std::string::npos;
+}
+
+/** Soft-kbd works because it focuses the Avalonia window before XTest. Gamescope's
+ *  nested Xwayland often leaves focus on steamcompmgr; Space then vanishes. */
+void focus_emulator_window(Display* display) {
+    if (display == nullptr) {
+        return;
+    }
+    install_x_error_guard();
+    Window focus = 0;
+    int revert = RevertToNone;
+    XGetInputFocus(display, &focus, &revert);
+    if (focus != 0 && focus != None && focus != PointerRoot) {
+        if (title_looks_like_emulator(window_title(display, focus)) &&
+            window_is_viewable(display, focus)) {
+            return;
+        }
+    }
+    std::vector<std::pair<Window, std::string>> windows;
+    collect_windows(display, DefaultRootWindow(display), windows);
+    for (const auto& [window, title] : windows) {
+        if (!title_looks_like_emulator(title) || !window_is_viewable(display, window)) {
+            continue;
+        }
+        XSetInputFocus(display, window, RevertToParent, CurrentTime);
+        XRaiseWindow(display, window);
+        XFlush(display);
+        return;
+    }
 }
 
 bool is_soft_keyboard_dialog_title(const std::string& title) {
@@ -526,7 +605,9 @@ std::string title_case_fallback(std::string text) {
     return text;
 }
 
-std::vector<std::string> soft_keyboard_display_candidates(const std::string& preferred) {
+} // namespace
+
+std::vector<std::string> xtest_display_candidates(const std::string& preferred) {
     std::vector<std::string> names;
     auto add = [&](std::string name) {
         if (name.empty()) {
@@ -549,8 +630,6 @@ std::vector<std::string> soft_keyboard_display_candidates(const std::string& pre
     }
     return names;
 }
-
-} // namespace
 
 void schedule_soft_keyboard(
     std::shared_ptr<SoftKeyboardHostBridge> bridge,
@@ -579,7 +658,7 @@ void schedule_soft_keyboard(
             int retry_at = 0;
         };
         std::vector<DisplayProbe> probes;
-        for (auto& name : soft_keyboard_display_candidates(preferred_display)) {
+        for (auto& name : xtest_display_candidates(preferred_display)) {
             probes.push_back({std::move(name), 0});
         }
         // Once a dialog has been served somewhere, stay on that display. Sibling session
@@ -848,6 +927,9 @@ const RemotedKeyBinding* default_remoted_key_bindings(std::size_t& count) {
 
 VirtualKeyboard::VirtualKeyboard(std::string) {}
 VirtualKeyboard::~VirtualKeyboard() = default;
+void VirtualKeyboard::rebind_display(std::string capture_display) {
+    capture_display_ = std::move(capture_display);
+}
 void VirtualKeyboard::plug() {}
 void VirtualKeyboard::unplug() {}
 void VirtualKeyboard::apply(const KeyboardState&) {}

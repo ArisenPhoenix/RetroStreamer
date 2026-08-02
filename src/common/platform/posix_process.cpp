@@ -119,20 +119,32 @@ void PosixChildProcess::stop() {
     }
 
     // Negative pid = process group (gst/Xvfb helpers should not outlive the host).
+    // Keep this short — waiting on gst-launch during GUI Ctrl+C freezes the desktop
+    // and leaves a stuck progressreport line on the terminal.
     kill(-pid_, SIGTERM);
-    for (int i = 0; i < 20; ++i) {
+    for (int i = 0; i < 4; ++i) {
         int status = 0;
         const pid_t result = waitpid(pid_, &status, WNOHANG);
         if (result == pid_) {
             pid_ = -1;
             return;
         }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
 
     kill(-pid_, SIGKILL);
-    waitpid(pid_, nullptr, 0);
+    for (int i = 0; i < 20; ++i) {
+        int status = 0;
+        const pid_t result = waitpid(pid_, &status, WNOHANG);
+        if (result == pid_ || errno == ECHILD) {
+            pid_ = -1;
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+    // Last resort: blocking wait can hang if the child is uninterruptible (D state).
+    // Prefer leaking a zombie over freezing the GUI/X11 thread.
+    waitpid(pid_, nullptr, WNOHANG);
     pid_ = -1;
 }
 

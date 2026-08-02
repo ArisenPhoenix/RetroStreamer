@@ -655,7 +655,10 @@ int HostApp::run_direct_session(
         std::nullopt,
         gamepads,
         launch_plan.players,
-        config.pulse_input);
+        config.pulse_input,
+        &keyboard,
+        gamescope_capture,
+        capture_display);
 
     // Start UDP input after the optional A-pulse so it does not race uinput updates.
     if (network_receiver.has_value()) {

@@ -5,6 +5,7 @@
 #include "client/gstreamer_media_pipeline.hpp"
 #include "client/gstreamer_probe.hpp"
 
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 
@@ -49,7 +50,9 @@ void WindowsGStreamerMediaPlatform::append_video_branch(
     std::uint16_t port,
     const H264DecoderChoice& decoder,
     const GstVideoSinkChoice& sink,
-    bool sync) {
+    bool sync,
+    std::optional<std::uint64_t> embed_xid) {
+    (void)embed_xid; // Windows uses a separate top-level sink; xid embed is Linux-only.
     auto source = gst_h264_rtp_source_args(port);
     args.insert(args.end(), source.begin(), source.end());
     gst_append_h264parse_if_available(args);
@@ -88,9 +91,10 @@ std::vector<std::string> WindowsGStreamerMediaPlatform::standalone_video_pipelin
     std::uint16_t port,
     const H264DecoderChoice& decoder,
     const GstVideoSinkChoice& sink,
-    bool sync) {
+    bool sync,
+    std::optional<std::uint64_t> embed_xid) {
     std::vector<std::string> args{gst_launch_bin()};
-    append_video_branch(args, port, decoder, sink, sync);
+    append_video_branch(args, port, decoder, sink, sync, embed_xid);
     return args;
 }
 

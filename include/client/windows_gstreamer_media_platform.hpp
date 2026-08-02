@@ -6,6 +6,7 @@
 #include "client/gstreamer_probe.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -25,14 +26,16 @@ public:
         std::uint16_t port,
         const H264DecoderChoice& decoder,
         const GstVideoSinkChoice& sink,
-        bool sync);
+        bool sync,
+        std::optional<std::uint64_t> embed_xid = std::nullopt);
 
     static void append_video_branch(
         std::vector<std::string>& args,
         std::uint16_t port,
         const H264DecoderChoice& decoder,
         const GstVideoSinkChoice& sink,
-        bool sync);
+        bool sync,
+        std::optional<std::uint64_t> embed_xid = std::nullopt);
 
     static void configure_display_for_sink(
         const GstVideoSinkChoice& sink,

@@ -4,6 +4,7 @@
 #include "client/gstreamer_probe.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -20,11 +21,13 @@ public:
     static GstVideoSinkChoice choose_video_sink(bool prefer_d3d11);
 
     // Standalone gst-launch argv for the legacy dual-process video receiver.
+    // embed_xid is rejected on GStreamer 1.24+ (use GStreamerOverlayVideo).
     static std::vector<std::string> standalone_video_pipeline(
         std::uint16_t port,
         const H264DecoderChoice& decoder,
         const GstVideoSinkChoice& sink,
-        bool sync);
+        bool sync,
+        std::optional<std::uint64_t> embed_xid = std::nullopt);
 
     // Append a video branch (no gst-launch bin) for the synced A/V process.
     static void append_video_branch(
@@ -32,7 +35,8 @@ public:
         std::uint16_t port,
         const H264DecoderChoice& decoder,
         const GstVideoSinkChoice& sink,
-        bool sync);
+        bool sync,
+        std::optional<std::uint64_t> embed_xid = std::nullopt);
 
     static void configure_display_for_sink(
         const GstVideoSinkChoice& sink,

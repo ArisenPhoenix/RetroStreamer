@@ -316,6 +316,7 @@ ClientRunResult ClientApp::join_session(
     if (!video_cutover) {
         video_cutover = std::make_shared<MediaVideoCutoverBridge>();
     }
+    std::uint64_t video_embed_serial = 0;
     // Ensure control-message handling can queue staging URIs for this session.
     ClientAppCallbacks session_callbacks = callbacks;
     session_callbacks.video_cutover = video_cutover;
@@ -338,9 +339,23 @@ ClientRunResult ClientApp::join_session(
         const auto strategy = config.synced_av
             ? ClientMediaPlayback::Strategy::Synced
             : ClientMediaPlayback::Strategy::Legacy;
-        media_receiver.connect(endpoint, strategy);
+        media_receiver.connect(
+            endpoint,
+            strategy,
+            config.video_embed_xid,
+            config.video_embed);
+        if (config.video_embed) {
+            int w = 0;
+            int h = 0;
+            if (config.video_embed->take_size(w, h, video_embed_serial)) {
+                media_receiver.apply_video_overlay_geometry(w, h);
+            }
+        }
         if (config.synced_av && callbacks.on_status) {
             callbacks.on_status("Using synced A/V pipeline (shared GStreamer clock).");
+        }
+        if (config.video_embed_xid != 0 && callbacks.on_status) {
+            callbacks.on_status("Video embedding into ArchStreamer window.");
         }
         if (callbacks.on_status) {
             if (!media_receiver.video_pipeline_info().empty()) {
@@ -552,7 +567,7 @@ ClientRunResult ClientApp::join_session(
         if (const auto pending = video_cutover->take_pending(); pending.has_value()) {
             if (media_receiver.begin_video_pending(*pending)) {
                 if (session_callbacks.on_status) {
-                    session_callbacks.on_status("Receiving staged video quality…");
+                    session_callbacks.on_status("Warming staged video quality…");
                 }
             } else if (session_callbacks.on_status) {
                 session_callbacks.on_status("Failed to open staged video path.");
@@ -562,7 +577,7 @@ ClientRunResult ClientApp::join_session(
             try {
                 joined_session.stream.send_packet(serialize_packet(MediaVideoReady{*ready_uri}));
                 if (session_callbacks.on_status) {
-                    session_callbacks.on_status("Staged video verified; waiting for host to swap.");
+                    session_callbacks.on_status("Staged video ready; telling host to drop old encode.");
                 }
             } catch (const std::exception& error) {
                 if (session_callbacks.on_status) {
@@ -571,8 +586,9 @@ ClientRunResult ClientApp::join_session(
                 }
             }
         }
-        // The host publishes the promoted endpoint once it has torn the old
-        // encode down; moving before that would point us at a dead port.
+        // Legacy already displays the staging port before ACK. MediaEndpoint is
+        // bookkeeping + promote (adopt warm process / Synced reconnect). The host
+        // may have already killed the old encode by the time this arrives.
         if (result.media_endpoint.has_value() && media_receiver &&
             !result.media_endpoint->video_uri.empty() &&
             result.media_endpoint->video_uri != media_receiver.endpoint().video_uri &&
@@ -580,10 +596,10 @@ ClientRunResult ClientApp::join_session(
             attempted_video_switch = result.media_endpoint->video_uri;
             if (media_receiver.switch_video(attempted_video_switch)) {
                 if (session_callbacks.on_status) {
-                    session_callbacks.on_status("Switched to new video quality.");
+                    session_callbacks.on_status("Promoted staged video quality.");
                 }
             } else if (session_callbacks.on_status) {
-                session_callbacks.on_status("Failed to switch to new video quality.");
+                session_callbacks.on_status("Failed to promote staged video quality.");
             }
         }
         if (callbacks.disc_control) {
@@ -645,6 +661,16 @@ ClientRunResult ClientApp::join_session(
 
         const auto now = std::chrono::steady_clock::now();
         if (media_receiver) {
+            if (config.video_embed) {
+                int w = 0;
+                int h = 0;
+                if (config.video_embed->take_size(w, h, video_embed_serial)) {
+                    media_receiver.apply_video_overlay_geometry(w, h);
+                }
+                if (config.video_embed->take_expose()) {
+                    media_receiver.expose_video_overlay();
+                }
+            }
             if (media_receiver.poll() && callbacks.on_status) {
                 callbacks.on_status("Audio output rebound.");
             }
@@ -789,11 +815,13 @@ ClientRunResult ClientApp::join_session(
     }
 
     input_stop.store(true, std::memory_order_relaxed);
-    if (input_thread.joinable()) {
-        input_thread.join();
-    }
+    // Stop video before joining input — GUI may be blocked in join() and must not
+    // leave an X/appsink pipeline running against a soon-to-be-destroyed window.
     if (media_receiver) {
         media_receiver.disconnect();
+    }
+    if (input_thread.joinable()) {
+        input_thread.join();
     }
     if (callbacks.disc_control) {
         std::lock_guard lock(callbacks.disc_control->mutex);

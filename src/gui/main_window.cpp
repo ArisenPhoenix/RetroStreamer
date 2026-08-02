@@ -90,6 +90,8 @@ MainWindow::MainWindow() {
 MainWindow::~MainWindow() {
     save_persisted_settings();
     stop_client_host_auto_pick();
+    // Request stop first so workers unwind before we tear down host media.
+    client_stop_requested_ = true;
     stop_client();
     stop_client_connect();
 #ifdef ARCHSTREAMER_HAS_HOST
@@ -1013,7 +1015,17 @@ void MainWindow::open_soft_keyboard_from_host(const SoftKeyboardRequest& request
 void MainWindow::restore_video_window_focus() {
     // Deferred: Qt is still tearing the dialog down and will hand focus back to this
     // window, which would land on top of whatever we raise right now.
-    QTimer::singleShot(150, this, [] {
+    QTimer::singleShot(150, this, [this] {
+        if (client_video_controller_) {
+            client_video_controller_->raiseVideo();
+            return;
+        }
+#ifdef ARCHSTREAMER_HAS_HOST
+        if (host_local_video_controller_) {
+            host_local_video_controller_->raiseVideo();
+            return;
+        }
+#endif
         archstreamer::raise_video_window();
     });
 }

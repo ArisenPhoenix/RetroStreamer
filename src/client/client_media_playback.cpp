@@ -16,12 +16,10 @@
 namespace archstreamer {
 namespace {
 
-constexpr auto kProbeGiveUp = std::chrono::seconds(6);
-// progressreport ticks once a second and only while buffers flow, so two lines
-// means the staging port carried real video for ~2s.
-constexpr std::uint64_t kProbeTicksRequired = 2;
+constexpr auto kSyncedProbeGiveUp = std::chrono::seconds(6);
+constexpr std::uint64_t kSyncedProbeTicksRequired = 2;
 
-std::filesystem::path staging_probe_log_path() {
+std::filesystem::path synced_staging_probe_log_path() {
     return gst_video_receiver_log_path().parent_path() / "gst-video-staging.log";
 }
 
@@ -40,9 +38,9 @@ std::uint64_t progress_tick_count(const std::filesystem::path& path) {
     return count;
 }
 
-// No decoder and no sink window: arriving, depayloadable H.264 is all the proof
-// the ACK needs, and it costs nothing to run beside the playing pipeline.
-std::vector<std::string> probe_pipeline_args(std::uint16_t port) {
+// Synced cutover still uses a headless probe; warm dual windows need a second
+// display sink the single-process session does not own yet.
+std::vector<std::string> synced_probe_pipeline_args(std::uint16_t port) {
     auto args = std::vector<std::string>{GStreamerMediaPlatform::gst_launch_bin()};
     auto source = gst_h264_rtp_source_args(port);
     args.insert(args.end(), source.begin(), source.end());
@@ -59,10 +57,25 @@ ClientMediaPlayback::ClientMediaPlayback(ClientMediaPlayback&&) noexcept = defau
 ClientMediaPlayback& ClientMediaPlayback::operator=(ClientMediaPlayback&&) noexcept = default;
 
 void ClientMediaPlayback::connect(const MediaEndpoint& endpoint) {
-    connect(endpoint, strategy_);
+    connect(endpoint, strategy_, 0, nullptr);
 }
 
 void ClientMediaPlayback::connect(const MediaEndpoint& endpoint, Strategy strategy) {
+    connect(endpoint, strategy, 0, nullptr);
+}
+
+void ClientMediaPlayback::connect(
+    const MediaEndpoint& endpoint,
+    Strategy strategy,
+    std::uint64_t video_embed_xid) {
+    connect(endpoint, strategy, video_embed_xid, nullptr);
+}
+
+void ClientMediaPlayback::connect(
+    const MediaEndpoint& endpoint,
+    Strategy strategy,
+    std::uint64_t video_embed_xid,
+    std::shared_ptr<VideoEmbedBridge> video_embed) {
     disconnect();
     strategy_ = strategy;
     endpoint_ = endpoint;
@@ -71,16 +84,23 @@ void ClientMediaPlayback::connect(const MediaEndpoint& endpoint, Strategy strate
         return;
     }
     if (strategy_ == Strategy::Synced) {
+        // Synced single-process path does not support Qt embed yet.
         synced_ = std::make_unique<GStreamerSyncedMediaReceiver>();
         synced_->connect(endpoint_);
         return;
     }
     legacy_ = std::make_unique<GStreamerMediaReceiver>();
+    if (video_embed) {
+        legacy_->set_video_embed_bridge(std::move(video_embed));
+    }
+    if (video_embed_xid != 0) {
+        legacy_->set_embed_xid(video_embed_xid);
+    }
     legacy_->connect(endpoint_);
 }
 
 void ClientMediaPlayback::disconnect() {
-    end_staging_probe();
+    end_synced_staging_probe();
     if (legacy_) {
         legacy_->disconnect();
     }
@@ -115,7 +135,10 @@ bool ClientMediaPlayback::resync_audio() {
 }
 
 bool ClientMediaPlayback::begin_video_pending(const std::string& video_uri) {
-    if (video_uri.empty() || staging_active_ || !active()) {
+    if (legacy_) {
+        return legacy_->begin_pending_video(video_uri);
+    }
+    if (!synced_ || video_uri.empty() || synced_staging_active_) {
         return false;
     }
     MediaEndpoint staging_endpoint;
@@ -125,51 +148,54 @@ bool ClientMediaPlayback::begin_video_pending(const std::string& video_uri) {
         return false;
     }
 
-    const auto log_path = staging_probe_log_path();
+    const auto log_path = synced_staging_probe_log_path();
     std::error_code error;
     std::filesystem::remove(log_path, error);
-    staging_probe_.stop();
+    synced_staging_probe_.stop();
     try {
-        staging_probe_.start(probe_pipeline_args(port), {}, {}, log_path.string());
+        synced_staging_probe_.start(synced_probe_pipeline_args(port), {}, {}, log_path.string());
     } catch (const std::exception&) {
-        staging_probe_.stop();
+        synced_staging_probe_.stop();
         return false;
     }
-    if (!staging_probe_.running()) {
+    if (!synced_staging_probe_.running()) {
         return false;
     }
-    pending_video_uri_ = video_uri;
-    staging_started_ = std::chrono::steady_clock::now();
-    staging_active_ = true;
+    synced_pending_video_uri_ = video_uri;
+    synced_staging_started_ = std::chrono::steady_clock::now();
+    synced_staging_active_ = true;
     return true;
 }
 
 std::optional<std::string> ClientMediaPlayback::poll_video_cutover() {
-    if (!staging_active_) {
+    if (legacy_) {
+        return legacy_->poll_pending_ready();
+    }
+    if (!synced_staging_active_) {
         return std::nullopt;
     }
-    if (!staging_probe_.running()) {
-        end_staging_probe();
+    if (!synced_staging_probe_.running()) {
+        end_synced_staging_probe();
         return std::nullopt;
     }
-    // A udpsrc sits at PLAYING forever on a port nobody sends to, so process
-    // health proves nothing — only ticks do.
-    if (progress_tick_count(staging_probe_log_path()) < kProbeTicksRequired) {
-        if (std::chrono::steady_clock::now() - staging_started_ >= kProbeGiveUp) {
-            end_staging_probe();
+    if (progress_tick_count(synced_staging_probe_log_path()) < kSyncedProbeTicksRequired) {
+        if (std::chrono::steady_clock::now() - synced_staging_started_ >= kSyncedProbeGiveUp) {
+            end_synced_staging_probe();
         }
         return std::nullopt;
     }
 
-    auto acked = pending_video_uri_;
-    // Free the port before the host promotes; the playing pipeline moves there
-    // only once the host answers with an updated endpoint.
-    end_staging_probe();
+    auto acked = synced_pending_video_uri_;
+    // Free the staging port before Synced reconnect binds it.
+    end_synced_staging_probe();
     return acked;
 }
 
 bool ClientMediaPlayback::video_cutover_pending() const {
-    return staging_active_;
+    if (legacy_) {
+        return legacy_->pending_video_active();
+    }
+    return synced_staging_active_;
 }
 
 bool ClientMediaPlayback::switch_video(const std::string& video_uri) {
@@ -177,7 +203,7 @@ bool ClientMediaPlayback::switch_video(const std::string& video_uri) {
         return false;
     }
     if (legacy_) {
-        const bool moved = legacy_->switch_video(video_uri);
+        const bool moved = legacy_->promote_or_switch_video(video_uri);
         // Even on failure the host has already dropped the old encode, so resync
         // has to aim at the new port rather than the one that is now silent.
         endpoint_.video_uri = video_uri;
@@ -194,10 +220,10 @@ bool ClientMediaPlayback::switch_video(const std::string& video_uri) {
     return false;
 }
 
-void ClientMediaPlayback::end_staging_probe() {
-    staging_probe_.stop();
-    staging_active_ = false;
-    pending_video_uri_.clear();
+void ClientMediaPlayback::end_synced_staging_probe() {
+    synced_staging_probe_.stop();
+    synced_staging_active_ = false;
+    synced_pending_video_uri_.clear();
 }
 
 bool ClientMediaPlayback::poll() {
@@ -260,6 +286,18 @@ const std::string& ClientMediaPlayback::audio_pipeline_info() const {
     }
     static const std::string empty;
     return legacy_ ? legacy_->audio_pipeline_info() : empty;
+}
+
+void ClientMediaPlayback::apply_video_overlay_geometry(int width, int height) {
+    if (legacy_) {
+        legacy_->apply_video_overlay_geometry(width, height);
+    }
+}
+
+void ClientMediaPlayback::expose_video_overlay() {
+    if (legacy_) {
+        legacy_->expose_video_overlay();
+    }
 }
 
 } // namespace archstreamer

@@ -3,6 +3,7 @@
 #include "client/gstreamer_media_pipeline.hpp"
 #include "client/gstreamer_probe.hpp"
 
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 
@@ -37,7 +38,8 @@ void PosixGStreamerMediaPlatform::append_video_branch(
     std::uint16_t port,
     const H264DecoderChoice& decoder,
     const GstVideoSinkChoice& sink,
-    bool sync) {
+    bool sync,
+    std::optional<std::uint64_t> embed_xid) {
     auto source = gst_h264_rtp_source_args(port);
     args.insert(args.end(), source.begin(), source.end());
     gst_append_h264parse_if_available(args);
@@ -49,16 +51,17 @@ void PosixGStreamerMediaPlatform::append_video_branch(
         args.push_back("output-corrupt=false");
     }
     args.push_back("!");
-    gst_append_progress_video_sink(args, sink, sync);
+    gst_append_progress_video_sink(args, sink, sync, embed_xid);
 }
 
 std::vector<std::string> PosixGStreamerMediaPlatform::standalone_video_pipeline(
     std::uint16_t port,
     const H264DecoderChoice& decoder,
     const GstVideoSinkChoice& sink,
-    bool sync) {
+    bool sync,
+    std::optional<std::uint64_t> embed_xid) {
     std::vector<std::string> args{gst_launch_bin()};
-    append_video_branch(args, port, decoder, sink, sync);
+    append_video_branch(args, port, decoder, sink, sync, embed_xid);
     return args;
 }
 

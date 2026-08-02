@@ -83,6 +83,22 @@ else()
     endif()
 endif()
 
+# Optional: in-process GstVideoOverlay into Qt (required for GStreamer 1.24+ embed;
+# gst-launch xid= was removed from ximagesink).
+set(ARCHSTREAMER_HAS_GST_LIBS OFF)
+if(PkgConfig_FOUND AND NOT WIN32)
+    pkg_check_modules(ARCHSTREAMER_GST IMPORTED_TARGET
+        gstreamer-1.0
+        gstreamer-app-1.0
+        gstreamer-video-1.0)
+    if(ARCHSTREAMER_GST_FOUND)
+        set(ARCHSTREAMER_HAS_GST_LIBS ON)
+        message(STATUS "Found GStreamer libs: ${ARCHSTREAMER_GST_gstreamer-1.0_VERSION} (in-process video enabled)")
+    else()
+        message(STATUS "GStreamer devel not found; Qt video embed unavailable (standalone gst-launch only)")
+    endif()
+endif()
+
 set(ARCHSTREAMER_CORE_SOURCES
     src/common/addresses.cpp
     src/common/art_transfer.cpp
@@ -191,6 +207,7 @@ add_library(archstreamer_client
     src/client/audio_playback_device.cpp
     src/client/gstreamer_media_pipeline.cpp
     src/client/gstreamer_media_receiver.cpp
+    src/client/gstreamer_overlay_video.cpp
     src/client/gstreamer_synced_media_session.cpp
     src/client/input_sender.cpp
     src/client/keyboard_poller.cpp
@@ -198,6 +215,10 @@ add_library(archstreamer_client
     src/client/session_client.cpp
     src/client/session_service.cpp
 )
+if(ARCHSTREAMER_HAS_GST_LIBS)
+    target_compile_definitions(archstreamer_client PUBLIC ARCHSTREAMER_HAS_GST_LIBS=1)
+    target_link_libraries(archstreamer_client PUBLIC PkgConfig::ARCHSTREAMER_GST)
+endif()
 if(WIN32)
     target_sources(archstreamer_client PRIVATE
         src/client/windows_audio_playback_device.cpp
@@ -415,6 +436,10 @@ if(Qt6Widgets_FOUND)
         src/gui/host_search_dialog.hpp
         src/gui/pad_on_screen_keyboard.cpp
         src/gui/pad_on_screen_keyboard.hpp
+        src/gui/archstreamer_video_surface.cpp
+        src/gui/archstreamer_video_surface.hpp
+        src/gui/client_video_controller.cpp
+        src/gui/client_video_controller.hpp
         src/gui/gui_logging.cpp
         src/gui/gui_logging.hpp
         src/gui/gui_util.cpp
@@ -487,4 +512,9 @@ else()
     message(STATUS "  GUI target:       no")
 endif()
 message(STATUS "  Require GUI:      ${ARCHSTREAMER_REQUIRE_GUI}")
+if(ARCHSTREAMER_HAS_GST_LIBS)
+    message(STATUS "  GStreamer libs:   yes (in-process Qt overlay available)")
+else()
+    message(STATUS "  GStreamer libs:   no (Qt embed disabled; standalone gst-launch only)")
+endif()
 message(STATUS "")

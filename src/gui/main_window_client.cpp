@@ -4,6 +4,7 @@
 #include "gui_util.hpp"
 #include "game_picker_widget.hpp"
 #include "host_search_dialog.hpp"
+#include "client_video_controller.hpp"
 #include "common/catalog_paths.hpp"
 #include "common/catalog_presenter.hpp"
 #include "common/addresses.hpp"
@@ -458,6 +459,41 @@ void MainWindow::start_client() {
         heartbeat_prefs_->max_bitrate_kbps = config.max_bitrate_kbps;
         heartbeat_prefs_->show_framecount = config.show_framecount;
     }
+
+#ifndef _WIN32
+    if (config.wants_video) {
+        auto video_embed = std::make_shared<archstreamer::VideoEmbedBridge>();
+        client_video_controller_ = std::make_unique<ClientVideoController>(this);
+        client_video_controller_->setVideoEmbedBridge(video_embed);
+        QObject::connect(
+            client_video_controller_.get(),
+            &ClientVideoController::userClosed,
+            this,
+            [this] {
+                append_log(client_log_, "Video window closed; stopping session.");
+                client_stop_requested_ = true;
+                // Do not join the session thread on the GUI/X11 thread — that is what
+                // freezes the desktop. The worker QueuedConnection cleans up the surface.
+            });
+        QString system_name;
+        QString game_name = QString::fromStdString(*config.game_selector);
+        if (const auto game = client_game_picker_->selectedGame(); game.has_value()) {
+            system_name = QString::fromStdString(game->system_name);
+            if (!game->display_name.empty()) {
+                game_name = QString::fromStdString(game->display_name);
+            }
+        }
+        client_video_controller_->setTitleFromGame(system_name, game_name);
+        client_video_controller_->setMode(ClientVideoMode::TopLevel);
+        client_video_controller_->prepareForSession();
+        config.video_embed_xid = client_video_controller_->embedXid();
+        config.video_embed = std::move(video_embed);
+        append_log(
+            client_log_,
+            QString("Video window ready (xid=%1).").arg(config.video_embed_xid));
+    }
+#endif
+
     client_thread_ = std::thread([this, config = std::move(config)]() mutable {
         try {
             auto connected_client_id = std::optional<archstreamer::ClientId>{};
@@ -507,7 +543,7 @@ void MainWindow::start_client() {
             callbacks.on_media_endpoint = [this](const archstreamer::MediaEndpoint& endpoint) {
                 if (!endpoint.video_uri.empty()) {
                     append_log(client_log_, QString("Video: %1").arg(QString::fromStdString(endpoint.video_uri)));
-                    append_log(client_log_, "Starting GStreamer video receiver (separate window).");
+                    append_log(client_log_, "Starting GStreamer video into ArchStreamer window.");
                 } else if (client_video_->isChecked()) {
                     append_log(
                         client_log_,
@@ -563,8 +599,12 @@ void MainWindow::start_client() {
         }
         client_session_live_ = false;
         QMetaObject::invokeMethod(
-            client_catalog_status_,
+            this,
             [this] {
+                if (client_video_controller_) {
+                    client_video_controller_->endSession();
+                    client_video_controller_.reset();
+                }
                 client_catalog_status_->setText("Client stopped");
                 refresh_game_options_ui();
                 // Reap finished worker so the next Connect/Join does not need Stop Client.
@@ -583,6 +623,11 @@ void MainWindow::stop_client() {
         client_thread_.join();
     }
     client_session_live_ = false;
+    // Overlay is fully stopped after join — only then destroy the X11 window.
+    if (client_video_controller_) {
+        client_video_controller_->endSession();
+        client_video_controller_.reset();
+    }
     if (disc_control_) {
         std::lock_guard lock(disc_control_->mutex);
         disc_control_->session_active = false;

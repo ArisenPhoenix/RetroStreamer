@@ -616,10 +616,11 @@ void MainWindow::stop_host() {
     if (host_process_ == nullptr || host_process_->state() == QProcess::NotRunning) {
         return;
     }
+    // Keep waits short — long waitForFinished on Ctrl+C freezes the desktop.
     host_process_->terminate();
-    if (!host_process_->waitForFinished(3000)) {
+    if (!host_process_->waitForFinished(400)) {
         host_process_->kill();
-        host_process_->waitForFinished(3000);
+        host_process_->waitForFinished(400);
     }
 }
 
@@ -627,13 +628,26 @@ void MainWindow::stop_host_local_media() {
     if (host_local_media_poll_timer_ != nullptr) {
         host_local_media_poll_timer_->stop();
     }
+    if (host_local_video_controller_) {
+        // Surface only — never touch GStreamer on the GUI/X11 thread.
+        host_local_video_controller_->endSession();
+    }
     if (host_local_receiver_) {
-        try {
-            host_local_receiver_->disconnect();
-        } catch (const std::exception& error) {
-            append_log(host_log_, QString("Local media stop: %1").arg(error.what()));
-        }
-        host_local_receiver_.reset();
+        // Disconnect (gst-launch / appsink drain) off the GUI thread so Ctrl+C and
+        // "Watch stream locally" close do not freeze the desktop.
+        auto doomed = std::move(host_local_receiver_);
+        std::thread([pipeline = std::move(doomed)]() mutable {
+            try {
+                if (pipeline) {
+                    pipeline->disconnect();
+                }
+            } catch (...) {
+            }
+            pipeline.reset();
+        }).detach();
+    }
+    if (host_local_video_controller_) {
+        host_local_video_controller_.reset();
     }
 }
 
@@ -670,12 +684,49 @@ void MainWindow::sync_host_local_media() {
         stop_host_local_media();
         const bool use_synced =
             client_synced_av_ != nullptr && client_synced_av_->isChecked();
+        std::uint64_t embed_xid = 0;
+        std::shared_ptr<archstreamer::VideoEmbedBridge> video_embed;
+#ifndef _WIN32
+        if (host_video_->isChecked() && !use_synced) {
+            video_embed = std::make_shared<archstreamer::VideoEmbedBridge>();
+            host_local_video_controller_ = std::make_unique<ClientVideoController>(this);
+            host_local_video_controller_->setVideoEmbedBridge(video_embed);
+            host_local_video_controller_->setTitleFromGame(
+                QStringLiteral("Host"),
+                QStringLiteral("Watch locally"));
+            host_local_video_controller_->setMode(ClientVideoMode::TopLevel);
+            host_local_video_controller_->prepareForSession();
+            embed_xid = host_local_video_controller_->embedXid();
+            QObject::connect(
+                host_local_video_controller_.get(),
+                &ClientVideoController::userClosed,
+                this,
+                [this] {
+                    if (host_local_media_ != nullptr) {
+                        host_local_media_->setChecked(false);
+                    }
+                    // Defer so we are not inside closeEvent; disconnect still runs on
+                    // the GUI thread but after request_stop so the wait is brief.
+                    QTimer::singleShot(0, this, [this] { stop_host_local_media(); });
+                });
+        }
+#endif
         auto playback = std::make_unique<archstreamer::ClientMediaPlayback>();
         playback->connect(
             endpoint,
             use_synced
                 ? archstreamer::ClientMediaPlayback::Strategy::Synced
-                : archstreamer::ClientMediaPlayback::Strategy::Legacy);
+                : archstreamer::ClientMediaPlayback::Strategy::Legacy,
+            embed_xid,
+            video_embed);
+        if (video_embed) {
+            int w = 0;
+            int h = 0;
+            std::uint64_t serial = 0;
+            if (video_embed->take_size(w, h, serial)) {
+                playback->apply_video_overlay_geometry(w, h);
+            }
+        }
         host_local_receiver_ = std::move(playback);
         if (host_local_media_poll_timer_ == nullptr) {
             host_local_media_poll_timer_ = new QTimer(this);
@@ -685,6 +736,13 @@ void MainWindow::sync_host_local_media() {
                     return;
                 }
                 try {
+                    if (host_local_video_controller_ && host_local_receiver_) {
+                        if (auto* surface = host_local_video_controller_->surface()) {
+                            host_local_receiver_->apply_video_overlay_geometry(
+                                surface->width(),
+                                surface->height());
+                        }
+                    }
                     if (host_local_receiver_->poll()) {
                         append_log(host_log_, "Local watch: audio output device changed; playback rebound.");
                     }
@@ -697,6 +755,22 @@ void MainWindow::sync_host_local_media() {
             });
         }
         host_local_media_poll_timer_->start();
+        // Keep a live geometry path: surface resize → apply immediately.
+#ifndef _WIN32
+        if (host_local_video_controller_ && host_local_receiver_) {
+            if (auto* surface = host_local_video_controller_->surface()) {
+                QObject::connect(
+                    surface,
+                    &ArchStreamerVideoSurface::geometryChanged,
+                    this,
+                    [this](int w, int h) {
+                        if (host_local_receiver_) {
+                            host_local_receiver_->apply_video_overlay_geometry(w, h);
+                        }
+                    });
+            }
+        }
+#endif
         append_log(
             host_log_,
             QString("Watching local stream (video port %1, audio port %2, %3).")

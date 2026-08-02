@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -29,10 +30,15 @@ std::vector<std::string> gst_opus_rtp_decode_args(std::uint16_t port, int jitter
 
 void gst_append_h264parse_if_available(std::vector<std::string>& args);
 
-// Software path: videoconvert ! progressreport ! <sink> sync=<sync>
+/**
+ * Software path: videoconvert ! progressreport ! <sink>.
+ * embed_xid is rejected (GStreamer 1.24+ dropped sink xid=); Qt embed uses
+ * GStreamerOverlayVideo / GstVideoOverlay in-process instead.
+ */
 void gst_append_progress_video_sink(
     std::vector<std::string>& args,
     const GstVideoSinkChoice& sink,
-    bool sync);
+    bool sync,
+    std::optional<std::uint64_t> embed_xid = std::nullopt);
 
 } // namespace archstreamer

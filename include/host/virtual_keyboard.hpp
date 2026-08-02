@@ -2,9 +2,11 @@
 
 #include "common/keyboard_state.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace archstreamer {
 
@@ -45,11 +47,16 @@ public:
     void unplug();
     bool plugged() const { return plugged_; }
 
+    /** Switch capture DISPLAY (e.g. gamescope nested Xwayland) and unplug first. */
+    void rebind_display(std::string capture_display);
+    const std::string& capture_display() const { return capture_display_; }
+
     void apply(const KeyboardState& state);
     void release_all();
 
 private:
     void apply_xtest_edges(std::uint32_t previous, std::uint32_t next);
+    void apply_xtest_space_autorepeat();
     void ensure_xtest_display();
 
     std::string capture_display_;
@@ -58,6 +65,7 @@ private:
     bool has_last_ = false;
     bool logged_ff_ = false;
     std::uint32_t last_keys_ = 0;
+    std::chrono::steady_clock::time_point last_space_repeat_{};
 };
 
 #ifndef _WIN32
@@ -72,6 +80,9 @@ void schedule_soft_keyboard(
     std::string fallback_text,
     std::string prompt = "The game is asking for text. Enter it with the pad.",
     std::string preferred_display = {});
+
+/** Preferred + common gamescope/Xvfb display names for XTest / soft-kbd probes. */
+std::vector<std::string> xtest_display_candidates(const std::string& preferred = {});
 #endif
 
 /**

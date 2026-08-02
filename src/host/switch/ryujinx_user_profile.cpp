@@ -50,13 +50,14 @@ void ensure_ryujinx_config(
     cfg["enable_discord_integration"] = false;
     cfg["disable_input_when_out_of_focus"] = false;
 
-    // Match RetroArch's Space = hold fast-forward. Clients already remoted-keyboard
-    // Space via XTest; without this Ryujinx leaves turbo_mode Unbound and Space is a no-op.
+    // Match RetroArch's Space = hold fast-forward. Clients remoted-keyboard Space via
+    // XTest. Use toggle (not while_held): gamescope/Avalonia often drops synthetic
+    // KeyPress holds, so we tap Space on remoted press and again on release.
     if (!cfg.contains("hotkeys") || !cfg["hotkeys"].is_object()) {
         cfg["hotkeys"] = nlohmann::json::object();
     }
     cfg["hotkeys"]["turbo_mode"] = "Space";
-    cfg["hotkeys"]["turbo_mode_while_held"] = true;
+    cfg["hotkeys"]["turbo_mode_while_held"] = false;
 
     if (resolution_scale > 0) {
         cfg["res_scale"] = std::clamp(resolution_scale, 1, 4);

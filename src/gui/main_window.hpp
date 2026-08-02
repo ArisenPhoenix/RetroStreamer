@@ -5,6 +5,7 @@
 #include "common/discovery.hpp"
 #include "common/game_assets.hpp"
 #include "common/protocol.hpp"
+#include "client_video_controller.hpp"
 #include "game_picker_widget.hpp"
 #include "gui_logging.hpp"
 
@@ -150,6 +151,7 @@ private:
     QStringList host_debug_args_;
     std::unique_ptr<HostDiscoveryAnnouncer> host_announcer_;
     std::unique_ptr<ClientMediaPlayback> host_local_receiver_;
+    std::unique_ptr<ClientVideoController> host_local_video_controller_;
     QTimer* host_local_media_poll_timer_ = nullptr;
     QTimer* host_advertise_timer_ = nullptr;
 #endif
@@ -178,6 +180,7 @@ private:
     std::shared_ptr<ClientHeartbeatPrefs> heartbeat_prefs_;
     std::shared_ptr<ClientFaceButtonPrefs> face_button_prefs_;
     std::shared_ptr<MediaResyncBridge> media_resync_;
+    std::unique_ptr<ClientVideoController> client_video_controller_;
     QCheckBox* game_options_swap_nw_ = nullptr;
     QCheckBox* game_options_swap_se_ = nullptr;
     QPushButton* game_options_pad_osk_ = nullptr;

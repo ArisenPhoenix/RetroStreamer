@@ -179,7 +179,15 @@ void gst_append_h264parse_if_available(std::vector<std::string>& args) {
 void gst_append_progress_video_sink(
     std::vector<std::string>& args,
     const GstVideoSinkChoice& sink,
-    bool sync) {
+    bool sync,
+    std::optional<std::uint64_t> embed_xid) {
+    if (embed_xid.has_value()) {
+        // GStreamer 1.24+ ximagesink no longer exposes xid= (use GstVideoOverlay
+        // in-process). Command-line embed is not supported.
+        throw std::runtime_error(
+            "gst-launch xid embed is unsupported on this GStreamer; use in-process overlay");
+    }
+
     args.push_back("videoconvert");
     args.push_back("!");
 

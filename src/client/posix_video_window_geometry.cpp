@@ -338,8 +338,6 @@ bool apply_video_window_geometry(
         return false;
     }
 
-    // ximagesink maps before the first frame; give the WM a beat to decorate it.
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
     apply_to_window(display, window, geometry);
     XCloseDisplay(display);
     return true;

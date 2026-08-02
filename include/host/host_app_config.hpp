@@ -62,7 +62,7 @@ struct HostAppConfig {
     // Primary GPU: H.264 nvenc encode, and game render unless separate_render_gpu.
     // "auto" or a GpuDevice::id from list_render_gpus() (e.g. nvidia:0).
     std::string encode_gpu = "auto";
-    // When true, render_gpu selects the card for RetroArch/Yuzu GL/Vulkan (PRIME).
+    // When true, render_gpu selects the card for RetroArch/Switch GL/Vulkan (PRIME).
     bool separate_render_gpu = false;
     // Used when separate_render_gpu is true; otherwise encode_gpu is used for render too.
     std::string render_gpu = "auto";
@@ -72,7 +72,7 @@ struct HostAppConfig {
     ResolutionSettings resolution;
 };
 
-// GPU id used for RetroArch/Yuzu PRIME / Vulkan device selection.
+// GPU id used for RetroArch/Switch PRIME / Vulkan device selection.
 inline std::string effective_render_gpu_selection(const HostAppConfig& config) {
     if (config.separate_render_gpu) {
         return config.render_gpu.empty() ? "auto" : config.render_gpu;

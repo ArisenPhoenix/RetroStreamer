@@ -32,7 +32,7 @@ The control channel now has explicit lifecycle packets:
 - `SessionStarting`: host-side input routing is ready and RetroArch launch is beginning.
 - `SessionEnded`: the game session ended or the host stopped it.
 
-The CLI tools use `HostSessionService` and `ClientApp` as the current reusable session layer. `ClientApp` wraps catalog sync, game filtering, controller metadata, media startup, heartbeat, and input streaming behind callbacks so a GUI can bind those events to state instead of duplicating the CLI flow.
+The CLI tools use `HostApp` / the concurrent lobby (`ActiveSessionSlot`) and `ClientApp` as the current reusable session layer. `ClientApp` wraps catalog sync, game filtering, controller metadata, media startup, heartbeat, and input streaming behind callbacks so a GUI can bind those events to state instead of duplicating the CLI flow.
 
 Clients send `ViewerHeartbeat` on the TCP control channel once per second after `SessionStarting`. This applies to player clients and viewer-only clients. The host monitors those heartbeats during gameplay and stops the session if a client disconnects or exceeds `--client-timeout` seconds without a heartbeat.
 

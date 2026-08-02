@@ -112,16 +112,6 @@ std::string sanitize_virtual_device_text(std::string_view value);
 std::string controller_name_for(const ClientHello& hello, LocalPlayerIndex local_player);
 std::vector<VirtualGamepadIdentity> virtual_identities_for_session(const SessionPlan& plan);
 
-SessionPlan wait_for_session_clients(
-    std::uint16_t control_port,
-    std::uint8_t client_count,
-    const GameList& game_list,
-    std::chrono::seconds timeout,
-    std::optional<ClientHello> host_hello = std::nullopt,
-    std::function<bool()> should_stop = {},
-    std::filesystem::path art_root = {});
-
-/** Same as wait_for_session_clients but uses an existing listener (shared control port). */
 SessionPlan gather_session_clients(
     TcpListener& listener,
     std::uint8_t client_count,

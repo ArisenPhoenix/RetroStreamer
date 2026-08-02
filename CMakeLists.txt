@@ -269,7 +269,6 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/session_launch_assemble.cpp
         src/host/session_lobby.cpp
         src/host/session_runtime.cpp
-        src/host/session_service.cpp
         src/host/session_slot_lease.cpp
         src/host/virtual_joypad_resolve.cpp
     )

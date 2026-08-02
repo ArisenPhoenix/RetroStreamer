@@ -420,7 +420,7 @@ QWidget* MainWindow::build_stream_tab() {
     settings_renderer_->addItem("Vulkan", QStringLiteral("vulkan"));
     settings_renderer_->setCurrentIndex(0);
     settings_renderer_->setToolTip(
-        "Preferred graphics API for standalone emulators (Yuzu).\n"
+        "Preferred graphics API for Switch standalone emulators (Ryujinx/Yuzu).\n"
         "Auto: Vulkan on gamescope, OpenGL on VirtualGL.\n"
         "Ignored for RetroArch cores.");
 
@@ -776,7 +776,7 @@ QWidget* MainWindow::build_settings_tab() {
         "auto (ARCHSTREAMER_HOST_RUNNER or common paths)");
     settings_native_host_runner_->setToolTip(
         "When running as a Flatpak, Host start uses flatpak-spawn --host on this binary.\n"
-        "Point it at a native host_runner built outside the sandbox (gamecope/uinput/Yuzu).");
+        "Point it at a native host_runner built outside the sandbox (gamecope/uinput/Switch).");
     form->addRow("Native host_runner", settings_native_host_runner_);
     connect(settings_native_host_runner_, &QLineEdit::editingFinished, this, [this] {
         persist_settings_if_idle();

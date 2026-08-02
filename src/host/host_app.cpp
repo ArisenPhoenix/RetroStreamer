@@ -24,16 +24,13 @@
 #include "host/network_input_receiver.hpp"
 #include "host/platform/default_host_platform.hpp"
 #include "host/retroarch_config_writer.hpp"
-#include "host/retroarch_netcmd.hpp"
 #include "host/retroarch_resolve.hpp"
 #include "host/save_profile.hpp"
 #include "host/session_launch_assemble.hpp"
 #include "host/standalone_emulator.hpp"
-#include "host/session_control_monitor.hpp"
 #include "host/session_lobby.hpp"
 #include "host/session_runtime.hpp"
 #include "host/virtual_joypad_resolve.hpp"
-#include "host/link_cable_backend.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -129,7 +126,6 @@ int HostApp::run_direct_session(
     std::optional<HostPlayerControllerIdentity> bridge_identity,
     bool host_plays_locally,
     const std::function<bool()>& should_stop) {
-    auto session_plan = std::optional<SessionPlan>{};
     // Soft-keyboard bridge for the no-session launch path. The watcher holds a weak
     // reference, so this has to outlive the launch block or it retires immediately.
     std::shared_ptr<SoftKeyboardHostBridge> standalone_soft_keyboard;
@@ -190,24 +186,6 @@ int HostApp::run_direct_session(
             << " (sdl2 stalls PlayStation cores).\n";
         config.retroarch_joypad_driver = "udev";
     }
-    if (session_plan.has_value()) {
-        session_plan->system_key = system_key;
-#if defined(ARCHSTREAMER_DEBUG_GB_LINK)
-        if (system_key == "gb" || system_key == "gbc" || system_key == "gb-gbc") {
-            LinkCableBackend::write_single_gb_core_options();
-        }
-#endif
-        if (const auto hosted = catalog.find_hosted(launch_plan.game_id); hosted.has_value()) {
-            session_plan->playlist_discs = hosted->get().info.playlist_discs;
-            session_plan->current_disc_index = 0;
-            session_plan->retroarch_netcmd_port = DefaultRetroArchNetcmdPort;
-            if (!session_plan->playlist_discs.empty()) {
-                std::cout
-                    << "Multi-disc playlist: " << session_plan->playlist_discs.size()
-                    << " disc(s); netcmd port " << session_plan->retroarch_netcmd_port << '\n';
-            }
-        }
-    }
     if (!launch_config.standalone) {
         launch_config.retroarch_path = resolved_retroarch.display_path;
         launch_config.command_prefix = resolved_retroarch.argv_prefix;
@@ -266,7 +244,7 @@ int HostApp::run_direct_session(
     }
 
     // Host Player keeps the real DISPLAY (and speakers). Streamed RetroArch needs a
-    // virtual capture surface. Switch/Yuzu defaults to headless gamescope on Linux;
+    // virtual capture surface. Switch standalone defaults to headless gamescope on Linux;
     // Windows captures the desktop/HWND via d3d11screencapturesrc (no gamescope).
     const auto capture = resolve_capture_plan(config, launch_config);
     const bool use_virtual_capture = capture.use_virtual_capture;
@@ -361,13 +339,8 @@ int HostApp::run_direct_session(
     auto media_destinations = std::vector<HostMediaDestination>{};
     auto media_streams = std::vector<MediaClientStream>{};
     if (config.video || config.audio) {
-        if (session_plan.has_value()) {
-            media_destinations = media_destinations_for_session(media_config, *session_plan);
-            media_streams = media_streams_for_dry_run(media_config, media_destinations);
-        } else {
-            media_destinations = media_destinations_for_host(media_config);
-            media_streams = media_streams_for_dry_run(media_config, media_destinations);
-        }
+        media_destinations = media_destinations_for_host(media_config);
+        media_streams = media_streams_for_dry_run(media_config, media_destinations);
     }
 
     std::cout
@@ -422,16 +395,6 @@ int HostApp::run_direct_session(
     }
 
     if (config.dry_run) {
-        if (session_plan.has_value()) {
-            for (const auto& stream : media_streams) {
-                if (stream.client_id == HostClientId) {
-                    continue;
-                }
-                send_media_endpoint_to_client(*session_plan, stream.client_id, stream.endpoint);
-            }
-            send_session_starting_to_clients(*session_plan);
-            send_session_ended_to_clients(*session_plan, "dry run complete");
-        }
         return 0;
     }
 
@@ -487,11 +450,7 @@ int HostApp::run_direct_session(
         // Re-verify at launch so a stale catalog / missing install cannot start.
         const auto runtime = resolve_switch_runtime();
         if (!runtime.has_value()) {
-            const auto message = switch_runtime_unavailable_message();
-            if (session_plan.has_value()) {
-                send_error_to_session_clients(*session_plan, message);
-            }
-            throw std::runtime_error(message);
+            throw std::runtime_error(switch_runtime_unavailable_message());
         }
         launch_config.standalone = true;
         launch_config.core_path = runtime->path;
@@ -554,19 +513,11 @@ int HostApp::run_direct_session(
                 << "\nYuzu keys:      " << yuzu_user.keys_directory << '\n';
         }
         if (switch_prep.enable_soft_keyboard) {
-            if (session_plan.has_value()) {
-                ensure_soft_keyboard(
-                    session_plan->soft_keyboard,
-                    profile_name,
-                    "What is your name?",
-                    capture_display);
-            } else {
-                ensure_soft_keyboard(
-                    standalone_soft_keyboard,
-                    profile_name,
-                    "What is your name?",
-                    capture_display);
-            }
+            ensure_soft_keyboard(
+                standalone_soft_keyboard,
+                profile_name,
+                "What is your name?",
+                capture_display);
         }
 
     } else {
@@ -636,7 +587,6 @@ int HostApp::run_direct_session(
     }
 
     auto media_server = std::unique_ptr<MediaServer>{};
-    auto media_index = media_destinations.size();
     if (config.audio || config.video) {
         normalize_audio_backend_for_platform(config);
         media_server = make_host_media_server(GStreamerMediaCaptureConfig{
@@ -677,42 +627,6 @@ int HostApp::run_direct_session(
         } catch (const std::exception& error) {
             std::cerr << "Warning: virtual keyboard unavailable: " << error.what() << '\n';
         }
-    }
-    if (session_plan.has_value()) {
-        for (const auto& stream : media_streams) {
-            if (stream.client_id == HostClientId) {
-                continue;
-            }
-            if (!stream.endpoint.video_uri.empty() || !stream.endpoint.audio_uri.empty()) {
-                send_media_endpoint_to_client(*session_plan, stream.client_id, stream.endpoint);
-            }
-        }
-    }
-
-    if (session_plan.has_value()) {
-        send_session_starting_to_clients(*session_plan);
-    }
-    auto late_viewer_listener = std::optional<TcpListener>{};
-    if (session_plan.has_value() && config.control_port.has_value()) {
-        late_viewer_listener.emplace(*config.control_port);
-        std::cout
-            << "Accepting late viewers and reconnecting players on TCP port "
-            << *config.control_port << ".\n";
-    }
-    auto session_monitor = std::optional<SessionControlMonitor>{};
-    if (session_plan.has_value() && media_server) {
-        std::uint16_t capture_w = 1920;
-        std::uint16_t capture_h = 1080;
-        parse_video_resolution(config.video_resolution, capture_w, capture_h);
-        session_monitor.emplace(
-            *session_plan,
-            input_router,
-            *media_server,
-            std::chrono::seconds(config.client_timeout_seconds),
-            std::chrono::seconds(config.player_reconnect_timeout_seconds),
-            nullptr,
-            capture_w,
-            capture_h);
     }
 
     auto local_bridge = std::optional<LocalControllerBridge>{};
@@ -789,8 +703,8 @@ int HostApp::run_direct_session(
         if (session_runtime->launch_config().standalone) {
             std::string message =
                 "Standalone emulator exited immediately (code " + std::to_string(code) + "). "
-                "Check Yuzu AppImage/keys under ~/.local/share/archstreamer/yuzu and "
-                "per-user data under the save profile yuzu/ directory.";
+                "Check Ryujinx/Yuzu install and keys under ~/.local/share/archstreamer/ "
+                "(ryujinx/ or yuzu/) and per-user data under the save profile Switch dirs.";
             if (!stderr_tail.empty()) {
                 message += "\n\n" + stderr_tail;
             }
@@ -831,104 +745,6 @@ int HostApp::run_direct_session(
         if (local_bridge.has_value()) {
             local_bridge->update(input_router);
         }
-        if (late_viewer_listener.has_value() && session_plan.has_value() && media_server) {
-            poll_active_session_joins(
-                *late_viewer_listener,
-                *session_plan,
-                list,
-                config,
-                media_index,
-                *media_server);
-        }
-        if (session_monitor.has_value()) {
-            if (const auto reason = session_monitor->poll(); reason.has_value()) {
-                std::cerr << "Stopping session: " << *reason << '\n';
-                session_end_reason = *reason;
-                break;
-            }
-        }
-        if (session_plan.has_value() && session_plan->pending_link_promotion) {
-            session_plan->pending_link_promotion = false;
-            LinkPromotionRequest promotion;
-            promotion.logical_host_client_id = session_plan->pending_link_host_client_id;
-            promotion.logical_client_client_id = session_plan->pending_link_client_client_id;
-            promotion.logical_host_username = session_plan->pending_link_host_username;
-            promotion.logical_client_username = session_plan->pending_link_client_username;
-            promotion.system_key = session_plan->system_key;
-
-            auto link_runtime = promote_to_link_runtime(std::move(session_runtime), std::move(promotion));
-            if (!link_runtime) {
-                std::cerr << "Link promotion failed: current runtime is not Single/Multi\n";
-                session_end_reason = "link promotion failed";
-                break;
-            }
-            std::cout
-                << "Session runtime: " << link_runtime->kind_name()
-                << " (shared_emulator=" << (link_runtime->uses_shared_emulator() ? "yes" : "no")
-                << ", instances=" << static_cast<int>(link_runtime->emulator_instance_count())
-                << ", logical_host_client="
-                << static_cast<int>(link_runtime->logical_host_client_id())
-                << ", logical_client="
-                << static_cast<int>(link_runtime->logical_client_client_id())
-                << ")\n"
-                << link_runtime->status_message() << '\n';
-            send_retroarch_netcmd(
-                "SHOW_MSG Link runtime: peer instance pending",
-                session_plan->retroarch_netcmd_port);
-            session_runtime = std::move(link_runtime);
-        }
-        if (session_plan.has_value() &&
-            !session_runtime->launch_config().standalone &&
-            session_plan->link_cable.consume_relaunch_request()) {
-#if defined(ARCHSTREAMER_DEBUG_GB_LINK)
-            const auto link_core = session_plan->link_cable.pending_core_path();
-            if (!link_core.has_value()) {
-                std::cerr << "Link cable relaunch requested but core path is empty\n";
-            } else {
-                std::cout
-                    << "Link cable: relaunching RetroArch with "
-                    << link_core->string() << '\n';
-                session_runtime->stop_emulator();
-                auto& launch_config = session_runtime->launch_config();
-                launch_config.core_path = *link_core;
-                LinkCableBackend::write_dual_gb_core_options();
-                RetroArchOverrideParams override_params;
-                override_params.first_virtual_joypad_index = virtual_joypad_index;
-                override_params.identities = &launch_plan.virtual_identities;
-                override_params.joypad_driver = config.retroarch_joypad_driver;
-                override_params.players = std::max<RetroArchPort>(launch_plan.players, 2);
-                override_params.save_profile = &save_profile;
-                override_params.realtime_pacing = config.audio || config.video;
-                override_params.capture_fullscreen = capture_fullscreen && use_virtual_capture;
-                override_params.capture_resolution = config.video_resolution;
-                override_params.vulkan_gpu_index =
-                    (!use_virtual_capture && resolved_gpu.has_value())
-                        ? resolved_gpu->vulkan_index
-                        : -1;
-                override_params.system_key = system_key;
-                override_params.core_path = launch_config.core_path;
-                override_params.resolution_scale = config.resolution.retroarch_scale;
-                apply_retroarch_override_and_env(
-                    launch_config, override_params, launch_env_request);
-                session_runtime->start_emulator();
-                for (int i = 0; i < 10 && session_runtime->emulator_running(); ++i) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                }
-                if (!session_runtime->emulator_running()) {
-                    session_end_reason =
-                        "link cable relaunch failed (RetroArch exited immediately)";
-                    std::cerr << "Stopping session: " << *session_end_reason << '\n';
-                    break;
-                }
-                send_retroarch_netcmd(
-                    "SHOW_MSG Link cable active — Cable Club",
-                    session_plan->retroarch_netcmd_port);
-                std::cout << "Link cable: dual-GB RetroArch is running\n";
-            }
-#else
-            std::cerr << "Link cable relaunch ignored (ARCHSTREAMER_DEBUG_GB_LINK is off)\n";
-#endif
-        }
         if (config.audio) {
             const auto now = std::chrono::steady_clock::now();
             if (now >= next_audio_park) {
@@ -953,7 +769,7 @@ int HostApp::run_direct_session(
         if (session_runtime->launch_config().standalone && gamescope_capture) {
             reason << " — if Host GPU is the non-boot NVIDIA, check Gamescope WSI "
                       "(ENABLE_GAMESCOPE_WSI / VK_ADD_IMPLICIT_LAYER_PATH); "
-                      "Yuzu often logs \"Device lacks a present queue\"";
+                      "Switch emulators often log \"Device lacks a present queue\"";
         }
         session_end_reason = reason.str();
         std::cerr << "Stopping session: " << *session_end_reason << '\n';
@@ -986,13 +802,6 @@ int HostApp::run_direct_session(
         streaming_audio.restore_default_sink();
     }
     cleanup_x11_capture_runtime_dir();
-    if (session_plan.has_value()) {
-        const std::string end_reason = should_stop()
-            ? "host stopped"
-            : session_end_reason.value_or("session ended");
-        send_session_ended_to_clients(*session_plan, end_reason);
-        session_plan.reset();
-    }
 
     return 0;
 }

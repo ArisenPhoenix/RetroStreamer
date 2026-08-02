@@ -5,7 +5,7 @@
 #include "common/serialization.hpp"
 #include "host/host_app_config.hpp"
 #include "host/host_launch_planner.hpp"
-#include "host/session_service.hpp"
+#include "host/session_lobby.hpp"
 
 #include <algorithm>
 #include <chrono>

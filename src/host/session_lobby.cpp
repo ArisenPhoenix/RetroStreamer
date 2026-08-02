@@ -631,24 +631,4 @@ SessionPlan gather_session_clients(
     return plan;
 }
 
-SessionPlan wait_for_session_clients(
-    std::uint16_t control_port,
-    std::uint8_t client_count,
-    const GameList& game_list,
-    std::chrono::seconds timeout,
-    std::optional<ClientHello> host_hello,
-    std::function<bool()> should_stop,
-    std::filesystem::path art_root) {
-    TcpListener listener(control_port);
-    return gather_session_clients(
-        listener,
-        client_count,
-        game_list,
-        timeout,
-        std::move(host_hello),
-        std::move(should_stop),
-        std::move(art_root),
-        std::nullopt);
-}
-
 } // namespace archstreamer

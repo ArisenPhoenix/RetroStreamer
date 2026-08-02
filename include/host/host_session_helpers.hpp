@@ -4,7 +4,7 @@
 #include "common/protocol.hpp"
 #include "host/host_app_config.hpp"
 #include "host/media_server.hpp"
-#include "host/session_service.hpp"
+#include "host/session_lobby.hpp"
 
 #include <functional>
 #include <optional>

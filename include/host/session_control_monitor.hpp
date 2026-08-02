@@ -3,7 +3,7 @@
 #include "common/protocol.hpp"
 #include "host/input_router.hpp"
 #include "host/media_server.hpp"
-#include "host/session_service.hpp"
+#include "host/session_lobby.hpp"
 
 #include <chrono>
 #include <optional>

@@ -888,10 +888,39 @@ void ActiveSessionSlot::run_session() {
 
     if (!should_stop() && !session_end_reason.has_value() && !session_runtime_->emulator_running()) {
         const auto code = session_runtime_->last_exit_code().value_or(-1);
-        std::ostringstream reason;
-        reason << "emulator exited (code " << code << ")";
-        session_end_reason = reason.str();
+        const auto stderr_tail = session_runtime_->last_stderr_tail();
+        session_end_reason = format_emulator_exit_summary(code);
+        std::cerr
+            << "session slot " << config_.slot_index << ": " << *session_end_reason << '\n';
+        if (!stderr_tail.empty()) {
+            std::cerr
+                << "session slot " << config_.slot_index
+                << ": emulator/gamescope stdio tail:\n"
+                << stderr_tail << '\n';
+        } else {
+            std::cerr
+                << "session slot " << config_.slot_index
+                << ": (no emulator/gamescope stdio captured)\n";
+        }
     }
+
+    {
+        const std::string preview = should_stop()
+            ? "host stopped"
+            : session_end_reason.value_or("session ended");
+        std::cout
+            << "session slot " << config_.slot_index << ": ending: " << preview << '\n';
+    }
+
+    // Drop XTest *before* killing gamescope/Xvfb. A live Display* to nested :N when
+    // that socket disappears makes Xlib call exit(1) ("XIO: fatal IO error … :1")
+    // and takes down the whole host_runner lobby with the session.
+    if (input_router_ != nullptr) {
+        unregister_input_clients();
+        input_router_.reset();
+    }
+    unplug_session_keyboard(keyboard_.get());
+    keyboard_.reset();
 
     // The runtime destructor also stops any process it still owns; stop here so
     // teardown ordering stays predictable.
@@ -900,16 +929,6 @@ void ActiveSessionSlot::run_session() {
     // Pull Ryujinx/Yuzu Switch saves into the shared canonical tree after exit.
     // (Launch already synced; in-session Ryujinx writes stay in bis until now.)
     sync_and_log_post_exit_switch_saves(save_profile_, slot, switch_backend.get());
-
-    // Drop XTest before tearing down Xvfb. Otherwise Xlib's fatal I/O handler
-    // calls exit(1) and kills the whole host_runner lobby ("XIO: fatal IO error
-    // on X server :99" right after "session finished; lobby still accepting").
-    if (input_router_ != nullptr) {
-        unregister_input_clients();
-        input_router_.reset();
-    }
-    unplug_session_keyboard(keyboard_.get());
-    keyboard_.reset();
 
     const std::string end_reason = should_stop()
         ? "host stopped"

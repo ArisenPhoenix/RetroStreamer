@@ -67,6 +67,9 @@ enum class EmulatorStartFailDetail {
 /** Wait settle_attempts × 50ms; true if emulator is still running. */
 bool wait_emulator_running(SessionRuntime& runtime, int settle_attempts = 10);
 
+/** Decode wait-status style codes (plain exit, or 128+signal) for session logs. */
+std::string format_emulator_exit_summary(int code);
+
 void start_emulator_and_verify(
     SessionRuntime& runtime,
     EmulatorStartFailDetail fail_detail);

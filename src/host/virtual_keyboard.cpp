@@ -77,6 +77,8 @@ bool bit_down(std::uint32_t keys, RemotedKey key) {
     return (keys & static_cast<std::uint32_t>(key)) != 0;
 }
 
+void install_x_io_exit_guard(Display* display);
+
 } // namespace
 
 const RemotedKeyBinding* default_remoted_key_bindings(std::size_t& count) {
@@ -105,15 +107,8 @@ void VirtualKeyboard::ensure_xtest_display() {
     if (display == nullptr) {
         throw std::runtime_error("failed to open X display " + capture_display_ + " for virtual keyboard");
     }
-    // Xlib's default fatal I/O path calls exit(1). When a session slot stops Xvfb,
-    // that would kill the whole host_runner lobby. Prefer closing the Display and
-    // continuing so concurrent sessions / the accept loop stay alive.
-    XSetIOErrorExitHandler(
-        display,
-        [](Display*, void*) {
-            // Intentionally empty: do not terminate the process.
-        },
-        nullptr);
+    // Xlib calls exit(1) after any IOExitHandler *returns*. Never return.
+    install_x_io_exit_guard(display);
     int event_base = 0;
     int error_base = 0;
     int major = 0;
@@ -152,12 +147,9 @@ void VirtualKeyboard::unplug() {
         }
     }
     if (display_ != nullptr) {
-        // XCloseDisplay can itself trip the fatal I/O path if Xvfb is already gone;
-        // the IO exit handler above keeps host_runner alive.
-        try {
-            XCloseDisplay(as_display(display_));
-        } catch (...) {
-        }
+        // Never XCloseDisplay here. If gamescope/Xvfb already tore down the socket,
+        // Close triggers XIO → exit(1) even with an IOExitHandler that returns.
+        // Leak the Display*; the OS reclaims the fd when host_runner exits.
         display_ = nullptr;
     }
     plugged_ = false;
@@ -224,6 +216,21 @@ void install_x_error_guard() {
     std::call_once(once, [] {
         XSetErrorHandler([](Display*, XErrorEvent*) { return 0; });
     });
+}
+
+/** Xlib calls exit(1) if an IOExitHandler returns. Park the thread instead. */
+void install_x_io_exit_guard(Display* display) {
+    if (display == nullptr) {
+        return;
+    }
+    XSetIOErrorExitHandler(
+        display,
+        [](Display*, void*) {
+            for (;;) {
+                std::this_thread::sleep_for(std::chrono::hours(24));
+            }
+        },
+        nullptr);
 }
 
 std::string window_title(Display* display, Window window) {
@@ -497,10 +504,7 @@ TextDialogProbe probe_text_dialog(const std::string& display_name) {
     if (display == nullptr) {
         return TextDialogProbe::Unavailable;
     }
-    XSetIOErrorExitHandler(
-        display,
-        [](Display*, void*) {},
-        nullptr);
+    install_x_io_exit_guard(display);
 
     const bool ready = find_focused_text_dialog(display).has_value();
     XCloseDisplay(display);
@@ -554,10 +558,7 @@ bool try_autofill_on_display(
     if (display == nullptr) {
         return false;
     }
-    XSetIOErrorExitHandler(
-        display,
-        [](Display*, void*) {},
-        nullptr);
+    install_x_io_exit_guard(display);
 
     Window target = 0;
     if (const auto focused = find_focused_text_dialog(display); focused.has_value()) {

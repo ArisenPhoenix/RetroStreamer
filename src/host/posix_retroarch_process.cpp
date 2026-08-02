@@ -1,9 +1,12 @@
 #include "host/posix_retroarch_process.hpp"
 
+#include "common/platform/paths.hpp"
+
 #include <cerrno>
 #include <chrono>
 #include <cstring>
 #include <fstream>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -63,7 +66,8 @@ std::string read_file_tail(const std::filesystem::path& path, std::size_t max_by
         }
     }
 
-    // Prefer the most useful diagnostic lines for GUI errors.
+    // Prefer diagnostic lines when present, but keep the full tail as fallback so
+    // gamescope/Ryujinx mid-session deaths (abort, Vulkan, etc.) are not dropped.
     std::string filtered;
     std::size_t line_start = 0;
     while (line_start < data.size()) {
@@ -74,10 +78,27 @@ std::string read_file_tail(const std::filesystem::path& path, std::size_t max_by
         const auto line = data.substr(line_start, line_end - line_start);
         const bool interesting =
             line.find("ERROR") != std::string::npos ||
+            line.find("Error") != std::string::npos ||
             line.find("Failed") != std::string::npos ||
             line.find("BIOS") != std::string::npos ||
             line.find("Fatal") != std::string::npos ||
-            line.find("Could not") != std::string::npos;
+            line.find("fatal") != std::string::npos ||
+            line.find("Could not") != std::string::npos ||
+            line.find("abort") != std::string::npos ||
+            line.find("Abort") != std::string::npos ||
+            line.find("Segmentation") != std::string::npos ||
+            line.find("segfault") != std::string::npos ||
+            line.find("Vulkan") != std::string::npos ||
+            line.find("vulkan") != std::string::npos ||
+            line.find("gamescope") != std::string::npos ||
+            line.find("Ryujinx") != std::string::npos ||
+            line.find("Exception") != std::string::npos ||
+            line.find("Unhandled") != std::string::npos ||
+            line.find("present queue") != std::string::npos ||
+            line.find("SIG") != std::string::npos ||
+            line.find("killed") != std::string::npos ||
+            line.find("Killed") != std::string::npos ||
+            line.find("terminated") != std::string::npos;
         if (interesting) {
             if (!filtered.empty()) {
                 filtered.push_back('\n');
@@ -87,6 +108,16 @@ std::string read_file_tail(const std::filesystem::path& path, std::size_t max_by
         line_start = line_end + 1;
     }
     if (!filtered.empty()) {
+        // Cap filtered output but append a marker that more context exists in the
+        // durable log / full tail when we truncated heavily.
+        constexpr std::size_t kMaxFiltered = 12288;
+        if (filtered.size() > kMaxFiltered) {
+            filtered = filtered.substr(filtered.size() - kMaxFiltered);
+            const auto nl = filtered.find('\n');
+            if (nl != std::string::npos && nl + 1 < filtered.size()) {
+                filtered.erase(0, nl + 1);
+            }
+        }
         return filtered;
     }
     return data;
@@ -172,7 +203,23 @@ void PosixRetroArchProcess::capture_stderr_tail() const {
     if (stderr_log_path_.empty()) {
         return;
     }
-    last_stderr_tail_ = read_file_tail(stderr_log_path_, 4096);
+    last_stderr_tail_ = read_file_tail(stderr_log_path_, 24576);
+
+    // Keep a durable copy for post-mortem after the temp file is removed.
+    if (const auto cache = archstreamer_cache_directory(); !cache.empty()) {
+        const auto durable = std::filesystem::path(cache) / "last-emu-stdio.log";
+        std::error_code ec;
+        std::filesystem::create_directories(durable.parent_path(), ec);
+        std::filesystem::copy_file(
+            stderr_log_path_,
+            durable,
+            std::filesystem::copy_options::overwrite_existing,
+            ec);
+        if (!ec) {
+            std::cerr << "emulator/gamescope stdio saved to " << durable.string() << '\n';
+        }
+    }
+
     clear_stderr_log();
 }
 
@@ -226,8 +273,8 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
             "Launch prefix executable is missing or not executable: " + args.front());
     }
 
-    // Quiet mode: keep stdout silent, but capture stderr so early exits (missing BIOS, etc.)
-    // can be surfaced in the host error dialog.
+    // Quiet mode: redirect stdout+stderr into a temp log so mid-session deaths
+    // (gamescope/Ryujinx) leave a diagnosable tail instead of vanishing into /dev/null.
     std::string stderr_path;
     if (config.quiet_stdio) {
         char tmpl[] = "/tmp/archstreamer-emu-XXXXXX";
@@ -236,6 +283,7 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
             close(fd);
             stderr_path = tmpl;
             stderr_log_path_ = tmpl;
+            std::cerr << "emulator/gamescope stdio → " << stderr_path << '\n';
         }
     }
 
@@ -256,19 +304,19 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
         close_inherited_fds();
         if (config.quiet_stdio) {
             const int null_fd = open("/dev/null", O_RDWR);
-            if (null_fd >= 0) {
-                dup2(null_fd, STDOUT_FILENO);
-            }
             int err_fd = -1;
             if (!stderr_path.empty()) {
                 err_fd = open(stderr_path.c_str(), O_WRONLY | O_APPEND);
             }
             if (err_fd >= 0) {
+                // Capture both streams — gamescope often logs useful progress on stdout.
+                dup2(err_fd, STDOUT_FILENO);
                 dup2(err_fd, STDERR_FILENO);
                 if (err_fd > STDERR_FILENO) {
                     close(err_fd);
                 }
             } else if (null_fd >= 0) {
+                dup2(null_fd, STDOUT_FILENO);
                 dup2(null_fd, STDERR_FILENO);
             }
             if (null_fd > STDERR_FILENO) {
@@ -363,6 +411,11 @@ bool PosixRetroArchProcess::running() const {
 
     if (errno == ECHILD) {
         pid_ = -1;
+        if (!last_exit_code_.has_value()) {
+            last_exit_code_ = -1;
+        }
+        // Still pull whatever stdio we have even if another waiter reaped the pid.
+        capture_stderr_tail();
         return false;
     }
 

@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -332,6 +333,24 @@ bool wait_emulator_running(SessionRuntime& runtime, int settle_attempts) {
     return runtime.emulator_running();
 }
 
+std::string format_emulator_exit_summary(int code) {
+    if (code < 0) {
+        return "emulator exited (unknown status)";
+    }
+    // PosixRetroArchProcess encodes WIFSIGNALED as 128 + signo.
+    if (code >= 128 && code < 192) {
+        const int sig = code - 128;
+        std::ostringstream oss;
+        oss << "emulator exited by signal " << sig;
+        if (const char* name = strsignal(sig); name != nullptr) {
+            oss << " (" << name << ")";
+        }
+        oss << " [code " << code << "]";
+        return oss.str();
+    }
+    return "emulator exited (code " + std::to_string(code) + ")";
+}
+
 void start_emulator_and_verify(
     SessionRuntime& runtime,
     EmulatorStartFailDetail fail_detail) {
@@ -342,23 +361,24 @@ void start_emulator_and_verify(
 
     const auto code = runtime.last_exit_code().value_or(127);
     const auto stderr_tail = runtime.last_stderr_tail();
+    const auto exit_summary = format_emulator_exit_summary(code);
     std::string message;
     if (fail_detail == EmulatorStartFailDetail::DirectCli) {
         if (runtime.launch_config().standalone) {
             message =
-                "Standalone emulator exited immediately (code " + std::to_string(code) + "). "
+                "Standalone " + exit_summary + " immediately. "
                 "Check Ryujinx/Yuzu install and keys under ~/.local/share/archstreamer/ "
                 "(ryujinx/ or yuzu/) and per-user data under the save profile Switch dirs.";
         } else {
             message =
-                "RetroArch exited immediately (code " + std::to_string(code) + "). "
+                "RetroArch " + exit_summary + " immediately. "
                 "Common causes: missing BIOS/firmware under ~/.config/retroarch/system "
                 "(PS2 needs files in system/pcsx2/bios), a broken core, or RetroArch not runnable.";
         }
     } else {
         message = runtime.launch_config().standalone
-            ? "Standalone emulator exited immediately (code " + std::to_string(code) + ")"
-            : "RetroArch exited immediately (code " + std::to_string(code) + ")";
+            ? ("Standalone " + exit_summary + " immediately")
+            : ("RetroArch " + exit_summary + " immediately");
     }
     if (!stderr_tail.empty()) {
         message += "\n\n" + stderr_tail;

@@ -679,7 +679,7 @@ int HostApp::run_direct_session(
         const auto code = session_runtime->last_exit_code().value_or(-1);
         const auto stderr_tail = session_runtime->last_stderr_tail();
         std::ostringstream reason;
-        reason << "emulator exited (code " << code << ")";
+        reason << format_emulator_exit_summary(code);
         if (session_runtime->launch_config().standalone && gamescope_capture) {
             reason << " — if Host GPU is the non-boot NVIDIA, check Gamescope WSI "
                       "(ENABLE_GAMESCOPE_WSI / VK_ADD_IMPLICIT_LAYER_PATH); "
@@ -688,7 +688,9 @@ int HostApp::run_direct_session(
         session_end_reason = reason.str();
         std::cerr << "Stopping session: " << *session_end_reason << '\n';
         if (!stderr_tail.empty()) {
-            std::cerr << stderr_tail << '\n';
+            std::cerr << "emulator/gamescope stdio tail:\n" << stderr_tail << '\n';
+        } else {
+            std::cerr << "(no emulator/gamescope stdio captured)\n";
         }
     }
 
@@ -696,10 +698,13 @@ int HostApp::run_direct_session(
         network_receiver->stop();
     }
 
+    // Close XTest before stopping gamescope/Xvfb so Xlib does not abort the process.
+    unplug_session_keyboard(&keyboard);
+
     stop_session_runtime(session_runtime);
     if (session_runtime != nullptr) {
         if (const auto code = session_runtime->last_exit_code(); code.has_value()) {
-            std::cout << "RetroArch exited with code " << *code << '\n';
+            std::cout << format_emulator_exit_summary(*code) << '\n';
             if (*code == 127) {
                 std::cerr
                     << "hint: exit 127 usually means the RetroArch launcher was not found. "
@@ -708,8 +713,6 @@ int HostApp::run_direct_session(
         }
     }
     sync_and_log_post_exit_switch_saves(save_profile, std::nullopt, switch_backend.get());
-    // Close XTest before Xvfb so Xlib does not abort the process.
-    unplug_session_keyboard(&keyboard);
     stop_session_media(media_server);
     if (config.audio) {
         streaming_audio.restore_default_sink();

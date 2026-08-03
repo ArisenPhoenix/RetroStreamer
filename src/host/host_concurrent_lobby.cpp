@@ -46,6 +46,9 @@ int run_concurrent_session_host(
         }
 
         const auto max_slots = clamp_max_session_slots(config.clients);
+        // Concurrent sessions use archstreamer-0..N only — drop the legacy
+        // "archstreamer" sink and any higher slot leftovers from older runs.
+        streaming_audio.prune_unused(static_cast<int>(max_slots), /*keep_legacy=*/false);
         std::cout
             << "Concurrent session host on TCP " << *config.control_port
             << " (max slots " << static_cast<int>(max_slots)

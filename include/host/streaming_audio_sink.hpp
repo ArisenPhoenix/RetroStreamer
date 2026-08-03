@@ -34,6 +34,13 @@ public:
     std::string ensure_slot(int slot_index);
     std::string monitor_source_for_slot(int slot_index);
 
+    /**
+     * Drop leftover ArchStreamer null sinks from older runs.
+     * keep_legacy: retain the single-session "archstreamer" sink.
+     * max_slots: keep archstreamer-0 .. archstreamer-(max_slots-1) only.
+     */
+    void prune_unused(int max_slots, bool keep_legacy);
+
     // Move Viewer RetroArch sink-inputs onto the legacy null sink.
     void park_game_audio();
     // Move only this slot's tagged streams onto archstreamer-N.
@@ -46,8 +53,10 @@ public:
     static std::string default_monitor_source();
 
     /**
-     * Windows: remember the emulator PID (and optional concurrent slot) so park
-     * can mute that process tree. Linux: no-op (Pulse uses application.id).
+     * Remember the emulator PID (and optional concurrent slot) so park can
+     * target that process tree. Windows: WASAPI mute. Linux: Pulse move onto
+     * the slot null sink (needed when firejail PID namespaces make
+     * application.process.id useless and PULSE_PROP is stripped/ignored).
      * slot_index < 0 → single-session / legacy park_game_audio().
      */
     void track_emulator_process(int process_id, int slot_index = -1);

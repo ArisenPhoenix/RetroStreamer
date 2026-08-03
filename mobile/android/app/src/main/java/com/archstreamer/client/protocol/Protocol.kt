@@ -1,12 +1,12 @@
 package com.archstreamer.client.protocol
 
 /**
- * Wire types matching include/common/protocol.hpp (ProtocolVersion 18).
+ * Wire types matching include/common/protocol.hpp (ProtocolVersion 19).
  * Keep field order identical to the C++ serializers.
  */
 object Protocol {
     const val MAGIC: Int = 0x41525354 // "ARST"
-    const val VERSION: Int = 18
+    const val VERSION: Int = 19
     const val HEADER_SIZE: Int = 11 // u32 + u16 + u8 + u32, little-endian, no padding
 
     const val DEFAULT_CONTROL_PORT: Int = 45555
@@ -46,7 +46,8 @@ enum class PacketType(val id: Int) {
     EmulatorControl(28),
     ClientLogBundle(29),
     PasswordChangeRequired(30),
-    PasswordChange(31);
+    PasswordChange(31),
+    TouchInput(32);
 
     companion object {
         fun fromId(id: Int): PacketType =

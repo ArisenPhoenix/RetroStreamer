@@ -6,6 +6,7 @@
 #include "host/input_router_demux.hpp"
 #include "host/launch_environment.hpp"
 #include "host/media_server.hpp"
+#include "host/nds/melonds_ctrl_client.hpp"
 #include "host/network_input_receiver.hpp"
 #include "host/save_profile.hpp"
 #include "host/session_control_monitor.hpp"
@@ -136,6 +137,8 @@ private:
     std::unique_ptr<HostVirtualGamepadBus> gamepads_;
     std::unique_ptr<VirtualKeyboard> keyboard_;
     std::unique_ptr<InputRouter> input_router_;
+    /** Persistent melonDS ctrl socket for remoted stylus (TouchInput). */
+    std::unique_ptr<MelonDsCtrlClient> melonds_touch_ctrl_;
     std::unique_ptr<MediaServer> media_server_;
     std::unique_ptr<SessionRuntime> session_runtime_;
     std::optional<SessionControlMonitor> session_monitor_;

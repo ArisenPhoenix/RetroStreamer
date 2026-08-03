@@ -22,6 +22,7 @@
 #include "host/switch/switch_backend.hpp"
 #include "host/nds/melonds_backend.hpp"
 #include "host/virtual_joypad_resolve.hpp"
+#include "host/pad_plan.hpp"
 #include "host/virtual_keyboard.hpp"
 #include "host/soft_keyboard_host.hpp"
 
@@ -722,17 +723,18 @@ void ActiveSessionSlot::run_session() {
 
     std::vector<std::size_t> resolved_indices;
     std::vector<ArchStreamerSdlPad> resolved_pads;
-    if (config.retroarch_joypad_driver == "udev") {
-        resolved_indices = find_archstreamer_udev_joypad_indices(
-            launch_plan.players,
-            config.verbose,
-            product_id_base);
+    const bool use_udev = config.retroarch_joypad_driver == "udev";
+    const auto shared_pad_plan = resolve_shared_pad_plan(
+        launch_plan.players,
+        config.ignore_controller.value_or(""),
+        config.verbose,
+        product_id_base,
+        use_udev);
+    if (use_udev) {
+        resolved_indices = shared_pad_plan.udev_indices;
+        resolved_pads = shared_pad_plan.pads;
     } else {
-        resolved_pads = find_archstreamer_sdl_pads(
-            launch_plan.players,
-            config.ignore_controller.value_or(""),
-            config.verbose,
-            product_id_base);
+        resolved_pads = shared_pad_plan.pads;
         resolved_indices.reserve(resolved_pads.size());
         for (const auto& pad : resolved_pads) {
             resolved_indices.push_back(pad.sdl_index);
@@ -806,6 +808,7 @@ void ActiveSessionSlot::run_session() {
                 &resolved_gpu,
                 profile_name,
                 std::move(resolved_pads),
+                static_cast<std::size_t>(std::max(0, slot)),
             });
         resolved_pads = std::move(switch_prep.resolved_pads);
         switch_backend->assign_launch_env_profile(launch_env_request, switch_prep);
@@ -880,6 +883,8 @@ void ActiveSessionSlot::run_session() {
                 resolve_display_layout_preference(plan.host_hello, hellos);
         }
         apply_retroarch_override(launch_config, override_params);
+        launch_env_request.pad_plan = shared_pad_plan;
+        log_pad_plan(shared_pad_plan, slot);
     }
 
     apply_capture_and_launch_environment(
@@ -896,6 +901,21 @@ void ActiveSessionSlot::run_session() {
 
     input_router_ = std::make_unique<InputRouter>(*gamepads_, keyboard_.get());
     input_router_->set_seat_assignment(launch_plan.seats);
+    melonds_touch_ctrl_.reset();
+    if (melonds_backend != nullptr && melonds_backend->profile() != nullptr) {
+        melonds_touch_ctrl_ = std::make_unique<MelonDsCtrlClient>(
+            melonds_backend->profile()->ctrl_server_name);
+        MelonDsCtrlClient* touch_ctrl = melonds_touch_ctrl_.get();
+        input_router_->set_touch_handler([touch_ctrl](const TouchInput& input) {
+            if (touch_ctrl == nullptr) {
+                return false;
+            }
+            if (input.pressed) {
+                return touch_ctrl->touch(input.x, input.y);
+            }
+            return touch_ctrl->touch_end();
+        });
+    }
     // Register demux before emulator start so early UDP from a phone client is not
     // dropped during the multi-second launch window.
     register_input_clients();
@@ -1052,7 +1072,12 @@ void ActiveSessionSlot::run_session() {
     // and takes down the whole host_runner lobby with the session.
     if (input_router_ != nullptr) {
         unregister_input_clients();
+        input_router_->set_touch_handler({});
         input_router_.reset();
+    }
+    if (melonds_touch_ctrl_ != nullptr) {
+        melonds_touch_ctrl_->close_touch_channel();
+        melonds_touch_ctrl_.reset();
     }
     unplug_session_keyboard(keyboard_.get());
     keyboard_.reset();

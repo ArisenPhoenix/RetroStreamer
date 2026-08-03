@@ -16,6 +16,9 @@ struct ArchStreamerSdlPad {
     std::uint16_t product_id = 0;
 };
 
+// Prefer PadPlan (include/host/pad_plan.hpp): resolve once, apply_pad_plan for env,
+// binders read pads/indices. These helpers remain the low-level SDL/udev scanners.
+
 // VID/PID whitelist helper (ArchStreamer uinput pads) in SDL hint form.
 std::string sdl_archstreamer_pad_whitelist(
     std::size_t players,

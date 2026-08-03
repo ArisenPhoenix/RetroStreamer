@@ -303,19 +303,11 @@ std::optional<std::string> select_gamescope_pipewire_node_from_dump(
             return std::to_string(pick->object_id);
         }
 
-        // Ownership unknown: only safe when a single gamescope source exists.
-        std::vector<Candidate*> pool;
-        for (auto& candidate : candidates) {
-            if (resolution_ok_count > 0 ? candidate.resolution_ok : true) {
-                pool.push_back(&candidate);
-            }
-        }
-        if (pool.size() == 1) {
-            return std::to_string(pool.front()->object_id);
-        }
-        if (candidates.size() == 1) {
-            return std::to_string(candidates.front().object_id);
-        }
+        // Never latch an unowned gamescope source when we have an owner pid.
+        // Concurrent slots used to steal the first (only) node that appeared —
+        // both encoders then pulled Shield's path=N, sharing video and often
+        // stalling that gamescope/Ryujinx. Keep waiting for this slot's node.
+        (void)resolution_ok_count;
         return std::nullopt;
     }
 

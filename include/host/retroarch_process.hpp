@@ -23,6 +23,9 @@ struct RetroArchLaunchConfig {
     bool quiet_stdio = false;
     // Cleared in the child before applying environment (e.g. WAYLAND_DISPLAY).
     std::vector<std::string> unset_environment;
+    // Outermost wrapper (e.g. firejail --net=… for dual-Ryujinx LDN). Applied before
+    // command_prefix so gamescope+emulator share the isolated network namespace.
+    std::vector<std::string> network_namespace_prefix;
 };
 
 class RetroArchProcess {

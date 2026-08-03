@@ -1199,6 +1199,15 @@ private fun PlayScreen(
             modifier = Modifier.fillMaxSize(),
             hybridPortraitStack = dualScreen && isPortrait,
         )
+        // Touch under gamepad: Compose draw order is z-order, so overlapping
+        // pad controls keep hit-testing priority when both cover the same pixels.
+        if (dualScreen && !state.overlayEditing) {
+            DsBottomTouchOverlay(
+                modifier = Modifier.fillMaxSize(),
+                portraitHybridStack = isPortrait,
+                onTouch = viewModel::onDsTouch,
+            )
+        }
         if (!state.physicalInputActive || state.overlayEditing) {
             GamepadOverlay(
                 modifier = Modifier.fillMaxSize(),

@@ -3,14 +3,26 @@
 
 #include "common/platform/process_utils.hpp"
 
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
+#include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
+
+#include <unistd.h>
 
 namespace archstreamer {
 namespace {
+
+std::mutex g_track_mutex;
+// slot_index -> root emulator/wrapper PID (-1 key = single-session)
+std::unordered_map<int, int> g_tracked_roots;
 
 bool sink_exists(const std::string& sink_name) {
     const auto sinks = read_command_output("pactl list short sinks 2>/dev/null");
@@ -122,7 +134,158 @@ std::string ensure_named_null_sink(const char* sink_name, const char* descriptio
 
     (void)read_command_output(
         (std::string("pactl suspend-sink ") + sink_name + " 0 2>/dev/null").c_str());
+    // Monitor capture includes sink soft-volume; keep it at 100% so host mixer
+    // knobs on "ArchStreamer" do not change what remotes hear.
+    (void)read_command_output(
+        (std::string("pactl set-sink-volume ") + sink_name + " 100% 2>/dev/null").c_str());
+    (void)read_command_output(
+        (std::string("pactl set-sink-mute ") + sink_name + " 0 2>/dev/null").c_str());
     return sink_name;
+}
+
+[[nodiscard]] std::optional<int> parse_prop_int(const std::string& block, const char* key) {
+    const std::string needle = std::string(key) + " = \"";
+    const auto pos = block.find(needle);
+    if (pos == std::string::npos) {
+        return std::nullopt;
+    }
+    const auto start = pos + needle.size();
+    const auto end = block.find('"', start);
+    if (end == std::string::npos) {
+        return std::nullopt;
+    }
+    try {
+        return std::stoi(block.substr(start, end - start));
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+[[nodiscard]] std::unordered_set<int> descendant_pids(int root) {
+    std::unordered_set<int> out;
+    if (root <= 0) {
+        return out;
+    }
+    std::vector<int> queue{root};
+    out.insert(root);
+    for (std::size_t i = 0; i < queue.size(); ++i) {
+        const int current = queue[i];
+        const auto task_dir =
+            std::filesystem::path("/proc") / std::to_string(current) / "task";
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::directory_iterator(task_dir, ec)) {
+            if (ec) {
+                break;
+            }
+            std::ifstream children(entry.path() / "children");
+            if (!children) {
+                continue;
+            }
+            int child = 0;
+            while (children >> child) {
+                if (out.insert(child).second) {
+                    queue.push_back(child);
+                }
+            }
+        }
+    }
+    return out;
+}
+
+[[nodiscard]] std::unordered_map<int, int> pulse_client_sec_pids() {
+    // object.id (PipeWire) → pipewire.sec.pid (host OS pid that opened the client)
+    std::unordered_map<int, int> out;
+    const auto dump = read_command_output("pactl list clients 2>/dev/null");
+    std::string::size_type pos = 0;
+    while (pos < dump.size()) {
+        const auto next = dump.find("Client #", pos + 1);
+        const auto block = dump.substr(
+            pos,
+            next == std::string::npos ? std::string::npos : next - pos);
+        pos = next == std::string::npos ? dump.size() : next;
+        const auto object_id = parse_prop_int(block, "object.id");
+        const auto sec_pid = parse_prop_int(block, "pipewire.sec.pid");
+        if (object_id.has_value() && sec_pid.has_value() && *sec_pid > 0) {
+            out[*object_id] = *sec_pid;
+        }
+    }
+    return out;
+}
+
+[[nodiscard]] int tracked_root_for_slot(int slot_index) {
+    std::lock_guard lock(g_track_mutex);
+    const auto it = g_tracked_roots.find(slot_index);
+    return it == g_tracked_roots.end() ? 0 : it->second;
+}
+
+[[nodiscard]] bool block_belongs_to_process_tree(
+    const std::string& block,
+    const std::unordered_set<int>& tree,
+    const std::unordered_map<int, int>& client_sec_pids) {
+    if (tree.empty()) {
+        return false;
+    }
+    if (const auto app_pid = parse_prop_int(block, "application.process.id");
+        app_pid.has_value() && tree.contains(*app_pid)) {
+        return true;
+    }
+    if (const auto client_id = parse_prop_int(block, "client.id"); client_id.has_value()) {
+        if (const auto it = client_sec_pids.find(*client_id); it != client_sec_pids.end()) {
+            if (tree.contains(it->second)) {
+                return true;
+            }
+            // firejail / PID namespaces: sec.pid may be the helper; same process
+            // group as a tracked emulator is still this slot.
+            if (const int node_pgid = ::getpgid(it->second); node_pgid > 0) {
+                for (const int pid : tree) {
+                    if (::getpgid(pid) == node_pgid) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
+/** Unload module-null-sink instances whose sink_name matches exactly. */
+void unload_null_sink_modules_named(const std::string& sink_name) {
+    const auto modules = read_command_output("pactl list modules short 2>/dev/null");
+    const std::string needle = std::string("sink_name=") + sink_name;
+    std::string::size_type pos = 0;
+    int removed = 0;
+    while (pos < modules.size()) {
+        const auto end = modules.find('\n', pos);
+        const auto line = modules.substr(
+            pos,
+            end == std::string::npos ? std::string::npos : end - pos);
+        pos = end == std::string::npos ? modules.size() : end + 1;
+        if (line.find("module-null-sink") == std::string::npos ||
+            line.find(needle) == std::string::npos) {
+            continue;
+        }
+        // Avoid matching archstreamer-10 when looking for archstreamer-1: require
+        // sink_name=X as a whole token (end or followed by space/tab).
+        const auto at = line.find(needle);
+        if (at == std::string::npos) {
+            continue;
+        }
+        const auto after = at + needle.size();
+        if (after < line.size() && line[after] != ' ' && line[after] != '\t') {
+            continue;
+        }
+        const auto tab = line.find('\t');
+        if (tab == std::string::npos) {
+            continue;
+        }
+        const auto id = line.substr(0, tab);
+        (void)read_command_output(
+            (std::string("pactl unload-module ") + id + " 2>/dev/null").c_str());
+        ++removed;
+    }
+    if (removed > 0) {
+        std::cout << "Removed " << removed << " stale '" << sink_name << "' null sink(s).\n";
+    }
 }
 
 int move_matching_sink_inputs_to(
@@ -143,6 +306,12 @@ int move_matching_sink_inputs_to(
         pos = next == std::string::npos ? dump.size() : next;
 
         if (!matches(block)) {
+            continue;
+        }
+
+        // Already routed to the capture sink — skip no-op moves (avoids log spam).
+        if (block.find(std::string("target.object = \"") + destination_sink + "\"") !=
+            std::string::npos) {
             continue;
         }
 
@@ -201,7 +370,26 @@ bool StreamingAudioSink::is_streaming_sink_name(std::string_view sink_name) {
     return sink_name == kName || sink_name.rfind("archstreamer-", 0) == 0;
 }
 
+void StreamingAudioSink::prune_unused(int max_slots, bool keep_legacy) {
+    // PipeWire null sinks persist across host restarts; without pruning the mixer
+    // accumulates archstreamer-0…N from every past max-slots setting.
+    if (max_slots < 0) {
+        max_slots = 0;
+    }
+    if (max_slots > 4) {
+        max_slots = 4; // matches clamp_max_session_slots upper bound
+    }
+    if (!keep_legacy) {
+        unload_null_sink_modules_named(kName);
+    }
+    // Drop high slot indices and anything beyond the current budget.
+    for (int slot = max_slots; slot < 16; ++slot) {
+        unload_null_sink_modules_named(slot_sink_name(slot));
+    }
+}
+
 std::string StreamingAudioSink::ensure() {
+    prune_unused(/*max_slots=*/4, /*keep_legacy=*/true);
     const auto name = ensure_named_null_sink(kName, "ArchStreamer");
     // Never leave the session default on the silent capture sink — clients using
     // Auto (and desktop apps) would hear nothing while the meter still moves.
@@ -214,8 +402,13 @@ std::string StreamingAudioSink::monitor_source() {
 }
 
 std::string StreamingAudioSink::ensure_slot(int slot_index) {
+    if (slot_index < 0) {
+        slot_index = 0;
+    }
+    // Concurrent hosts only need 0..max_slots-1; drop leftovers from older runs.
+    prune_unused(/*max_slots=*/4, /*keep_legacy=*/false);
     const auto name = slot_sink_name(slot_index);
-    const auto description = "ArchStreamer slot " + std::to_string(slot_index < 0 ? 0 : slot_index);
+    const auto description = "ArchStreamer slot " + std::to_string(slot_index);
     ensure_named_null_sink(name.c_str(), description.c_str());
     restore_default_sink();
     return name;
@@ -236,7 +429,15 @@ void StreamingAudioSink::park_game_audio() {
         return;
     }
 
-    const auto moved = move_matching_sink_inputs_to(kName, block_looks_like_retroarch);
+    const int root = tracked_root_for_slot(-1);
+    const auto tree = descendant_pids(root);
+    const auto client_secs = root > 0 ? pulse_client_sec_pids() : std::unordered_map<int, int>{};
+    const auto moved = move_matching_sink_inputs_to(
+        kName,
+        [&](const std::string& block) {
+            return block_looks_like_retroarch(block) ||
+                block_belongs_to_process_tree(block, tree, client_secs);
+        });
     if (moved > 0) {
         std::cout
             << "Parked " << moved
@@ -257,16 +458,89 @@ void StreamingAudioSink::park_game_audio_for_slot(int slot_index) {
         return;
     }
 
-    const auto moved = move_matching_sink_inputs_to(
-        sink.c_str(),
-        [&](const std::string& block) {
-            return block_has_application_id(block, app_id);
-        });
+    const int root = tracked_root_for_slot(slot_index);
+    const auto tree = descendant_pids(root);
+    const auto client_secs = root > 0 ? pulse_client_sec_pids() : std::unordered_map<int, int>{};
+    const auto matches = [&](const std::string& block) {
+        if (block_has_application_id(block, app_id)) {
+            return true;
+        }
+        return block_belongs_to_process_tree(block, tree, client_secs);
+    };
+    // Count matches before move so "already on sink" is not reported as missing.
+    int matched = 0;
+    {
+        const auto dump = read_command_output("pactl list sink-inputs 2>/dev/null");
+        std::string::size_type pos = 0;
+        while (pos < dump.size()) {
+            const auto next = dump.find("Sink Input #", pos + 1);
+            const auto block = dump.substr(
+                pos,
+                next == std::string::npos ? std::string::npos : next - pos);
+            pos = next == std::string::npos ? dump.size() : next;
+            if (matches(block)) {
+                ++matched;
+            }
+        }
+    }
+    const auto moved = move_matching_sink_inputs_to(sink.c_str(), matches);
     if (moved > 0) {
         std::cout
             << "Parked " << moved
             << " stream(s) on '" << sink
             << "' (slot " << slot_index << ").\n";
+    } else if (matched == 0 && root > 0 && tree.size() > 1) {
+        // Help diagnose "phone silent / host hears game": capture sink empty.
+        static thread_local int warn_slot = -1;
+        static thread_local int warn_count = 0;
+        if (warn_slot != slot_index) {
+            warn_slot = slot_index;
+            warn_count = 0;
+        }
+        if (warn_count < 3) {
+            ++warn_count;
+            std::cerr
+                << "Warning: no Pulse sink-input found for slot " << slot_index
+                << " (owner pid " << root << ", tree " << tree.size()
+                << ") — remotes may hear silence while speakers get the game\n";
+            const auto dump = read_command_output("pactl list sink-inputs 2>/dev/null");
+            if (dump.find("Sink Input #") == std::string::npos) {
+                std::cerr << "  (no sink-inputs listed by pactl)\n";
+            } else {
+                std::string::size_type pos = 0;
+                int listed = 0;
+                while (pos < dump.size() && listed < 6) {
+                    const auto next = dump.find("Sink Input #", pos + 1);
+                    const auto block = dump.substr(
+                        pos,
+                        next == std::string::npos ? std::string::npos : next - pos);
+                    pos = next == std::string::npos ? dump.size() : next;
+                    if (block.find("Sink Input #") == std::string::npos) {
+                        continue;
+                    }
+                    std::string binary = "?";
+                    std::string app = "?";
+                    const auto bin_key = std::string("application.process.binary = \"");
+                    if (const auto b = block.find(bin_key); b != std::string::npos) {
+                        const auto s = b + bin_key.size();
+                        const auto e = block.find('"', s);
+                        if (e != std::string::npos) {
+                            binary = block.substr(s, e - s);
+                        }
+                    }
+                    const auto app_key = std::string("application.name = \"");
+                    if (const auto a = block.find(app_key); a != std::string::npos) {
+                        const auto s = a + app_key.size();
+                        const auto e = block.find('"', s);
+                        if (e != std::string::npos) {
+                            app = block.substr(s, e - s);
+                        }
+                    }
+                    std::cerr << "  sink-input: app=" << app << " binary=" << binary << '\n';
+                    ++listed;
+                }
+            }
+        }
     }
 }
 
@@ -350,8 +624,18 @@ std::string StreamingAudioSink::default_monitor_source() {
     return sink + ".monitor";
 }
 
-void StreamingAudioSink::track_emulator_process(int, int) {}
-void StreamingAudioSink::untrack_emulator_process(int) {}
+void StreamingAudioSink::track_emulator_process(int process_id, int slot_index) {
+    if (process_id <= 0) {
+        return;
+    }
+    std::lock_guard lock(g_track_mutex);
+    g_tracked_roots[slot_index] = process_id;
+}
+
+void StreamingAudioSink::untrack_emulator_process(int slot_index) {
+    std::lock_guard lock(g_track_mutex);
+    g_tracked_roots.erase(slot_index);
+}
 
 } // namespace archstreamer
 

@@ -286,6 +286,7 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/switch/ryujinx_backend.cpp
         src/host/switch/yuzu_backend.cpp
         src/host/switch/switch_runtime.cpp
+        src/host/switch/ryujinx_title_updates.cpp
         src/host/nds_display_layout.cpp
         src/host/nds/melonds_user_profile.cpp
         src/host/nds/melonds_ctrl_client.cpp
@@ -300,6 +301,7 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/session_lobby.cpp
         src/host/session_runtime.cpp
         src/host/session_slot_lease.cpp
+        src/host/pad_plan.cpp
         src/host/virtual_joypad_resolve.cpp
     )
     if(WIN32)
@@ -338,6 +340,7 @@ if(ARCHSTREAMER_BUILD_HOST)
             src/host/switch/posix_switch_paths.cpp
             src/host/switch/posix_yuzu_runtime.cpp
             src/host/switch/posix_ryujinx_runtime.cpp
+            src/host/switch/ldn_net_isolation.cpp
             src/host/nds/posix_melonds_runtime.cpp
         )
     endif()

@@ -68,4 +68,19 @@ bool InputRouterDemux::route(const KeyboardInput& input) {
     return router->route(input);
 }
 
+bool InputRouterDemux::route(const TouchInput& input) {
+    InputRouter* router = nullptr;
+    {
+        std::lock_guard lock(mutex_);
+        const auto it = routers_.find(input.client_id);
+        if (it != routers_.end()) {
+            router = it->second;
+        }
+    }
+    if (router == nullptr) {
+        return false;
+    }
+    return router->route(input);
+}
+
 } // namespace archstreamer

@@ -17,6 +17,7 @@ public:
 
     bool route(const ControllerInput& input);
     bool route(const KeyboardInput& input);
+    bool route(const TouchInput& input);
 
 private:
     mutable std::mutex mutex_;

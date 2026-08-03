@@ -57,23 +57,42 @@ ProcessEnvironment audio_launch_environment(
         env.set("SDL_AUDIODRIVER", "pulse");
     }
     if (stream_audio) {
+        // Pin Pulse/PipeWire to the real user session so SDL (melonDS under
+        // gamescope) hits the same server we park/capture from.
+        const auto real_rt = real_xdg_runtime_dir();
+        env.set("PIPEWIRE_RUNTIME_DIR", real_rt.string());
+        const auto pulse_native = real_rt / "pulse" / "native";
+        std::error_code ec;
+        if (std::filesystem::exists(pulse_native, ec) && !ec) {
+            env.set("PULSE_SERVER", "unix:" + pulse_native.string());
+        }
         if (!audio_source.empty() && audio_source.ends_with(".monitor")) {
             const auto sink = audio_source.substr(0, audio_source.size() - 8);
             env.set("PULSE_SINK", sink);
-            // Tag this emulator so concurrent slots can park/capture independently.
+            // Tag this emulator so concurrent slots park/capture independently and
+            // PipeWire stream-restore does not link both Ryujinx volumes together.
+            // Use PULSE_PROP= (not PULSE_PROP_application.id): gamescope strips any
+            // environment variable whose name contains a '.' before exec'ing the game.
             if (StreamingAudioSink::is_streaming_sink_name(sink)) {
+                std::string app_id = sink;
+                std::string app_name = "ArchStreamer";
                 if (sink == StreamingAudioSink::kName) {
-                    env.set("PULSE_PROP_application.id", StreamingAudioSink::kName);
+                    app_id = StreamingAudioSink::kName;
                 } else if (sink.rfind("archstreamer-", 0) == 0) {
                     try {
-                        const int slot = std::stoi(sink.substr(std::string("archstreamer-").size()));
-                        env.set(
-                            "PULSE_PROP_application.id",
-                            StreamingAudioSink::slot_application_id(slot));
+                        const int slot =
+                            std::stoi(sink.substr(std::string("archstreamer-").size()));
+                        app_id = StreamingAudioSink::slot_application_id(slot);
+                        app_name = "ArchStreamer-Slot-" + std::to_string(slot);
                     } catch (const std::exception&) {
-                        env.set("PULSE_PROP_application.id", sink);
+                        app_id = sink;
+                        app_name = sink;
                     }
                 }
+                env.set(
+                    "PULSE_PROP",
+                    "application.id=" + app_id + " application.name=" + app_name +
+                        " module-stream-restore.id=" + app_id);
             }
         }
         // Prefer a small Pulse quantum so audio_sync pacing stays near realtime.

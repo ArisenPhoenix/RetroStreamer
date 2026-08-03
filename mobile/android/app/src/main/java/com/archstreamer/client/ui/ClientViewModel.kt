@@ -1611,6 +1611,13 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         latestPad = ControllerState.applyFaceButtonSwaps(state, snap.swapNw, snap.swapSe)
     }
 
+    /** Remoted DS stylus; coords are already absolute 0–255 × 0–191. */
+    fun onDsTouch(x: Int, y: Int, pressed: Boolean) {
+        val active = session ?: return
+        if (!_state.value.playing) return
+        runCatching { active.sendTouch(x, y, pressed) }
+    }
+
     fun leavePlay() {
         menuDrawerOpen = false
         lastSentMenuPause = null

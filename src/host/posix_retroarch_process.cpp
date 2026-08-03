@@ -19,6 +19,36 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+namespace {
+
+/** access(2) does not search PATH; resolve bare names the same way execvp will. */
+bool path_is_executable(const std::string& path_or_name) {
+    if (path_or_name.find('/') != std::string::npos) {
+        return access(path_or_name.c_str(), X_OK) == 0;
+    }
+    const char* path_env = getenv("PATH");
+    if (path_env == nullptr || *path_env == '\0') {
+        path_env = "/usr/local/bin:/usr/bin:/bin";
+    }
+    std::string path{path_env};
+    std::size_t start = 0;
+    while (start <= path.size()) {
+        const auto end = path.find(':', start);
+        const auto dir = path.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        const auto candidate = (dir.empty() ? "." : dir) + "/" + path_or_name;
+        if (access(candidate.c_str(), X_OK) == 0) {
+            return true;
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        start = end + 1;
+    }
+    return false;
+}
+
+} // namespace
+
 namespace archstreamer {
 namespace {
 
@@ -260,15 +290,21 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
 
     expand_host_exec_retroarch_shim(args, config);
 
-    const auto& executable = config.standalone
+    if (!config.network_namespace_prefix.empty()) {
+        std::vector<std::string> wrapped = config.network_namespace_prefix;
+        wrapped.insert(wrapped.end(), args.begin(), args.end());
+        args = std::move(wrapped);
+    }
+
+    const auto binary = config.standalone
         ? path_string(config.core_path, "standalone emulator")
-        : args.front();
-    if (access(executable.c_str(), X_OK) != 0) {
+        : path_string(config.retroarch_path, "RetroArch executable");
+    if (access(binary.c_str(), X_OK) != 0) {
         throw std::runtime_error(
             std::string(config.standalone ? "Emulator" : "RetroArch") +
-            " executable is missing or not executable: " + executable);
+            " executable is missing or not executable: " + binary);
     }
-    if (!config.command_prefix.empty() && access(args.front().c_str(), X_OK) != 0) {
+    if (!args.empty() && !path_is_executable(args.front())) {
         throw std::runtime_error(
             "Launch prefix executable is missing or not executable: " + args.front());
     }

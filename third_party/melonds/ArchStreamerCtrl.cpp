@@ -1,10 +1,12 @@
 /*
-    ArchStreamer control socket for mid-session LAN host/connect.
+    ArchStreamer control socket for mid-session LAN host/connect and DS touch.
 
     Line-oriented commands (UTF-8, newline-terminated):
       LAN_HOST <player> [numplayers]
       LAN_CONNECT <player> <host>
       LAN_END
+      TOUCH <x> <y>          // absolute DS coords; x 0-255, y 0-191
+      TOUCH_END
       PING
     Replies: OK / ERR <message> / PONG
 */
@@ -12,6 +14,7 @@
 #include "ArchStreamerCtrl.h"
 
 #include <QStringList>
+#include <algorithm>
 
 #include "Config.h"
 #include "LAN.h"
@@ -139,6 +142,23 @@ void ArchStreamerCtrl::applyLanEnd()
     printf("ArchStreamerCtrl: LAN session ended\n");
 }
 
+bool ArchStreamerCtrl::applyTouch(int x, int y)
+{
+    EmuInstance* inst = firstEmuInstance();
+    if (!inst)
+        return false;
+    const int cx = std::clamp(x, 0, 255);
+    const int cy = std::clamp(y, 0, 191);
+    inst->touchScreen(cx, cy);
+    return true;
+}
+
+void ArchStreamerCtrl::applyTouchEnd()
+{
+    if (EmuInstance* inst = firstEmuInstance())
+        inst->releaseScreen();
+}
+
 void ArchStreamerCtrl::onNewConnection()
 {
     while (server_ && server_->hasPendingConnections())
@@ -147,7 +167,10 @@ void ArchStreamerCtrl::onNewConnection()
         if (!sock)
             continue;
         connect(sock, &QLocalSocket::readyRead, this, &ArchStreamerCtrl::onReadyRead);
-        connect(sock, &QLocalSocket::disconnected, sock, &QObject::deleteLater);
+        connect(sock, &QLocalSocket::disconnected, this, [this, sock]() {
+            pendingBySock_.remove(sock);
+            sock->deleteLater();
+        });
     }
 }
 
@@ -157,12 +180,13 @@ void ArchStreamerCtrl::onReadyRead()
     if (!sock)
         return;
 
-    pending_.append(sock->readAll());
+    QByteArray& pending = pendingBySock_[sock];
+    pending.append(sock->readAll());
     int idx;
-    while ((idx = pending_.indexOf('\n')) >= 0)
+    while ((idx = pending.indexOf('\n')) >= 0)
     {
-        QByteArray line = pending_.left(idx).trimmed();
-        pending_.remove(0, idx + 1);
+        QByteArray line = pending.left(idx).trimmed();
+        pending.remove(0, idx + 1);
         if (!line.isEmpty())
             handleLine(sock, line);
     }
@@ -222,6 +246,36 @@ void ArchStreamerCtrl::handleLine(QLocalSocket* sock, const QByteArray& line)
             writeReply(sock, "OK");
         else
             writeReply(sock, "ERR StartClient failed");
+        return;
+    }
+
+    if (cmd == QStringLiteral("TOUCH"))
+    {
+        if (parts.size() < 3)
+        {
+            writeReply(sock, "ERR usage: TOUCH <x> <y>");
+            return;
+        }
+        bool okX = false;
+        bool okY = false;
+        const int x = parts[1].toInt(&okX);
+        const int y = parts[2].toInt(&okY);
+        if (!okX || !okY)
+        {
+            writeReply(sock, "ERR TOUCH coords");
+            return;
+        }
+        if (applyTouch(x, y))
+            writeReply(sock, "OK");
+        else
+            writeReply(sock, "ERR no emu instance");
+        return;
+    }
+
+    if (cmd == QStringLiteral("TOUCH_END"))
+    {
+        applyTouchEnd();
+        writeReply(sock, "OK");
         return;
     }
 

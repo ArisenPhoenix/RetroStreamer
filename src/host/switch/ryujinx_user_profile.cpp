@@ -1,6 +1,7 @@
 #include "host/switch/ryujinx_user_profile.hpp"
 
 #include "host/switch/default_switch_paths.hpp"
+#include "host/switch/ryujinx_title_updates.hpp"
 #include "host/switch/switch_fs.hpp"
 #include "host/switch/switch_system_defaults.hpp"
 
@@ -23,7 +24,9 @@ namespace {
 void ensure_ryujinx_config(
     const std::filesystem::path& config_path,
     bool enable_ldn_mitm,
-    int resolution_scale) {
+    int resolution_scale,
+    const std::filesystem::path& title_updates_dir,
+    const std::string& lan_interface_id) {
     std::filesystem::create_directories(config_path.parent_path());
     nlohmann::json cfg = nlohmann::json::object();
     if (std::filesystem::is_regular_file(config_path)) {
@@ -57,6 +60,13 @@ void ensure_ryujinx_config(
 
     // Turbo @ 200% via F6 hold (absolute on/off — VSync F1 cycling desyncs under gamescope).
     cfg["tick_scalar"] = 200;
+
+    if (!title_updates_dir.empty()) {
+        cfg["autoload_dirs"] = nlohmann::json::array({title_updates_dir.string()});
+    }
+    if (!lan_interface_id.empty()) {
+        cfg["multiplayer_lan_interface_id"] = lan_interface_id;
+    }
 
     if (!cfg.contains("hotkeys") || !cfg["hotkeys"].is_object()) {
         cfg["hotkeys"] = nlohmann::json::object();
@@ -247,7 +257,8 @@ RyujinxUserProfile RyujinxUserProfileService::prepare(
     const SaveProfile& save_profile,
     bool enable_ldn_mitm,
     int resolution_scale,
-    std::string_view profile_display_name) {
+    std::string_view profile_display_name,
+    std::string_view lan_interface_id) {
     RyujinxUserProfile profile;
     profile.xdg_config_home = save_profile.user_directory / "ryujinx" / "xdg-config";
     profile.data_root = profile.xdg_config_home / "Ryujinx";
@@ -272,11 +283,20 @@ RyujinxUserProfile RyujinxUserProfileService::prepare(
     }
 
     SwitchSystemDefaults::ensure_ryujinx_firmware(profile.data_root);
+    ensure_ryujinx_title_updates(profile.data_root);
+
+    const auto updates_dir = switch_title_updates_directory();
+    const std::string lan_iface{lan_interface_id};
 
     const auto template_config = save_profile.root_directory / "template" / "ryujinx" / "xdg-config" /
         "Ryujinx" / "Config.json";
     if (!std::filesystem::is_regular_file(template_config)) {
-        ensure_ryujinx_config(template_config, /*enable_ldn_mitm=*/true, /*resolution_scale=*/1);
+        ensure_ryujinx_config(
+            template_config,
+            /*enable_ldn_mitm=*/true,
+            /*resolution_scale=*/1,
+            updates_dir,
+            lan_iface);
     }
 
     const auto user_config = profile.data_root / "Config.json";
@@ -293,7 +313,7 @@ RyujinxUserProfile RyujinxUserProfileService::prepare(
         }
     }
 
-    ensure_ryujinx_config(user_config, enable_ldn_mitm, resolution_scale);
+    ensure_ryujinx_config(user_config, enable_ldn_mitm, resolution_scale, updates_dir, lan_iface);
     const std::string display =
         profile_display_name.empty() ? save_profile.username : std::string(profile_display_name);
     ensure_ryujinx_profiles_json(profile.data_root, save_profile.username, display);

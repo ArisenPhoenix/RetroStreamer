@@ -13,6 +13,7 @@
 #include "host/host_app.hpp"
 #include "host/host_app_config.hpp"
 #include "host/host_concurrent_lobby.hpp"
+#include "host/active_session_slot.hpp"
 #include "host/streaming_audio_sink.hpp"
 #include "host/host_launch_planner.hpp"
 #include "host/host_session_helpers.hpp"
@@ -33,6 +34,7 @@
 #include "host/session_runtime.hpp"
 #include "host/switch/switch_backend.hpp"
 #include "host/nds/melonds_backend.hpp"
+#include "host/pad_plan.hpp"
 #include "host/virtual_joypad_resolve.hpp"
 
 #include <algorithm>
@@ -66,6 +68,18 @@ void HostApp::apply_host_player_media_policy(HostAppConfig& config, bool host_pl
 
 void HostApp::prepare_streaming_audio_source(HostAppConfig& config, StreamingAudioSink& sink) {
     if (!config.audio || !config.audio_source.empty()) {
+        return;
+    }
+    // Concurrent lobby uses archstreamer-0..N per session slot. Creating the
+    // legacy "archstreamer" sink here only clutters the system mixer.
+    if (config.control_port.has_value()) {
+        sink.prune_unused(
+            static_cast<int>(clamp_max_session_slots(config.clients)),
+            /*keep_legacy=*/false);
+        sink.restore_default_sink();
+        std::cout
+            << "Audio capture: per-slot null sinks (archstreamer-0…); "
+            << "host speakers stay quiet unless Watch stream locally\n";
         return;
     }
     try {
@@ -420,18 +434,21 @@ int HostApp::run_direct_session(
     // udev and sdl2 enumerate pads differently — match the driver RetroArch will use.
     std::vector<std::size_t> resolved_indices;
     std::vector<ArchStreamerSdlPad> resolved_pads;
-    if (config.retroarch_joypad_driver == "udev") {
-        if (config.verbose) {
-            std::cout << "udev joysticks (ArchStreamer hunt):\n";
-        }
-        resolved_indices = find_archstreamer_udev_joypad_indices(
-            launch_plan.players,
-            config.verbose);
+    const bool use_udev = config.retroarch_joypad_driver == "udev";
+    if (config.verbose && use_udev) {
+        std::cout << "udev joysticks (ArchStreamer hunt):\n";
+    }
+    const auto shared_pad_plan = resolve_shared_pad_plan(
+        launch_plan.players,
+        config.ignore_controller.value_or(""),
+        config.verbose,
+        /*product_id_base=*/0,
+        use_udev);
+    if (use_udev) {
+        resolved_indices = shared_pad_plan.udev_indices;
+        resolved_pads = shared_pad_plan.pads;
     } else {
-        resolved_pads = find_archstreamer_sdl_pads(
-            launch_plan.players,
-            config.ignore_controller.value_or(""),
-            config.verbose);
+        resolved_pads = shared_pad_plan.pads;
         resolved_indices.reserve(resolved_pads.size());
         for (const auto& pad : resolved_pads) {
             resolved_indices.push_back(pad.sdl_index);
@@ -563,6 +580,8 @@ int HostApp::run_direct_session(
             std::cout << "Face buttons: system=" << system_key
                       << " (" << face_button_map_name(system_key) << ")\n";
         }
+        launch_env_request.pad_plan = shared_pad_plan;
+        log_pad_plan(shared_pad_plan);
     }
 
     apply_capture_and_launch_environment(
@@ -587,6 +606,21 @@ int HostApp::run_direct_session(
 
     InputRouter input_router(gamepads, &keyboard);
     input_router.set_seat_assignment(launch_plan.seats);
+    std::unique_ptr<MelonDsCtrlClient> melonds_touch_ctrl;
+    if (melonds_backend != nullptr && melonds_backend->profile() != nullptr) {
+        melonds_touch_ctrl = std::make_unique<MelonDsCtrlClient>(
+            melonds_backend->profile()->ctrl_server_name);
+        MelonDsCtrlClient* touch_ctrl = melonds_touch_ctrl.get();
+        input_router.set_touch_handler([touch_ctrl](const TouchInput& input) {
+            if (touch_ctrl == nullptr) {
+                return false;
+            }
+            if (input.pressed) {
+                return touch_ctrl->touch(input.x, input.y);
+            }
+            return touch_ctrl->touch_end();
+        });
+    }
     std::cout << "Input seats: " << launch_plan.seats.seats.size() << '\n';
     for (const auto& seat : launch_plan.seats.seats) {
         std::cout

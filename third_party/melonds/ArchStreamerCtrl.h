@@ -1,11 +1,12 @@
 /*
-    ArchStreamer control socket for mid-session LAN host/connect.
+    ArchStreamer control socket for mid-session LAN host/connect and DS touch.
     Enabled when --archstreamer-ctrl <name> is passed (QLocalServer name).
 */
 
 #ifndef ARCHSTREAMER_CTRL_H
 #define ARCHSTREAMER_CTRL_H
 
+#include <QHash>
 #include <QObject>
 #include <QByteArray>
 #include <QLocalServer>
@@ -26,6 +27,9 @@ public:
     static bool applyLanHost(const QString& playerName, int numPlayers);
     static bool applyLanConnect(const QString& playerName, const QString& host);
     static void applyLanEnd();
+    /** Absolute DS stylus: x in [0,255], y in [0,191]. */
+    static bool applyTouch(int x, int y);
+    static void applyTouchEnd();
 
 private slots:
     void onNewConnection();
@@ -36,7 +40,7 @@ private:
     void writeReply(QLocalSocket* sock, const QByteArray& reply);
 
     QLocalServer* server_ = nullptr;
-    QByteArray pending_;
+    QHash<QLocalSocket*, QByteArray> pendingBySock_;
 };
 
 #endif // ARCHSTREAMER_CTRL_H

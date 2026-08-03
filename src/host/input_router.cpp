@@ -15,6 +15,12 @@ void InputRouter::set_seat_assignment(SeatAssignment assignment) {
     std::lock_guard lock(mutex_);
     assignment_ = std::move(assignment);
     last_input_timestamp_by_player_.clear();
+    last_touch_timestamp_by_player_.clear();
+}
+
+void InputRouter::set_touch_handler(TouchHandler handler) {
+    std::lock_guard lock(mutex_);
+    touch_handler_ = std::move(handler);
 }
 
 bool InputRouter::client_has_seat(ClientId client_id) const {
@@ -99,6 +105,37 @@ bool InputRouter::route(const KeyboardInput& input) {
             << " (space=0x1 … f1=0x200 p=0x400)\n";
     }
     return true;
+}
+
+bool InputRouter::route(const TouchInput& input) {
+    TouchHandler handler;
+    {
+        std::lock_guard lock(mutex_);
+        if (!touch_handler_) {
+            return false;
+        }
+        const auto port = find_retroarch_port(assignment_, input.client_id, input.local_player);
+        if (!port.has_value()) {
+            return false;
+        }
+
+        const PlayerKey key{input.client_id, input.local_player};
+        const auto last_timestamp = last_touch_timestamp_by_player_.find(key);
+        if (last_timestamp != last_touch_timestamp_by_player_.end() &&
+            input.timestamp_us < last_timestamp->second) {
+            return false;
+        }
+        last_touch_timestamp_by_player_[key] = input.timestamp_us;
+        handler = touch_handler_;
+        if (!first_touch_logged_) {
+            first_touch_logged_ = true;
+            std::cout
+                << "First touch input: client " << static_cast<int>(input.client_id)
+                << " (" << input.x << "," << input.y
+                << ") pressed=" << (input.pressed ? 1 : 0) << '\n';
+        }
+    }
+    return handler(input);
 }
 
 void InputRouter::apply_emulator_control(const EmulatorControl& control) {

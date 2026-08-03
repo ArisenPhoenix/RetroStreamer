@@ -1,6 +1,7 @@
 #include "host/switch/switch_backend.hpp"
 
 #include "host/gpu_select.hpp"
+#include "host/pad_plan.hpp"
 #include "host/standalone_emulator.hpp"
 
 namespace archstreamer {
@@ -38,6 +39,12 @@ void YuzuBackend::assign_launch_env_profile(
     SwitchBackendPrepResult& prep) const {
     env.yuzu_profile = std::move(prep.yuzu_profile);
     env.ryujinx_profile.reset();
+    // Yuzu binds by GUID under the shared IGNORE blacklist (not exclusive EXCEPT).
+    PadPlan plan;
+    plan.mode = PadPlanMode::Shared;
+    plan.pads = prep.resolved_pads;
+    plan.ignore_devices = env.ignore_devices;
+    env.pad_plan = std::move(plan);
 }
 
 } // namespace archstreamer

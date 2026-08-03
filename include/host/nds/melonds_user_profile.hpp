@@ -20,6 +20,7 @@ struct MelonDsUserProfile {
     std::filesystem::path xdg_config_home;
     std::filesystem::path config_dir;   // .../melonDS
     std::filesystem::path config_path;  // .../melonDS.toml
+    /** SaveFilePath — shared with RetroArch: <user>/saves */
     std::filesystem::path save_directory;
     /** QLocalServer name passed as --archstreamer-ctrl (socket under /tmp on Linux). */
     std::string ctrl_server_name;

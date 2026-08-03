@@ -1,5 +1,6 @@
 #include "host/switch/switch_backend.hpp"
 
+#include "host/pad_plan.hpp"
 #include "host/switch_save_share.hpp"
 
 #include <algorithm>
@@ -80,6 +81,9 @@ void log_switch_backend_prep(
     const std::optional<GpuDevice>& resolved_gpu,
     std::optional<int> slot_index) {
     (void)backend;
+    if (env.pad_plan.has_value()) {
+        log_pad_plan(*env.pad_plan, slot_index);
+    }
     if (slot_index.has_value()) {
         if (env.ryujinx_profile.has_value()) {
             std::cout

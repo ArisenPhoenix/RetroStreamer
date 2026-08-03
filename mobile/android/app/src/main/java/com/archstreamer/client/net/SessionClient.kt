@@ -149,6 +149,22 @@ data class JoinedPlaySession(
         inputSocket.send(datagram)
     }
 
+    /** Absolute DS stylus (0–255 × 0–191). [pressed]=false sends TOUCH_END on the host. */
+    fun sendTouch(x: Int, y: Int, pressed: Boolean, localPlayer: Int = 0) {
+        inputSequence += 1
+        val packet = PacketCodec.touchInput(
+            clientId = welcome.clientId,
+            localPlayer = localPlayer,
+            sequence = inputSequence,
+            timestampUs = System.nanoTime() / 1_000L,
+            x = x,
+            y = y,
+            pressed = pressed,
+        )
+        val datagram = DatagramPacket(packet, packet.size, inputAddress, inputPort)
+        inputSocket.send(datagram)
+    }
+
     /** Press then release a remoted key (e.g. P → PAUSE_TOGGLE). */
     fun pulseKeyboardKey(keyMask: Int, holdMs: Long = 40L) {
         sendKeyboard(keyMask)

@@ -15,7 +15,7 @@
 namespace archstreamer {
 
 constexpr std::uint32_t ProtocolMagic = 0x41525354; // "ARST"
-constexpr std::uint16_t ProtocolVersion = 18;
+constexpr std::uint16_t ProtocolVersion = 19;
 constexpr std::uint8_t MaxRemoteClients = 2;
 constexpr std::uint8_t MaxPlayersPerClient = 2;
 constexpr std::uint8_t MaxRetroArchPorts = 5; // Ports 0-3 plus a host player if desired.
@@ -67,6 +67,8 @@ enum class PacketType : std::uint8_t {
     PasswordChangeRequired = 30,
     // Client → host: set a new password (join handshake or Profile side-channel).
     PasswordChange = 31,
+    // Client → host: absolute DS stylus / bottom-screen touch (0–255 × 0–191).
+    TouchInput = 32,
 };
 
 enum class ClientRole : std::uint8_t {
@@ -241,6 +243,17 @@ struct KeyboardInput {
     ClientId client_id = 0;
     LocalPlayerIndex local_player = 0;
     KeyboardState state;
+};
+
+/** Absolute DS touchscreen sample (client → host UDP). */
+struct TouchInput {
+    ClientId client_id = 0;
+    LocalPlayerIndex local_player = 0;
+    std::uint32_t sequence = 0;
+    std::uint64_t timestamp_us = 0;
+    std::uint16_t x = 0; // 0–255
+    std::uint16_t y = 0; // 0–191
+    bool pressed = false; // true = down/move, false = up
 };
 
 /**
@@ -700,6 +713,7 @@ using PacketPayload = std::variant<
     MediaVideoPending,
     MediaVideoReady,
     KeyboardInput,
+    TouchInput,
     EmulatorControl,
     ClientLogBundle,
     PasswordChangeRequired,

@@ -1,8 +1,9 @@
 #pragma once
 
 #include "host/gpu_select.hpp"
-#include "host/standalone_emulator.hpp"
 #include "host/nds/melonds_user_profile.hpp"
+#include "host/pad_plan.hpp"
+#include "host/standalone_emulator.hpp"
 
 #include <optional>
 #include <string>
@@ -33,7 +34,13 @@ struct EmulatorLaunchEnvRequest {
     bool stream_audio = false;       // config.audio
     bool host_plays_locally = false; // Host Player without remote stream
     std::string audio_source;        // may be "*.monitor" when capturing a sink
-    std::string ignore_devices;      // SDL_GAMECONTROLLER_IGNORE_DEVICES value
+    /** Fallback when pad_plan is unset (prefer PadPlan for all new paths). */
+    std::string ignore_devices;
+    /**
+     * Session pad contract (Shared IGNORE vs Exclusive EXCEPT). When set,
+     * apply_pad_plan owns SDL filter env — profile launch envs must not set them.
+     */
+    std::optional<PadPlan> pad_plan;
 
     bool use_virtual_capture = false;
     bool gamescope_capture = false;

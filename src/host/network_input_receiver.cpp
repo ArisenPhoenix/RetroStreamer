@@ -102,6 +102,12 @@ void NetworkInputReceiver::poll() {
                 } else if (auto* demux = std::get_if<InputRouterDemux*>(&target_); demux != nullptr) {
                     (*demux)->route(*keys);
                 }
+            } else if (auto* touch = std::get_if<TouchInput>(&payload); touch != nullptr) {
+                if (auto* router = std::get_if<InputRouter*>(&target_); router != nullptr) {
+                    (*router)->route(*touch);
+                } else if (auto* demux = std::get_if<InputRouterDemux*>(&target_); demux != nullptr) {
+                    (*demux)->route(*touch);
+                }
             }
         } catch (const std::exception& error) {
             std::cerr << "Ignoring bad input packet: " << error.what() << '\n';

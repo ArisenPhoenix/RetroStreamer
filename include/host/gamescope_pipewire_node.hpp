@@ -11,9 +11,10 @@ namespace archstreamer {
  * Pick a gamescope PipeWire Video/Source node id from a `pw-dump` JSON document.
  *
  * Prefers a node owned by `owner_pid` (OS pid on the PipeWire Client linked by
- * client.id, or on the node props). Ownership includes process-group peers and
- * descendants of the gamescope wrapper. Falls back to a single unmatched
- * candidate only when exactly one gamescope Video/Source exists.
+ * client.id — especially pipewire.sec.pid — or on the node props). Ownership
+ * includes process-group peers and descendants of the gamescope wrapper.
+ * When owner_pid > 0, never returns an unowned node (avoids concurrent slots
+ * latching the same gamescope source and sharing / stalling video).
  */
 [[nodiscard]] std::optional<std::string> select_gamescope_pipewire_node_from_dump(
     std::string_view pw_dump_json,

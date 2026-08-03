@@ -78,7 +78,12 @@ ProcessEnvironment build_emulator_launch_environment(const EmulatorLaunchEnvRequ
         request.stream_audio,
         request.host_plays_locally,
         request.audio_source));
-    env.merge(input_launch_environment(request.ignore_devices));
+    // Pad filters: one applier. Profile env below must not set IGNORE/EXCEPT.
+    if (request.pad_plan.has_value()) {
+        apply_pad_plan(env, *request.pad_plan);
+    } else {
+        env.merge(input_launch_environment(request.ignore_devices));
+    }
     if (request.render_gpu.has_value()) {
         env.merge_pairs(render_gpu_environment(*request.render_gpu));
     }
@@ -92,23 +97,13 @@ ProcessEnvironment build_emulator_launch_environment(const EmulatorLaunchEnvRequ
     }
     if (request.ryujinx_profile.has_value()) {
         env.merge_pairs(ryujinx_launch_environment(*request.ryujinx_profile));
-        // Exclusive whitelist must be alone: a present IGNORE var (even "") can fight
-        // EXCEPT inside some SDL builds / AppImage wrappers. Unset, don't set empty.
-        if (!request.ryujinx_profile->sdl_device_filter.empty()) {
-            env.clear_var("SDL_GAMECONTROLLER_IGNORE_DEVICES");
-            env.set(
-                "SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT",
-                request.ryujinx_profile->sdl_device_filter);
-        }
     }
     if (request.melonds_profile.has_value()) {
         env.merge_pairs(melonds_launch_environment(*request.melonds_profile));
-        if (!request.melonds_profile->sdl_device_filter.empty()) {
-            env.clear_var("SDL_GAMECONTROLLER_IGNORE_DEVICES");
-            env.set(
-                "SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT",
-                request.melonds_profile->sdl_device_filter);
-        }
+    }
+    // Re-apply pad plan last so profile merge cannot resurrect IGNORE alongside EXCEPT.
+    if (request.pad_plan.has_value()) {
+        apply_pad_plan(env, *request.pad_plan);
     }
     return env;
 }

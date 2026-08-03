@@ -251,6 +251,18 @@ ByteBuffer serialize_payload(const KeyboardInput& payload) {
     return writer.take();
 }
 
+ByteBuffer serialize_payload(const TouchInput& payload) {
+    Writer writer;
+    writer.write_pod<ClientId>(payload.client_id);
+    writer.write_pod<LocalPlayerIndex>(payload.local_player);
+    writer.write_pod<std::uint32_t>(payload.sequence);
+    writer.write_pod<std::uint64_t>(payload.timestamp_us);
+    writer.write_pod<std::uint16_t>(payload.x);
+    writer.write_pod<std::uint16_t>(payload.y);
+    writer.write_bool(payload.pressed);
+    return writer.take();
+}
+
 ByteBuffer serialize_payload(const ViewerHeartbeat& payload) {
     Writer writer;
     writer.write_pod<ClientId>(payload.client_id);
@@ -489,6 +501,7 @@ PacketType packet_type_for(const ClientConfig&) { return PacketType::ClientConfi
 PacketType packet_type_for(const SeatAssignment&) { return PacketType::SeatAssignment; }
 PacketType packet_type_for(const ControllerInput&) { return PacketType::ControllerInput; }
 PacketType packet_type_for(const KeyboardInput&) { return PacketType::KeyboardInput; }
+PacketType packet_type_for(const TouchInput&) { return PacketType::TouchInput; }
 PacketType packet_type_for(const ViewerHeartbeat&) { return PacketType::ViewerHeartbeat; }
 PacketType packet_type_for(const ErrorPacket&) { return PacketType::Error; }
 PacketType packet_type_for(const GameListRequest&) { return PacketType::GameListRequest; }
@@ -551,6 +564,10 @@ ByteBuffer serialize_packet(const ControllerInput& payload) {
 }
 
 ByteBuffer serialize_packet(const KeyboardInput& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const TouchInput& payload) {
     return serialize_packet_impl(payload);
 }
 
@@ -724,6 +741,18 @@ KeyboardInput read_keyboard_input(Reader& reader) {
     payload.state.sequence = reader.read_pod<std::uint32_t>();
     payload.state.timestamp_us = reader.read_pod<std::uint64_t>();
     payload.state.keys = reader.read_pod<std::uint32_t>();
+    return payload;
+}
+
+TouchInput read_touch_input(Reader& reader) {
+    TouchInput payload;
+    payload.client_id = reader.read_pod<ClientId>();
+    payload.local_player = reader.read_pod<LocalPlayerIndex>();
+    payload.sequence = reader.read_pod<std::uint32_t>();
+    payload.timestamp_us = reader.read_pod<std::uint64_t>();
+    payload.x = reader.read_pod<std::uint16_t>();
+    payload.y = reader.read_pod<std::uint16_t>();
+    payload.pressed = reader.read_bool();
     return payload;
 }
 
@@ -983,6 +1012,8 @@ PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
             return read_controller_input(payload_reader);
         case PacketType::KeyboardInput:
             return read_keyboard_input(payload_reader);
+        case PacketType::TouchInput:
+            return read_touch_input(payload_reader);
         case PacketType::ViewerHeartbeat:
             return read_viewer_heartbeat(payload_reader);
         case PacketType::Error:

@@ -4,6 +4,7 @@
 #include "host/launch_environment.hpp"
 #include "host/nds/melonds_ctrl_client.hpp"
 #include "host/nds/melonds_user_profile.hpp"
+#include "host/pad_plan.hpp"
 #include "host/retroarch_process.hpp"
 #include "host/save_profile.hpp"
 #include "host/standalone_emulator.hpp"
@@ -36,6 +37,7 @@ struct MelonDsBackendPrepContext {
 struct MelonDsBackendPrepResult {
     MelonDsUserProfile profile;
     std::vector<ArchStreamerSdlPad> resolved_pads;
+    std::optional<PadPlan> pad_plan;
 };
 
 /**

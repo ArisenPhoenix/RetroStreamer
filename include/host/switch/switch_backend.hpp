@@ -3,6 +3,7 @@
 #include "host/gpu_select.hpp"
 #include "host/launch_environment.hpp"
 #include "host/media_capture.hpp"
+#include "host/pad_plan.hpp"
 #include "host/retroarch_process.hpp"
 #include "host/save_profile.hpp"
 #include "host/standalone_emulator.hpp"
@@ -30,6 +31,8 @@ struct SwitchBackendPrepContext {
     /** Caller-resolved Ryujinx profile name (Steam persona or session hello). */
     std::string profile_display_name;
     std::vector<ArchStreamerSdlPad> resolved_pads;
+    /** Concurrent session slot (0/1/…) for LDN netns IP assignment. */
+    std::size_t slot_index = 0;
 };
 
 struct SwitchBackendPrepResult {
@@ -40,6 +43,7 @@ struct SwitchBackendPrepResult {
     std::optional<RyujinxUserProfile> ryujinx_profile;
     std::optional<YuzuUserProfile> yuzu_profile;
     std::vector<ArchStreamerSdlPad> resolved_pads;
+    std::optional<PadPlan> pad_plan;
 };
 
 /**

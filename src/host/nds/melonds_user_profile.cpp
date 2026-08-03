@@ -149,7 +149,9 @@ MelonDsUserProfile prepare_melonds_user_profile(
     profile.xdg_config_home = save_profile.user_directory / "melonds" / "xdg-config";
     profile.config_dir = profile.xdg_config_home / "melonDS";
     profile.config_path = profile.config_dir / "melonDS.toml";
-    profile.save_directory = save_profile.user_directory / "melonds" / "saves";
+    // Same per-user save tree as RetroArch (…/<user>/saves) so standalone melonDS
+    // picks up existing .sav files (e.g. Pokemon Black Version 2.sav).
+    profile.save_directory = save_profile.savefile_directory;
     profile.player_name = sanitize_player_name(profile_display_name);
     profile.ctrl_server_name = melonds_ctrl_server_name_for_slot(slot_index);
     profile.sdl_device_filter = seed.sdl_device_filter;
@@ -255,9 +257,7 @@ std::vector<std::pair<std::string, std::string>> melonds_launch_environment(
     if (!profile.sdl_gamecontroller_config.empty()) {
         env.emplace_back("SDL_GAMECONTROLLERCONFIG", profile.sdl_gamecontroller_config);
     }
-    if (!profile.sdl_device_filter.empty()) {
-        env.emplace_back("SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT", profile.sdl_device_filter);
-    }
+    // SDL IGNORE/EXCEPT come from PadPlan via apply_pad_plan — not here.
     return env;
 }
 

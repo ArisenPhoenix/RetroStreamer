@@ -3,7 +3,7 @@
 #include "host/nds/default_melonds_platform.hpp"
 #include "host/nds/melonds_ctrl_client.hpp"
 #include "host/nds/melonds_user_profile.hpp"
-#include "host/virtual_joypad_resolve.hpp"
+#include "host/pad_plan.hpp"
 
 #include <iostream>
 #include <utility>
@@ -46,16 +46,20 @@ MelonDsBackendPrepResult MelonDsBackend::prepare(
             ctx.product_id_base);
     }
 
-    const auto exclusive = resolve_exclusive_archstreamer_pads(
+    auto pad_plan = resolve_exclusive_pad_plan(
         ctx.players,
         ctx.verbose,
         ctx.product_id_base,
         result.resolved_pads);
-    result.resolved_pads = exclusive.pads;
+    if (!pad_plan.exclusive()) {
+        pad_plan.ignore_devices = ctx.ignore_controller;
+    }
+    result.resolved_pads = pad_plan.pads;
+    result.pad_plan = pad_plan;
 
     MelonDsProfileSeed seed;
     seed.display_layout = ctx.display_layout;
-    apply_melonds_pad_seed(seed, result.resolved_pads, exclusive.sdl_device_filter);
+    apply_melonds_pad_seed(seed, result.resolved_pads, pad_plan.exclusive_filter);
 
     result.profile = prepare_melonds_user_profile(
         ctx.save_profile,
@@ -80,6 +84,9 @@ void MelonDsBackend::assign_launch_env_profile(
     EmulatorLaunchEnvRequest& env,
     MelonDsBackendPrepResult& prep) const {
     env.melonds_profile = std::move(prep.profile);
+    if (prep.pad_plan.has_value()) {
+        env.pad_plan = std::move(prep.pad_plan);
+    }
 }
 
 bool MelonDsBackend::lan_host(std::string_view player_name, int num_players) const {
@@ -136,7 +143,9 @@ void log_melonds_backend_prep(
     const MelonDsBackendPrepResult& prep,
     std::optional<int> slot_index) {
     (void)backend;
-    (void)prep;
+    if (env.pad_plan.has_value()) {
+        log_pad_plan(*env.pad_plan, slot_index);
+    }
     if (!env.melonds_profile.has_value()) {
         return;
     }

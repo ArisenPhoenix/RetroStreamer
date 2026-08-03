@@ -337,6 +337,27 @@ object PacketCodec {
         return wrap(PacketType.KeyboardInput, payload)
     }
 
+    fun touchInput(
+        clientId: Int,
+        localPlayer: Int,
+        sequence: Long,
+        timestampUs: Long,
+        x: Int,
+        y: Int,
+        pressed: Boolean,
+    ): ByteArray {
+        val payload = WireWriter().apply {
+            writeU8(clientId)
+            writeU8(localPlayer)
+            writeU32(sequence)
+            writeU64(timestampUs)
+            writeU16(x.coerceIn(0, 255))
+            writeU16(y.coerceIn(0, 191))
+            writeBool(pressed)
+        }.toByteArray()
+        return wrap(PacketType.TouchInput, payload)
+    }
+
     fun viewerHeartbeat(
         clientId: Int,
         sequence: Long,

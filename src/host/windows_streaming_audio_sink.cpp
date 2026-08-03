@@ -267,6 +267,8 @@ std::string StreamingAudioSink::monitor_source_for_slot(int slot_index) {
     return slot_sink_name(slot_index) + ".monitor";
 }
 
+void StreamingAudioSink::prune_unused(int /*max_slots*/, bool /*keep_legacy*/) {}
+
 void StreamingAudioSink::track_emulator_process(int process_id, int slot_index) {
     if (process_id <= 0) {
         return;

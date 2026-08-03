@@ -139,6 +139,8 @@ data class UiState(
      * When true the touch overlay is hidden and pad events drive [ControllerState].
      */
     val physicalInputActive: Boolean = false,
+    /** Physical remap profile under edit (shared JSON document). */
+    val editingMapProfile: ControllerMapProfile = ControllerMapProfile.DEFAULT,
     /** Live LAN/VPN hosts from UDP discovery (ASDISC). */
     val discoveredHosts: List<DiscoveredHost> = emptyList(),
     /** Short discovery status for the Client tab. */
@@ -151,6 +153,9 @@ data class UiState(
 class ClientViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = application.getSharedPreferences(PREFS_NAME, Application.MODE_PRIVATE)
     private var overlayProfiles = OverlayProfileStore.loadAll(prefs).toMutableMap()
+    private val buttonMapFile =
+        File(application.filesDir, ControllerMapDocument.FILE_NAME)
+    private var buttonMapDocument = loadButtonMapDocument()
     private var passwordChangeLatch: java.util.concurrent.CountDownLatch? = null
     @Volatile private var passwordChangeResult: String = ""
 
@@ -170,6 +175,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             editingOverlayFamily = OverlaySystemFamily.Standard,
             editingOverlayProfile = overlayProfiles[OverlaySystemFamily.Standard]
                 ?: OverlayProfile.DEFAULT,
+            editingMapProfile = buttonMapDocument.profile(ControllerMapFamily.Standard),
             recentGameIds = loadRecentGameIds(
                 prefs.getString(KEY_HOST, "").orEmpty(),
                 prefs.getString(KEY_CONTROL_PORT, Protocol.DEFAULT_CONTROL_PORT.toString())
@@ -261,15 +267,119 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private fun profileFor(family: OverlaySystemFamily): OverlayProfile =
         overlayProfiles[family] ?: OverlayProfile.DEFAULT
 
+    private fun mapProfileFor(family: OverlaySystemFamily): ControllerMapProfile =
+        buttonMapDocument.profile(OverlaySystemFamily.toMapFamily(family))
+
+    private fun loadButtonMapDocument(): ControllerMapDocument {
+        val loaded = ControllerMapStore.load(buttonMapFile)
+        if (buttonMapFile.isFile) {
+            return loaded
+        }
+        // First run: migrate overlay face swaps into the portable document.
+        var doc = loaded
+        var changed = false
+        OverlaySystemFamily.entries.forEach { family ->
+            val overlay = overlayProfiles[family] ?: return@forEach
+            if (!overlay.swapNw && !overlay.swapSe) return@forEach
+            val mapFamily = OverlaySystemFamily.toMapFamily(family)
+            val profile = doc.profile(mapFamily).copy(
+                swapNw = overlay.swapNw,
+                swapSe = overlay.swapSe,
+            )
+            doc = doc.withProfile(mapFamily, profile)
+            changed = true
+        }
+        if (changed) {
+            ControllerMapStore.save(buttonMapFile, doc)
+        }
+        return doc
+    }
+
+    private fun persistButtonMapDocument() {
+        ControllerMapStore.save(buttonMapFile, buttonMapDocument)
+    }
+
+    /**
+     * When a custom overlay is saved, mirror remappable control Actions into the shared
+     * controller_button_map.json so desktop can reuse the same remaps.
+     */
+    private fun syncButtonMapRemapsFromItems(family: OverlaySystemFamily, items: List<OverlayItem>) {
+        fun storedAction(kind: OverlayControlKind): ControllerMapAction {
+            val item = items.firstOrNull { it.kind == kind } ?: return ControllerMapAction.Default
+            if (item.action == OverlayAction.Default || item.resolvedAction() == kind.defaultAction) {
+                return ControllerMapAction.Default
+            }
+            return overlayActionToMapAction(item.resolvedAction())
+        }
+        val mapFamily = OverlaySystemFamily.toMapFamily(family)
+        val current = buttonMapDocument.profile(mapFamily)
+        val next = current.copy(
+            select = storedAction(OverlayControlKind.Select),
+            start = storedAction(OverlayControlKind.Start),
+            l = storedAction(OverlayControlKind.ShoulderL),
+            r = storedAction(OverlayControlKind.ShoulderR),
+            l2 = storedAction(OverlayControlKind.ShoulderL2),
+            r2 = storedAction(OverlayControlKind.ShoulderR2),
+            l3 = storedAction(OverlayControlKind.LeftStick),
+            r3 = storedAction(OverlayControlKind.RightStick),
+        )
+        buttonMapDocument = buttonMapDocument.withProfile(mapFamily, next)
+        persistButtonMapDocument()
+        _state.update {
+            if (it.editingOverlayFamily == family) it.copy(editingMapProfile = next) else it
+        }
+    }
+
+    private fun overlayActionToMapAction(action: OverlayAction): ControllerMapAction = when (action) {
+        OverlayAction.Default -> ControllerMapAction.Default
+        OverlayAction.ButtonA -> ControllerMapAction.A
+        OverlayAction.ButtonB -> ControllerMapAction.B
+        OverlayAction.ButtonX -> ControllerMapAction.X
+        OverlayAction.ButtonY -> ControllerMapAction.Y
+        OverlayAction.ButtonL -> ControllerMapAction.L
+        OverlayAction.ButtonR -> ControllerMapAction.R
+        OverlayAction.ButtonL2 -> ControllerMapAction.L2
+        OverlayAction.ButtonR2 -> ControllerMapAction.R2
+        OverlayAction.Select -> ControllerMapAction.Select
+        OverlayAction.Start -> ControllerMapAction.Start
+        OverlayAction.Menu -> ControllerMapAction.Menu
+        OverlayAction.LeftStick -> ControllerMapAction.LeftStick
+        OverlayAction.RightStick -> ControllerMapAction.RightStick
+        OverlayAction.FastForward -> ControllerMapAction.FastForward
+    }
+
+    private fun updateEditingMapProfile(transform: (ControllerMapProfile) -> ControllerMapProfile) {
+        val overlayFamily = _state.value.editingOverlayFamily
+        val mapFamily = OverlaySystemFamily.toMapFamily(overlayFamily)
+        val next = transform(mapProfileFor(overlayFamily))
+        buttonMapDocument = buttonMapDocument.withProfile(mapFamily, next)
+        persistButtonMapDocument()
+        // Mirror face swaps into overlay prefs so touch pad matches physical feel.
+        val overlay = profileFor(overlayFamily).copy(swapNw = next.swapNw, swapSe = next.swapSe)
+        overlayProfiles[overlayFamily] = overlay
+        OverlayProfileStore.save(prefs, overlayFamily, overlay)
+        _state.update {
+            val live = !it.playing || sessionFamily == overlayFamily
+            it.copy(
+                editingMapProfile = next,
+                editingOverlayProfile = overlay,
+                swapNw = if (live) next.swapNw else it.swapNw,
+                swapSe = if (live) next.swapSe else it.swapSe,
+            )
+        }
+        applyLiveOverlayFrom(overlayFamily, overlay)
+    }
+
     private fun applyLiveOverlayFrom(family: OverlaySystemFamily, profile: OverlayProfile) {
         if (!_state.value.playing || family != sessionFamily) return
         val orientation = _state.value.overlayOrientation
+        val mapProfile = mapProfileFor(family)
         _state.update {
             it.copy(
                 padLayout = profile.resolveLayout(sessionSystemKey),
                 overlayOpacity = profile.clampedOpacity(),
-                swapNw = profile.swapNw,
-                swapSe = profile.swapSe,
+                swapNw = mapProfile.swapNw,
+                swapSe = mapProfile.swapSe,
                 overlayItems = profile.resolveItems(sessionSystemKey, orientation),
             )
         }
@@ -277,11 +387,13 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun publishEditing(family: OverlaySystemFamily) {
         val profile = profileFor(family)
+        val mapProfile = mapProfileFor(family)
         val orientation = _state.value.overlayOrientation
         _state.update {
             it.copy(
                 editingOverlayFamily = family,
                 editingOverlayProfile = profile,
+                editingMapProfile = mapProfile,
                 overlayItems = if (it.playing) {
                     it.overlayItems
                 } else {
@@ -353,11 +465,11 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setOverlaySwapNw(value: Boolean) {
-        updateEditingProfile { it.copy(swapNw = value) }
+        updateEditingMapProfile { it.copy(swapNw = value) }
     }
 
     fun setOverlaySwapSe(value: Boolean) {
-        updateEditingProfile { it.copy(swapSe = value) }
+        updateEditingMapProfile { it.copy(swapSe = value) }
     }
 
     fun setOverlayOpacity(value: Float) {
@@ -499,6 +611,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         )
         overlayProfiles[family] = next
         OverlayProfileStore.save(prefs, family, next)
+        syncButtonMapRemapsFromItems(family, custom.itemsFor(snap.overlayOrientation))
         _state.update {
             it.copy(
                 overlayEditing = false,
@@ -589,8 +702,9 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun onPhysicalPadState(state: ControllerState) {
         if (!_state.value.physicalInputActive) return
-        val snap = _state.value
-        latestPad = ControllerState.applyFaceButtonSwaps(state, snap.swapNw, snap.swapSe)
+        // Remaps come from the overlay Action editor; face swaps from the shared map profile.
+        val map = mapProfileFor(sessionFamily)
+        latestPad = ControllerState.applyFaceButtonSwaps(state, map.swapNw, map.swapSe)
     }
 
     /** Overlay Action remap for a control kind (Custom layout); else the kind default. */
@@ -1095,9 +1209,12 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
      * Absolute pause from UI truth: drawer open pauses; control editing is the only
      * exception (game stays live under the editor). Never toggles / inverts.
      *
+     * Only pause once the client has decoded at least one video frame — early drawer
+     * open during stream init must not send EmulatorControl pause (Ryujinx F5 is a
+     * toggle; On→Off during boot can leave the emu stuck paused and block cutover).
+     *
      * Debounced: a same-frame Open→Closed (scrim eating the menu press, effect restart,
-     * etc.) must not send pause=on then pause=off — Ryujinx F5 is a toggle, so that
-     * pair desyncs the host cache from the real emulator state.
+     * etc.) must not send pause=on then pause=off — that pair also desyncs F5.
      */
     private fun syncMenuPause() {
         if (!_state.value.playing) {
@@ -1110,8 +1227,10 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         menuPauseJob = viewModelScope.launch(Dispatchers.IO) {
             delay(MENU_PAUSE_DEBOUNCE_MS)
             if (!_state.value.playing) return@launch
-            val wantPaused = menuDrawerOpen && !_state.value.overlayEditing
-            // Initial Closed while playing: do not poke the host.
+            val hasFrames = session?.videoPlayer?.hasDecodedFrames() == true
+            val wantPaused =
+                menuDrawerOpen && !_state.value.overlayEditing && hasFrames
+            // Initial Closed while playing / drawer open before first frame: do not poke.
             if (lastSentMenuPause == null && !wantPaused) return@launch
             if (lastSentMenuPause == wantPaused) return@launch
             lastSentMenuPause = wantPaused
@@ -1157,9 +1276,11 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * Play-menu pause switch (same absolute On/Off model as fast-forward).
      * Failsafe when menu F5 desyncs: flip Pause to match what you want the game to do.
+     * Pause On is ignored until at least one video frame has been decoded.
      */
     fun setPaused(enabled: Boolean) {
         if (!_state.value.playing) return
+        if (enabled && session?.videoPlayer?.hasDecodedFrames() != true) return
         if (_state.value.paused == enabled) return
         menuPauseJob?.cancel()
         menuPauseJob = null
@@ -1395,6 +1516,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 sessionSystemKey = game.systemKey
                 sessionFamily = OverlaySystemFamily.fromSystemKey(game.systemKey)
                 val profile = profileFor(sessionFamily)
+                val mapProfile = mapProfileFor(sessionFamily)
                 val recentIds = rememberRecentGame(game.id, host, snap.controlPort)
                 _state.update {
                     it.copy(
@@ -1404,8 +1526,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                         videoPlayer = joined.videoPlayer,
                         padLayout = profile.resolveLayout(game.systemKey),
                         overlayOpacity = profile.clampedOpacity(),
-                        swapNw = profile.swapNw,
-                        swapSe = profile.swapSe,
+                        swapNw = mapProfile.swapNw,
+                        swapSe = mapProfile.swapSe,
                         overlayItems = profile.resolveItems(
                             game.systemKey,
                             _state.value.overlayOrientation,
@@ -1413,6 +1535,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                         overlayEditing = false,
                         editingOverlayFamily = sessionFamily,
                         editingOverlayProfile = profile,
+                        editingMapProfile = mapProfile,
                         reconnectHintGameId = null,
                         status = "Playing ${game.displayName}",
                         mediaHint = run {
@@ -1616,6 +1739,15 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                     )
                     return@launch
                 }
+                // Drawer may have opened before the first decoded frame; apply pause once
+                // frames exist so we still pause for a long-open menu after init.
+                if (menuDrawerOpen &&
+                    lastSentMenuPause != true &&
+                    !_state.value.overlayEditing &&
+                    active.videoPlayer?.hasDecodedFrames() == true
+                ) {
+                    syncMenuPause()
+                }
                 delay(1_000L)
             }
         }
@@ -1654,6 +1786,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                                     mediaHint = "Video UDP :${promoted.port}",
                                 )
                             }
+                            // Staging Ready means frames exist; apply deferred drawer pause.
+                            if (menuDrawerOpen) syncMenuPause()
                         }
                     }
                     is IncomingPacket.Ended -> {

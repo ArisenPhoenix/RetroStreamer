@@ -244,7 +244,7 @@ Flatpak GUI Host tab launches a **native** `host_runner` via `flatpak-spawn --ho
 
 ## Save Profiles
 
-The host keeps save data under a configurable save root. The default root is `~/.local/share/archstreamer/saves`.
+The host keeps save data under a configurable save root (Settings → **Client save root**, or `host_runner --save-root`). The default root is `~/.local/share/archstreamer/saves`. Flatpak builds must use a path visible to the sandbox (home, or an explicit `flatpak override --filesystem=…:rw`).
 
 Each username gets its own profile directory:
 
@@ -351,7 +351,7 @@ Each `ControllerState` carries a monotonic `timestamp_us` captured when the clie
 
 Client backends normalize controller input before transmission. Stick axes use signed `-32768..32767` values with a deadzone around center, so small Bluetooth/controller drift becomes zero. Triggers use unsigned `0..65535` values with a small lower deadzone. Clients send a packet only when controls change (after the first sample), while still polling at a high cadence.
 
-Face buttons use a fixed NESW letter map on the wire (`A`=South, `B`=East, `X`=West, `Y`=North). Optional client-side **Swap NW** / **Swap SE** checkboxes (Game Options) remapped those pairs before send so DualShock vs Xbox muscle memory can be corrected without host-side per-system remaps. The host stays a dumb relay for face bits.
+Face buttons use a fixed NESW letter map on the wire (`A`=South, `B`=East, `X`=West, `Y`=North). Client-side **Controller mapping** (Game Options, per system family) remaps Select/Start/L/R/L2/R2/L3/R3 and optional **Swap NW** / **Swap SE** before send. Desktop and mobile share the same portable JSON (`controller_button_map.json`, see `shared/` and `common/controller_button_map.hpp`). Stick axes are never remapped (only stick-click bits). Remapped Fast-forward uses `EmulatorControl` on the control channel. The host stays a dumb relay for face bits.
 
 On Linux, the virtual gamepad implementation uses `uinput`. RetroArch can then see each assigned player as a normal controller. The process needs permission to open `/dev/uinput`, which usually means a udev rule, running with elevated privileges during early testing, or adding the user to the relevant device-access group depending on the distro setup.
 
@@ -395,7 +395,7 @@ The Qt GUI tabs are organized by concern:
 - **Client** — connect/join, game picker, controllers, role/mode
 - **Host** — ports, lobby mode, stream toggles, advertise
 - **Stream** — client quality/size and A/V receive options; host capture resolution, GPU, renderer scales
-- **Game Options** — face-button swaps, pad OSK test button, per-game helpers
+- **Game Options** — per-family controller remaps + face-button swaps, pad OSK test button, per-game helpers
 - **Profile** — usernames / Steam account
 - **Settings** — art/ROM/meta roots, audio device refresh, lobby wait, log level
 

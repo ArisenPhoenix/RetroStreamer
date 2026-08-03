@@ -105,6 +105,7 @@ set(ARCHSTREAMER_CORE_SOURCES
     src/common/catalog_presenter.cpp
     src/common/cli_common.cpp
     src/common/client_logs.cpp
+    src/common/controller_button_map.cpp
     src/common/controller_normalization.cpp
     src/common/discovery.cpp
     src/common/game_assets.cpp

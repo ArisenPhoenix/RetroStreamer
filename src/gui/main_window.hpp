@@ -56,6 +56,12 @@ private:
     QWidget* build_profile_tab();
     QWidget* build_settings_tab();
     void refresh_game_options_ui();
+    void sync_controller_map_editor_ui();
+    void commit_controller_map_editor_ui();
+    ControllerMapFamily selected_controller_map_family() const;
+    std::filesystem::path controller_map_file_path() const;
+    void load_controller_map_document();
+    void save_controller_map_document();
 
     void refresh_client_controllers();
 #ifdef ARCHSTREAMER_HAS_HOST
@@ -91,6 +97,14 @@ private:
     GuiLogLevel current_log_level() const;
     int session_timeout_seconds() const;
     std::filesystem::path art_root_path() const;
+#ifdef ARCHSTREAMER_HAS_HOST
+    std::filesystem::path save_root_path() const;
+    void update_save_root_status();
+    void browse_save_root();
+    void create_save_root();
+    void sync_save_root_field_to_path(const std::filesystem::path& path);
+    void persist_valid_save_root(const std::filesystem::path& path);
+#endif
     std::string steam_account_id_text() const;
     std::string profile_client_username() const;
     std::string profile_host_name() const;
@@ -184,11 +198,21 @@ private:
     std::shared_ptr<LinkControlBridge> link_control_;
     std::shared_ptr<SoftKeyboardBridge> soft_keyboard_;
     std::shared_ptr<ClientHeartbeatPrefs> heartbeat_prefs_;
-    std::shared_ptr<ClientFaceButtonPrefs> face_button_prefs_;
+    std::shared_ptr<ClientControllerMapPrefs> controller_map_prefs_;
+    std::shared_ptr<EmulatorControlBridge> emulator_control_;
     std::shared_ptr<MediaResyncBridge> media_resync_;
     std::unique_ptr<ClientVideoController> client_video_controller_;
+    QComboBox* game_options_map_family_ = nullptr;
     QCheckBox* game_options_swap_nw_ = nullptr;
     QCheckBox* game_options_swap_se_ = nullptr;
+    QComboBox* game_options_remap_select_ = nullptr;
+    QComboBox* game_options_remap_start_ = nullptr;
+    QComboBox* game_options_remap_l_ = nullptr;
+    QComboBox* game_options_remap_r_ = nullptr;
+    QComboBox* game_options_remap_l2_ = nullptr;
+    QComboBox* game_options_remap_r2_ = nullptr;
+    QComboBox* game_options_remap_l3_ = nullptr;
+    QComboBox* game_options_remap_r3_ = nullptr;
     QPushButton* game_options_pad_osk_ = nullptr;
     QLabel* game_options_status_ = nullptr;
     QComboBox* game_options_disc_ = nullptr;
@@ -243,6 +267,10 @@ private:
     QPushButton* settings_send_logs_ = nullptr;
     QCheckBox* settings_show_framecount_ = nullptr;
 #ifdef ARCHSTREAMER_HAS_HOST
+    QLineEdit* host_save_root_ = nullptr;
+    QLabel* host_save_root_status_ = nullptr;
+    QPushButton* host_save_root_browse_ = nullptr;
+    QPushButton* host_save_root_create_ = nullptr;
     QCheckBox* settings_allow_new_users_ = nullptr;
     QLineEdit* settings_native_host_runner_ = nullptr;
     QComboBox* settings_gpu_ = nullptr;

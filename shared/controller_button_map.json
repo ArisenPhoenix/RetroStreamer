@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "families": {
+    "standard": {
+      "swap_nw": false,
+      "swap_se": false,
+      "select": "default",
+      "start": "default",
+      "l": "default",
+      "r": "default",
+      "l2": "default",
+      "r2": "default",
+      "l3": "default",
+      "r3": "default"
+    },
+    "switch": {
+      "swap_nw": false,
+      "swap_se": false,
+      "select": "default",
+      "start": "default",
+      "l": "default",
+      "r": "default",
+      "l2": "default",
+      "r2": "default",
+      "l3": "default",
+      "r3": "default"
+    },
+    "gba": {
+      "swap_nw": false,
+      "swap_se": false,
+      "select": "default",
+      "start": "default",
+      "l": "default",
+      "r": "default",
+      "l2": "default",
+      "r2": "default",
+      "l3": "default",
+      "r3": "default"
+    },
+    "gb": {
+      "swap_nw": false,
+      "swap_se": false,
+      "select": "default",
+      "start": "default",
+      "l": "default",
+      "r": "default",
+      "l2": "default",
+      "r2": "default",
+      "l3": "default",
+      "r3": "default"
+    },
+    "dual": {
+      "swap_nw": false,
+      "swap_se": false,
+      "select": "default",
+      "start": "default",
+      "l": "default",
+      "r": "default",
+      "l2": "default",
+      "r2": "default",
+      "l3": "default",
+      "r3": "default"
+    },
+    "psx": {
+      "swap_nw": false,
+      "swap_se": false,
+      "select": "default",
+      "start": "default",
+      "l": "default",
+      "r": "default",
+      "l2": "default",
+      "r2": "default",
+      "l3": "default",
+      "r3": "default"
+    }
+  }
+}

@@ -407,6 +407,20 @@ ClientRunResult ClientApp::join_session(
             }
         }
     }
+    if (callbacks.controller_map_prefs) {
+        std::string system_key;
+        for (const auto& game : result.full_catalog.games) {
+            if (result.selected_game_id.has_value() && game.id == *result.selected_game_id) {
+                system_key = game.system_key;
+                break;
+            }
+        }
+        callbacks.controller_map_prefs->set_active_family(
+            controller_map_family_from_system_key(system_key));
+    }
+    if (callbacks.emulator_control) {
+        callbacks.emulator_control->reset();
+    }
 
     auto controller_backend = std::optional<ControllerBackend>{};
     auto input_sender = std::optional<InputSender>{};
@@ -469,22 +483,24 @@ ClientRunResult ClientApp::join_session(
             &input_socket,
             &config,
             want_pads,
-            face_button_prefs = callbacks.face_button_prefs,
+            controller_map_prefs = callbacks.controller_map_prefs,
+            emulator_control = callbacks.emulator_control,
             keyboard_poller = std::move(keyboard_poller)
         ]() mutable {
             std::array<ControllerState, MaxPlayersPerClient> last_sent{};
             std::array<bool, MaxPlayersPerClient> have_last_sent{};
             KeyboardState last_keys{};
             bool have_last_keys = false;
+            std::array<ControllerMapApplyState, MaxPlayersPerClient> map_apply_states{};
             constexpr auto kInputTick = std::chrono::milliseconds(4);
             constexpr int kChangeCopies = 3;
             while (!input_stop.load(std::memory_order_relaxed)) {
                 const auto tick_start = std::chrono::steady_clock::now();
-                bool swap_nw = false;
-                bool swap_se = false;
-                if (face_button_prefs) {
-                    face_button_prefs->snapshot(swap_nw, swap_se);
+                ControllerMapProfile map_profile{};
+                if (controller_map_prefs) {
+                    map_profile = controller_map_prefs->snapshot_active();
                 }
+                bool any_ff_held = false;
                 if (want_pads && controller_backend.has_value()) {
                     for (LocalPlayerIndex player = 0; player < config.filter.requested_players; ++player) {
                         const auto state = controller_backend->poll(player);
@@ -495,14 +511,20 @@ ClientRunResult ClientApp::join_session(
                             !have_last_sent[player] || !same_controls(last_sent[player], *state);
                         // Always send each tick so lost button-down edges recover quickly.
                         const int copies = changed ? kChangeCopies : 1;
+                        ControllerMapApplyExtras map_extras{};
+                        auto mapped = apply_controller_button_map(
+                            *state,
+                            map_profile,
+                            map_apply_states[player],
+                            map_extras);
+                        any_ff_held = any_ff_held || map_extras.fast_forward_held;
                         for (int copy = 0; copy < copies; ++copy) {
-                            auto sample = *state;
-                            apply_face_button_swaps(sample, swap_nw, swap_se);
+                            auto sample = mapped;
                             // Distinct timestamps so host ordering accepts each UDP copy.
                             sample.timestamp_us =
                                 archstreamer::steady_timestamp_us() + static_cast<std::uint64_t>(copy);
                             if (copy > 0) {
-                                sample.sequence = state->sequence + static_cast<std::uint32_t>(copy);
+                                sample.sequence = mapped.sequence + static_cast<std::uint32_t>(copy);
                             }
                             const auto packet = input_sender->make_input(player, sample);
                             try {
@@ -517,6 +539,9 @@ ClientRunResult ClientApp::join_session(
                         last_sent[player] = *state;
                         have_last_sent[player] = true;
                     }
+                }
+                if (emulator_control) {
+                    emulator_control->set_fast_forward_held(any_ff_held);
                 }
 
                 if (config.send_keyboard && keyboard_poller) {
@@ -638,6 +663,20 @@ ClientRunResult ClientApp::join_session(
                     if (callbacks.on_status) {
                         callbacks.on_status(
                             std::string("Failed to send soft keyboard response: ") + error.what());
+                    }
+                }
+            }
+        }
+        if (callbacks.emulator_control && result.client_id.has_value()) {
+            if (const auto control =
+                    callbacks.emulator_control->take_pending(*result.client_id);
+                control.has_value()) {
+                try {
+                    joined_session.stream.send_packet(serialize_packet(*control));
+                } catch (const std::exception& error) {
+                    if (callbacks.on_status) {
+                        callbacks.on_status(
+                            std::string("Failed to send emulator control: ") + error.what());
                     }
                 }
             }

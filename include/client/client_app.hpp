@@ -4,10 +4,12 @@
 #include "client/game_filter.hpp"
 #include "client/session_service.hpp"
 #include "client/video_embed_bridge.hpp"
+#include "common/controller_button_map.hpp"
 #include "common/controller_state.hpp"
 #include "common/participant_role.hpp"
 #include "common/protocol.hpp"
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -67,27 +69,70 @@ struct ClientHeartbeatPrefs {
     }
 };
 
-// Live face-button transforms (NESW). Applied on the client before ControllerInput
-// is sent; the host maps South/East/West/North 1:1 onto the virtual pad.
-struct ClientFaceButtonPrefs {
+/**
+ * Live per-family controller remaps + face swaps (see common/controller_button_map.hpp).
+ * Input thread snapshots the active family's profile each tick.
+ */
+struct ClientControllerMapPrefs {
     std::mutex mutex;
-    bool swap_nw = false; // North ↔ West (Triangle ↔ Square / Y ↔ X)
-    bool swap_se = false; // South ↔ East (Cross ↔ Circle / A ↔ B)
+    std::array<ControllerMapProfile, ControllerMapFamilyCount> profiles{};
+    ControllerMapFamily active_family = ControllerMapFamily::Standard;
 
-    void set_swap_nw(bool enabled) {
+    void set_profile(ControllerMapFamily family, ControllerMapProfile profile) {
         std::lock_guard lock(mutex);
-        swap_nw = enabled;
+        profiles[static_cast<std::size_t>(family)] = profile;
     }
 
-    void set_swap_se(bool enabled) {
+    ControllerMapProfile profile(ControllerMapFamily family) {
         std::lock_guard lock(mutex);
-        swap_se = enabled;
+        return profiles[static_cast<std::size_t>(family)];
     }
 
-    void snapshot(bool& nw, bool& se) {
+    void set_active_family(ControllerMapFamily family) {
         std::lock_guard lock(mutex);
-        nw = swap_nw;
-        se = swap_se;
+        active_family = family;
+    }
+
+    ControllerMapFamily active_family_snapshot() {
+        std::lock_guard lock(mutex);
+        return active_family;
+    }
+
+    ControllerMapProfile snapshot_active() {
+        std::lock_guard lock(mutex);
+        return profiles[static_cast<std::size_t>(active_family)];
+    }
+};
+
+/** Explicit FF On/Off over the TCP control channel (parity with mobile remapped FF). */
+struct EmulatorControlBridge {
+    std::mutex mutex;
+    bool want_fast_forward = false;
+    bool sent_fast_forward = false;
+
+    void set_fast_forward_held(bool held) {
+        std::lock_guard lock(mutex);
+        want_fast_forward = held;
+    }
+
+    std::optional<EmulatorControl> take_pending(ClientId client_id) {
+        std::lock_guard lock(mutex);
+        if (want_fast_forward == sent_fast_forward) {
+            return std::nullopt;
+        }
+        sent_fast_forward = want_fast_forward;
+        EmulatorControl control;
+        control.client_id = client_id;
+        control.fast_forward = want_fast_forward
+            ? EmulatorControlState::On
+            : EmulatorControlState::Off;
+        return control;
+    }
+
+    void reset() {
+        std::lock_guard lock(mutex);
+        want_fast_forward = false;
+        sent_fast_forward = false;
     }
 };
 
@@ -305,7 +350,8 @@ struct ClientAppCallbacks {
     std::shared_ptr<LinkControlBridge> link_control;
     std::shared_ptr<SoftKeyboardBridge> soft_keyboard;
     std::shared_ptr<ClientHeartbeatPrefs> heartbeat_prefs;
-    std::shared_ptr<ClientFaceButtonPrefs> face_button_prefs;
+    std::shared_ptr<ClientControllerMapPrefs> controller_map_prefs;
+    std::shared_ptr<EmulatorControlBridge> emulator_control;
     std::shared_ptr<MediaResyncBridge> media_resync;
     std::shared_ptr<MediaVideoCutoverBridge> video_cutover;
 };

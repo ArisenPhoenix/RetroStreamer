@@ -14,20 +14,18 @@ enum class OverlaySystemFamily(val id: String, val title: String) {
     Gba("gba", "GBA"),
     Gb("gb", "GB / GBC"),
     Dual("dual", "DS / 3DS"),
+    Psx("psx", "PSX"),
     ;
 
     companion object {
         fun fromSystemKey(systemKey: String?): OverlaySystemFamily =
-            when (PadLayout.forSystemKey(systemKey)) {
-                PadLayout.GameBoy -> Gb
-                PadLayout.Gba -> Gba
-                PadLayout.DualScreen -> Dual
-                PadLayout.Switch -> Switch
-                PadLayout.Standard -> Standard
-            }
+            fromId(ControllerMapFamily.fromSystemKey(systemKey).id)
 
         fun fromId(id: String): OverlaySystemFamily =
             entries.firstOrNull { it.id == id } ?: Standard
+
+        fun toMapFamily(family: OverlaySystemFamily): ControllerMapFamily =
+            ControllerMapFamily.fromId(family.id)
     }
 }
 

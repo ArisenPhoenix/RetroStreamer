@@ -51,6 +51,8 @@ object PhysicalGamepad {
         KeyEvent.KEYCODE_BUTTON_R1 -> OverlayControlKind.ShoulderR
         KeyEvent.KEYCODE_BUTTON_L2 -> OverlayControlKind.ShoulderL2
         KeyEvent.KEYCODE_BUTTON_R2 -> OverlayControlKind.ShoulderR2
+        KeyEvent.KEYCODE_BUTTON_THUMBL -> OverlayControlKind.LeftStick
+        KeyEvent.KEYCODE_BUTTON_THUMBR -> OverlayControlKind.RightStick
         else -> null
     }
 }
@@ -198,7 +200,9 @@ class PhysicalGamepadTracker(
             }
             OverlayAction.Select -> setButton(ControllerState.BUTTON_BACK, down)
             OverlayAction.Start -> setButton(ControllerState.BUTTON_START, down)
-            OverlayAction.Default, OverlayAction.LeftStick, OverlayAction.RightStick -> Unit
+            OverlayAction.LeftStick -> setButton(ControllerState.BUTTON_LEFT_STICK, down)
+            OverlayAction.RightStick -> setButton(ControllerState.BUTTON_RIGHT_STICK, down)
+            OverlayAction.Default -> Unit
         }
     }
 

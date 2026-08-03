@@ -17,6 +17,7 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -51,6 +52,7 @@
 #include "host/gpu_select.hpp"
 #include "host/host_app_config.hpp"
 #include "host/media_capture.hpp"
+#include "host/save_profile.hpp"
 #include "host/standalone_emulator.hpp"
 #endif
 
@@ -427,21 +429,8 @@ void MainWindow::load_persisted_settings() {
         settings_show_framecount_->setChecked(
             settings.value("client/showFramecount", false).toBool());
     }
-    if (game_options_swap_nw_ != nullptr) {
-        const QSignalBlocker blocker(game_options_swap_nw_);
-        const bool enabled = settings.value("client/swapFaceNw", false).toBool();
-        game_options_swap_nw_->setChecked(enabled);
-        if (face_button_prefs_) {
-            face_button_prefs_->set_swap_nw(enabled);
-        }
-    }
-    if (game_options_swap_se_ != nullptr) {
-        const QSignalBlocker blocker(game_options_swap_se_);
-        const bool enabled = settings.value("client/swapFaceSe", false).toBool();
-        game_options_swap_se_->setChecked(enabled);
-        if (face_button_prefs_) {
-            face_button_prefs_->set_swap_se(enabled);
-        }
+    if (game_options_map_family_ != nullptr) {
+        load_controller_map_document();
     }
 
 #ifdef ARCHSTREAMER_HAS_HOST
@@ -452,6 +441,15 @@ void MainWindow::load_persisted_settings() {
     if (host_meta_root_ != nullptr) {
         host_meta_root_->setText(
             settings.value("host/metaRoot", archstreamer::DefaultMetaRoot).toString());
+    }
+    if (host_save_root_ != nullptr) {
+        const auto default_save =
+            QString::fromStdString(archstreamer::default_save_profile_root().string());
+        const QSignalBlocker blocker(host_save_root_);
+        const QString stored = settings.value(QStringLiteral("host/saveRoot")).toString().trimmed();
+        // Missing or blank → show the live default, not an empty field.
+        host_save_root_->setText(stored.isEmpty() ? default_save : stored);
+        update_save_root_status();
     }
     if (host_control_port_ != nullptr) {
         host_control_port_->setValue(
@@ -609,11 +607,8 @@ void MainWindow::save_persisted_settings() {
     if (settings_show_framecount_ != nullptr) {
         settings.setValue("client/showFramecount", settings_show_framecount_->isChecked());
     }
-    if (game_options_swap_nw_ != nullptr) {
-        settings.setValue("client/swapFaceNw", game_options_swap_nw_->isChecked());
-    }
-    if (game_options_swap_se_ != nullptr) {
-        settings.setValue("client/swapFaceSe", game_options_swap_se_->isChecked());
+    if (controller_map_prefs_ != nullptr) {
+        save_controller_map_document();
     }
     if (client_game_picker_ != nullptr && client_game_picker_->hasSelection()) {
         persisted_client_game_id_ =
@@ -629,6 +624,15 @@ void MainWindow::save_persisted_settings() {
     }
     if (host_meta_root_ != nullptr) {
         settings.setValue("host/metaRoot", host_meta_root_->text().trimmed());
+    }
+    if (host_save_root_ != nullptr) {
+        // Never persist blank: resolve to the path the host would actually use.
+        const QString resolved = QString::fromStdString(save_root_path().string());
+        if (host_save_root_->text().trimmed().isEmpty()) {
+            const QSignalBlocker blocker(host_save_root_);
+            host_save_root_->setText(resolved);
+        }
+        settings.setValue(QStringLiteral("host/saveRoot"), resolved);
     }
     if (host_control_port_ != nullptr) {
         settings.setValue("host/controlPort", host_control_port_->value());
@@ -733,6 +737,155 @@ std::filesystem::path MainWindow::art_root_path() const {
     }
     return std::filesystem::path{archstreamer::DefaultArtRoot};
 }
+
+#ifdef ARCHSTREAMER_HAS_HOST
+
+namespace {
+
+QString expand_user_path(QString path) {
+    path = path.trimmed();
+    if (path == QLatin1String("~")) {
+        return QDir::homePath();
+    }
+    if (path.startsWith(QLatin1String("~/"))) {
+        return QDir::homePath() + path.mid(1);
+    }
+    return path;
+}
+
+} // namespace
+
+std::filesystem::path MainWindow::save_root_path() const {
+    if (host_save_root_ != nullptr && !host_save_root_->text().trimmed().isEmpty()) {
+        return std::filesystem::path{
+            expand_user_path(host_save_root_->text()).toStdString()};
+    }
+    return archstreamer::default_save_profile_root();
+}
+
+void MainWindow::sync_save_root_field_to_path(const std::filesystem::path& path) {
+    if (host_save_root_ == nullptr) {
+        return;
+    }
+    const QString text = QString::fromStdString(path.string());
+    if (host_save_root_->text().trimmed() != text) {
+        const QSignalBlocker blocker(host_save_root_);
+        host_save_root_->setText(text);
+    }
+    update_save_root_status();
+}
+
+void MainWindow::persist_valid_save_root(const std::filesystem::path& path) {
+    if (!std::filesystem::is_directory(path)) {
+        return;
+    }
+    std::error_code ec;
+    const auto absolute = std::filesystem::absolute(path, ec);
+    const auto stored = ec ? path : absolute;
+    sync_save_root_field_to_path(stored);
+    if (restoring_settings_) {
+        return;
+    }
+    QSettings settings(QStringLiteral("ArchStreamer"), QStringLiteral("ArchStreamer"));
+    settings.setValue(
+        QStringLiteral("host/saveRoot"),
+        QString::fromStdString(stored.string()));
+}
+
+void MainWindow::update_save_root_status() {
+    if (host_save_root_status_ == nullptr || host_save_root_create_ == nullptr) {
+        return;
+    }
+    // Keep the field populated with the live default when blank.
+    if (host_save_root_ != nullptr && host_save_root_->text().trimmed().isEmpty()) {
+        const QSignalBlocker blocker(host_save_root_);
+        host_save_root_->setText(
+            QString::fromStdString(archstreamer::default_save_profile_root().string()));
+    }
+    const auto path = save_root_path();
+    const QString qpath = QString::fromStdString(path.string());
+    const QFileInfo info(qpath);
+    if (info.isDir()) {
+        host_save_root_status_->clear();
+        host_save_root_create_->setEnabled(false);
+        return;
+    }
+    host_save_root_create_->setEnabled(true);
+    QString message = QStringLiteral("Directory does not exist: %1").arg(qpath);
+    if (info.exists() && !info.isDir()) {
+        message = QStringLiteral("Path exists but is not a directory: %1").arg(qpath);
+        host_save_root_create_->setEnabled(false);
+    } else if (running_inside_flatpak()) {
+        message += QStringLiteral(
+            "\nFlatpak cannot see or create this path unless it is under home "
+            "(or granted via: flatpak override --user "
+            "--filesystem=<path>:rw io.github.ArisenPhoenix.ArchStreamer). "
+            "Create it on the host, or choose a visible directory.");
+    } else {
+        message += QStringLiteral(" — create it or choose another location.");
+    }
+    host_save_root_status_->setText(message);
+}
+
+void MainWindow::browse_save_root() {
+    if (host_save_root_ == nullptr) {
+        return;
+    }
+    const auto current = QString::fromStdString(save_root_path().string());
+    const QString start =
+        QFileInfo(current).isDir() ? current : QFileInfo(current).absolutePath();
+    const QString chosen = QFileDialog::getExistingDirectory(
+        this,
+        QStringLiteral("Client save root"),
+        start.isEmpty() ? QDir::homePath() : start);
+    if (chosen.isEmpty()) {
+        return;
+    }
+    host_save_root_->setText(chosen);
+    update_save_root_status();
+    persist_valid_save_root(save_root_path());
+}
+
+void MainWindow::create_save_root() {
+    if (host_save_root_ == nullptr) {
+        return;
+    }
+    const auto path = save_root_path();
+    const QString qpath = QString::fromStdString(path.string());
+    if (QFileInfo(qpath).isDir()) {
+        persist_valid_save_root(path);
+        return;
+    }
+    if (QFileInfo(qpath).exists()) {
+        update_save_root_status();
+        if (settings_log_ != nullptr) {
+            append_log(
+                settings_log_,
+                QStringLiteral("Save root exists but is not a directory: %1").arg(qpath),
+                GuiLogLevel::Quiet);
+        }
+        return;
+    }
+    if (!QDir().mkpath(qpath)) {
+        QString detail = QStringLiteral("Could not create save root: %1").arg(qpath);
+        if (running_inside_flatpak()) {
+            detail += QStringLiteral(
+                " (Flatpak may lack write access — grant with flatpak override "
+                "--filesystem=<path>:rw, or create the directory on the host OS)");
+        }
+        if (settings_log_ != nullptr) {
+            append_log(settings_log_, detail, GuiLogLevel::Quiet);
+        }
+        update_save_root_status();
+        return;
+    }
+    if (settings_log_ != nullptr) {
+        append_log(settings_log_, QStringLiteral("Created save root: %1").arg(qpath));
+    }
+    persist_valid_save_root(path);
+}
+
+#endif
 
 std::string MainWindow::steam_account_id_text() const {
     if (profile_steam_account_ == nullptr) {

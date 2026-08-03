@@ -91,8 +91,8 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
 
     // Scrim tap / swipe close bypasses closeDrawer(). Use settled currentValue — not
     // targetValue — so a flash Open→Closed (cutover / press-through) never pauses.
-    // Absolute rule: drawer open → pause On; closed → Off. Control editing relaxes
-    // pause (see ClientViewModel.syncMenuPause) so the game stays live under the editor.
+    // Absolute rule: drawer open → pause On (only after decoded frames); closed → Off.
+    // Control editing relaxes pause (see ClientViewModel.syncMenuPause).
     LaunchedEffect(drawerState, state.playing) {
         if (!state.playing) return@LaunchedEffect
         snapshotFlow { drawerState.currentValue }
@@ -814,7 +814,7 @@ private fun GameOptionsSection(state: UiState, viewModel: ClientViewModel) {
                 "face swaps, opacity, and one named custom (separate landscape / portrait). " +
                 "While editing a custom, select a control and use Action to remap " +
                 "(e.g. Select → Fast-forward, R → R2 for DS screen swap). Remaps apply to " +
-                "the touch overlay and to a physical controller. Add L2/R2/FF as needed.",
+                "the touch overlay and to a physical controller.",
             style = MaterialTheme.typography.bodyMedium,
         )
 
@@ -896,7 +896,7 @@ private fun GameOptionsSection(state: UiState, viewModel: ClientViewModel) {
             }
         }
 
-        Text("Face buttons (desktop parity)", style = MaterialTheme.typography.titleSmall)
+        Text("Face buttons", style = MaterialTheme.typography.titleSmall)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -904,7 +904,7 @@ private fun GameOptionsSection(state: UiState, viewModel: ClientViewModel) {
         ) {
             Text("Swap NW (Y ↔ X)")
             Switch(
-                checked = profile.swapNw,
+                checked = state.editingMapProfile.swapNw,
                 onCheckedChange = viewModel::setOverlaySwapNw,
             )
         }
@@ -915,7 +915,7 @@ private fun GameOptionsSection(state: UiState, viewModel: ClientViewModel) {
         ) {
             Text("Swap SE (A ↔ B)")
             Switch(
-                checked = profile.swapSe,
+                checked = state.editingMapProfile.swapSe,
                 onCheckedChange = viewModel::setOverlaySwapSe,
             )
         }

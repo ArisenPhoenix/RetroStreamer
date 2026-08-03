@@ -20,6 +20,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
+#include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -33,7 +34,9 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QSignalBlocker>
+#include <QSizePolicy>
 #include <QSpinBox>
+#include <QStandardPaths>
 #include <QTabWidget>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -53,6 +56,7 @@
 #include "host/gpu_select.hpp"
 #include "host/host_app_config.hpp"
 #include "host/media_capture.hpp"
+#include "host/save_profile.hpp"
 #include "host/standalone_emulator.hpp"
 #endif
 
@@ -507,33 +511,123 @@ QWidget* MainWindow::build_game_options_tab() {
     auto* page = new QWidget(this);
     auto* root = new QVBoxLayout(page);
 
-    face_button_prefs_ = std::make_shared<archstreamer::ClientFaceButtonPrefs>();
+    controller_map_prefs_ = std::make_shared<archstreamer::ClientControllerMapPrefs>();
+    emulator_control_ = std::make_shared<archstreamer::EmulatorControlBridge>();
 
-    auto* face_box = new QGroupBox("Face buttons", page);
-    auto* face_form = new QFormLayout(face_box);
-    game_options_swap_nw_ = new QCheckBox("Swap NW (Triangle ↔ Square / Y ↔ X)", face_box);
-    game_options_swap_se_ = new QCheckBox("Swap SE (Cross ↔ Circle / A ↔ B)", face_box);
+    auto* map_box = new QGroupBox("Controller mapping", page);
+    auto* map_layout = new QVBoxLayout(map_box);
+    auto* map_form = new QFormLayout();
+    map_layout->addLayout(map_form);
+
+    game_options_map_family_ = new QComboBox(map_box);
+    for (std::size_t i = 0; i < archstreamer::ControllerMapFamilyCount; ++i) {
+        const auto family = static_cast<archstreamer::ControllerMapFamily>(i);
+        game_options_map_family_->addItem(
+            QString::fromUtf8(archstreamer::controller_map_family_title(family).data()),
+            QString::fromUtf8(archstreamer::controller_map_family_id(family).data()));
+    }
+    game_options_map_family_->setToolTip(
+        "Per-system family profiles (same families as the mobile overlay).\n"
+        "During a session the active profile follows the game's system key.");
+    map_form->addRow("System family", game_options_map_family_);
+
+    game_options_swap_nw_ = new QCheckBox("Swap NW (Triangle ↔ Square / Y ↔ X)", map_box);
+    game_options_swap_se_ = new QCheckBox("Swap SE (Cross ↔ Circle / A ↔ B)", map_box);
     game_options_swap_nw_->setToolTip(
         "Swap the north and west face buttons before they reach the host.\n"
-        "Use this when Triangle/Square (or Y/X) feel reversed for the current system.");
+        "Use this when Triangle/Square (or Y/X) feel reversed for this family.");
     game_options_swap_se_->setToolTip(
         "Swap the south and east face buttons before they reach the host.\n"
-        "Use this when Cross/Circle (or A/B) feel reversed for the current system.");
-    face_form->addRow("", game_options_swap_nw_);
-    face_form->addRow("", game_options_swap_se_);
-    connect(game_options_swap_nw_, &QCheckBox::toggled, this, [this](bool checked) {
-        if (face_button_prefs_) {
-            face_button_prefs_->set_swap_nw(checked);
+        "Use this when Cross/Circle (or A/B) feel reversed for this family.");
+    map_form->addRow("", game_options_swap_nw_);
+    map_form->addRow("", game_options_swap_se_);
+
+    auto fill_remap = [](QComboBox* combo) {
+        const archstreamer::ControllerMapAction actions[] = {
+            archstreamer::ControllerMapAction::Default,
+            archstreamer::ControllerMapAction::A,
+            archstreamer::ControllerMapAction::B,
+            archstreamer::ControllerMapAction::X,
+            archstreamer::ControllerMapAction::Y,
+            archstreamer::ControllerMapAction::L,
+            archstreamer::ControllerMapAction::R,
+            archstreamer::ControllerMapAction::L2,
+            archstreamer::ControllerMapAction::R2,
+            archstreamer::ControllerMapAction::Select,
+            archstreamer::ControllerMapAction::Start,
+            archstreamer::ControllerMapAction::Menu,
+            archstreamer::ControllerMapAction::LeftStick,
+            archstreamer::ControllerMapAction::RightStick,
+            archstreamer::ControllerMapAction::FastForward,
+        };
+        for (const auto action : actions) {
+            combo->addItem(
+                QString::fromUtf8(archstreamer::controller_map_action_title(action).data()),
+                QString::fromUtf8(archstreamer::controller_map_action_id(action).data()));
         }
-        persist_settings_if_idle();
+    };
+
+    game_options_remap_select_ = new QComboBox(map_box);
+    game_options_remap_start_ = new QComboBox(map_box);
+    game_options_remap_l_ = new QComboBox(map_box);
+    game_options_remap_r_ = new QComboBox(map_box);
+    game_options_remap_l2_ = new QComboBox(map_box);
+    game_options_remap_r2_ = new QComboBox(map_box);
+    game_options_remap_l3_ = new QComboBox(map_box);
+    game_options_remap_r3_ = new QComboBox(map_box);
+    fill_remap(game_options_remap_select_);
+    fill_remap(game_options_remap_start_);
+    fill_remap(game_options_remap_l_);
+    fill_remap(game_options_remap_r_);
+    fill_remap(game_options_remap_l2_);
+    fill_remap(game_options_remap_r2_);
+    fill_remap(game_options_remap_l3_);
+    fill_remap(game_options_remap_r3_);
+    map_form->addRow("Select →", game_options_remap_select_);
+    map_form->addRow("Start →", game_options_remap_start_);
+    map_form->addRow("L →", game_options_remap_l_);
+    map_form->addRow("R →", game_options_remap_r_);
+    map_form->addRow("L2 →", game_options_remap_l2_);
+    map_form->addRow("R2 →", game_options_remap_r2_);
+    map_form->addRow("L3 (stick click) →", game_options_remap_l3_);
+    map_form->addRow("R3 (stick click) →", game_options_remap_r3_);
+
+    auto* remap_hint = new QLabel(
+        "Remaps apply to physical button presses (e.g. L3 → Fast-forward, R → R2 for "
+        "DS screen swap). Stick movement, face A/B/X/Y, and the D-pad stay fixed; "
+        "use Swap NW/SE for face buttons.",
+        map_box);
+    remap_hint->setWordWrap(true);
+    remap_hint->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+    remap_hint->setMinimumHeight(remap_hint->fontMetrics().lineSpacing() * 3 + 12);
+    remap_hint->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+    map_layout->addWidget(remap_hint);
+
+    connect(game_options_map_family_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+        sync_controller_map_editor_ui();
     });
-    connect(game_options_swap_se_, &QCheckBox::toggled, this, [this](bool checked) {
-        if (face_button_prefs_) {
-            face_button_prefs_->set_swap_se(checked);
-        }
+    const auto commit = [this](bool) {
+        commit_controller_map_editor_ui();
         persist_settings_if_idle();
-    });
-    root->addWidget(face_box);
+    };
+    connect(game_options_swap_nw_, &QCheckBox::toggled, this, commit);
+    connect(game_options_swap_se_, &QCheckBox::toggled, this, commit);
+    const auto connect_remap = [this](QComboBox* combo) {
+        connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+            commit_controller_map_editor_ui();
+            persist_settings_if_idle();
+        });
+    };
+    connect_remap(game_options_remap_select_);
+    connect_remap(game_options_remap_start_);
+    connect_remap(game_options_remap_l_);
+    connect_remap(game_options_remap_r_);
+    connect_remap(game_options_remap_l2_);
+    connect_remap(game_options_remap_r2_);
+    connect_remap(game_options_remap_l3_);
+    connect_remap(game_options_remap_r3_);
+
+    root->addWidget(map_box);
 
     game_options_pad_osk_ = new QPushButton(QStringLiteral("Pad on-screen keyboard"), page);
     game_options_pad_osk_->setCheckable(true);
@@ -693,7 +787,154 @@ QWidget* MainWindow::build_game_options_tab() {
 
     root->addWidget(link_box);
     root->addStretch();
+    sync_controller_map_editor_ui();
     return page;
+}
+
+ControllerMapFamily MainWindow::selected_controller_map_family() const {
+    if (game_options_map_family_ == nullptr) {
+        return ControllerMapFamily::Standard;
+    }
+    const auto id = game_options_map_family_->currentData().toString().toStdString();
+    return controller_map_family_from_id(id).value_or(ControllerMapFamily::Standard);
+}
+
+void MainWindow::sync_controller_map_editor_ui() {
+    if (!controller_map_prefs_ || game_options_swap_nw_ == nullptr) {
+        return;
+    }
+    const auto profile = controller_map_prefs_->profile(selected_controller_map_family());
+
+    const QSignalBlocker block_nw(game_options_swap_nw_);
+    const QSignalBlocker block_se(game_options_swap_se_);
+    game_options_swap_nw_->setChecked(profile.swap_nw);
+    game_options_swap_se_->setChecked(profile.swap_se);
+
+    const auto set_remap = [](QComboBox* combo, ControllerMapAction action) {
+        if (combo == nullptr) {
+            return;
+        }
+        const QSignalBlocker blocker(combo);
+        const auto id = QString::fromUtf8(controller_map_action_id(action).data());
+        const auto index = combo->findData(id);
+        combo->setCurrentIndex(index >= 0 ? index : 0);
+    };
+    set_remap(game_options_remap_select_, profile.select);
+    set_remap(game_options_remap_start_, profile.start);
+    set_remap(game_options_remap_l_, profile.l);
+    set_remap(game_options_remap_r_, profile.r);
+    set_remap(game_options_remap_l2_, profile.l2);
+    set_remap(game_options_remap_r2_, profile.r2);
+    set_remap(game_options_remap_l3_, profile.l3);
+    set_remap(game_options_remap_r3_, profile.r3);
+}
+
+void MainWindow::commit_controller_map_editor_ui() {
+    if (!controller_map_prefs_ || game_options_swap_nw_ == nullptr) {
+        return;
+    }
+    const auto read_action = [](QComboBox* combo) {
+        if (combo == nullptr) {
+            return ControllerMapAction::Default;
+        }
+        return controller_map_action_from_id(combo->currentData().toString().toStdString())
+            .value_or(ControllerMapAction::Default);
+    };
+
+    ControllerMapProfile profile;
+    profile.swap_nw = game_options_swap_nw_->isChecked();
+    profile.swap_se = game_options_swap_se_->isChecked();
+    profile.select = read_action(game_options_remap_select_);
+    profile.start = read_action(game_options_remap_start_);
+    profile.l = read_action(game_options_remap_l_);
+    profile.r = read_action(game_options_remap_r_);
+    profile.l2 = read_action(game_options_remap_l2_);
+    profile.r2 = read_action(game_options_remap_r2_);
+    profile.l3 = read_action(game_options_remap_l3_);
+    profile.r3 = read_action(game_options_remap_r3_);
+    controller_map_prefs_->set_profile(selected_controller_map_family(), profile);
+    save_controller_map_document();
+}
+
+std::filesystem::path MainWindow::controller_map_file_path() const {
+    const QString root = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+    return (std::filesystem::path(root.toStdString()) / std::string(archstreamer::ControllerMapFileName));
+}
+
+void MainWindow::load_controller_map_document() {
+    if (!controller_map_prefs_) {
+        return;
+    }
+    const auto path = controller_map_file_path();
+    if (auto document = archstreamer::controller_map_document_load_file(path); document.has_value()) {
+        for (std::size_t i = 0; i < archstreamer::ControllerMapFamilyCount; ++i) {
+            const auto family = static_cast<archstreamer::ControllerMapFamily>(i);
+            controller_map_prefs_->set_profile(family, document->profile(family));
+        }
+        sync_controller_map_editor_ui();
+        return;
+    }
+
+    // Migrate legacy QSettings keys into the portable JSON file once.
+    QSettings settings("ArchStreamer", "ArchStreamer");
+    archstreamer::ControllerMapDocument document;
+    const bool legacy_nw = settings.value("client/swapFaceNw", false).toBool();
+    const bool legacy_se = settings.value("client/swapFaceSe", false).toBool();
+    bool migrated = false;
+    for (std::size_t i = 0; i < archstreamer::ControllerMapFamilyCount; ++i) {
+        const auto family = static_cast<archstreamer::ControllerMapFamily>(i);
+        const auto prefix = QString("client/buttonMap/%1/")
+            .arg(QString::fromUtf8(archstreamer::controller_map_family_id(family).data()));
+        archstreamer::ControllerMapProfile profile;
+        const bool has_family = settings.contains(prefix + "swapNw") ||
+            settings.contains(prefix + "select");
+        if (has_family || legacy_nw || legacy_se) {
+            migrated = true;
+        }
+        profile.swap_nw = settings.value(
+            prefix + "swapNw",
+            has_family ? false : legacy_nw).toBool();
+        profile.swap_se = settings.value(
+            prefix + "swapSe",
+            has_family ? false : legacy_se).toBool();
+        const auto load_action = [&](const char* key) {
+            const auto id = settings.value(prefix + key, "default").toString().toStdString();
+            return archstreamer::controller_map_action_from_id(id)
+                .value_or(archstreamer::ControllerMapAction::Default);
+        };
+        profile.select = load_action("select");
+        profile.start = load_action("start");
+        profile.l = load_action("l");
+        profile.r = load_action("r");
+        profile.l2 = load_action("l2");
+        profile.r2 = load_action("r2");
+        profile.l3 = load_action("l3");
+        profile.r3 = load_action("r3");
+        document.profile(family) = profile;
+        controller_map_prefs_->set_profile(family, profile);
+    }
+    if (migrated) {
+        archstreamer::controller_map_document_save_file(path, document);
+    }
+    sync_controller_map_editor_ui();
+}
+
+void MainWindow::save_controller_map_document() {
+    if (!controller_map_prefs_) {
+        return;
+    }
+    archstreamer::ControllerMapDocument document;
+    for (std::size_t i = 0; i < archstreamer::ControllerMapFamilyCount; ++i) {
+        const auto family = static_cast<archstreamer::ControllerMapFamily>(i);
+        document.profile(family) = controller_map_prefs_->profile(family);
+    }
+    archstreamer::controller_map_document_save_file(controller_map_file_path(), document);
+
+    // Keep legacy keys in sync for older builds.
+    const auto standard = document.profile(archstreamer::ControllerMapFamily::Standard);
+    QSettings settings("ArchStreamer", "ArchStreamer");
+    settings.setValue("client/swapFaceNw", standard.swap_nw);
+    settings.setValue("client/swapFaceSe", standard.swap_se);
 }
 
 QWidget* MainWindow::build_profile_tab() {
@@ -814,12 +1055,36 @@ QWidget* MainWindow::build_settings_tab() {
 #ifdef ARCHSTREAMER_HAS_HOST
     host_rom_root_ = new QLineEdit(archstreamer::DefaultRomRoot, form_box);
     host_meta_root_ = new QLineEdit(archstreamer::DefaultMetaRoot, form_box);
+    const auto default_save_root =
+        QString::fromStdString(archstreamer::default_save_profile_root().string());
+    host_save_root_ = new QLineEdit(default_save_root, form_box);
+    host_save_root_->setToolTip(
+        "Directory where client usernames store saves, states, and emulator profiles.\n"
+        "Layout: <save-root>/<username>/…\n"
+        "Flatpak: path must be visible to this app (home is allowed; other disks need\n"
+        "flatpak override --filesystem=<path>:rw). Host sessions use the native host_runner\n"
+        "path on the host OS.");
+    host_save_root_browse_ = new QPushButton("Browse…", form_box);
+    host_save_root_create_ = new QPushButton("Create", form_box);
+    host_save_root_create_->setToolTip(
+        "Create this directory (and parents) if it is missing and writable.");
+    host_save_root_status_ = new QLabel(form_box);
+    host_save_root_status_->setWordWrap(true);
+    host_save_root_status_->setStyleSheet(QStringLiteral("color: #a33;"));
+    auto* save_root_row = new QWidget(form_box);
+    auto* save_root_layout = new QHBoxLayout(save_root_row);
+    save_root_layout->setContentsMargins(0, 0, 0, 0);
+    save_root_layout->addWidget(host_save_root_, 1);
+    save_root_layout->addWidget(host_save_root_browse_);
+    save_root_layout->addWidget(host_save_root_create_);
 #endif
 
     form->addRow("Art root", settings_art_root_);
 #ifdef ARCHSTREAMER_HAS_HOST
     form->addRow("ROM root", host_rom_root_);
     form->addRow("Meta root", host_meta_root_);
+    form->addRow("Client save root", save_root_row);
+    form->addRow("", host_save_root_status_);
 #endif
 
 #ifdef ARCHSTREAMER_HAS_HOST
@@ -917,6 +1182,26 @@ QWidget* MainWindow::build_settings_tab() {
     connect(host_meta_root_, &QLineEdit::editingFinished, this, [this] {
         persist_settings_if_idle();
     });
+    connect(host_save_root_, &QLineEdit::editingFinished, this, [this] {
+        update_save_root_status();
+        // If the resolved path is a real directory, remember it; otherwise keep typing.
+        const auto path = save_root_path();
+        if (std::filesystem::is_directory(path)) {
+            persist_valid_save_root(path);
+        } else {
+            persist_settings_if_idle();
+        }
+    });
+    connect(host_save_root_, &QLineEdit::textChanged, this, [this](const QString&) {
+        update_save_root_status();
+    });
+    connect(host_save_root_browse_, &QPushButton::clicked, this, [this] {
+        browse_save_root();
+    });
+    connect(host_save_root_create_, &QPushButton::clicked, this, [this] {
+        create_save_root();
+    });
+    update_save_root_status();
 #endif
     connect(settings_session_timeout_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
         persist_settings_if_idle();

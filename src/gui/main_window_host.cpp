@@ -50,6 +50,7 @@
 #include "host/gpu_select.hpp"
 #include "host/host_app_config.hpp"
 #include "host/media_capture.hpp"
+#include "host/save_profile.hpp"
 #include "host/standalone_emulator.hpp"
 #endif
 
@@ -489,12 +490,34 @@ void MainWindow::start_host() {
     }
     // Viewer hosts are a persistent lobby: clients pick the game. No host game required.
 
+    const auto save_root = save_root_path();
+    if (!std::filesystem::is_directory(save_root)) {
+        host_status_->setText("Host not started; save root missing");
+        QString message = QStringLiteral(
+            "Client save root does not exist or is not visible to this app: %1")
+                              .arg(QString::fromStdString(save_root.string()));
+        if (running_inside_flatpak()) {
+            message += QStringLiteral(
+                " (Flatpak: create it under home, or grant access with "
+                "flatpak override --user --filesystem=<path>:rw "
+                "io.github.ArisenPhoenix.ArchStreamer)");
+        } else {
+            message += QStringLiteral(
+                " — create it in Settings (Create) or choose another directory.");
+        }
+        append_log(host_log_, message, GuiLogLevel::Quiet);
+        return;
+    }
+    // Valid path the host will use: keep the field and QSettings in sync.
+    persist_valid_save_root(save_root);
+
     QStringList args;
     {
         archstreamer::HostAppConfig host_cfg;
         host_cfg.rom_root = host_rom_root_->text().toStdString();
         host_cfg.meta_root = host_meta_root_->text().toStdString();
         host_cfg.art_root = art_root_path();
+        host_cfg.save_root = save_root_path();
         host_cfg.control_port = static_cast<std::uint16_t>(host_control_port_->value());
         host_cfg.input_port = static_cast<std::uint16_t>(host_input_port_->value());
         host_cfg.clients = static_cast<std::uint8_t>(host_clients_->value());

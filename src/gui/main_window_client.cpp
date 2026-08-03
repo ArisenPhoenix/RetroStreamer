@@ -561,7 +561,8 @@ void MainWindow::start_client() {
             callbacks.link_control = link_control_;
             callbacks.soft_keyboard = soft_keyboard_;
             callbacks.heartbeat_prefs = heartbeat_prefs_;
-            callbacks.face_button_prefs = face_button_prefs_;
+            callbacks.controller_map_prefs = controller_map_prefs_;
+            callbacks.emulator_control = emulator_control_;
             callbacks.media_resync = media_resync_;
             callbacks.on_catalog = [this](const archstreamer::GameList& full, const archstreamer::GameList& filtered) {
                 append_log(client_log_, QString("Received %1 games; %2 after filters.")

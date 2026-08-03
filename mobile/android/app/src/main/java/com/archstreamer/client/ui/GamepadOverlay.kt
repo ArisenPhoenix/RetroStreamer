@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -297,6 +298,7 @@ fun GamepadOverlay(
                         ),
                 ) {
                     val label = item.displayLabel()
+                    val useFfIcon = item.resolvedAction() == OverlayAction.FastForward
                     when (item.kind) {
                         OverlayControlKind.Menu -> {
                             MenuPadButton(
@@ -317,6 +319,7 @@ fun GamepadOverlay(
                         -> {
                             ShoulderButton(
                                 label = label,
+                                useFastForwardIcon = useFfIcon,
                                 width = unitBtn * 1.55f,
                                 height = unitBtn * 0.72f,
                                 colors = colors,
@@ -329,6 +332,7 @@ fun GamepadOverlay(
                         -> {
                             PadButton(
                                 label = label,
+                                useFastForwardIcon = useFfIcon,
                                 mask = 0,
                                 size = unitBtn * 0.85f,
                                 colors = colors,
@@ -620,6 +624,7 @@ private fun ShoulderButton(
     height: Dp,
     colors: PadColors,
     enabled: Boolean = true,
+    useFastForwardIcon: Boolean = false,
     onPress: (Boolean) -> Unit,
 ) {
     var pressed by remember { mutableStateOf(false) }
@@ -657,12 +662,21 @@ private fun ShoulderButton(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = label,
-            color = colors.label,
-            fontWeight = FontWeight.Bold,
-            fontSize = (height.value * 0.36f).coerceIn(10f, 16f).sp,
-        )
+        if (useFastForwardIcon) {
+            Icon(
+                Icons.Filled.FastForward,
+                contentDescription = "Fast-forward",
+                tint = colors.label,
+                modifier = Modifier.size(height * 0.58f),
+            )
+        } else {
+            Text(
+                text = label,
+                color = colors.label,
+                fontWeight = FontWeight.Bold,
+                fontSize = (height.value * 0.36f).coerceIn(10f, 16f).sp,
+            )
+        }
     }
 }
 
@@ -794,6 +808,7 @@ private fun PadButton(
     colors: PadColors,
     onButton: (Int, Boolean) -> Unit,
     enabled: Boolean = true,
+    useFastForwardIcon: Boolean = false,
 ) {
     var pressed by remember { mutableStateOf(false) }
     Box(
@@ -829,11 +844,20 @@ private fun PadButton(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = label,
-            color = colors.label,
-            fontWeight = FontWeight.Bold,
-            fontSize = (size.value * 0.28f).coerceIn(12f, 18f).sp,
-        )
+        if (useFastForwardIcon) {
+            Icon(
+                Icons.Filled.FastForward,
+                contentDescription = "Fast-forward",
+                tint = colors.label,
+                modifier = Modifier.size(size * 0.45f),
+            )
+        } else {
+            Text(
+                text = label,
+                color = colors.label,
+                fontWeight = FontWeight.Bold,
+                fontSize = (size.value * 0.28f).coerceIn(12f, 18f).sp,
+            )
+        }
     }
 }

@@ -3,11 +3,14 @@
 Steam ROM Manager scrapes artwork. ArchStreamer **never** sends art over the wire;
 each computer reads local files under `Art/`.
 
+Paths below assume a Gaming root you choose (env `ARCHSTREAMER_GAMING_ROOT` or
+`--gaming-root`). Layout under that root stays `ROMS/Games`, `ROMS/Art`, `tools/srm`.
+
 ## Install / launch
 
 ```bash
-./scripts/install-srm.sh          # already done if AppImage exists
-./scripts/launch-srm.sh
+python3 scripts/install_srm.py --gaming-root /path/to/Gaming
+python3 scripts/launch_srm.py --gaming-root /path/to/Gaming
 ```
 
 AppImage path: `<Gaming>/tools/srm/Steam-ROM-Manager.AppImage`
@@ -31,7 +34,7 @@ AppImage path: `<Gaming>/tools/srm/Steam-ROM-Manager.AppImage`
 ## Sync into ArchStreamer catalog paths
 
 ```bash
-./scripts/sync_srm_art_into_catalog.sh
+python3 scripts/sync_srm_art_into_catalog.py --gaming-root /path/to/Gaming
 ```
 
 This copies `Art/poster/<ROM title>.png` (etc.) into:

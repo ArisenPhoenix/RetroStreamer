@@ -1051,10 +1051,13 @@ QWidget* MainWindow::build_settings_tab() {
     auto* form_box = new QGroupBox("Local configuration", page);
     auto* form = new QFormLayout(form_box);
 
-    settings_art_root_ = new QLineEdit(archstreamer::DefaultArtRoot, form_box);
+    settings_art_root_ = new QLineEdit(form_box);
+    settings_art_root_->setPlaceholderText(QStringLiteral("…/ROMS/Art  (under your Gaming root)"));
 #ifdef ARCHSTREAMER_HAS_HOST
-    host_rom_root_ = new QLineEdit(archstreamer::DefaultRomRoot, form_box);
-    host_meta_root_ = new QLineEdit(archstreamer::DefaultMetaRoot, form_box);
+    host_rom_root_ = new QLineEdit(form_box);
+    host_rom_root_->setPlaceholderText(QStringLiteral("…/ROMS/Games  (under your Gaming root)"));
+    host_meta_root_ = new QLineEdit(form_box);
+    host_meta_root_->setPlaceholderText(QStringLiteral("…/ROMS/Meta  (under your Gaming root)"));
     const auto default_save_root =
         QString::fromStdString(archstreamer::default_save_profile_root().string());
     host_save_root_ = new QLineEdit(default_save_root, form_box);

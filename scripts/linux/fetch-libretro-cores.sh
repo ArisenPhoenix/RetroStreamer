@@ -7,14 +7,18 @@
 #
 # Usage:
 #   ./scripts/fetch-libretro-cores.sh
-#   ./scripts/fetch-libretro-cores.sh --catalog-systems   # only systems under DefaultRomRoot
+#   ARCHSTREAMER_GAMING_ROOT=/path/to/Gaming ./scripts/fetch-libretro-cores.sh --catalog-systems
 set -euo pipefail
 
 CORE_DIR="${ARCHSTREAMER_CORE_DIR:-$HOME/.config/retroarch/cores}"
 SYSTEM_DIR="${ARCHSTREAMER_SYSTEM_DIR:-$HOME/.config/retroarch/system}"
 ARCH="${ARCHSTREAMER_LIBRETRO_ARCH:-x86_64}"
 BASE="https://buildbot.libretro.com/nightly/linux/${ARCH}/latest"
-ROM_ROOT="${ARCHSTREAMER_ROM_ROOT:-<Gaming>/ROMS/Games}"
+GAMING_ROOT="${ARCHSTREAMER_GAMING_ROOT:-}"
+ROM_ROOT="${ARCHSTREAMER_ROM_ROOT:-}"
+if [[ -z "$ROM_ROOT" && -n "$GAMING_ROOT" ]]; then
+  ROM_ROOT="$GAMING_ROOT/ROMS/Games"
+fi
 
 # Preferred cores aligned with ra.py / ArchStreamer (buildbot names).
 # Skip standalone-only (yuzu) and apt-already-covered when present.
@@ -66,6 +70,10 @@ cores_for_rom_tree() {
 
 CORES=()
 if [[ "${1:-}" == "--catalog-systems" || "${1:-}" == "--rom-tree" ]]; then
+  if [[ -z "$ROM_ROOT" ]]; then
+    echo "--catalog-systems needs ARCHSTREAMER_GAMING_ROOT or ARCHSTREAMER_ROM_ROOT." >&2
+    exit 2
+  fi
   mapfile -t CORES < <(cores_for_rom_tree)
 elif [[ -n "${ARCHSTREAMER_CORES:-}" ]]; then
   # shellcheck disable=SC2206

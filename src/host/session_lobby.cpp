@@ -425,9 +425,6 @@ SessionPlan gather_session_clients(
     std::optional<SessionClientConnection> first_client,
     std::filesystem::path save_root,
     bool allow_new_users) {
-    if (art_root.empty()) {
-        art_root = DefaultArtRoot;
-    }
     std::cout
         << "Waiting up to " << timeout.count()
         << "s for enough players on shared control listener"

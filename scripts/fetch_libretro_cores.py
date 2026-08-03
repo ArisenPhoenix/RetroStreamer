@@ -13,7 +13,13 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from scriptutil import eprint
+from scriptutil import (
+    REL_ROM_ROOT,
+    add_gaming_root_arg,
+    env_path,
+    eprint,
+    resolve_gaming_path,
+)
 
 DEFAULT_CORES = [
     # Handheld / cart
@@ -123,12 +129,13 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Reference implementation: scripts/fetch-libretro-cores.sh",
     )
+    add_gaming_root_arg(parser)
     parser.add_argument(
         "--catalog-systems",
         "--rom-tree",
         dest="catalog_systems",
         action="store_true",
-        help="only systems under ROM root",
+        help="only systems under ROM root (<gaming-root>/ROMS/Games)",
     )
     parser.add_argument(
         "--core-dir",
@@ -155,11 +162,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--rom-root",
         type=Path,
-        default=Path(
-            os.environ.get(
-                "ARCHSTREAMER_ROM_ROOT", "<Gaming>/ROMS/Games"
-            )
-        ),
+        default=env_path("ARCHSTREAMER_ROM_ROOT"),
+        help="ROM catalog root (default: <gaming-root>/ROMS/Games); required with --catalog-systems",
     )
     parser.add_argument(
         "--cores",
@@ -174,10 +178,29 @@ def main(argv: list[str] | None = None) -> int:
     core_dir.mkdir(parents=True, exist_ok=True)
     system_dir.mkdir(parents=True, exist_ok=True)
 
+    rom_root: Path | None = None
+    if args.catalog_systems or args.rom_root is not None or args.gaming_root is not None:
+        try:
+            rom_root = resolve_gaming_path(
+                gaming_root=args.gaming_root,
+                relative=REL_ROM_ROOT,
+                override=args.rom_root,
+                label="ROM root (--rom-root)",
+            )
+        except SystemExit:
+            if args.catalog_systems:
+                raise
+            rom_root = None
+
     if args.cores is not None and len(args.cores) > 0:
         cores = list(args.cores)
     elif args.catalog_systems:
-        cores = cores_for_rom_tree(args.rom_root)
+        if rom_root is None:
+            raise SystemExit(
+                "--catalog-systems needs --gaming-root or --rom-root "
+                "(or ARCHSTREAMER_GAMING_ROOT / ARCHSTREAMER_ROM_ROOT)"
+            )
+        cores = cores_for_rom_tree(rom_root)
     elif os.environ.get("ARCHSTREAMER_CORES", "").strip():
         cores = os.environ["ARCHSTREAMER_CORES"].split()
     else:

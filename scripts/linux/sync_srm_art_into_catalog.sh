@@ -2,11 +2,23 @@
 # Copy SRM title-based local art into ArchStreamer asset_key folders.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD="${ROOT}/build"
-ART_ROOT="${ARCHSTREAMER_ART_ROOT:-<Gaming>/ROMS/Art}"
-ROM_ROOT="${ARCHSTREAMER_ROMS_ROOT:-<Gaming>/ROMS/Games}"
-META_ROOT="${ARCHSTREAMER_META_ROOT:-<Gaming>/ROMS/Meta}"
+GAMING_ROOT="${ARCHSTREAMER_GAMING_ROOT:-${1:-}}"
+ART_ROOT="${ARCHSTREAMER_ART_ROOT:-}"
+ROM_ROOT="${ARCHSTREAMER_ROMS_ROOT:-}"
+META_ROOT="${ARCHSTREAMER_META_ROOT:-}"
+
+if [[ -n "$GAMING_ROOT" ]]; then
+  [[ -n "$ART_ROOT" ]] || ART_ROOT="$GAMING_ROOT/ROMS/Art"
+  [[ -n "$ROM_ROOT" ]] || ROM_ROOT="$GAMING_ROOT/ROMS/Games"
+  [[ -n "$META_ROOT" ]] || META_ROOT="$GAMING_ROOT/ROMS/Meta"
+fi
+
+if [[ -z "$ART_ROOT" || -z "$ROM_ROOT" || -z "$META_ROOT" ]]; then
+  echo "Set ARCHSTREAMER_GAMING_ROOT (or ART/ROMS/META path env vars), or pass Gaming root as \$1." >&2
+  exit 2
+fi
 
 if [[ ! -x "${BUILD}/asset_probe" ]]; then
   echo "Build asset_probe first: cmake --build ${BUILD} -j\$(nproc)" >&2

@@ -10,21 +10,27 @@ import sys
 import urllib.request
 from pathlib import Path
 
+from scriptutil import (
+    REL_SRM_DIR,
+    add_gaming_root_arg,
+    env_path,
+    resolve_gaming_path,
+)
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Reference implementation: scripts/install-srm.sh",
+        epilog="Reference implementation: scripts/install-srm.sh\n"
+        "Default install dir under --gaming-root: tools/srm/",
     )
+    add_gaming_root_arg(parser)
     parser.add_argument(
         "--dest-dir",
         type=Path,
-        default=Path(
-            os.environ.get(
-                "ARCHSTREAMER_SRM_DIR", "<Gaming>/tools/srm"
-            )
-        ),
+        default=env_path("ARCHSTREAMER_SRM_DIR"),
+        help="AppImage directory (default: <gaming-root>/tools/srm)",
     )
     parser.add_argument(
         "--version",
@@ -32,7 +38,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    dest_dir: Path = args.dest_dir
+    dest_dir = resolve_gaming_path(
+        gaming_root=args.gaming_root,
+        relative=REL_SRM_DIR,
+        override=args.dest_dir,
+        label="SRM dest dir (--dest-dir)",
+    )
     version: str = args.version
     dest = dest_dir / "Steam-ROM-Manager.AppImage"
     ver_num = version[1:] if version.startswith("v") else version
@@ -50,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
         dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     size = dest.stat().st_size
     print(f"{dest}  {size} bytes")
-    print("Launch with: ./scripts/launch-srm.sh")
+    print("Launch with: python3 scripts/launch_srm.py --gaming-root <path>")
     return 0
 
 

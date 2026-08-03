@@ -8,6 +8,14 @@ import os
 import sys
 from pathlib import Path
 
+from scriptutil import (
+    REL_BIOS_ROOT,
+    add_gaming_root_arg,
+    env_path,
+    resolve_gaming_path,
+)
+
+
 def link_file(src: Path, dest: Path) -> bool:
     if not src.exists():
         print(f"  skip (missing): {src}")
@@ -25,8 +33,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Reference implementation: scripts/link-system-bios.sh",
+        epilog="Reference implementation: scripts/link-system-bios.sh\n"
+        "Expected layout under --gaming-root: BIOS FILES/PS1|PS2|NDS|3DS/…",
     )
+    add_gaming_root_arg(parser)
     parser.add_argument(
         "--system-dir",
         type=Path,
@@ -39,16 +49,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--bios-root",
         type=Path,
-        default=Path(
-            os.environ.get(
-                "ARCHSTREAMER_BIOS_ROOT", "<Gaming>/BIOS FILES"
-            )
-        ),
+        default=env_path("ARCHSTREAMER_BIOS_ROOT"),
+        help="BIOS library root (default: <gaming-root>/BIOS FILES)",
     )
     args = parser.parse_args(argv)
 
     system_dir: Path = args.system_dir
-    bios_root: Path = args.bios_root
+    bios_root = resolve_gaming_path(
+        gaming_root=args.gaming_root,
+        relative=REL_BIOS_ROOT,
+        override=args.bios_root,
+        label="BIOS root (--bios-root)",
+    )
     system_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"System dir: {system_dir}")

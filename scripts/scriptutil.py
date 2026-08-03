@@ -3,15 +3,56 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Sequence
 
+# Layout under a user-chosen Gaming root (--gaming-root / ARCHSTREAMER_GAMING_ROOT).
+REL_ROM_ROOT = "ROMS/Games"
+REL_META_ROOT = "ROMS/Meta"
+REL_ART_ROOT = "ROMS/Art"
+REL_BIOS_ROOT = "BIOS FILES"
+REL_SRM_DIR = "tools/srm"
+REL_SRM_APPIMAGE = "tools/srm/Steam-ROM-Manager.AppImage"
+
 
 def eprint(*args: object, **kwargs: object) -> None:
     print(*args, file=sys.stderr, **kwargs)
+
+
+def env_path(name: str) -> Path | None:
+    value = os.environ.get(name, "").strip()
+    return Path(value) if value else None
+
+
+def add_gaming_root_arg(parser) -> None:
+    parser.add_argument(
+        "--gaming-root",
+        type=Path,
+        default=env_path("ARCHSTREAMER_GAMING_ROOT"),
+        help="Gaming tree root (contains ROMS/, BIOS FILES/, tools/). "
+        "Env: ARCHSTREAMER_GAMING_ROOT",
+    )
+
+
+def resolve_gaming_path(
+    *,
+    gaming_root: Path | None,
+    relative: str,
+    override: Path | None,
+    label: str,
+) -> Path:
+    """Resolve a path under the Gaming tree; *override* wins over gaming-root."""
+    if override is not None:
+        return override
+    if gaming_root is not None:
+        return gaming_root / relative
+    raise SystemExit(
+        f"Provide --gaming-root (or ARCHSTREAMER_GAMING_ROOT), or an explicit path for {label}"
+    )
 
 
 def repo_root(start: Path | None = None) -> Path:
@@ -77,8 +118,6 @@ def require_linux() -> None:
 
 
 def default_vcpkg_root() -> Path:
-    import os
-
     env = os.environ.get("VCPKG_ROOT", "").strip()
     if env:
         return Path(env)

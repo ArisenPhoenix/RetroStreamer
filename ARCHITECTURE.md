@@ -52,7 +52,9 @@ That keeps dual-OS bugs localized (Windows Job Objects vs `PR_SET_PDEATHSIG`, X1
 
 ## Game Metadata
 
-The scanner looks for metadata in a parallel tree next to the ROM tree. With the default ROM root `<Gaming>/ROMS/Games`, metadata defaults to `<Gaming>/ROMS/Meta`.
+The scanner looks for metadata in a parallel tree next to the ROM tree. With ROM root
+`<Gaming>/ROMS/Games` (set in Settings / `--rom-root`; no built-in machine path),
+metadata defaults to `<Gaming>/ROMS/Meta`.
 
 Metadata mirrors the ROM's relative path and replaces the ROM extension with `.json`:
 
@@ -117,7 +119,7 @@ The CLI client stores this at `$XDG_CACHE_HOME/archstreamer/catalog.json`, or `~
 
 ## Game Assets
 
-Artwork is local data, not session protocol payload. Hosts and clients should use the same local asset provider against a configurable art root. With the default ROM root `<Gaming>/ROMS/Games`, art defaults to `<Gaming>/ROMS/Art`.
+Artwork is local data, not session protocol payload. Hosts and clients should use the same local asset provider against a configurable art root. With ROM root `<Gaming>/ROMS/Games`, art defaults to the sibling `<Gaming>/ROMS/Art`.
 
 The art tree is based on `asset_key`, not ROM path. `asset_key` is:
 
@@ -137,7 +139,7 @@ Art/snes/super-bomberman/en/unknown/unknown/screenshot.png
 ```
 
 Artwork root defaults to the sibling `Art` directory next to `Games` / `Meta`
-(`<Gaming>/ROMS/Art`). Until a game has local art, the GUI uses
+(under your configured Gaming tree). Until a game has local art, the GUI uses
 `Art/default/default_image.png` as a placeholder. Artwork is never sent over the
 session protocol; each machine resolves art locally (for example via Steam ROM
 Manager on client PCs).

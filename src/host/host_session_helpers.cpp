@@ -137,7 +137,9 @@ void poll_active_session_joins(
                 acknowledge_password_change(config.save_root, *password_change)));
             return;
         }
-        const auto art_root = config.art_root.empty() ? std::filesystem::path{DefaultArtRoot} : config.art_root;
+        const auto art_root = config.art_root.empty()
+            ? (config.rom_root.parent_path() / "Art")
+            : config.art_root;
         if (const auto* art_request = std::get_if<ArtAssetRequest>(&first_payload); art_request != nullptr) {
             stream->send_packet(serialize_packet(load_art_asset_response(
                 art_root,
@@ -310,8 +312,7 @@ std::optional<AcceptedControlHello> try_accept_control_hello(
             stream->send_packet(serialize_packet(info));
             return AcceptedControlHello{};
         }
-        const auto resolved_art =
-            art_root.empty() ? std::filesystem::path{DefaultArtRoot} : art_root;
+        const auto& resolved_art = art_root;
         if (const auto* art_request = std::get_if<ArtAssetRequest>(&first_payload);
             art_request != nullptr) {
             stream->send_packet(serialize_packet(load_art_asset_response(

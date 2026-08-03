@@ -2,8 +2,8 @@
 # Run elevated (Administrator):
 #   .\deploy\windows\enable-openssh-server.ps1
 #
-# Then from Linux:
-#   ssh merk@<host>
+# Then from Linux (use the Windows host's LAN IP from Settings / ipconfig):
+#   ssh <windows-user>@<windows-host-ip>
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"

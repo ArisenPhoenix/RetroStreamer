@@ -90,6 +90,16 @@ int main(int argc, char** argv) {
         options.steam_account_id = account->account_id;
     }
 
+    if (content_root.empty() || assets_root.empty()) {
+        std::cerr
+            << "content-root and assets-root are required "
+               "(pass positional args; typical: <Gaming>/ROMS/Games and <Gaming>/ROMS/Art)\n";
+        return 2;
+    }
+    if (metadata_root.empty()) {
+        metadata_root = content_root.parent_path() / "Meta";
+    }
+
     const auto catalog = archstreamer::scan_game_catalog(
         content_root,
         archstreamer::LibretroCoreRegistry::ubuntu_defaults(),

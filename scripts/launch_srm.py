@@ -8,7 +8,16 @@ import os
 import sys
 from pathlib import Path
 
-from scriptutil import eprint, ensure_scripts_on_path
+from scriptutil import (
+    REL_ART_ROOT,
+    REL_ROM_ROOT,
+    REL_SRM_APPIMAGE,
+    add_gaming_root_arg,
+    env_path,
+    eprint,
+    ensure_scripts_on_path,
+    resolve_gaming_path,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -17,6 +26,7 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Reference implementation: scripts/launch-srm.sh",
     )
+    add_gaming_root_arg(parser)
     parser.add_argument(
         "--sandbox",
         action="store_true",
@@ -25,40 +35,45 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--appimage",
         type=Path,
-        default=Path(
-            os.environ.get(
-                "ARCHSTREAMER_SRM_APPIMAGE",
-                "<Gaming>/tools/srm/Steam-ROM-Manager.AppImage",
-            )
-        ),
+        default=env_path("ARCHSTREAMER_SRM_APPIMAGE"),
+        help="SRM AppImage (default: <gaming-root>/tools/srm/Steam-ROM-Manager.AppImage)",
     )
     parser.add_argument(
         "--art-root",
         type=Path,
-        default=Path(
-            os.environ.get(
-                "ARCHSTREAMER_ART_ROOT", "<Gaming>/ROMS/Art"
-            )
-        ),
+        default=env_path("ARCHSTREAMER_ART_ROOT"),
+        help="Art root (default: <gaming-root>/ROMS/Art)",
     )
     parser.add_argument(
         "--roms-root",
         type=Path,
-        default=Path(
-            os.environ.get(
-                "ARCHSTREAMER_ROMS_ROOT", "<Gaming>/ROMS/Games"
-            )
-        ),
+        default=env_path("ARCHSTREAMER_ROMS_ROOT"),
+        help="ROMs root (default: <gaming-root>/ROMS/Games)",
     )
     args, passthrough = parser.parse_known_args(argv)
 
-    appimage: Path = args.appimage
-    art_root: Path = args.art_root
-    roms_root: Path = args.roms_root
+    appimage = resolve_gaming_path(
+        gaming_root=args.gaming_root,
+        relative=REL_SRM_APPIMAGE,
+        override=args.appimage,
+        label="SRM AppImage (--appimage)",
+    )
+    art_root = resolve_gaming_path(
+        gaming_root=args.gaming_root,
+        relative=REL_ART_ROOT,
+        override=args.art_root,
+        label="art root (--art-root)",
+    )
+    roms_root = resolve_gaming_path(
+        gaming_root=args.gaming_root,
+        relative=REL_ROM_ROOT,
+        override=args.roms_root,
+        label="ROMs root (--roms-root)",
+    )
 
     if not (appimage.is_file() and os.access(appimage, os.X_OK)):
         eprint(f"Steam ROM Manager AppImage not found at: {appimage}")
-        eprint("Download it with scripts/install-srm.sh")
+        eprint("Download it with: python3 scripts/install_srm.py --gaming-root <path>")
         return 1
 
     for sub in ("default", "poster", "heroes", "logos", "icons", "grids"):
@@ -86,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         "Enable 'DRM Protect' / artwork backup on parsers so SGDB choices are cached locally."
     )
-    print("Then run: ./scripts/sync_srm_art_into_catalog.sh")
+    print("Then run: python3 scripts/sync_srm_art_into_catalog.py --gaming-root <path>")
     print()
 
     cmd = [str(appimage)]

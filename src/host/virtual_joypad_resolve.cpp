@@ -2,6 +2,7 @@
 
 #include "common/protocol.hpp"
 #include "host/host_session_helpers.hpp"
+#include "host/platform/host_pad_platform.hpp"
 #include "host/virtual_gamepad.hpp"
 
 #include <SDL.h>
@@ -21,19 +22,7 @@ constexpr std::uint16_t kVirtualVendorId = 0x1209;
 constexpr std::uint16_t kVirtualProductIdBase = 0xa517;
 
 bool is_archstreamer_joystick(int device_index, std::uint16_t product_id_base, std::size_t players) {
-    const auto vendor = static_cast<std::uint16_t>(SDL_JoystickGetDeviceVendor(device_index));
-    const auto product = static_cast<std::uint16_t>(SDL_JoystickGetDeviceProduct(device_index));
-    const auto base = product_id_base != 0 ? product_id_base : kVirtualProductIdBase;
-    const auto span = std::max<std::size_t>(players, 1);
-    if (vendor == kVirtualVendorId &&
-        product >= base &&
-        product < static_cast<std::uint16_t>(base + span)) {
-        return true;
-    }
-
-    const char* name = SDL_JoystickNameForIndex(device_index);
-    return product_id_base == 0 &&
-        name != nullptr && std::string(name).rfind("ArchStreamer", 0) == 0;
+    return platform_is_host_virtual_joystick(device_index, product_id_base, players);
 }
 
 std::string guid_string_for_index(int device_index) {

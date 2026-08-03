@@ -350,43 +350,9 @@ std::string StreamingAudioSink::default_monitor_source() {
     return sink + ".monitor";
 }
 
-} // namespace archstreamer
-
-#else
-
-#include "host/streaming_audio_sink.hpp"
-
-namespace archstreamer {
-
-std::string StreamingAudioSink::slot_sink_name(int slot_index) {
-    if (slot_index < 0) {
-        slot_index = 0;
-    }
-    return std::string(kName) + "-" + std::to_string(slot_index);
-}
-
-std::string StreamingAudioSink::slot_application_id(int slot_index) {
-    if (slot_index < 0) {
-        slot_index = 0;
-    }
-    return std::string(kName) + "-slot-" + std::to_string(slot_index);
-}
-
-bool StreamingAudioSink::is_streaming_sink_name(std::string_view sink_name) {
-    return sink_name == kName || sink_name.rfind("archstreamer-", 0) == 0;
-}
-
-std::string StreamingAudioSink::ensure() { return kName; }
-std::string StreamingAudioSink::monitor_source() { return std::string(kName) + ".monitor"; }
-std::string StreamingAudioSink::ensure_slot(int slot_index) { return slot_sink_name(slot_index); }
-std::string StreamingAudioSink::monitor_source_for_slot(int slot_index) {
-    return slot_sink_name(slot_index) + ".monitor";
-}
-void StreamingAudioSink::park_game_audio() {}
-void StreamingAudioSink::park_game_audio_for_slot(int) {}
-void StreamingAudioSink::restore_default_sink() {}
-std::string StreamingAudioSink::default_monitor_source() { return {}; }
+void StreamingAudioSink::track_emulator_process(int, int) {}
+void StreamingAudioSink::untrack_emulator_process(int) {}
 
 } // namespace archstreamer
 
-#endif
+#endif // !_WIN32 — Windows backend: windows_streaming_audio_sink.cpp

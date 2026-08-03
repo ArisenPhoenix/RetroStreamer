@@ -19,6 +19,7 @@ public:
     bool running() const override;
     std::optional<int> last_exit_code() const override;
     std::string last_stderr_tail() const override;
+    std::optional<int> process_id() const override;
 
 private:
     void capture_stderr_tail() const;

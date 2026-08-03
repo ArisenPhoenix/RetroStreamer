@@ -265,13 +265,11 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/active_session_slot.cpp
         src/host/launch_environment.cpp
         src/host/libretro_core_registry.cpp
-        src/host/virtual_keyboard.cpp
         src/host/local_controller_bridge.cpp
         src/host/network_input_receiver.cpp
-        src/host/streaming_audio_sink.cpp
+        src/host/platform_host_pad_match.cpp
         src/host/retroarch_config_writer.cpp
         src/host/retroarch_netcmd.cpp
-        src/host/retroarch_resolve.cpp
         src/host/save_profile.cpp
         src/host/user_credentials.cpp
         src/host/standalone_emulator.cpp
@@ -305,10 +303,15 @@ if(ARCHSTREAMER_BUILD_HOST)
             src/host/windows_launch_environment.cpp
             src/host/windows_session_slot_lease.cpp
             src/host/windows_retroarch_process.cpp
+            src/host/windows_retroarch_resolve.cpp
             src/host/windows_vigem_gamepad.cpp
             src/host/windows_media_server.cpp
             src/host/windows_capture_platform.cpp
             src/host/windows_emulator_orphan_reaper.cpp
+            src/host/windows_virtual_keyboard.cpp
+            src/host/windows_soft_keyboard.cpp
+            src/host/windows_streaming_audio_sink.cpp
+            src/host/windows_save_profile_paths.cpp
             src/host/switch/windows_switch_paths.cpp
             src/host/switch/windows_yuzu_runtime.cpp
             src/host/switch/windows_ryujinx_runtime.cpp
@@ -324,6 +327,9 @@ if(ARCHSTREAMER_BUILD_HOST)
             src/host/gamescope_pipewire_node.cpp
             src/host/linux_capture_platform.cpp
             src/host/linux_emulator_orphan_reaper.cpp
+            src/host/virtual_keyboard.cpp
+            src/host/streaming_audio_sink.cpp
+            src/host/retroarch_resolve.cpp
             src/host/switch/posix_switch_paths.cpp
             src/host/switch/posix_yuzu_runtime.cpp
             src/host/switch/posix_ryujinx_runtime.cpp
@@ -355,6 +361,8 @@ if(ARCHSTREAMER_BUILD_HOST)
         else()
             message(FATAL_ERROR "libXtst required for host virtual keyboard (apt: libxtst-dev)")
         endif()
+    else()
+        target_link_libraries(archstreamer_host PRIVATE ole32 uuid)
     endif()
 
     add_executable(game_catalog_probe

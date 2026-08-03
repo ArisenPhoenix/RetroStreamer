@@ -115,7 +115,14 @@ void HostRunnerCli::print_usage() const {
         << "  --ignore-controller <vid/pid>\n"
         << "                      Hide a physical controller from RetroArch SDL2, for example 0x054c/0x09cc.\n"
         << "  --retroarch-joypad-driver <driver>\n"
-        << "                      RetroArch joypad driver (udev|sdl2). Default: udev (preferred;\n"
+        << "                      RetroArch joypad driver (udev|sdl2|xinput). "
+           "Default: platform ("
+#if defined(_WIN32)
+           "xinput"
+#else
+           "udev"
+#endif
+           "; preferred).\n"
         << "                      sdl2 can stall heavy cores like LRPS2).\n"
         << "  --save-root <path>  Base save profile directory. Default: ~/.local/share/archstreamer/saves\n"
         << "  --allow-new-users   Allow ClientHello to create new save profiles (off by default).\n"

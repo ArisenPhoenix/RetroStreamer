@@ -447,6 +447,13 @@ void post_emulator_start_warmup(
 
     if (config.audio) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        if (audio != nullptr) {
+            if (const auto pid = runtime.emulator().process_id(); pid.has_value()) {
+                audio->track_emulator_process(
+                    *pid,
+                    audio_slot_index.value_or(-1));
+            }
+        }
         park_session_game_audio(audio, audio_slot_index);
     }
 
@@ -466,6 +473,15 @@ void stop_session_runtime(
     if (reset) {
         runtime.reset();
     }
+}
+
+void untrack_session_audio(
+    StreamingAudioSink* audio,
+    std::optional<int> audio_slot_index) {
+    if (audio == nullptr) {
+        return;
+    }
+    audio->untrack_emulator_process(audio_slot_index.value_or(-1));
 }
 
 void unplug_session_keyboard(VirtualKeyboard* keyboard) {

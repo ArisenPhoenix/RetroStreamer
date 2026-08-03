@@ -1,5 +1,9 @@
 #include "host/save_profile.hpp"
 
+#if defined(_WIN32)
+#include "host/platform/default_save_profile_paths.hpp"
+#endif
+
 #include <cstdlib>
 #include <stdexcept>
 #include <string_view>
@@ -8,11 +12,17 @@
 namespace archstreamer {
 
 std::filesystem::path default_save_profile_root() {
+#if defined(_WIN32)
+    return SaveProfilePaths::default_root();
+#else
+    // Linux reference implementation (XDG-style). Keep intact until a
+    // PosixSaveProfilePaths wrapper matches WindowsSaveProfilePaths.
     if (const char* home = std::getenv("HOME"); home != nullptr && *home != '\0') {
         return std::filesystem::path(home) / ".local/share/archstreamer/saves";
     }
 
     return std::filesystem::current_path() / "archstreamer-saves";
+#endif
 }
 
 void copy_directory_contents(
@@ -83,10 +93,14 @@ std::filesystem::path user_ps2_memcard_directory(const SaveProfile& profile) {
 }
 
 std::filesystem::path shared_retroarch_system_directory() {
+#if defined(_WIN32)
+    return SaveProfilePaths::shared_retroarch_system_directory();
+#else
     if (const char* home = std::getenv("HOME"); home != nullptr && *home != '\0') {
         return std::filesystem::path(home) / ".config/retroarch/system";
     }
     return std::filesystem::path(".config/retroarch/system");
+#endif
 }
 
 namespace {
@@ -94,6 +108,9 @@ namespace {
 void link_into_mirror(
     const std::filesystem::path& link,
     const std::filesystem::path& target) {
+#if defined(_WIN32)
+    SaveProfilePaths::link_path(link, target);
+#else
     std::error_code error;
     if (std::filesystem::is_symlink(link, error)) {
         if (std::filesystem::read_symlink(link, error) == target) {
@@ -105,6 +122,7 @@ void link_into_mirror(
         return;
     }
     std::filesystem::create_symlink(target, link, error);
+#endif
 }
 
 void mirror_children(

@@ -241,6 +241,7 @@ Flatpak GUI Host tab launches a **native** `host_runner` via `flatpak-spawn --ho
 - Embedded GUI media later needs platform-specific GStreamer window integration
 - RetroArch-on-Windows host parity (paths / joypad drivers) after Switch stream proof
 - Windows video-window geometry restore across cutovers (raise-to-front is implemented; full placement restore is still Linux-first)
+- Windows host backends now follow the same `using` / CMake twin pattern as pads/media (`HostVirtualKeyboard`, `SaveProfilePaths`, `windows_*_resolve` / soft-keyboard / audio-sink). Linux reference implementations stay in place until a matching `Posix*` wrapper is introduced without behaviour change. Windows soft-keyboard typing uses EnumWindows + SendInput; audio parking mutes tracked emulator WASAPI sessions (speakers quiet while `wasapisrc` loopback continues).
 
 ## Save Profiles
 

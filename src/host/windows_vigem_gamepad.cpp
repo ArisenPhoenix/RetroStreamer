@@ -58,6 +58,8 @@ using PFN_vigem_target_free = void (__cdecl*)(void*);
 using PFN_vigem_target_add = VIGEM_ERROR (__cdecl*)(void*, void*);
 using PFN_vigem_target_remove = VIGEM_ERROR (__cdecl*)(void*, void*);
 using PFN_vigem_target_x360_update = VIGEM_ERROR (__cdecl*)(void*, void*, XUSB_REPORT);
+using PFN_vigem_target_set_vid = void (__cdecl*)(void*, unsigned short);
+using PFN_vigem_target_set_pid = void (__cdecl*)(void*, unsigned short);
 
 struct VigemApi {
     HMODULE module = nullptr;
@@ -70,6 +72,8 @@ struct VigemApi {
     PFN_vigem_target_add target_add = nullptr;
     PFN_vigem_target_remove target_remove = nullptr;
     PFN_vigem_target_x360_update target_x360_update = nullptr;
+    PFN_vigem_target_set_vid target_set_vid = nullptr;
+    PFN_vigem_target_set_pid target_set_pid = nullptr;
 };
 
 VigemApi& vigem_api() {
@@ -101,6 +105,10 @@ bool load_vigem_api() {
         reinterpret_cast<PFN_vigem_target_remove>(GetProcAddress(api.module, "vigem_target_remove"));
     api.target_x360_update = reinterpret_cast<PFN_vigem_target_x360_update>(
         GetProcAddress(api.module, "vigem_target_x360_update"));
+    api.target_set_vid = reinterpret_cast<PFN_vigem_target_set_vid>(
+        GetProcAddress(api.module, "vigem_target_set_vid"));
+    api.target_set_pid = reinterpret_cast<PFN_vigem_target_set_pid>(
+        GetProcAddress(api.module, "vigem_target_set_pid"));
     if (api.alloc == nullptr || api.free == nullptr || api.connect == nullptr ||
         api.disconnect == nullptr || api.target_x360_alloc == nullptr ||
         api.target_free == nullptr || api.target_add == nullptr ||
@@ -109,6 +117,7 @@ bool load_vigem_api() {
         api = {};
         return false;
     }
+    // set_vid/set_pid are optional — older ViGEmClient builds still work without them.
     return true;
 }
 
@@ -217,6 +226,16 @@ void ViGEmGamepadBus::plug(RetroArchPort port) {
     if (pad.target == nullptr) {
         throw std::runtime_error("vigem_target_x360_alloc failed");
     }
+    VirtualGamepadIdentity id =
+        (port < identities_.size()) ? identities_[port] : identity_;
+    // Match LinuxUinputGamepadBus: distinct PID per port for SDL/emulator binding.
+    id.product_id = static_cast<std::uint16_t>(id.product_id + port);
+    if (api.target_set_vid != nullptr) {
+        api.target_set_vid(pad.target, id.vendor_id);
+    }
+    if (api.target_set_pid != nullptr) {
+        api.target_set_pid(pad.target, id.product_id);
+    }
     const auto err = api.target_add(client_, pad.target);
     if (err != VIGEM_ERROR_NONE) {
         api.target_free(pad.target);
@@ -224,8 +243,6 @@ void ViGEmGamepadBus::plug(RetroArchPort port) {
         throw std::runtime_error("vigem_target_add failed (0x" + std::to_string(err) + ")");
     }
     pad.plugged = true;
-    (void)identity_;
-    (void)identities_;
 }
 
 void ViGEmGamepadBus::unplug(RetroArchPort port) {

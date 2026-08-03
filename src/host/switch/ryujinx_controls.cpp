@@ -1,5 +1,7 @@
 #include "host/switch/ryujinx_controls.hpp"
 
+#include "host/platform/host_pad_platform.hpp"
+
 #include <nlohmann/json.hpp>
 
 #include <fstream>
@@ -88,7 +90,7 @@ nlohmann::json ryujinx_pro_controller_sdl_binding(
 
 std::string archstreamer_sdl_gamecontroller_mapping(const std::string& sdl_guid, const std::string& name) {
     return sdl_guid + "," + name +
-        ",platform:Linux,"
+        ",platform:" + std::string(kSdlGameControllerPlatform) + ","
         "a:b0,b:b1,y:b2,x:b3,"
         "leftshoulder:b4,rightshoulder:b5,"
         "back:b6,start:b7,guide:b8,"

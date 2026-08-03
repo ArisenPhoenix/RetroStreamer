@@ -5,6 +5,7 @@
 #include "common/protocol.hpp"
 #include "host/host_launch_planner.hpp"
 #include "host/media_capture.hpp"
+#include "host/platform/host_pad_platform.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -55,7 +56,7 @@ struct HostAppConfig {
     std::optional<std::size_t> bridge_controller_index;
     std::optional<std::size_t> virtual_joypad_index;
     std::optional<std::string> ignore_controller;
-    std::string retroarch_joypad_driver = "udev";
+    std::string retroarch_joypad_driver = kDefaultRetroArchJoypadDriver;
     std::filesystem::path save_root;
     std::filesystem::path art_root;
     std::string username;

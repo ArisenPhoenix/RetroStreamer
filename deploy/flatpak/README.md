@@ -1,5 +1,11 @@
 # Flatpak (Bazzite / immutable Linux)
 
+**Python front-end** (preferred; `scripts/build-flatpak.sh` remains as a reference):
+
+```bash
+python3 scripts/build_flatpak.py
+```
+
 Bazzite and other atomic desktops often lack compile-time packages on the host.
 A Flatpak is the easiest way to run the ArchStreamer GUI there.
 

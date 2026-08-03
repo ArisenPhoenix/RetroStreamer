@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 #include "host/media_capture.hpp"
+#include "host/platform/default_save_profile_paths.hpp"
 #include "host/windows_media_server.hpp"
 #include "host/windows_retroarch_process.hpp"
 #include "host/windows_vigem_gamepad.hpp"
@@ -12,6 +13,8 @@
 #endif
 
 #include "host/media_server.hpp"
+#include "host/platform/host_pad_platform.hpp"
+#include "host/virtual_keyboard.hpp"
 
 #include <memory>
 
@@ -21,6 +24,7 @@ namespace archstreamer {
 using HostRetroArchProcess = WindowsRetroArchProcess;
 using HostVirtualGamepadBus = ViGEmGamepadBus;
 using HostMediaServer = WindowsMediaServer;
+using HostSaveProfilePaths = SaveProfilePaths;
 
 inline std::unique_ptr<MediaServer> make_host_media_server(const GStreamerMediaCaptureConfig& config) {
     WindowsMediaCaptureConfig win{};
@@ -40,5 +44,8 @@ inline std::unique_ptr<MediaServer> make_host_media_server(const GStreamerMediaC
     return make_gstreamer_media_server(config);
 }
 #endif
+
+// Shared concrete type; Linux XTest vs Windows SendInput selected by CMake sources.
+using HostVirtualKeyboard = VirtualKeyboard;
 
 } // namespace archstreamer

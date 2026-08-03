@@ -148,6 +148,17 @@ std::string WindowsRetroArchProcess::last_stderr_tail() const {
     return last_stderr_tail_;
 }
 
+std::optional<int> WindowsRetroArchProcess::process_id() const {
+    if (!launched_ || !process_.running()) {
+        return std::nullopt;
+    }
+    const int pid = process_.pid();
+    if (pid <= 0) {
+        return std::nullopt;
+    }
+    return pid;
+}
+
 } // namespace archstreamer
 
 #endif // _WIN32

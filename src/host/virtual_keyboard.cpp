@@ -1443,44 +1443,4 @@ void ensure_soft_keyboard(
 
 } // namespace archstreamer
 
-#else
-
-#include "host/virtual_keyboard.hpp"
-
-namespace archstreamer {
-
-const RemotedKeyBinding* default_remoted_key_bindings(std::size_t& count) {
-    count = 0;
-    return nullptr;
-}
-
-VirtualKeyboard::VirtualKeyboard(std::string) {}
-VirtualKeyboard::~VirtualKeyboard() = default;
-void VirtualKeyboard::rebind_display(std::string capture_display) {
-    capture_display_ = std::move(capture_display);
-}
-void VirtualKeyboard::plug() {}
-void VirtualKeyboard::unplug() {}
-void VirtualKeyboard::apply(const KeyboardState&) {}
-void VirtualKeyboard::apply_emulator_control(const EmulatorControl&) {}
-void VirtualKeyboard::set_paused(bool) {}
-void VirtualKeyboard::set_fast_forward(bool) {}
-void VirtualKeyboard::release_all() {}
-void VirtualKeyboard::xtest_tap_keysym(unsigned long) {}
-
-void ensure_soft_keyboard(
-    std::shared_ptr<SoftKeyboardHostBridge>& bridge,
-    std::string fallback_text,
-    std::string prompt,
-    std::string preferred_display,
-    int owner_pid) {
-    (void)bridge;
-    (void)fallback_text;
-    (void)prompt;
-    (void)preferred_display;
-    (void)owner_pid;
-}
-
-} // namespace archstreamer
-
-#endif
+#endif // !_WIN32 — Windows backends: windows_virtual_keyboard.cpp / windows_soft_keyboard.cpp

@@ -5,12 +5,15 @@
 
 namespace archstreamer {
 
-// Owns Pulse/PipeWire-Pulse null sink(s) used while streaming so game audio stays
-// off the real speakers unless Watch-local (or a remote) plays the RTP feed.
+// Linux: Pulse/PipeWire-Pulse null sink(s) so game audio stays off the real
+// speakers unless Watch-local (or a remote) plays the RTP feed.
+// Windows: WASAPI session mute for tracked emulator processes (same call sites);
+// system loopback capture continues via WindowsMediaServer.
 //
 // Single-session host uses sink name "archstreamer".
 // Concurrent session slots use "archstreamer-0", "archstreamer-1", … so each
-// GStreamer capture hears only that slot's emulator.
+// GStreamer capture hears only that slot's emulator (Pulse). On Windows, slots
+// are targeted via track_emulator_process(pid, slot).
 class StreamingAudioSink {
 public:
     static constexpr const char* kName = "archstreamer";
@@ -41,6 +44,14 @@ public:
 
     // Default Pulse sink's .monitor (no ArchStreamer null sink).
     static std::string default_monitor_source();
+
+    /**
+     * Windows: remember the emulator PID (and optional concurrent slot) so park
+     * can mute that process tree. Linux: no-op (Pulse uses application.id).
+     * slot_index < 0 → single-session / legacy park_game_audio().
+     */
+    void track_emulator_process(int process_id, int slot_index = -1);
+    void untrack_emulator_process(int slot_index = -1);
 };
 
 } // namespace archstreamer

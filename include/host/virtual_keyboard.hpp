@@ -113,6 +113,10 @@ private:
 // next real dialog. `fallback_text` is unused (kept for call-site compatibility).
 // `preferred_display` / `owner_pid` scope probes to this session's nested
 // Xwayland — never scan sibling gamescope displays (concurrent slots).
+#endif
+// Declared on every platform; Windows provides no-op / SendInput backends in
+// windows_soft_keyboard.cpp / windows_virtual_keyboard.cpp (Linux reference stays
+// in virtual_keyboard.cpp).
 void schedule_soft_keyboard(
     std::shared_ptr<SoftKeyboardHostBridge> bridge,
     std::string fallback_text,
@@ -138,6 +142,5 @@ std::vector<std::string> xtest_display_candidates(const std::string& preferred =
 std::vector<std::string> soft_keyboard_display_candidates(
     const std::string& preferred = {},
     int owner_pid = 0);
-#endif
 
 } // namespace archstreamer

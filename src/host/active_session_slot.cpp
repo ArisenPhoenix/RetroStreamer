@@ -534,6 +534,7 @@ void ActiveSessionSlot::run_session() {
             << user_ps2_memcard_directory(save_profile_) << '\n';
     }
 
+#if !defined(_WIN32)
     if (!launch_config.standalone &&
         (system_key_ == "ps1" || system_key_ == "ps2" || system_key_ == "psp") &&
         config.retroarch_joypad_driver == "sdl2") {
@@ -542,6 +543,7 @@ void ActiveSessionSlot::run_session() {
             << " (sdl2 stalls PlayStation cores).\n";
         config.retroarch_joypad_driver = "udev";
     }
+#endif
 
 #if defined(ARCHSTREAMER_DEBUG_GB_LINK)
     if (system_key_ == "gb" || system_key_ == "gbc" || system_key_ == "gb-gbc") {
@@ -1009,6 +1011,8 @@ void ActiveSessionSlot::run_session() {
     }
     unplug_session_keyboard(keyboard_.get());
     keyboard_.reset();
+
+    untrack_session_audio(config_.streaming_audio, config_.slot_index);
 
     // The runtime destructor also stops any process it still owns; stop here so
     // teardown ordering stays predictable.

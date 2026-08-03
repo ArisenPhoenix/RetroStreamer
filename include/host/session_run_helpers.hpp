@@ -98,6 +98,11 @@ void park_session_game_audio(
     StreamingAudioSink* audio,
     std::optional<int> audio_slot_index = std::nullopt);
 
+/** Windows: drop tracked emulator PID for park targeting. Linux: no-op. */
+void untrack_session_audio(
+    StreamingAudioSink* audio,
+    std::optional<int> audio_slot_index = std::nullopt);
+
 /**
  * Per-session loop cadence: local bridge poll, periodic audio park, sleep.
  * Owns the park deadline; call tick() once per loop iteration.

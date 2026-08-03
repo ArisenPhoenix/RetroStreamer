@@ -183,6 +183,7 @@ int HostApp::run_direct_session(
     }
     // LRPS2/PCSX ReARMed stall badly under RetroArch's sdl2 joypad poll. Keep udev
     // for PlayStation even if a caller/GUI asked for sdl2.
+#if !defined(_WIN32)
     if (!launch_config.standalone &&
         (system_key == "ps1" || system_key == "ps2" || system_key == "psp") &&
         config.retroarch_joypad_driver == "sdl2") {
@@ -191,6 +192,7 @@ int HostApp::run_direct_session(
             << " (sdl2 stalls PlayStation cores).\n";
         config.retroarch_joypad_driver = "udev";
     }
+#endif
     if (!launch_config.standalone) {
         launch_config.retroarch_path = resolved_retroarch.display_path;
         launch_config.command_prefix = resolved_retroarch.argv_prefix;
@@ -717,6 +719,7 @@ int HostApp::run_direct_session(
     // Close XTest before stopping gamescope/Xvfb so Xlib does not abort the process.
     unplug_session_keyboard(&keyboard);
 
+    untrack_session_audio(&streaming_audio);
     stop_session_runtime(session_runtime);
     if (session_runtime != nullptr) {
         if (const auto code = session_runtime->last_exit_code(); code.has_value()) {

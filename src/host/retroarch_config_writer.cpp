@@ -308,19 +308,15 @@ void apply_retroarch_resolution_scale(
     }
 }
 
-// Stream-friendly DS layout: large main (top) screen with a smaller touchscreen
-// beside it. melonDS "Hybrid Top" + small=Bottom matches that; Top/Bottom stacks
-// both at equal size and wastes vertical space on the stream.
-//
-// R2 is the core's Swap Screens button. In the software renderer the small pane
-// ignores the swap (large flips, side stays fixed — often duplicating bottom).
-// The OpenGL path exchanges both panes; we already wrap melonDS in VirtualGL, so
-// enabling the core GL renderer is safe and makes R2 a real swap.
-void apply_nds_screen_layout(const std::filesystem::path& core_path) {
-    if (core_path.empty()) {
-        return;
-    }
-    const auto key = core_file_key(core_path);
+} // namespace
+
+bool core_needs_gl_on_virtual_display(const std::filesystem::path& core_path) {
+    return core_needs_gl_on_virtual_display_impl(core_path);
+}
+
+// Stream-friendly DS layout. melonDS "Hybrid Top" matches landscape/desktop;
+// "Top/Bottom" stacks equal screens for portrait phones.
+void apply_nds_screen_layout(DisplayLayoutPreference preference) {
     auto write = [&](std::string_view dir, std::vector<std::pair<std::string, std::string>> opts) {
         const auto path = retroarch_core_opt_path(dir);
         if (!path.empty()) {
@@ -328,24 +324,18 @@ void apply_nds_screen_layout(const std::filesystem::path& core_path) {
         }
     };
 
-    if (key == "melonds") {
-        write("melonDS", {
-            {"melonds_screen_layout", "Hybrid Top"},
-            {"melonds_hybrid_small_screen", "Bottom"},
-            {"melonds_hybrid_ratio", "3"},
-            {"melonds_screen_gap", "0"},
-            {"melonds_swapscreen_mode", "Toggle"},
-            {"melonds_opengl_renderer", "enabled"},
-            // Layout buffer is still ≥4× native in-core; keep 3D scale modest.
-            {"melonds_opengl_resolution", "2x native (512x384)"},
-        });
-    }
-}
-
-} // namespace
-
-bool core_needs_gl_on_virtual_display(const std::filesystem::path& core_path) {
-    return core_needs_gl_on_virtual_display_impl(core_path);
+    const bool portrait = preference == DisplayLayoutPreference::Portrait;
+    const char* layout = portrait ? "Top/Bottom" : "Hybrid Top";
+    write("melonDS", {
+        {"melonds_screen_layout", layout},
+        {"melonds_hybrid_small_screen", "Bottom"},
+        {"melonds_hybrid_ratio", "3"},
+        {"melonds_screen_gap", "0"},
+        {"melonds_swapscreen_mode", "Toggle"},
+        {"melonds_opengl_renderer", "enabled"},
+        // Layout buffer is still ≥4× native in-core; keep 3D scale modest.
+        {"melonds_opengl_resolution", "2x native (512x384)"},
+    });
 }
 
 std::string_view face_button_map_name(std::string_view system_key) {
@@ -380,7 +370,8 @@ std::filesystem::path write_retroarch_input_override(
     const std::filesystem::path& core_path,
     int resolution_scale,
     int slot_index,
-    std::uint16_t network_cmd_port) {
+    std::uint16_t network_cmd_port,
+    DisplayLayoutPreference display_layout) {
     // Home path so Flatpak ArchStreamer + flatpak-spawn --host retroarch share the same files.
     const auto root = retroarch_runtime_root();
     const auto directory = root / "config";
@@ -561,7 +552,9 @@ std::filesystem::path write_retroarch_input_override(
         ensure_lrps2_virtual_display_options();
     }
     apply_retroarch_resolution_scale(core_path, resolution_scale);
-    apply_nds_screen_layout(core_path);
+    if (core_file_key(core_path) == "melonds" || system_key == "nds") {
+        apply_nds_screen_layout(display_layout);
+    }
 
     return path;
 }

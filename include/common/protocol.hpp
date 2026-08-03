@@ -15,7 +15,7 @@
 namespace archstreamer {
 
 constexpr std::uint32_t ProtocolMagic = 0x41525354; // "ARST"
-constexpr std::uint16_t ProtocolVersion = 16;
+constexpr std::uint16_t ProtocolVersion = 18;
 constexpr std::uint8_t MaxRemoteClients = 2;
 constexpr std::uint8_t MaxPlayersPerClient = 2;
 constexpr std::uint8_t MaxRetroArchPorts = 5; // Ports 0-3 plus a host player if desired.
@@ -59,6 +59,14 @@ enum class PacketType : std::uint8_t {
     MediaVideoPending = 26,
     // Client → host: staging video path is receiving; host may promote + tear down old.
     MediaVideoReady = 27,
+    // Client → host: explicit pause / fast-forward (not toggle or hold).
+    EmulatorControl = 28,
+    // Client → host: diagnostic log dump (side channel; also accepted as lone TCP payload).
+    ClientLogBundle = 29,
+    // Host → client: password ok but must be changed before join continues.
+    PasswordChangeRequired = 30,
+    // Client → host: set a new password (join handshake or Profile side-channel).
+    PasswordChange = 31,
 };
 
 enum class ClientRole : std::uint8_t {
@@ -135,6 +143,29 @@ struct ControllerInfo {
     std::uint16_t product_id = 0;
 };
 
+/**
+ * Client display geometry hint (trailing on Hello / ViewerHeartbeat).
+ * For Nintendo DS (melonDS): Landscape → Hybrid Top, Portrait → Top/Bottom.
+ * Auto → host default (Hybrid Top). Older peers omit the field (Auto).
+ */
+enum class DisplayLayoutPreference : std::uint8_t {
+    Auto = 0,
+    Landscape = 1,
+    Portrait = 2,
+};
+
+inline const char* display_layout_preference_name(DisplayLayoutPreference value) {
+    switch (value) {
+    case DisplayLayoutPreference::Landscape:
+        return "landscape";
+    case DisplayLayoutPreference::Portrait:
+        return "portrait";
+    case DisplayLayoutPreference::Auto:
+    default:
+        return "auto";
+    }
+}
+
 struct ClientHello {
     std::string username;
     std::string display_name;
@@ -144,6 +175,10 @@ struct ClientHello {
     std::vector<ControllerInfo> controllers;
     bool wants_video = true;
     bool wants_audio = true;
+    // Trailing — older peers omit it (Auto).
+    DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto;
+    // Required at protocol v18 — host verifies / creates credentials.json.
+    std::string password;
 };
 
 struct HostWelcome {
@@ -206,6 +241,22 @@ struct KeyboardInput {
     ClientId client_id = 0;
     LocalPlayerIndex local_player = 0;
     KeyboardState state;
+};
+
+/**
+ * Explicit playback controls (client → host). Tri-state so a packet can change
+ * pause, FF, both, or neither — no toggle desync, no hold-to-activate.
+ */
+enum class EmulatorControlState : std::uint8_t {
+    Unchanged = 0,
+    Off = 1,
+    On = 2,
+};
+
+struct EmulatorControl {
+    ClientId client_id = 0;
+    EmulatorControlState pause = EmulatorControlState::Unchanged;
+    EmulatorControlState fast_forward = EmulatorControlState::Unchanged;
 };
 
 enum class MediaQualityTier : std::uint8_t {
@@ -510,6 +561,8 @@ struct ViewerHeartbeat {
     // Encode height ladder (independent of wanted_tier). Trailing — older peers omit
     // it and it stays Auto (host then keeps applied size / legacy Medium→720p).
     MediaStreamSize wanted_size = MediaStreamSize::Auto;
+    // Trailing — older peers omit (Auto). DS host uses Landscape→Hybrid, Portrait→Top/Bottom.
+    DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto;
 };
 
 struct ErrorPacket {
@@ -597,8 +650,26 @@ struct MediaVideoPending {
 };
 
 // Client → host: staging URI is up; echo uri so host can match in-flight cutovers.
+// Empty video_uri is a client NACK (staging bind/decode failed) — host aborts cutover.
 struct MediaVideoReady {
     std::string video_uri;
+};
+
+// Client → host: UTF-8 diagnostic log text covering the last N app sessions.
+struct ClientLogBundle {
+    std::string username;
+    std::uint32_t session_count = 0;
+    std::vector<std::uint8_t> text;
+};
+
+// Host → client: empty; client must send PasswordChange on the same socket.
+struct PasswordChangeRequired {};
+
+// Client → host: change password (forced join change or Profile anytime).
+struct PasswordChange {
+    std::string username;
+    std::string current_password;
+    std::string new_password;
 };
 
 using PacketPayload = std::variant<
@@ -628,7 +699,11 @@ using PacketPayload = std::variant<
     SoftKeyboardResponse,
     MediaVideoPending,
     MediaVideoReady,
-    KeyboardInput>;
+    KeyboardInput,
+    EmulatorControl,
+    ClientLogBundle,
+    PasswordChangeRequired,
+    PasswordChange>;
 
 ClientRole role_for_player_count(std::uint8_t requested_players);
 bool valid_player_count(std::uint8_t requested_players);

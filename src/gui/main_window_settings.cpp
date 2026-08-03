@@ -279,11 +279,21 @@ void MainWindow::load_persisted_settings() {
         const QSignalBlocker blocker(settings_log_level_);
         settings_log_level_->setCurrentIndex(index >= 0 ? index : 1);
     }
+    if (settings_log_sessions_ != nullptr) {
+        const QSignalBlocker blocker(settings_log_sessions_);
+        settings_log_sessions_->setValue(
+            qBound(settings.value("client/logSessions", 3).toInt(), 1, 20));
+    }
 #ifdef ARCHSTREAMER_HAS_HOST
     if (settings_native_host_runner_ != nullptr) {
         const QSignalBlocker blocker(settings_native_host_runner_);
         settings_native_host_runner_->setText(
             settings.value("host/nativeHostRunner").toString());
+    }
+    if (settings_allow_new_users_ != nullptr) {
+        const QSignalBlocker blocker(settings_allow_new_users_);
+        settings_allow_new_users_->setChecked(
+            settings.value("host/allowNewUsers", false).toBool());
     }
 #endif
 #ifdef ARCHSTREAMER_HAS_HOST
@@ -518,9 +528,15 @@ void MainWindow::save_persisted_settings() {
         settings.setValue("host/sessionTimeoutSeconds", settings_session_timeout_->value());
     }
     settings.setValue("ui/logLevel", static_cast<int>(current_log_level()));
+    if (settings_log_sessions_ != nullptr) {
+        settings.setValue("client/logSessions", settings_log_sessions_->value());
+    }
 #ifdef ARCHSTREAMER_HAS_HOST
     if (settings_native_host_runner_ != nullptr) {
         settings.setValue("host/nativeHostRunner", settings_native_host_runner_->text().trimmed());
+    }
+    if (settings_allow_new_users_ != nullptr) {
+        settings.setValue("host/allowNewUsers", settings_allow_new_users_->isChecked());
     }
 #endif
 #ifdef ARCHSTREAMER_HAS_HOST

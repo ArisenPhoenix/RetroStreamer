@@ -1,5 +1,7 @@
 #include "host/input_router_demux.hpp"
 
+#include <iostream>
+
 namespace archstreamer {
 
 void InputRouterDemux::register_router(ClientId client_id, InputRouter* router) {
@@ -34,6 +36,15 @@ bool InputRouterDemux::route(const ControllerInput& input) {
         const auto it = routers_.find(input.client_id);
         if (it != routers_.end()) {
             router = it->second;
+        } else if (miss_logs_ < 8) {
+            ++miss_logs_;
+            std::cerr
+                << "input demux: no router for client "
+                << static_cast<int>(input.client_id)
+                << " (registered " << routers_.size() << ")\n";
+            for (const auto& [id, _] : routers_) {
+                std::cerr << "  registered client " << static_cast<int>(id) << '\n';
+            }
         }
     }
     if (router == nullptr) {

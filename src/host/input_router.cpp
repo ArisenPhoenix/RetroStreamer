@@ -1,5 +1,7 @@
 #include "host/input_router.hpp"
 
+#include "common/protocol.hpp"
+
 #include <iostream>
 #include <utility>
 
@@ -84,6 +86,17 @@ bool InputRouter::route(const KeyboardInput& input) {
             << " (space=0x1 … f1=0x200 p=0x400)\n";
     }
     return true;
+}
+
+void InputRouter::apply_emulator_control(const EmulatorControl& control) {
+    std::lock_guard lock(mutex_);
+    if (keyboard_ == nullptr) {
+        return;
+    }
+    if (!client_has_seat(control.client_id) && control.client_id != HostClientId) {
+        return;
+    }
+    keyboard_->apply_emulator_control(control);
 }
 
 void InputRouter::neutralize_client(ClientId client_id) {

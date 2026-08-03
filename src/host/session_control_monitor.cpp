@@ -1,9 +1,12 @@
 #include "host/session_control_monitor.hpp"
 
+#include "common/client_logs.hpp"
 #include "common/serialization.hpp"
 #include "host/active_session_slot.hpp"
 #include "host/host_session_hub.hpp"
+#include "host/retroarch_config_writer.hpp"
 #include "host/retroarch_netcmd.hpp"
+#include "host/user_credentials.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -90,7 +93,8 @@ SessionControlMonitor::SessionControlMonitor(
     std::chrono::seconds reconnect_timeout,
     HostSessionHub* host_hub,
     std::uint16_t capture_width,
-    std::uint16_t capture_height)
+    std::uint16_t capture_height,
+    std::filesystem::path save_root)
     : plan_(plan),
       input_router_(input_router),
       media_server_(media_server),
@@ -99,7 +103,8 @@ SessionControlMonitor::SessionControlMonitor(
       started_at_(std::chrono::steady_clock::now()),
       host_hub_(host_hub),
       capture_width_(capture_width == 0 ? 1920 : capture_width),
-      capture_height_(capture_height == 0 ? 1080 : capture_height) {
+      capture_height_(capture_height == 0 ? 1080 : capture_height),
+      save_root_(std::move(save_root)) {
     const auto now = started_at_;
     for (auto& client : plan_.clients) {
         client.last_seen = now;
@@ -186,6 +191,9 @@ std::optional<std::string> SessionControlMonitor::poll() {
             const auto payload = deserialize_packet(*packet);
             if (const auto* leave = std::get_if<ClientSessionLeave>(&payload); leave != nullptr) {
                 const auto reason = leave->reason.empty() ? "left" : leave->reason;
+                std::cout
+                    << "ClientSessionLeave from " << client_label(client)
+                    << " reason=\"" << reason << "\"\n";
                 if (remove_viewer(i, reason)) {
                     removed_current = true;
                     break;
@@ -193,6 +201,10 @@ std::optional<std::string> SessionControlMonitor::poll() {
                 mark_player_disconnected(client, "left");
                 if (!any_connected_seated_player(plan_)) {
                     return client_label(client) + " left; ending session for a new lobby";
+                }
+                // Singleplayer: one seated player left — end even if viewers remain wait.
+                if (plan_.session_mode == GameSessionMode::SinglePlayer) {
+                    return client_label(client) + " left; ending singleplayer session";
                 }
                 ++i;
                 removed_current = true;
@@ -231,9 +243,47 @@ std::optional<std::string> SessionControlMonitor::poll() {
                             << " from " << client_label(client) << '\n';
                     }
                 }
+            } else if (const auto* emu_control = std::get_if<EmulatorControl>(&payload);
+                       emu_control != nullptr) {
+                if (emu_control->client_id == client.client_id) {
+                    input_router_.apply_emulator_control(*emu_control);
+                }
+            } else if (const auto* log_bundle = std::get_if<ClientLogBundle>(&payload);
+                       log_bundle != nullptr) {
+                try {
+                    client.stream.send_packet(
+                        serialize_packet(acknowledge_client_log_bundle(*log_bundle)));
+                } catch (const std::exception&) {
+                }
+            } else if (const auto* password_change = std::get_if<PasswordChange>(&payload);
+                       password_change != nullptr) {
+                try {
+                    client.stream.send_packet(serialize_packet(
+                        acknowledge_password_change(save_root_, *password_change)));
+                } catch (const std::exception&) {
+                }
             } else if (const auto* video_ready = std::get_if<MediaVideoReady>(&payload);
                        video_ready != nullptr) {
-                if (client.pending_video_uri.has_value() &&
+                if (client.pending_video_uri.has_value() && video_ready->video_uri.empty()) {
+                    // Client NACK (staging bind / decode probe failed) — abort immediately
+                    // instead of waiting out kVideoCutoverTimeout.
+                    media_server_.abort_video_tier_cutover(client.client_id);
+                    ++client.video_cutover_failures;
+                    std::cerr << "Video cutover NACK from " << client_label(client) << '\n';
+                    if (!client.video_cutover_suppressed &&
+                        client.video_cutover_failures >= 2) {
+                        client.video_cutover_suppressed = true;
+                        std::cerr
+                            << " — suppressing further size cutovers until reconnect"
+                            << " (client NACK)\n";
+                    } else {
+                        std::cerr << '\n';
+                    }
+                    client.pending_video_uri.reset();
+                    client.pending_tier.reset();
+                    client.pending_size.reset();
+                    client.video_cutover_started = {};
+                } else if (client.pending_video_uri.has_value() &&
                     video_ready->video_uri == *client.pending_video_uri) {
                     if (media_server_.complete_video_tier_cutover(
                             client.client_id,
@@ -244,6 +294,8 @@ std::optional<std::string> SessionControlMonitor::poll() {
                         if (client.pending_size.has_value()) {
                             client.applied_size = *client.pending_size;
                         }
+                        client.video_cutover_failures = 0;
+                        client.video_cutover_suppressed = false;
                         if (client.media_endpoint.has_value()) {
                             client.media_endpoint->video_uri = video_ready->video_uri;
                             try {
@@ -399,10 +451,19 @@ std::optional<std::string> SessionControlMonitor::poll() {
             client.video_cutover_started.time_since_epoch().count() != 0 &&
             now - client.video_cutover_started >= kVideoCutoverTimeout) {
             media_server_.abort_video_tier_cutover(client.client_id);
+            ++client.video_cutover_failures;
             std::cerr
                 << "Video cutover timed out for " << client_label(client)
                 << "; keeping " << media_stream_size_name(client.applied_size)
-                << "/" << media_quality_tier_name(client.applied_tier) << '\n';
+                << "/" << media_quality_tier_name(client.applied_tier);
+            if (!client.video_cutover_suppressed &&
+                client.video_cutover_failures >= 2) {
+                client.video_cutover_suppressed = true;
+                std::cerr
+                    << " — suppressing further size cutovers until reconnect"
+                    << " (no MediaVideoReady)";
+            }
+            std::cerr << '\n';
             client.pending_video_uri.reset();
             client.pending_tier.reset();
             client.pending_size.reset();
@@ -471,6 +532,18 @@ void SessionControlMonitor::handle_heartbeat(
     client.wanted_size = heartbeat.wanted_size;
     client.max_bitrate_kbps = heartbeat.max_bitrate_kbps;
     client.show_framecount = heartbeat.show_framecount;
+
+    if (heartbeat.display_layout != DisplayLayoutPreference::Auto &&
+        heartbeat.display_layout != client.display_layout) {
+        client.display_layout = heartbeat.display_layout;
+        client.hello.display_layout = heartbeat.display_layout;
+        if (plan_.system_key == "nds") {
+            apply_nds_screen_layout(heartbeat.display_layout);
+        }
+    } else if (heartbeat.display_layout != DisplayLayoutPreference::Auto) {
+        client.display_layout = heartbeat.display_layout;
+        client.hello.display_layout = heartbeat.display_layout;
+    }
 
     if (!client.hello.wants_video) {
         return;
@@ -613,6 +686,9 @@ void SessionControlMonitor::apply_video_encode(
     MediaQualityTier tier,
     std::string_view reason) {
     const auto now = std::chrono::steady_clock::now();
+    if (client.video_cutover_suppressed) {
+        return;
+    }
     if (client.pending_video_uri.has_value() ||
         media_server_.video_cutover_in_flight(client.client_id)) {
         return;
@@ -699,6 +775,10 @@ void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& cl
     client.connection_state = SessionConnectionState::Disconnected;
     client.disconnected_at = std::chrono::steady_clock::now();
     client.disconnect_reason = std::string(reason);
+    client.pending_tier.reset();
+    client.pending_size.reset();
+    client.pending_video_uri.reset();
+    client.video_cutover_started = {};
     input_router_.neutralize_client(client.client_id);
     const auto grace = reconnect_grace_for(client, reconnect_timeout_);
     std::cerr

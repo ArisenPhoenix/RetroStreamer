@@ -55,6 +55,16 @@ class WireReader(private val bytes: ByteArray, private var offset: Int = 0) {
         return text
     }
 
+    fun readBytes(): ByteArray {
+        val size = readU32().toInt()
+        require(size >= 0)
+        if (size > 16 * 1024 * 1024) error("binary payload too large ($size)")
+        require(size)
+        val value = bytes.copyOfRange(offset, offset + size)
+        offset += size
+        return value
+    }
+
     fun readOptionalString(): String? {
         if (!readBool()) return null
         return readString()
@@ -115,6 +125,12 @@ class WireWriter {
         if (value != null) writeString(value)
     }
 
+    fun writeBytes(value: ByteArray) {
+        check(value.size <= 16 * 1024 * 1024) { "binary payload too large for protocol packet" }
+        writeU32(value.size.toLong())
+        value.forEach { out.add(it) }
+    }
+
     fun toByteArray(): ByteArray = out.toByteArray()
 }
 
@@ -157,6 +173,8 @@ object PacketCodec {
         controllers: List<ControllerInfo>,
         wantsVideo: Boolean = true,
         wantsAudio: Boolean = true,
+        displayLayout: Int = DisplayLayoutPreference.Auto.id,
+        password: String = "",
     ): ByteArray {
         val payload = WireWriter().apply {
             writeString(username)
@@ -174,6 +192,8 @@ object PacketCodec {
             }
             writeBool(wantsVideo)
             writeBool(wantsAudio)
+            writeU8(displayLayout)
+            writeString(password)
         }.toByteArray()
         return wrap(PacketType.ClientHello, payload)
     }
@@ -205,6 +225,115 @@ object PacketCodec {
             writeString(reason)
         }.toByteArray()
         return wrap(PacketType.ClientSessionLeave, payload)
+    }
+
+    fun softKeyboardResponse(
+        requestId: Long,
+        accepted: Boolean,
+        text: String,
+    ): ByteArray {
+        val payload = WireWriter().apply {
+            writeU32(requestId)
+            writeBool(accepted)
+            writeString(text)
+        }.toByteArray()
+        return wrap(PacketType.SoftKeyboardResponse, payload)
+    }
+
+    fun mediaVideoReady(videoUri: String): ByteArray {
+        val payload = WireWriter().apply {
+            writeString(videoUri)
+        }.toByteArray()
+        return wrap(PacketType.MediaVideoReady, payload)
+    }
+
+    fun emulatorControl(
+        clientId: Int,
+        pause: EmulatorControlState = EmulatorControlState.Unchanged,
+        fastForward: EmulatorControlState = EmulatorControlState.Unchanged,
+    ): ByteArray {
+        val payload = WireWriter().apply {
+            writeU8(clientId)
+            writeU8(pause.id)
+            writeU8(fastForward.id)
+        }.toByteArray()
+        return wrap(PacketType.EmulatorControl, payload)
+    }
+
+    fun clientLogBundle(
+        username: String,
+        sessionCount: Int,
+        textUtf8: ByteArray,
+    ): ByteArray {
+        val payload = WireWriter().apply {
+            writeString(username)
+            writeU32(sessionCount.toLong() and 0xffffffffL)
+            writeBytes(textUtf8)
+        }.toByteArray()
+        return wrap(PacketType.ClientLogBundle, payload)
+    }
+
+    fun passwordChange(
+        username: String,
+        currentPassword: String,
+        newPassword: String,
+    ): ByteArray {
+        val payload = WireWriter().apply {
+            writeString(username)
+            writeString(currentPassword)
+            writeString(newPassword)
+        }.toByteArray()
+        return wrap(PacketType.PasswordChange, payload)
+    }
+
+    fun artAssetRequest(assetKey: String, role: String): ByteArray {
+        val payload = WireWriter().apply {
+            writeString(assetKey)
+            writeString(role)
+        }.toByteArray()
+        return wrap(PacketType.ArtAssetRequest, payload)
+    }
+
+    fun keyboardInput(
+        clientId: Int,
+        localPlayer: Int,
+        sequence: Long,
+        timestampUs: Long,
+        keys: Int,
+    ): ByteArray {
+        val payload = WireWriter().apply {
+            writeU8(clientId)
+            writeU8(localPlayer)
+            writeU32(sequence)
+            writeU64(timestampUs)
+            writeU32(keys.toLong() and 0xffffffffL)
+        }.toByteArray()
+        return wrap(PacketType.KeyboardInput, payload)
+    }
+
+    fun viewerHeartbeat(
+        clientId: Int,
+        sequence: Long,
+        lossPermille: Int = 0,
+        framesDecodedDelta: Int = 0,
+        wantedTier: Int = MediaQualityTier.Medium.id,
+        maxBitrateKbps: Int = 0,
+        showFramecount: Boolean = false,
+        wantedSize: Int = MediaStreamSize.P540.id,
+        displayLayout: Int = DisplayLayoutPreference.Auto.id,
+    ): ByteArray {
+        val payload = WireWriter().apply {
+            writeU8(clientId)
+            writeU32(sequence)
+            writeU16(lossPermille)
+            writeU16(framesDecodedDelta)
+            writeU8(wantedTier)
+            writeU16(maxBitrateKbps)
+            writeBool(showFramecount)
+            writeU8(wantedSize)
+            writeU8(displayLayout)
+        }.toByteArray()
+        return wrap(PacketType.ViewerHeartbeat, payload)
     }
 
     fun decode(type: PacketType, payload: ByteArray): IncomingPacket {
@@ -250,7 +379,26 @@ object PacketCodec {
                     audioUri = reader.readString(),
                 ),
             )
+            PacketType.MediaVideoPending -> IncomingPacket.VideoPending(reader.readString())
+            PacketType.SoftKeyboardRequest -> IncomingPacket.SoftKeyboard(
+                SoftKeyboardRequest(
+                    requestId = reader.readU32(),
+                    prompt = reader.readString(),
+                    initialText = reader.readString(),
+                    maxLength = reader.readU8().let { if (it == 0) 12 else it },
+                ),
+            )
+            PacketType.ArtAssetResponse -> IncomingPacket.Art(
+                ArtAssetResponse(
+                    assetKey = reader.readString(),
+                    role = reader.readString(),
+                    found = reader.readBool(),
+                    extension = reader.readString(),
+                    data = reader.readBytes(),
+                ),
+            )
             PacketType.Error -> IncomingPacket.Error(ErrorPacket(reader.readString()))
+            PacketType.PasswordChangeRequired -> IncomingPacket.PasswordChangeRequired
             else -> IncomingPacket.Unknown(type)
         }
     }

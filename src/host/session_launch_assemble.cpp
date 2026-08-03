@@ -86,7 +86,8 @@ std::filesystem::path apply_retroarch_override(
         params.core_path,
         params.resolution_scale,
         params.slot_index,
-        params.network_cmd_port);
+        params.network_cmd_port,
+        params.display_layout);
     rewrite_retroarch_config_arg(launch_config, runtime_override);
     return runtime_override;
 }
@@ -98,6 +99,35 @@ std::filesystem::path apply_retroarch_override_and_env(
     const auto runtime_override = apply_retroarch_override(launch_config, params);
     apply_launch_env_to_config(launch_config, env_request);
     return runtime_override;
+}
+
+DisplayLayoutPreference resolve_display_layout_preference(
+    const std::optional<ClientHello>& host_hello,
+    const std::vector<ClientHello>& client_hellos) {
+    DisplayLayoutPreference first_explicit = DisplayLayoutPreference::Auto;
+    bool saw_portrait = false;
+    auto consider = [&](const ClientHello& hello) {
+        if (!hello.wants_video) {
+            return;
+        }
+        if (hello.display_layout == DisplayLayoutPreference::Portrait) {
+            saw_portrait = true;
+        } else if (
+            hello.display_layout != DisplayLayoutPreference::Auto &&
+            first_explicit == DisplayLayoutPreference::Auto) {
+            first_explicit = hello.display_layout;
+        }
+    };
+    if (host_hello.has_value()) {
+        consider(*host_hello);
+    }
+    for (const auto& hello : client_hellos) {
+        consider(hello);
+    }
+    if (saw_portrait) {
+        return DisplayLayoutPreference::Portrait;
+    }
+    return first_explicit;
 }
 
 } // namespace archstreamer

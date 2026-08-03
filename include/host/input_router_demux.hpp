@@ -21,6 +21,7 @@ public:
 private:
     mutable std::mutex mutex_;
     std::unordered_map<ClientId, InputRouter*> routers_;
+    int miss_logs_ = 0;
 };
 
 } // namespace archstreamer

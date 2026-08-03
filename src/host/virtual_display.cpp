@@ -1,6 +1,5 @@
 #include "host/virtual_display.hpp"
 
-#include "common/platform/process_utils.hpp"
 #include "host/session_slot_lease.hpp"
 
 #include <chrono>
@@ -50,19 +49,6 @@ std::string normalize_pci_sysfs_name(std::string bus) {
         }
     }
     return bus;
-}
-
-std::string shell_single_quote(const std::string& value) {
-    std::string out = "'";
-    for (const char character : value) {
-        if (character == '\'') {
-            out += "'\\''";
-        } else {
-            out.push_back(character);
-        }
-    }
-    out.push_back('\'');
-    return out;
 }
 
 } // namespace
@@ -387,83 +373,6 @@ std::optional<std::string> pci_vendor_device_id(const std::string& pci_bus) {
         device = device.substr(2);
     }
     return vendor + ":" + device;
-}
-
-std::optional<std::string> wait_for_gamescope_pipewire_node(
-    std::chrono::milliseconds timeout,
-    int expect_width,
-    int expect_height,
-    int owner_pid) {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    // Prefer: (1) PID/process-group match to this session's gamescope, (2) matching
-    // resolution, (3) running, (4) highest node id. Without the PID gate a stale
-    // leftover gamescope can win and the encoder dies when that process exits.
-    const std::string py =
-        "import sys,json,os\n"
-        "try:\n"
-        " data=json.load(sys.stdin)\n"
-        "except Exception:\n"
-        " sys.exit(0)\n"
-        "want_w=" + std::to_string(expect_width) + "\n"
-        "want_h=" + std::to_string(expect_height) + "\n"
-        "want_pid=" + std::to_string(owner_pid) + "\n"
-        "def pgid(pid):\n"
-        " try:\n"
-        "  return os.getpgid(int(pid))\n"
-        " except Exception:\n"
-        "  return None\n"
-        "want_pgid=pgid(want_pid) if want_pid>0 else None\n"
-        "cands=[]\n"
-        "for o in data:\n"
-        " info=o.get('info') or {}\n"
-        " props=(info.get('props') or {})\n"
-        " if props.get('media.name')!='gamescope' or props.get('media.class')!='Video/Source':\n"
-        "  continue\n"
-        " oid=o.get('id')\n"
-        " if oid is None: continue\n"
-        " w=h=0\n"
-        " for fmt in (info.get('params') or {}).get('EnumFormat') or []:\n"
-        "  size=fmt.get('size') or {}\n"
-        "  if isinstance(size, dict) and 'width' in size and 'height' in size:\n"
-        "   try:\n"
-        "    w=int(size['width']); h=int(size['height'])\n"
-        "   except Exception:\n"
-        "    pass\n"
-        "   break\n"
-        " match=(want_w<=0 or want_h<=0) or (w==want_w and h==want_h)\n"
-        " if not match: continue\n"
-        " pid=None\n"
-        " for key in ('pipewire.sec.pid','application.process.id','node.pid'):\n"
-        "  if key in props:\n"
-        "   try: pid=int(props[key]); break\n"
-        "   except Exception: pass\n"
-        " owner=0\n"
-        " if want_pid>0 and pid is not None:\n"
-        "  if pid==want_pid: owner=2\n"
-        "  elif want_pgid is not None and pgid(pid)==want_pgid: owner=1\n"
-        " state=str(info.get('state') or '')\n"
-        " score=(owner, 1 if state=='running' else 0, int(oid))\n"
-        " cands.append((score, oid))\n"
-        "if cands:\n"
-        " cands.sort()\n"
-        " # If an owner_pid was requested, refuse nodes that don't match it once any\n"
-        " # matching candidate exists; otherwise fall back to best remaining.\n"
-        " if want_pid>0:\n"
-        "  owned=[c for c in cands if c[0][0]>0]\n"
-        "  if owned:\n"
-        "   print(owned[-1][1]); sys.exit(0)\n"
-        " print(cands[-1][1])\n";
-    const std::string command = "pw-dump 2>/dev/null | python3 -c " + shell_single_quote(py);
-
-    while (std::chrono::steady_clock::now() < deadline) {
-        const auto pw_dump = read_command_output(command.c_str());
-        auto node = trim_ascii_whitespace(pw_dump);
-        if (!node.empty()) {
-            return node;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    }
-    return std::nullopt;
 }
 
 VirtualDisplayBackend choose_virtual_display_backend(VirtualDisplayBackend requested) {

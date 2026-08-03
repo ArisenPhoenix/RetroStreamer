@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" role="img" aria-label="ArchStreamer foreground">
+  <!-- Adaptive-icon foreground (safe zone ~66dp diameter). No tile background. -->
+  <g transform="translate(0,2)">
+    <path d="M30 28c16-13 32-13 48 0" fill="none" stroke="#2E7D4F" stroke-width="5.5" stroke-linecap="round"/>
+    <path d="M38 40c10-7.5 22-7.5 32 0" fill="none" stroke="#3FA86A" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="54" cy="50" r="4.5" fill="#5BC87E"/>
+    <rect x="18" y="60" width="72" height="38" rx="15" fill="#E8A54B"/>
+    <circle cx="36" cy="79" r="7" fill="#121816"/>
+    <rect x="64" y="74" width="18" height="6" rx="2" fill="#121816"/>
+    <rect x="70" y="68" width="6" height="18" rx="2" fill="#121816"/>
+  </g>
+</svg>

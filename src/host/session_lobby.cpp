@@ -2,6 +2,8 @@
 
 #include "common/art_transfer.hpp"
 #include "common/catalog_paths.hpp"
+#include "common/client_logs.hpp"
+#include "host/user_credentials.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -420,7 +422,9 @@ SessionPlan gather_session_clients(
     std::optional<ClientHello> host_hello,
     std::function<bool()> should_stop,
     std::filesystem::path art_root,
-    std::optional<SessionClientConnection> first_client) {
+    std::optional<SessionClientConnection> first_client,
+    std::filesystem::path save_root,
+    bool allow_new_users) {
     if (art_root.empty()) {
         art_root = DefaultArtRoot;
     }
@@ -520,6 +524,17 @@ SessionPlan gather_session_clients(
                     art_request->role)));
                 continue;
             }
+            if (const auto* log_bundle = std::get_if<ClientLogBundle>(&first_payload);
+                log_bundle != nullptr) {
+                stream->send_packet(serialize_packet(acknowledge_client_log_bundle(*log_bundle)));
+                continue;
+            }
+            if (const auto* password_change = std::get_if<PasswordChange>(&first_payload);
+                password_change != nullptr) {
+                stream->send_packet(serialize_packet(
+                    acknowledge_password_change(save_root, *password_change)));
+                continue;
+            }
             const auto* game_list_request = std::get_if<GameListRequest>(&first_payload);
             if (game_list_request == nullptr) {
                 throw std::runtime_error("expected GameListRequest from session client");
@@ -552,21 +567,23 @@ SessionPlan gather_session_clients(
             if (hello == nullptr) {
                 throw std::runtime_error("expected ClientHello from session client");
             }
-            if (!valid_username(hello->username)) {
+            auto authenticated_hello = *hello;
+            if (!valid_username(authenticated_hello.username)) {
                 throw std::runtime_error("session client supplied an invalid username");
             }
-            if (!valid_player_count(hello->requested_players)) {
+            authenticate_client_hello(*stream, save_root, authenticated_hello, allow_new_users);
+            if (!valid_player_count(authenticated_hello.requested_players)) {
                 throw std::runtime_error("session client requested too many players");
             }
-            if (hello->controllers.size() > hello->requested_players) {
+            if (authenticated_hello.controllers.size() > authenticated_hello.requested_players) {
                 throw std::runtime_error("session client supplied controller metadata for unrequested players");
             }
-            if (!hello->selected_game_id.has_value()) {
+            if (!authenticated_hello.selected_game_id.has_value()) {
                 throw std::runtime_error("session client did not select a game");
             }
 
             if (!selected_game.has_value()) {
-                selected_game = hello->selected_game_id;
+                selected_game = authenticated_hello.selected_game_id;
                 selected_game_info = game_info_for(game_list, *selected_game);
                 if (!selected_game_info.has_value()) {
                     throw std::runtime_error("session client selected an unknown game");
@@ -574,27 +591,27 @@ SessionPlan gather_session_clients(
                 if (!valid_game_player_limits(selected_game_info->min_players, selected_game_info->max_players)) {
                     throw std::runtime_error("selected game has invalid player metadata");
                 }
-            } else if (*selected_game != *hello->selected_game_id) {
+            } else if (*selected_game != *authenticated_hello.selected_game_id) {
                 throw std::runtime_error("session clients selected different games");
             }
 
             if (!selected_mode.has_value()) {
-                selected_mode = hello->session_mode;
-            } else if (*selected_mode != hello->session_mode) {
+                selected_mode = authenticated_hello.session_mode;
+            } else if (*selected_mode != authenticated_hello.session_mode) {
                 throw std::runtime_error("session clients selected different session modes");
             }
 
             std::cout
                 << "Client " << static_cast<int>(client_id)
-                << " username=" << hello->username
-                << " display=\"" << hello->display_name << "\""
-                << " mode=" << session_mode_name(hello->session_mode)
-                << " players=" << static_cast<int>(hello->requested_players)
-                << " game=\"" << *hello->selected_game_id << "\"\n";
+                << " username=" << authenticated_hello.username
+                << " display=\"" << authenticated_hello.display_name << "\""
+                << " mode=" << session_mode_name(authenticated_hello.session_mode)
+                << " players=" << static_cast<int>(authenticated_hello.requested_players)
+                << " game=\"" << *authenticated_hello.selected_game_id << "\"\n";
 
             plan.clients.push_back(SessionClientConnection{
                 client_id,
-                *hello,
+                std::move(authenticated_hello),
                 std::move(*stream),
             });
             accepted_client = true;

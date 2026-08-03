@@ -4,6 +4,7 @@
 #include "common/platform/default_platform.hpp"
 
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <optional>
 
@@ -37,7 +38,16 @@ public:
 
     PendingSession begin() const;
     ActiveSessionInfo active_session_info() const;
-    JoinedSession finish_join(PendingSession pending, const ClientHello& hello) const;
+    /**
+     * Send ClientHello and complete Welcome/Seats/Ready.
+     * If the host requires a password change, on_password_change_required(current)
+     * must return the new password (non-empty).
+     */
+    JoinedSession finish_join(
+        PendingSession pending,
+        ClientHello hello,
+        const std::function<std::string(const std::string& current_password)>&
+            on_password_change_required = {}) const;
     SessionStart wait_for_starting(TcpStream& stream) const;
 
 private:

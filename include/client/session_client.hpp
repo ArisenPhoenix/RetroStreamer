@@ -18,7 +18,8 @@ public:
         std::uint8_t requested_players,
         std::vector<ControllerInfo> controllers = {},
         bool wants_video = true,
-        bool wants_audio = true) const;
+        bool wants_audio = true,
+        std::string password = {}) const;
 
     ClientConfig make_config(
         std::optional<std::string> username,

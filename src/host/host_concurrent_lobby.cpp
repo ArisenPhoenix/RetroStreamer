@@ -167,7 +167,9 @@ int run_concurrent_session_host(
                             }
                         }
                         return info;
-                    });
+                    },
+                    config.save_root,
+                    config.allow_new_users);
 
                 if (accepted.has_value() && accepted->have_hello) {
                     auto hello = std::move(accepted->hello);
@@ -214,7 +216,9 @@ int run_concurrent_session_host(
                                 std::nullopt,
                                 should_stop,
                                 art_root,
-                                std::move(first));
+                                std::move(first),
+                                config.save_root,
+                                config.allow_new_users);
                             start_slot(std::move(plan));
                             continue;
                         }

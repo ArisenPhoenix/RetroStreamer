@@ -17,6 +17,7 @@ public:
     void set_seat_assignment(SeatAssignment assignment);
     bool route(const ControllerInput& input);
     bool route(const KeyboardInput& input);
+    void apply_emulator_control(const EmulatorControl& control);
     void neutralize_client(ClientId client_id);
 
 private:

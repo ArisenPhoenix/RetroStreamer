@@ -114,6 +114,9 @@ std::vector<std::string> host_app_config_to_argv(const HostAppConfig& config) {
         args.push_back("--save-root");
         args.push_back(config.save_root.string());
     }
+    if (config.allow_new_users) {
+        args.push_back("--allow-new-users");
+    }
     if (!config.username.empty()) {
         args.push_back("--username");
         args.push_back(config.username);

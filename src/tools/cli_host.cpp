@@ -118,6 +118,7 @@ void HostRunnerCli::print_usage() const {
         << "                      RetroArch joypad driver (udev|sdl2). Default: udev (preferred;\n"
         << "                      sdl2 can stall heavy cores like LRPS2).\n"
         << "  --save-root <path>  Base save profile directory. Default: ~/.local/share/archstreamer/saves\n"
+        << "  --allow-new-users   Allow ClientHello to create new save profiles (off by default).\n"
         << "  --username <name>   Save profile username. Default: $USER or local.\n"
         << "  --virtual-joypad-index <index>\n"
         << "                      RetroArch joypad index for the virtual pad. Default: 1 with bridge.\n"
@@ -267,6 +268,8 @@ HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
         } else if (arg == "--save-root") {
             if_throw(i, "--save-root requires a path");
             args.save_root = argv[i];
+        } else if (arg == "--allow-new-users") {
+            args.allow_new_users = true;
         } else if (arg == "--username") {
             if_throw(i, "--username requires a name");
             args.username = argv[i];

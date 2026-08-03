@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Monochrome status-bar / FGS icon (system tints this white). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.6"
+        android:strokeLineCap="round"
+        android:pathData="M6,6.5c3.5,-3 8.5,-3 12,0" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:pathData="M8,9c2.5,-2 5.5,-2 8,0" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,11.2m-1.1,0a1.1,1.1 0,1 1,2.2,0a1.1,1.1 0,1 1,-2.2,0" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M4.5,13.5h15c1.2,0 2.2,1 2.2,2.2v3.6c0,1.2 -1,2.2 -2.2,2.2h-15c-1.2,0 -2.2,-1 -2.2,-2.2v-3.6c0,-1.2 1,-2.2 2.2,-2.2z" />
+</vector>

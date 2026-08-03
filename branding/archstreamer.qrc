@@ -1,0 +1,7 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+  <!-- Window / taskbar icon for native Linux + Windows GUI runs. -->
+  <qresource prefix="/branding">
+    <file>archstreamer-icon-256.png</file>
+  </qresource>
+</RCC>

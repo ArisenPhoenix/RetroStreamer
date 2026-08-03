@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/protocol.hpp"
 #include "host/virtual_gamepad.hpp"
 #include "host/save_profile.hpp"
 
@@ -29,7 +30,8 @@ std::filesystem::path write_retroarch_input_override(
     const std::filesystem::path& core_path = {},
     int resolution_scale = 1,
     int slot_index = 0,
-    std::uint16_t network_cmd_port = 55355);
+    std::uint16_t network_cmd_port = 55355,
+    DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto);
 
 // Which face-button mapping write_retroarch_input_override() applies, for logging.
 std::string_view face_button_map_name(std::string_view system_key);
@@ -38,5 +40,12 @@ std::string_view face_button_map_name(std::string_view system_key);
 // Software cores (gambatte, etc.) should use plain Xvfb + sdl2 — vglrun left remotes
 // stuck on static GB credits/title until continuous animation.
 bool core_needs_gl_on_virtual_display(const std::filesystem::path& core_path);
+
+/**
+ * melonDS screen layout for streaming: Landscape/Auto → Hybrid Top (desktop-like),
+ * Portrait → Top/Bottom (phone-friendly). Writes melonDS.opt; running cores pick this
+ * up on the next content load (clients also rearrange Hybrid frames for mid-session).
+ */
+void apply_nds_screen_layout(DisplayLayoutPreference preference = DisplayLayoutPreference::Auto);
 
 } // namespace archstreamer

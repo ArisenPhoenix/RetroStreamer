@@ -104,6 +104,7 @@ set(ARCHSTREAMER_CORE_SOURCES
     src/common/art_transfer.cpp
     src/common/catalog_presenter.cpp
     src/common/cli_common.cpp
+    src/common/client_logs.cpp
     src/common/controller_normalization.cpp
     src/common/discovery.cpp
     src/common/game_assets.cpp
@@ -271,6 +272,7 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/retroarch_netcmd.cpp
         src/host/retroarch_resolve.cpp
         src/host/save_profile.cpp
+        src/host/user_credentials.cpp
         src/host/standalone_emulator.cpp
         src/host/switch/switch_fs.cpp
         src/host/switch/switch_system_defaults.cpp
@@ -318,6 +320,7 @@ if(ARCHSTREAMER_BUILD_HOST)
             src/host/linux_uinput_gamepad.cpp
             src/host/posix_retroarch_process.cpp
             src/host/virtual_display.cpp
+            src/host/gamescope_pipewire_node.cpp
             src/host/linux_capture_platform.cpp
             src/host/linux_emulator_orphan_reaper.cpp
             src/host/switch/posix_switch_paths.cpp
@@ -423,6 +426,7 @@ target_link_libraries(client_catalog_probe
 # Client GUI always when Qt is present; Host tab only when ARCHSTREAMER_BUILD_HOST=ON.
 if(Qt6Widgets_FOUND)
     set(CMAKE_AUTOMOC ON)
+    set(CMAKE_AUTORCC ON)
     # WIN32 = Windows GUI subsystem (no console window). Logs still go to
     # %TEMP%\archstreamer-logs\gui.log. Omit WIN32 only if you need stdout.
     set(ARCHSTREAMER_GUI_SOURCES
@@ -458,9 +462,19 @@ if(Qt6Widgets_FOUND)
             src/gui/main_window_host.cpp
         )
     endif()
+    list(APPEND ARCHSTREAMER_GUI_SOURCES branding/archstreamer.qrc)
     add_executable(archstreamer_gui ${ARCHSTREAMER_GUI_SOURCES})
     if(WIN32)
         set_target_properties(archstreamer_gui PROPERTIES WIN32_EXECUTABLE TRUE)
+        # Embed branding .ico as the EXE icon (shortcuts use TargetPath,0).
+        set(ARCHSTREAMER_WIN_ICO "${CMAKE_SOURCE_DIR}/branding/archstreamer-icon.ico")
+        file(TO_CMAKE_PATH "${ARCHSTREAMER_WIN_ICO}" ARCHSTREAMER_WIN_ICO)
+        configure_file(
+            "${CMAKE_SOURCE_DIR}/branding/archstreamer_gui.rc.in"
+            "${CMAKE_BINARY_DIR}/archstreamer_gui_icon.rc"
+            @ONLY
+        )
+        target_sources(archstreamer_gui PRIVATE "${CMAKE_BINARY_DIR}/archstreamer_gui_icon.rc")
     endif()
     target_include_directories(archstreamer_gui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/gui)
     target_link_libraries(archstreamer_gui
@@ -488,6 +502,30 @@ endif()
 install(TARGETS ${ARCHSTREAMER_INSTALL_TARGETS}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+
+# Desktop entry + hicolor icons (native Linux; Flatpak installs the same branding assets).
+if(TARGET archstreamer_gui AND UNIX AND NOT APPLE)
+    install(FILES deploy/flatpak/io.github.ArisenPhoenix.ArchStreamer.desktop
+        DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications
+    )
+    install(FILES branding/archstreamer-icon.svg
+        DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps
+        RENAME io.github.ArisenPhoenix.ArchStreamer.svg
+    )
+    foreach(_as_icon_size IN ITEMS 128 256 512)
+        install(FILES branding/archstreamer-icon-${_as_icon_size}.png
+            DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/${_as_icon_size}x${_as_icon_size}/apps
+            RENAME io.github.ArisenPhoenix.ArchStreamer.png
+        )
+    endforeach()
+endif()
+
+# Optional standalone .ico for Windows tooling / shortcuts that don't use the EXE icon.
+if(TARGET archstreamer_gui AND WIN32)
+    install(FILES branding/archstreamer-icon.ico
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/archstreamer
+    )
+endif()
 
 message(STATUS "")
 message(STATUS "ArchStreamer dependency summary")

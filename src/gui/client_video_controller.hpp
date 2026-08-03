@@ -41,6 +41,9 @@ public:
     /** Shares live widget size with the session/media thread. */
     void setVideoEmbedBridge(std::shared_ptr<archstreamer::VideoEmbedBridge> bridge);
 
+    /** Drive Hello/heartbeat display_layout from video window aspect. */
+    void setHeartbeatPrefs(std::shared_ptr<archstreamer::ClientHeartbeatPrefs> prefs);
+
     /** Show/raise the surface for a live session; creates native window handle. */
     void prepareForSession();
     /** Hide and force-close after gst has been stopped. */
@@ -62,6 +65,7 @@ private:
     QString title_ = QStringLiteral("ArchStreamer");
     QWidget* embed_parent_ = nullptr;
     std::shared_ptr<archstreamer::VideoEmbedBridge> embed_bridge_;
+    std::shared_ptr<archstreamer::ClientHeartbeatPrefs> heartbeat_prefs_;
     std::unique_ptr<ArchStreamerVideoSurface> surface_;
     QTimer* refresh_timer_ = nullptr;
 };

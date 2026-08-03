@@ -9,17 +9,30 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
-#include <QListView>
-#include <QListWidget>
 #include <QPixmap>
+#include <QSettings>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
 #include <QVBoxLayout>
+
+#include <algorithm>
+#include <map>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace archstreamer::gui {
 
 namespace {
+
+constexpr int kMaxRecentGames = 8;
+constexpr int kThumbW = 48;
+constexpr int kThumbH = 64;
+constexpr int kItemTypeGame = QTreeWidgetItem::UserType + 1;
+constexpr int kItemTypeGroup = QTreeWidgetItem::UserType + 2;
 
 QPixmap load_game_art_pixmap(const std::filesystem::path& art_root, const GameInfo& game, QSize size) {
     LocalGameAssetProvider provider({}, art_root);
@@ -48,6 +61,27 @@ void populate_filter_combo(QComboBox* combo, const std::vector<std::string>& val
     }
 }
 
+std::string system_group_name(const GameInfo& game) {
+    if (!game.system_name.empty()) {
+        return game.system_name;
+    }
+    if (!game.system_key.empty()) {
+        return game.system_key;
+    }
+    return "Other";
+}
+
+bool game_matches_needle(const GameInfo& game, const QString& needle) {
+    if (needle.isEmpty()) {
+        return true;
+    }
+    const auto haystack = QString::fromStdString(
+        game.display_name + " " + format_game_summary(game) + " " + game.system_name + " " +
+        game.system_key)
+                              .toLower();
+    return haystack.contains(needle);
+}
+
 } // namespace
 
 GameSelectionDialog::GameSelectionDialog(
@@ -55,12 +89,14 @@ GameSelectionDialog::GameSelectionDialog(
     const std::optional<std::string>& current_id,
     std::filesystem::path art_root,
     GameFilter session_filter,
+    QString recent_settings_key,
     QWidget* parent)
     : QDialog(parent),
       catalog_(catalog),
       session_filter_(std::move(session_filter)),
       selected_id_(current_id),
-      art_root_(std::move(art_root)) {
+      art_root_(std::move(art_root)),
+      recent_settings_key_(std::move(recent_settings_key)) {
     setWindowTitle("Choose a Game");
     resize(980, 580);
 
@@ -83,15 +119,19 @@ GameSelectionDialog::GameSelectionDialog(
 
     auto* right = new QVBoxLayout();
     auto* body = new QHBoxLayout();
-    list_ = new QListWidget(this);
-    list_->setViewMode(QListView::IconMode);
-    list_->setIconSize(QSize(120, 160));
-    list_->setResizeMode(QListWidget::Adjust);
-    list_->setMovement(QListWidget::Static);
-    list_->setSpacing(12);
-    list_->setSelectionMode(QAbstractItemView::SingleSelection);
-    list_->setWordWrap(true);
-    body->addWidget(list_, 3);
+    tree_ = new QTreeWidget(this);
+    tree_->setHeaderHidden(true);
+    tree_->setRootIsDecorated(true);
+    tree_->setUniformRowHeights(false);
+    tree_->setIconSize(QSize(kThumbW, kThumbH));
+    tree_->setSelectionMode(QAbstractItemView::SingleSelection);
+    tree_->setAnimated(true);
+    tree_->setIndentation(16);
+    tree_->setExpandsOnDoubleClick(false);
+    if (auto* header = tree_->header(); header != nullptr) {
+        header->setStretchLastSection(true);
+    }
+    body->addWidget(tree_, 3);
 
     auto* preview = new QWidget(this);
     auto* preview_layout = new QVBoxLayout(preview);
@@ -122,10 +162,14 @@ GameSelectionDialog::GameSelectionDialog(
     connect(filter_, &QLineEdit::textChanged, this, [this](const QString&) {
         applyTextFilter();
     });
-    connect(list_, &QListWidget::currentItemChanged, this, [this](QListWidgetItem*, QListWidgetItem*) {
+    connect(tree_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem*, QTreeWidgetItem*) {
         updatePreview();
     });
-    connect(list_, &QListWidget::itemDoubleClicked, this, &GameSelectionDialog::acceptSelection);
+    connect(tree_, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem* item, int) {
+        if (item != nullptr && item->type() == kItemTypeGame) {
+            acceptSelection();
+        }
+    });
     connect(buttons, &QDialogButtonBox::accepted, this, &GameSelectionDialog::acceptSelection);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 }
@@ -151,64 +195,220 @@ GameFilter GameSelectionDialog::combinedFilter() const {
     return filter;
 }
 
-void GameSelectionDialog::refreshFilteredList() {
-    visible_ = filter_games(catalog_, combinedFilter());
-    list_->clear();
-    QListWidgetItem* selected_item = nullptr;
-    for (const auto& game : visible_.games) {
-        auto* item = new QListWidgetItem(QString::fromStdString(game.display_name), list_);
-        item->setData(Qt::UserRole, QString::fromStdString(game.id));
-        item->setToolTip(QString::fromStdString(format_game_summary(game)));
-        item->setIcon(QIcon(load_game_art_pixmap(art_root_, game, QSize(120, 160))));
-        item->setTextAlignment(Qt::AlignHCenter | Qt::AlignTop);
-        if (selected_id_.has_value() && game.id == *selected_id_) {
-            selected_item = item;
+std::vector<std::string> GameSelectionDialog::loadRecentIds() const {
+    if (recent_settings_key_.isEmpty()) {
+        return {};
+    }
+    QSettings settings(QStringLiteral("ArchStreamer"), QStringLiteral("ArchStreamer"));
+    const auto values = settings.value(recent_settings_key_).toStringList();
+    std::vector<std::string> ids;
+    ids.reserve(static_cast<std::size_t>(values.size()));
+    for (const auto& value : values) {
+        const auto trimmed = value.trimmed();
+        if (!trimmed.isEmpty()) {
+            ids.push_back(trimmed.toStdString());
         }
     }
-    if (selected_item != nullptr) {
-        list_->setCurrentItem(selected_item);
-    } else if (list_->count() > 0) {
-        list_->setCurrentRow(0);
+    return ids;
+}
+
+void GameSelectionDialog::rememberRecentId(const std::string& game_id) {
+    if (recent_settings_key_.isEmpty() || game_id.empty()) {
+        return;
     }
+    QSettings settings(QStringLiteral("ArchStreamer"), QStringLiteral("ArchStreamer"));
+    QStringList values = settings.value(recent_settings_key_).toStringList();
+    const QString id = QString::fromStdString(game_id);
+    values.removeAll(id);
+    values.prepend(id);
+    while (values.size() > kMaxRecentGames) {
+        values.removeLast();
+    }
+    settings.setValue(recent_settings_key_, values);
+}
+
+QTreeWidgetItem* GameSelectionDialog::addGameLeaf(
+    QTreeWidgetItem* parent,
+    const GameInfo& game,
+    QTreeWidgetItem*& selected_item) {
+    auto* item = new QTreeWidgetItem(parent, kItemTypeGame);
+    item->setText(0, QString::fromStdString(game.display_name));
+    item->setData(0, Qt::UserRole, QString::fromStdString(game.id));
+    item->setToolTip(0, QString::fromStdString(format_game_summary(game)));
+    item->setIcon(0, QIcon(load_game_art_pixmap(art_root_, game, QSize(kThumbW, kThumbH))));
+    item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+    if (selected_id_.has_value() && game.id == *selected_id_) {
+        selected_item = item;
+    }
+    return item;
+}
+
+void GameSelectionDialog::refreshFilteredList() {
+    visible_ = filter_games(catalog_, combinedFilter());
+    tree_->clear();
+
+    std::unordered_map<std::string, const GameInfo*> by_id;
+    by_id.reserve(visible_.games.size());
+    for (const auto& game : visible_.games) {
+        by_id.emplace(game.id, &game);
+    }
+
+    QTreeWidgetItem* selected_item = nullptr;
+    QTreeWidgetItem* selected_system_group = nullptr;
+
+    // Recents (order preserved from settings).
+    const auto recent_ids = loadRecentIds();
+    std::vector<const GameInfo*> recent_games;
+    recent_games.reserve(recent_ids.size());
+    for (const auto& id : recent_ids) {
+        if (const auto it = by_id.find(id); it != by_id.end()) {
+            recent_games.push_back(it->second);
+        }
+    }
+    if (!recent_games.empty()) {
+        auto* group = new QTreeWidgetItem(tree_, kItemTypeGroup);
+        group->setText(
+            0,
+            QStringLiteral("Recents (%1)").arg(static_cast<int>(recent_games.size())));
+        group->setFlags(Qt::ItemIsEnabled);
+        group->setExpanded(true);
+        for (const auto* game : recent_games) {
+            addGameLeaf(group, *game, selected_item);
+        }
+    }
+
+    // System groups A–Z.
+    std::map<std::string, std::vector<const GameInfo*>> grouped;
+    for (const auto& game : visible_.games) {
+        grouped[system_group_name(game)].push_back(&game);
+    }
+    for (auto& [system_name, games] : grouped) {
+        std::sort(games.begin(), games.end(), [](const GameInfo* a, const GameInfo* b) {
+            return QString::fromStdString(a->display_name).compare(
+                       QString::fromStdString(b->display_name), Qt::CaseInsensitive) < 0;
+        });
+        auto* group = new QTreeWidgetItem(tree_, kItemTypeGroup);
+        group->setText(
+            0,
+            QStringLiteral("%1 (%2)")
+                .arg(QString::fromStdString(system_name))
+                .arg(static_cast<int>(games.size())));
+        group->setFlags(Qt::ItemIsEnabled);
+        for (const auto* game : games) {
+            addGameLeaf(group, *game, selected_item);
+            if (selected_id_.has_value() && game->id == *selected_id_) {
+                selected_system_group = group;
+            }
+        }
+        // Expand the system that contains the current selection; otherwise leave collapsed.
+        group->setExpanded(selected_system_group == group);
+    }
+
+    if (selected_item != nullptr) {
+        tree_->setCurrentItem(selected_item);
+        tree_->scrollToItem(selected_item);
+    } else {
+        // Prefer first recent leaf, else first system leaf.
+        for (int i = 0; i < tree_->topLevelItemCount(); ++i) {
+            auto* group = tree_->topLevelItem(i);
+            if (group->childCount() > 0) {
+                group->setExpanded(true);
+                tree_->setCurrentItem(group->child(0));
+                break;
+            }
+        }
+    }
+
     count_->setText(QString("%1 / %2 games")
-        .arg(visible_.games.size())
-        .arg(catalog_.games.size()));
+                        .arg(visible_.games.size())
+                        .arg(catalog_.games.size()));
     applyTextFilter();
     updatePreview();
 }
 
 void GameSelectionDialog::applyTextFilter() {
     const auto needle = filter_->text().trimmed().toLower();
-    int visible_count = 0;
-    for (int row = 0; row < list_->count(); ++row) {
-        auto* item = list_->item(row);
-        const auto haystack = item->text().toLower() + " " + item->toolTip().toLower();
-        const bool hide = !needle.isEmpty() && !haystack.contains(needle);
-        item->setHidden(hide);
-        if (!hide) {
-            ++visible_count;
+
+    for (int g = 0; g < tree_->topLevelItemCount(); ++g) {
+        auto* group = tree_->topLevelItem(g);
+        int visible_children = 0;
+        for (int c = 0; c < group->childCount(); ++c) {
+            auto* leaf = group->child(c);
+            const auto game_id = leaf->data(0, Qt::UserRole).toString().toStdString();
+            const auto* game = find_game_by_id(catalog_, game_id);
+            const bool match = game != nullptr && game_matches_needle(*game, needle);
+            leaf->setHidden(!match);
+            if (match) {
+                ++visible_children;
+            }
+        }
+        const bool hide_group = visible_children == 0;
+        group->setHidden(hide_group);
+        if (!hide_group && !needle.isEmpty()) {
+            // Mobile parity: auto-expand groups that still have matches under search.
+            group->setExpanded(true);
         }
     }
+
     if (!needle.isEmpty()) {
+        // Count unique matches from system groups only (skip Recents duplicates).
+        std::unordered_set<std::string> unique;
+        for (int g = 0; g < tree_->topLevelItemCount(); ++g) {
+            auto* group = tree_->topLevelItem(g);
+            if (group->isHidden() || group->text(0).startsWith(QStringLiteral("Recents"))) {
+                continue;
+            }
+            for (int c = 0; c < group->childCount(); ++c) {
+                auto* leaf = group->child(c);
+                if (!leaf->isHidden()) {
+                    unique.insert(leaf->data(0, Qt::UserRole).toString().toStdString());
+                }
+            }
+        }
         count_->setText(QString("%1 shown (search) / %2 filtered / %3 total")
-            .arg(visible_count)
-            .arg(visible_.games.size())
-            .arg(catalog_.games.size()));
+                            .arg(unique.size())
+                            .arg(visible_.games.size())
+                            .arg(catalog_.games.size()));
     } else {
         count_->setText(QString("%1 / %2 games")
-            .arg(visible_.games.size())
-            .arg(catalog_.games.size()));
+                            .arg(visible_.games.size())
+                            .arg(catalog_.games.size()));
     }
+
+    // If current selection is hidden, move to first visible game leaf.
+    auto* current = tree_->currentItem();
+    if (current == nullptr || current->isHidden() || current->type() != kItemTypeGame ||
+        (current->parent() != nullptr && current->parent()->isHidden())) {
+        QTreeWidgetItem* first = nullptr;
+        for (int g = 0; g < tree_->topLevelItemCount() && first == nullptr; ++g) {
+            auto* group = tree_->topLevelItem(g);
+            if (group->isHidden()) {
+                continue;
+            }
+            for (int c = 0; c < group->childCount(); ++c) {
+                auto* leaf = group->child(c);
+                if (!leaf->isHidden()) {
+                    first = leaf;
+                    break;
+                }
+            }
+        }
+        if (first != nullptr) {
+            tree_->setCurrentItem(first);
+        }
+    }
+    updatePreview();
 }
 
 void GameSelectionDialog::updatePreview() {
-    if (list_->currentItem() == nullptr || list_->currentItem()->isHidden()) {
+    auto* item = tree_->currentItem();
+    if (item == nullptr || item->type() != kItemTypeGame || item->isHidden()) {
         preview_image_->clear();
         preview_text_->setText("Select a game");
         return;
     }
 
-    const auto game_id = list_->currentItem()->data(Qt::UserRole).toString().toStdString();
+    const auto game_id = item->data(0, Qt::UserRole).toString().toStdString();
     const auto* game = find_game_by_id(catalog_, game_id);
     if (game == nullptr) {
         preview_image_->clear();
@@ -221,10 +421,12 @@ void GameSelectionDialog::updatePreview() {
 }
 
 void GameSelectionDialog::acceptSelection() {
-    if (list_->currentItem() == nullptr || list_->currentItem()->isHidden()) {
+    auto* item = tree_->currentItem();
+    if (item == nullptr || item->type() != kItemTypeGame || item->isHidden()) {
         return;
     }
-    selected_id_ = list_->currentItem()->data(Qt::UserRole).toString().toStdString();
+    selected_id_ = item->data(0, Qt::UserRole).toString().toStdString();
+    rememberRecentId(*selected_id_);
     accept();
 }
 

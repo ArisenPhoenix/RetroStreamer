@@ -41,6 +41,11 @@ void ensure_ryujinx_config(
     cfg["multiplayer_mode"] = enable_ldn_mitm ? 2 : 1;
     cfg["enable_internet_access"] = false;
     cfg["enable_vsync"] = true;
+    // Switch = normal 60Hz cap. Custom + 200% is ArchStreamer FF (~2x). F1 cycles
+    // Switch → Unbounded → Custom → Switch; we tap twice to land on Custom.
+    cfg["vsync_mode"] = 0;
+    cfg["enable_custom_vsync_interval"] = true;
+    cfg["custom_vsync_interval"] = 200;
     cfg["dram_size"] = 3;
     cfg["check_updates_on_start"] = false;
     cfg["update_checker_type"] = "Disabled";
@@ -50,14 +55,19 @@ void ensure_ryujinx_config(
     cfg["enable_discord_integration"] = false;
     cfg["disable_input_when_out_of_focus"] = false;
 
-    // Match RetroArch's Space = hold fast-forward. Clients remoted-keyboard Space via
-    // XTest. Use toggle (not while_held): gamescope/Avalonia often drops synthetic
-    // KeyPress holds, so we tap Space on remoted press and again on release.
+    // Turbo @ 200% via F6 hold (absolute on/off — VSync F1 cycling desyncs under gamescope).
+    cfg["tick_scalar"] = 200;
+
     if (!cfg.contains("hotkeys") || !cfg["hotkeys"].is_object()) {
         cfg["hotkeys"] = nlohmann::json::object();
     }
-    cfg["hotkeys"]["turbo_mode"] = "Space";
-    cfg["hotkeys"]["turbo_mode_while_held"] = false;
+    cfg["hotkeys"]["turbo_mode"] = "F6";
+    cfg["hotkeys"]["turbo_mode_while_held"] = true;
+    cfg["hotkeys"]["toggle_vsync_mode"] = "F1";
+    if (!cfg["hotkeys"].contains("pause") || cfg["hotkeys"]["pause"] == "Unbound" ||
+        cfg["hotkeys"]["pause"] == nullptr) {
+        cfg["hotkeys"]["pause"] = "F5";
+    }
 
     if (resolution_scale > 0) {
         cfg["res_scale"] = std::clamp(resolution_scale, 1, 4);

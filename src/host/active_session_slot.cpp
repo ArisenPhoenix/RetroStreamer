@@ -143,6 +143,15 @@ RetroArchOverrideParams ActiveSessionSlot::make_relaunch_override_params(
     override_params.resolution_scale = slot_config_.resolution.retroarch_scale;
     override_params.slot_index = config_.slot_index;
     override_params.network_cmd_port = config_.plan.retroarch_netcmd_port;
+    {
+        std::vector<ClientHello> hellos;
+        hellos.reserve(config_.plan.clients.size());
+        for (const auto& client : config_.plan.clients) {
+            hellos.push_back(client.hello);
+        }
+        override_params.display_layout =
+            resolve_display_layout_preference(config_.plan.host_hello, hellos);
+    }
     return override_params;
 }
 
@@ -303,10 +312,24 @@ void ActiveSessionSlot::thread_main() {
 
 void ActiveSessionSlot::register_input_clients() {
     if (config_.input_demux == nullptr || input_router_ == nullptr) {
+        std::cerr
+            << "session slot " << config_.slot_index
+            << ": input demux register skipped (demux or router null)\n";
+        return;
+    }
+    if (config_.plan.seats.seats.empty()) {
+        std::cerr
+            << "session slot " << config_.slot_index
+            << ": input demux register skipped (no seats in plan)\n";
         return;
     }
     for (const auto& seat : config_.plan.seats.seats) {
         config_.input_demux->register_router(seat.client_id, input_router_.get());
+        std::cout
+            << "session slot " << config_.slot_index
+            << ": input demux ← client " << static_cast<int>(seat.client_id)
+            << " local P" << static_cast<int>(seat.local_player) + 1
+            << " → RA P" << static_cast<int>(seat.retroarch_port) + 1 << '\n';
     }
 }
 
@@ -351,6 +374,22 @@ void ActiveSessionSlot::drain_pending_joins() {
                 throw std::runtime_error("media server unavailable for pending join");
             }
 
+            // Same control handshake as a fresh lobby join / poll_active_session_joins:
+            // Welcome → Seats → Ready → MediaEndpoint → SessionStarting.
+            // Skipping Welcome left Android (and any ClientHello waiter) hanging on an
+            // open TCP with no heartbeats until the reconnect seat timed out.
+            auto welcome = HostWelcome{};
+            welcome.client_id = client_id;
+            welcome.max_players_for_client = MaxPlayersPerClient;
+            welcome.host_is_player = plan.host_hello.has_value();
+            pending.stream.send_packet(serialize_packet(welcome));
+            pending.stream.send_packet(serialize_packet(plan.seats));
+            pending.stream.send_packet(serialize_packet(SessionReady{
+                plan.selected_game_id,
+                plan.session_mode,
+                static_cast<std::uint8_t>(assigned_player_count(plan.seats)),
+            }));
+
             const auto destination_host = media_destination_host(
                 media_plan_config_for(slot_config_),
                 pending.stream.peer_address());
@@ -380,6 +419,21 @@ void ActiveSessionSlot::drain_pending_joins() {
                 reconnected_player->connection_state = SessionConnectionState::Connected;
                 reconnected_player->last_seen = std::chrono::steady_clock::now();
                 reconnected_player->disconnected_at = {};
+                reconnected_player->disconnect_reason.clear();
+                // Match what add_client just latched (720p/medium shared tee).
+                reconnected_player->applied_tier = MediaQualityTier::Medium;
+                reconnected_player->applied_size = MediaStreamSize::P720;
+                reconnected_player->pending_tier.reset();
+                reconnected_player->pending_size.reset();
+                reconnected_player->pending_video_uri.reset();
+                reconnected_player->video_cutover_started = {};
+                reconnected_player->video_cutover_failures = 0;
+                reconnected_player->video_cutover_suppressed = false;
+                if (!endpoint.video_uri.empty() || !endpoint.audio_uri.empty()) {
+                    reconnected_player->media_endpoint = endpoint;
+                } else {
+                    reconnected_player->media_endpoint.reset();
+                }
                 std::cout
                     << "session slot " << config_.slot_index << ": player "
                     << static_cast<int>(client_id)
@@ -659,6 +713,7 @@ void ActiveSessionSlot::run_session() {
     }
 
     keyboard_ = std::make_unique<VirtualKeyboard>(capture_display);
+    keyboard_->set_netcmd_port(plan.retroarch_netcmd_port);
     std::this_thread::sleep_for(std::chrono::milliseconds(750));
 
     std::vector<std::size_t> resolved_indices;
@@ -699,6 +754,13 @@ void ActiveSessionSlot::run_session() {
         switch_backend = make_switch_backend(*runtime);
     }
 
+    if (launch_config.standalone && keyboard_ != nullptr) {
+        keyboard_->set_switch_style_hotkeys(true);
+    }
+
+    std::string soft_keyboard_fallback;
+    bool arm_soft_keyboard = false;
+
     if (launch_config.standalone) {
         if (!switch_backend) {
             throw std::runtime_error("Switch standalone launch missing backend");
@@ -736,11 +798,13 @@ void ActiveSessionSlot::run_session() {
             resolved_gpu,
             slot);
         if (switch_backend->enable_soft_keyboard()) {
-            ensure_soft_keyboard(
-                plan.soft_keyboard,
-                profile_name,
-                "What is your name?",
-                capture_display);
+            // Bridge must exist before SessionControlMonitor starts; arm the X11
+            // watcher only after gamescope has a pid so we don't scan sibling slots.
+            if (!plan.soft_keyboard) {
+                plan.soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();
+            }
+            soft_keyboard_fallback = profile_name;
+            arm_soft_keyboard = true;
         }
     } else {
         RetroArchOverrideParams override_params;
@@ -759,6 +823,15 @@ void ActiveSessionSlot::run_session() {
         override_params.resolution_scale = config.resolution.retroarch_scale;
         override_params.slot_index = slot;
         override_params.network_cmd_port = plan.retroarch_netcmd_port;
+        {
+            std::vector<ClientHello> hellos;
+            hellos.reserve(plan.clients.size());
+            for (const auto& client : plan.clients) {
+                hellos.push_back(client.hello);
+            }
+            override_params.display_layout =
+                resolve_display_layout_preference(plan.host_hello, hellos);
+        }
         apply_retroarch_override(launch_config, override_params);
     }
 
@@ -776,6 +849,9 @@ void ActiveSessionSlot::run_session() {
 
     input_router_ = std::make_unique<InputRouter>(*gamepads_, keyboard_.get());
     input_router_->set_seat_assignment(launch_plan.seats);
+    // Register demux before emulator start so early UDP from a phone client is not
+    // dropped during the multi-second launch window.
+    register_input_clients();
 
     media_server_ = start_host_media_server_if_needed(HostMediaStartRequest{
         config,
@@ -820,7 +896,8 @@ void ActiveSessionSlot::run_session() {
             std::chrono::seconds(config.player_reconnect_timeout_seconds),
             config_.hub,
             capture_w,
-            capture_h);
+            capture_h,
+            config.save_root);
     }
 
     auto local_bridge = std::optional<LocalControllerBridge>{};
@@ -850,7 +927,18 @@ void ActiveSessionSlot::run_session() {
         capture_display,
         slot_prefix);
 
-    register_input_clients();
+    if (arm_soft_keyboard && plan.soft_keyboard) {
+        std::string display = capture_display;
+        if (keyboard_ != nullptr && keyboard_->plugged()) {
+            display = keyboard_->capture_display();
+        }
+        schedule_soft_keyboard(
+            plan.soft_keyboard,
+            soft_keyboard_fallback,
+            "What is your name?",
+            display,
+            session_runtime_->emulator().process_id().value_or(0));
+    }
 
     std::optional<std::string> session_end_reason;
     const RelaunchContext relaunch_ctx{

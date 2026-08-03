@@ -8,9 +8,12 @@
 #include "common/catalog_paths.hpp"
 #include "common/catalog_presenter.hpp"
 #include "common/addresses.hpp"
+#include "common/client_logs.hpp"
 #include "common/discovery.hpp"
 #include "common/game_assets.hpp"
+#include "common/platform/default_platform.hpp"
 #include "common/platform/paths.hpp"
+#include "common/serialization.hpp"
 #include "common/steam_art_import.hpp"
 #include "client/client_media_playback.hpp"
 #include "client/game_filter.hpp"
@@ -21,9 +24,11 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMessageBox>
 #include <QMetaObject>
 #include <QPlainTextEdit>
 #include <QPixmapCache>
@@ -39,8 +44,11 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QCoreApplication>
+#include <QGuiApplication>
+#include <QScreen>
 
 #include <chrono>
+#include <algorithm>
 #include <exception>
 #include <iostream>
 #include <optional>
@@ -136,6 +144,9 @@ archstreamer::ClientAppConfig MainWindow::client_config_from_fields() const {
     config.display_name = archstreamer::preferred_steam_or_username_display_name(
         config.username,
         steam_account_id_text());
+    if (client_password_ != nullptr) {
+        config.password = client_password_->text().toStdString();
+    }
     config.role = selected_client_role(client_role_);
     config.session_mode = selected_mode(client_mode_);
     config.filter = client_filter_from_fields();
@@ -147,6 +158,15 @@ archstreamer::ClientAppConfig MainWindow::client_config_from_fields() const {
     config.wanted_size = selected_stream_size();
     config.show_framecount =
         settings_show_framecount_ != nullptr && settings_show_framecount_->isChecked();
+    if (const auto* screen = QGuiApplication::primaryScreen()) {
+        const auto geom = screen->geometry();
+        config.display_layout =
+            geom.width() >= geom.height()
+                ? archstreamer::DisplayLayoutPreference::Landscape
+                : archstreamer::DisplayLayoutPreference::Portrait;
+    } else {
+        config.display_layout = archstreamer::DisplayLayoutPreference::Landscape;
+    }
 
     for (const auto* item : client_controllers_->selectedItems()) {
         config.controller_indexes.push_back(static_cast<std::size_t>(client_controllers_->row(item)));
@@ -227,7 +247,7 @@ void MainWindow::open_host_search_dialog() {
 }
 
 void MainWindow::start_client_host_auto_pick() {
-    if (client_host_ == nullptr || !client_host_->text().trimmed().isEmpty()) {
+    if (client_host_ == nullptr) {
         return;
     }
     stop_client_host_auto_pick();
@@ -236,9 +256,11 @@ void MainWindow::start_client_host_auto_pick() {
         std::vector<std::string> seeds;
         QSettings settings(QStringLiteral("ArchStreamer"), QStringLiteral("ArchStreamer"));
         const auto saved = settings.value(QStringLiteral("client/hostAddress")).toString().trimmed();
-        if (!saved.isEmpty() && saved != QStringLiteral("127.0.0.1") &&
-            !saved.startsWith(QStringLiteral("127."))) {
-            seeds.push_back(saved.toStdString());
+        const auto field = client_host_->text().trimmed();
+        const auto seed_candidate = !field.isEmpty() ? field : saved;
+        if (!seed_candidate.isEmpty() && seed_candidate != QStringLiteral("127.0.0.1") &&
+            !seed_candidate.startsWith(QStringLiteral("127."))) {
+            seeds.push_back(seed_candidate.toStdString());
         }
         client_auto_browser_->set_seed_hosts(std::move(seeds));
     } catch (const std::exception& error) {
@@ -249,21 +271,45 @@ void MainWindow::start_client_host_auto_pick() {
     client_auto_pick_timer_->setInterval(1000);
     client_auto_pick_attempts_ = 0;
     connect(client_auto_pick_timer_, &QTimer::timeout, this, [this] {
-        if (client_host_ == nullptr || !client_host_->text().trimmed().isEmpty() || !client_auto_browser_) {
+        if (client_host_ == nullptr || !client_auto_browser_) {
             stop_client_host_auto_pick();
             return;
         }
         try {
             client_auto_browser_->poll();
             client_auto_browser_->expire_older_than(std::chrono::seconds(8));
-            if (const auto preferred = archstreamer::prefer_discovered_host(client_auto_browser_->hosts());
+            const auto live = client_auto_browser_->hosts();
+            const auto current = client_host_->text().trimmed().toStdString();
+            const bool current_empty = current.empty();
+            const bool current_live = std::any_of(
+                live.begin(),
+                live.end(),
+                [&](const archstreamer::DiscoveredHost& host) { return host.address == current; });
+
+            // Keep a reachable saved/current host; only fill or switch when it's missing.
+            if (!current_empty && current_live) {
+                stop_client_host_auto_pick();
+                return;
+            }
+
+            if (const auto preferred = archstreamer::prefer_discovered_host(live);
                 preferred.has_value()) {
-                apply_client_host(
-                    QString::fromStdString(preferred->address),
-                    preferred->control_port,
-                    preferred->input_port,
-                    QString::fromStdString(preferred->username));
-                append_log(client_log_, "Auto-selected LAN host (same-subnet preferred).");
+                if (preferred->address != current) {
+                    apply_client_host(
+                        QString::fromStdString(preferred->address),
+                        preferred->control_port,
+                        preferred->input_port,
+                        QString::fromStdString(preferred->username));
+                    if (current_empty) {
+                        append_log(client_log_, "Auto-selected LAN host (same-subnet preferred).");
+                    } else {
+                        append_log(
+                            client_log_,
+                            QString("Saved host unreachable — switched to %1 @ %2")
+                                .arg(QString::fromStdString(preferred->username))
+                                .arg(QString::fromStdString(preferred->address)));
+                    }
+                }
                 stop_client_host_auto_pick();
                 return;
             }
@@ -401,6 +447,17 @@ void MainWindow::start_client() {
         append_log(client_log_, "Choose a game before joining.");
         return;
     }
+    if (config.password.empty()) {
+        const auto created = prompt_new_password("Create password");
+        if (created.isEmpty()) {
+            append_log(client_log_, "Password required before joining.");
+            return;
+        }
+        if (client_password_ != nullptr) {
+            client_password_->setText(created);
+        }
+        config.password = created.toStdString();
+    }
     if (config.role == archstreamer::ClientParticipantRole::Player) {
         refresh_client_controllers();
         config = client_config_from_fields();
@@ -458,6 +515,7 @@ void MainWindow::start_client() {
         heartbeat_prefs_->wanted_size = config.wanted_size;
         heartbeat_prefs_->max_bitrate_kbps = config.max_bitrate_kbps;
         heartbeat_prefs_->show_framecount = config.show_framecount;
+        heartbeat_prefs_->display_layout = config.display_layout;
     }
 
 #ifndef _WIN32
@@ -465,6 +523,7 @@ void MainWindow::start_client() {
         auto video_embed = std::make_shared<archstreamer::VideoEmbedBridge>();
         client_video_controller_ = std::make_unique<ClientVideoController>(this);
         client_video_controller_->setVideoEmbedBridge(video_embed);
+        client_video_controller_->setHeartbeatPrefs(heartbeat_prefs_);
         QObject::connect(
             client_video_controller_.get(),
             &ClientVideoController::userClosed,
@@ -580,6 +639,19 @@ void MainWindow::start_client() {
             callbacks.on_status = [this](const std::string& message) {
                 append_log(client_log_, QString::fromStdString(message));
             };
+            callbacks.on_password_change_required = [this](const std::string& /*current*/) {
+                QString new_password;
+                QMetaObject::invokeMethod(
+                    this,
+                    [this, &new_password] {
+                        new_password = prompt_new_password("Host requires a new password");
+                        if (!new_password.isEmpty() && client_password_ != nullptr) {
+                            client_password_->setText(new_password);
+                        }
+                    },
+                    Qt::BlockingQueuedConnection);
+                return new_password.toStdString();
+            };
 
             client_app_.run_session(
                 config,
@@ -650,6 +722,165 @@ void MainWindow::stop_client() {
 void MainWindow::stop_client_connect() {
     if (client_connect_thread_.joinable()) {
         client_connect_thread_.join();
+    }
+}
+
+void MainWindow::send_client_logs_to_host() {
+    auto* log = settings_log_ != nullptr ? settings_log_ : client_log_;
+    if (client_host_ == nullptr || client_port_ == nullptr) {
+        append_log(log, "Send logs: host/port fields missing.", GuiLogLevel::Quiet);
+        return;
+    }
+    const auto host = client_host_->text().trimmed();
+    if (host.isEmpty()) {
+        append_log(log, "Send logs: select a host first (Client tab).", GuiLogLevel::Quiet);
+        return;
+    }
+    const auto sessions = settings_log_sessions_ != nullptr
+        ? static_cast<std::uint32_t>(settings_log_sessions_->value())
+        : 3u;
+    const auto text = archstreamer::extract_last_log_sessions_from_file(
+        gui_log_path(),
+        archstreamer::GuiLogSessionMarker,
+        sessions);
+    if (text.empty()) {
+        append_log(log, "Send logs: gui.log is empty or unreadable.", GuiLogLevel::Quiet);
+        return;
+    }
+
+    archstreamer::ClientLogBundle bundle;
+    bundle.username = profile_client_username();
+    bundle.session_count = sessions;
+    bundle.text.assign(text.begin(), text.end());
+
+    try {
+        auto stream = archstreamer::TcpStream::connect_to(
+            host.toStdString(),
+            static_cast<std::uint16_t>(client_port_->value()));
+        stream.send_packet(archstreamer::serialize_packet(bundle));
+        const auto reply = stream.receive_packet();
+        if (!reply.has_value()) {
+            append_log(log, "Send logs: host closed without ack.", GuiLogLevel::Quiet);
+            return;
+        }
+        const auto payload = archstreamer::deserialize_packet(*reply);
+        if (const auto* err = std::get_if<archstreamer::ErrorPacket>(&payload); err != nullptr) {
+            append_log(log, QString("Send logs: %1").arg(QString::fromStdString(err->message)));
+            return;
+        }
+        append_log(log, "Send logs: unexpected host reply.");
+    } catch (const std::exception& error) {
+        append_log(
+            log,
+            QString("Send logs failed: %1").arg(QString::fromUtf8(error.what())),
+            GuiLogLevel::Quiet);
+    }
+}
+
+QString MainWindow::prompt_new_password(const QString& title) {
+    bool ok = false;
+    const auto first = QInputDialog::getText(
+        this,
+        title,
+        "New password:",
+        QLineEdit::Password,
+        {},
+        &ok);
+    if (!ok || first.isEmpty()) {
+        return {};
+    }
+    const auto second = QInputDialog::getText(
+        this,
+        title,
+        "Confirm new password:",
+        QLineEdit::Password,
+        {},
+        &ok);
+    if (!ok) {
+        return {};
+    }
+    if (first != second) {
+        QMessageBox::warning(this, title, "Passwords do not match.");
+        return {};
+    }
+    return first;
+}
+
+void MainWindow::change_profile_password_on_host() {
+    auto* log = profile_log_ != nullptr ? profile_log_ : client_log_;
+    if (client_host_ == nullptr || client_port_ == nullptr) {
+        append_log(log, "Change password: host/port fields missing.", GuiLogLevel::Quiet);
+        return;
+    }
+    const auto host = client_host_->text().trimmed();
+    if (host.isEmpty()) {
+        append_log(log, "Change password: select a host first (Client tab).", GuiLogLevel::Quiet);
+        return;
+    }
+    QString current;
+    if (client_password_ != nullptr && !client_password_->text().isEmpty()) {
+        current = client_password_->text();
+    } else if (profile_change_current_password_ != nullptr) {
+        current = profile_change_current_password_->text();
+    }
+    if (current.isEmpty()) {
+        append_log(
+            log,
+            "Change password: enter your password on the Client tab, or Current password here.",
+            GuiLogLevel::Quiet);
+        return;
+    }
+    const auto new_pw = profile_new_password_ != nullptr ? profile_new_password_->text() : QString{};
+    const auto confirm = profile_confirm_password_ != nullptr ? profile_confirm_password_->text() : QString{};
+    if (new_pw.isEmpty() || confirm.isEmpty()) {
+        append_log(log, "Change password: fill New password and Confirm new.", GuiLogLevel::Quiet);
+        return;
+    }
+    if (new_pw != confirm) {
+        append_log(log, "Change password: new passwords do not match.", GuiLogLevel::Quiet);
+        return;
+    }
+
+    archstreamer::PasswordChange change;
+    change.username = profile_client_username();
+    change.current_password = current.toStdString();
+    change.new_password = new_pw.toStdString();
+
+    try {
+        auto stream = archstreamer::TcpStream::connect_to(
+            host.toStdString(),
+            static_cast<std::uint16_t>(client_port_->value()));
+        stream.send_packet(archstreamer::serialize_packet(change));
+        const auto reply = stream.receive_packet();
+        if (!reply.has_value()) {
+            append_log(log, "Change password: host closed without ack.", GuiLogLevel::Quiet);
+            return;
+        }
+        const auto payload = archstreamer::deserialize_packet(*reply);
+        if (const auto* err = std::get_if<archstreamer::ErrorPacket>(&payload); err != nullptr) {
+            append_log(log, QString("Change password: %1").arg(QString::fromStdString(err->message)));
+            if (err->message == "password updated") {
+                if (client_password_ != nullptr) {
+                    client_password_->setText(new_pw);
+                }
+                if (profile_change_current_password_ != nullptr) {
+                    profile_change_current_password_->clear();
+                }
+                if (profile_new_password_ != nullptr) {
+                    profile_new_password_->clear();
+                }
+                if (profile_confirm_password_ != nullptr) {
+                    profile_confirm_password_->clear();
+                }
+            }
+            return;
+        }
+        append_log(log, "Change password: unexpected host reply.");
+    } catch (const std::exception& error) {
+        append_log(
+            log,
+            QString("Change password failed: %1").arg(QString::fromUtf8(error.what())),
+            GuiLogLevel::Quiet);
     }
 }
 

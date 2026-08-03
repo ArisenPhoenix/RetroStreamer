@@ -96,12 +96,36 @@ ActiveSessionInfo ClientSessionService::active_session_info() const {
     return *info;
 }
 
-JoinedSession ClientSessionService::finish_join(PendingSession pending, const ClientHello& hello) const {
+JoinedSession ClientSessionService::finish_join(
+    PendingSession pending,
+    ClientHello hello,
+    const std::function<std::string(const std::string& current_password)>&
+        on_password_change_required) const {
     pending.stream.send_packet(serialize_packet(hello));
 
-    const auto welcome_payload = receive_client_control_payload(pending.stream);
+    auto welcome_payload = receive_client_control_payload(pending.stream);
     if (const auto* error = std::get_if<ErrorPacket>(&welcome_payload); error != nullptr) {
         throw std::runtime_error("host rejected session: " + error->message);
+    }
+    if (std::holds_alternative<PasswordChangeRequired>(welcome_payload)) {
+        if (!on_password_change_required) {
+            throw std::runtime_error("host requires a password change");
+        }
+        const auto new_password = on_password_change_required(hello.password);
+        if (new_password.empty()) {
+            throw std::runtime_error("password change cancelled");
+        }
+        PasswordChange change;
+        change.username = hello.username;
+        change.current_password = hello.password;
+        change.new_password = new_password;
+        pending.stream.send_packet(serialize_packet(change));
+        hello.password = new_password;
+
+        welcome_payload = receive_client_control_payload(pending.stream);
+        if (const auto* error = std::get_if<ErrorPacket>(&welcome_payload); error != nullptr) {
+            throw std::runtime_error("host rejected session: " + error->message);
+        }
     }
     const auto* welcome = std::get_if<HostWelcome>(&welcome_payload);
     if (welcome == nullptr) {

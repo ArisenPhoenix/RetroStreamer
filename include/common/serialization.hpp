@@ -81,6 +81,10 @@ ByteBuffer serialize_payload(const SoftKeyboardRequest& payload);
 ByteBuffer serialize_payload(const SoftKeyboardResponse& payload);
 ByteBuffer serialize_payload(const MediaVideoPending& payload);
 ByteBuffer serialize_payload(const MediaVideoReady& payload);
+ByteBuffer serialize_payload(const EmulatorControl& payload);
+ByteBuffer serialize_payload(const ClientLogBundle& payload);
+ByteBuffer serialize_payload(const PasswordChangeRequired& payload);
+ByteBuffer serialize_payload(const PasswordChange& payload);
 
 PacketType packet_type_for(const ClientHello& payload);
 PacketType packet_type_for(const HostWelcome& payload);
@@ -109,6 +113,10 @@ PacketType packet_type_for(const SoftKeyboardRequest& payload);
 PacketType packet_type_for(const SoftKeyboardResponse& payload);
 PacketType packet_type_for(const MediaVideoPending& payload);
 PacketType packet_type_for(const MediaVideoReady& payload);
+PacketType packet_type_for(const EmulatorControl& payload);
+PacketType packet_type_for(const ClientLogBundle& payload);
+PacketType packet_type_for(const PasswordChangeRequired& payload);
+PacketType packet_type_for(const PasswordChange& payload);
 
 ByteBuffer serialize_packet(const ClientHello& payload);
 ByteBuffer serialize_packet(const HostWelcome& payload);
@@ -137,6 +145,10 @@ ByteBuffer serialize_packet(const SoftKeyboardRequest& payload);
 ByteBuffer serialize_packet(const SoftKeyboardResponse& payload);
 ByteBuffer serialize_packet(const MediaVideoPending& payload);
 ByteBuffer serialize_packet(const MediaVideoReady& payload);
+ByteBuffer serialize_packet(const EmulatorControl& payload);
+ByteBuffer serialize_packet(const ClientLogBundle& payload);
+ByteBuffer serialize_packet(const PasswordChangeRequired& payload);
+ByteBuffer serialize_packet(const PasswordChange& payload);
 
 PacketPayload deserialize_packet(std::span<const std::uint8_t> packet);
 

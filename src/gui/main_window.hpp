@@ -120,6 +120,10 @@ private:
     void start_client();
     void stop_client();
     void stop_client_connect();
+    void send_client_logs_to_host();
+    void change_profile_password_on_host();
+    /** Prompt new+confirm; returns empty if cancelled/mismatch. */
+    QString prompt_new_password(const QString& title);
 
 #ifdef ARCHSTREAMER_HAS_HOST
     void start_host();
@@ -158,6 +162,8 @@ private:
 
     QLineEdit* client_host_ = nullptr;
     QLabel* client_host_summary_ = nullptr;
+    /** Session-only join password (Client tab; not persisted). */
+    QLineEdit* client_password_ = nullptr;
     QSpinBox* client_port_ = nullptr;
     QSpinBox* client_input_port_ = nullptr;
     QComboBox* client_role_ = nullptr;
@@ -222,13 +228,22 @@ private:
     QLineEdit* profile_username_ = nullptr;
     QLineEdit* profile_host_name_ = nullptr;
     QLineEdit* profile_steam_account_ = nullptr;
+    /** Shown only when client_password_ is empty — for Change password. */
+    QLineEdit* profile_change_current_password_ = nullptr;
+    QWidget* profile_change_current_row_ = nullptr;
+    QLineEdit* profile_new_password_ = nullptr;
+    QLineEdit* profile_confirm_password_ = nullptr;
+    QPushButton* profile_change_password_ = nullptr;
     QPlainTextEdit* profile_log_ = nullptr;
 
     QLineEdit* settings_art_root_ = nullptr;
     QSpinBox* settings_session_timeout_ = nullptr;
     QComboBox* settings_log_level_ = nullptr;
+    QSpinBox* settings_log_sessions_ = nullptr;
+    QPushButton* settings_send_logs_ = nullptr;
     QCheckBox* settings_show_framecount_ = nullptr;
 #ifdef ARCHSTREAMER_HAS_HOST
+    QCheckBox* settings_allow_new_users_ = nullptr;
     QLineEdit* settings_native_host_runner_ = nullptr;
     QComboBox* settings_gpu_ = nullptr;
     QCheckBox* settings_separate_render_gpu_ = nullptr;

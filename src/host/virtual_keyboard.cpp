@@ -5,6 +5,8 @@
 #include "host/retroarch_netcmd.hpp"
 
 #include <chrono>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -12,6 +14,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -25,10 +28,10 @@ namespace archstreamer {
 namespace {
 
 constexpr RemotedKeyBinding kDefaultBindings[] = {
-    // Prefer XTest Space over FAST_FORWARD netcmd: input_hold_fast_forward=space in the
-    // session cfg, and toggle-netcmd desyncs easily (pause works; FF often looks dead).
+    // Desktop Space: XTest hold for RetroArch hold-FF; Switch uses edge taps in apply().
     {KeySpace, RemotedKeyAction::XTestHold, nullptr},
-    {KeyP, RemotedKeyAction::NetcmdPress, "PAUSE_TOGGLE"},
+    // Desktop P: one-shot pause toggle (explicit set via EmulatorControl preferred).
+    {KeyP, RemotedKeyAction::NetcmdPress, nullptr},
     {KeyF1, RemotedKeyAction::NetcmdPress, "MENU_TOGGLE"},
     // Yuzu: Toggle Framerate Limit (continuous uncapped speed). Bound in qt-config.
     {KeyF8, RemotedKeyAction::XTestHold, nullptr},
@@ -131,9 +134,14 @@ void VirtualKeyboard::plug() {
     plugged_ = true;
     has_last_ = false;
     last_keys_ = 0;
+    paused_ = false;
+    fast_forward_ = false;
+    ff_space_held_ = false;
     std::cout
         << "Virtual keyboard ready on " << capture_display_
-        << " (Space→XTest hold-FF, F8→Yuzu continuous FF, P→pause, F1→menu; arrows/Enter/Esc→XTest)\n";
+        << (switch_style_hotkeys_
+                ? " (Ryujinx FF→hold F6 turbo@200%, P→F5 pause; arrows/Enter/Esc→XTest)\n"
+                : " (Space→XTest hold-FF, F8→Yuzu continuous FF, P→pause, F1→menu; arrows/Enter/Esc→XTest)\n");
 }
 
 void VirtualKeyboard::unplug() {
@@ -202,7 +210,52 @@ void VirtualKeyboard::apply_xtest_edges(std::uint32_t previous, std::uint32_t ne
 }
 
 void VirtualKeyboard::apply_xtest_space_autorepeat() {
-    // Unused — Space is edge-tapped for Ryujinx toggle turbo (see apply()).
+    // Unused — Space is handled in apply() / set_retroarch_ff_space_held().
+}
+
+void VirtualKeyboard::xtest_tap_keysym(unsigned long keysym) {
+    ensure_xtest_display();
+    if (display_ == nullptr) {
+        return;
+    }
+    Display* display = as_display(display_);
+    const KeyCode code = XKeysymToKeycode(display, static_cast<KeySym>(keysym));
+    if (code == 0) {
+        return;
+    }
+    focus_emulator_window(/*settle=*/true);
+    XTestFakeKeyEvent(display, code, True, CurrentTime);
+    XFlush(display);
+    std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    XTestFakeKeyEvent(display, code, False, CurrentTime);
+    XFlush(display);
+}
+
+void VirtualKeyboard::xtest_set_keysym(unsigned long keysym, bool down) {
+    ensure_xtest_display();
+    if (display_ == nullptr) {
+        return;
+    }
+    Display* display = as_display(display_);
+    const KeyCode code = XKeysymToKeycode(display, static_cast<KeySym>(keysym));
+    if (code == 0) {
+        return;
+    }
+    focus_emulator_window(/*settle=*/true);
+    XTestFakeKeyEvent(display, code, down ? True : False, CurrentTime);
+    XFlush(display);
+}
+
+void VirtualKeyboard::set_retroarch_ff_space_held(bool want_held) {
+    if (want_held == ff_space_held_) {
+        if (want_held) {
+            // Re-assert focus + down in case the capture window ate the key.
+            xtest_set_keysym(XK_space, true);
+        }
+        return;
+    }
+    xtest_set_keysym(XK_space, want_held);
+    ff_space_held_ = want_held;
 }
 
 namespace {
@@ -617,32 +670,6 @@ bool try_autofill_on_display(
     return true;
 }
 
-std::string title_case_fallback(std::string text) {
-    if (text.size() > 12) {
-        text.resize(12);
-    }
-    if (text.empty()) {
-        return "Player";
-    }
-    bool capitalize = true;
-    for (char& character : text) {
-        if (character == ' ' || character == '-' || character == '_') {
-            if (character == '_' || character == '-') {
-                character = ' ';
-            }
-            capitalize = true;
-            continue;
-        }
-        if (capitalize && character >= 'a' && character <= 'z') {
-            character = static_cast<char>(character - 'a' + 'A');
-        } else if (!capitalize && character >= 'A' && character <= 'Z') {
-            character = static_cast<char>(character - 'A' + 'a');
-        }
-        capitalize = false;
-    }
-    return text;
-}
-
 } // namespace
 
 bool VirtualKeyboard::focus_emulator_window(bool settle) {
@@ -694,10 +721,159 @@ bool VirtualKeyboard::focus_emulator_window(bool settle) {
 
     activate_x_window(display, target);
     if (settle) {
-        // Soft-kbd uses ~250ms; shorter is enough once _NET_ACTIVE_WINDOW has fired.
+        // Soft-kbd uses ~250ms; gamescope needs a bit longer for _NET_ACTIVE_WINDOW.
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    }
+    if (focused_is_emulator()) {
+        return true;
+    }
+    // One more raise — nested Xwayland under gamescope often needs a second kick.
+    activate_x_window(display, target);
+    if (settle) {
         std::this_thread::sleep_for(std::chrono::milliseconds(80));
     }
+    if (!focused_is_emulator()) {
+        if (!logged_focus_miss_) {
+            logged_focus_miss_ = true;
+            std::cerr
+                << "Virtual keyboard: failed to focus Ryujinx/yuzu on " << capture_display_
+                << " (pid=" << target_pid_ << ") — F5/Space may miss the emulator\n";
+        }
+        return false;
+    }
     return true;
+}
+
+void VirtualKeyboard::set_paused(bool want_paused) {
+    if (!plugged_) {
+        return;
+    }
+    // Client sends absolute On/Off (menu open ⇒ pause; overlay edit relaxes). F5 is a
+    // toggle, so we only tap when the desired state differs from our last applied value.
+    if (want_paused == paused_) {
+        // Still reconcile RetroArch from GET_STATUS when possible.
+        if (!switch_style_hotkeys_) {
+            const auto current = query_retroarch_paused(netcmd_port_);
+            if (current.has_value() && *current == want_paused) {
+                return;
+            }
+            if (current.has_value()) {
+                // Local cache drifted — fall through and fix.
+            } else {
+                return;
+            }
+        } else {
+            return;
+        }
+    }
+    if (switch_style_hotkeys_) {
+        // Under gamescope, activate can report success while focus never sticks. If we
+        // still flip paused_ after a missed F5, the next absolute On/Off inverts the game.
+        if (!focus_emulator_window(/*settle=*/true)) {
+            std::cerr
+                << "EmulatorControl: pause=" << (want_paused ? "on" : "off")
+                << " skipped — no emulator focus on " << capture_display_ << '\n';
+            return;
+        }
+        ensure_xtest_display();
+        if (display_ == nullptr) {
+            return;
+        }
+        Display* display = as_display(display_);
+        const KeyCode code = XKeysymToKeycode(display, XK_F5);
+        if (code == 0) {
+            return;
+        }
+        XTestFakeKeyEvent(display, code, True, CurrentTime);
+        XFlush(display);
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        XTestFakeKeyEvent(display, code, False, CurrentTime);
+        XFlush(display);
+        paused_ = want_paused;
+        std::cout
+            << "EmulatorControl: pause=" << (want_paused ? "on" : "off")
+            << " (XTest F5) on " << capture_display_ << '\n';
+        return;
+    }
+    if (set_retroarch_paused(want_paused, netcmd_port_)) {
+        paused_ = want_paused;
+        std::cout
+            << "EmulatorControl: pause=" << (want_paused ? "on" : "off")
+            << " (netcmd " << netcmd_port_ << ")\n";
+    } else if (want_paused) {
+        if (send_retroarch_netcmd("PAUSE_TOGGLE", netcmd_port_)) {
+            paused_ = true;
+            std::cout << "EmulatorControl: pause=on via PAUSE_TOGGLE (status unknown)\n";
+        }
+    }
+}
+
+void VirtualKeyboard::set_fast_forward(bool want_on) {
+    if (!plugged_) {
+        return;
+    }
+    if (switch_style_hotkeys_) {
+        if (want_on == fast_forward_) {
+            return;
+        }
+        // Ryujinx VSync modes cycle Switch → Unbounded → Custom → Switch (F1).
+        // Custom refresh is preconfigured at 200% (~2x). From Switch, two taps land
+        // on Custom; one tap from Custom returns to Switch. Brief Unbounded blip is OK.
+        if (want_on) {
+            if (ryujinx_switch_vsync_) {
+                xtest_tap_keysym(XK_F1);
+                std::this_thread::sleep_for(std::chrono::milliseconds(40));
+                xtest_tap_keysym(XK_F1);
+                ryujinx_switch_vsync_ = false;
+            }
+        } else if (!ryujinx_switch_vsync_) {
+            xtest_tap_keysym(XK_F1);
+            ryujinx_switch_vsync_ = true;
+        }
+        fast_forward_ = want_on;
+        std::cout
+            << "EmulatorControl: fast_forward=" << (want_on ? "on" : "off")
+            << " (Ryujinx VSync " << (want_on ? "Custom@200%" : "Switch")
+            << ") on " << capture_display_ << '\n';
+        return;
+    }
+
+    // RetroArch session cfg: input_hold_fast_forward=space, toggle=nul.
+    // Hold Space for as long as the client wants FF — toggle netcmd desyncs easily.
+    // force refresh when already on so menu-close can re-assert after unpause.
+    const bool already = (want_on == fast_forward_ && want_on == ff_space_held_);
+    if (already && want_on) {
+        set_retroarch_ff_space_held(true);
+        return;
+    }
+    if (already) {
+        return;
+    }
+    set_retroarch_ff_space_held(want_on);
+    fast_forward_ = want_on;
+    std::cout
+        << "EmulatorControl: fast_forward=" << (want_on ? "on" : "off")
+        << " (hold Space on " << capture_display_ << ")\n";
+}
+
+void VirtualKeyboard::apply_emulator_control(const EmulatorControl& control) {
+    if (control.pause == EmulatorControlState::On) {
+        set_paused(true);
+    } else if (control.pause == EmulatorControlState::Off) {
+        set_paused(false);
+    }
+    if (control.fast_forward == EmulatorControlState::On) {
+        set_fast_forward(true);
+    } else if (control.fast_forward == EmulatorControlState::Off) {
+        set_fast_forward(false);
+    } else if (
+        control.pause == EmulatorControlState::Off &&
+        fast_forward_ &&
+        !switch_style_hotkeys_) {
+        // Unpause can steal focus; re-assert Space hold so RetroArch FF stays active.
+        // Ryujinx uses F6 toggles — do not re-tap or we would flip turbo off.
+        set_retroarch_ff_space_held(true);
+    }
 }
 
 void VirtualKeyboard::apply(const KeyboardState& state) {
@@ -721,25 +897,37 @@ void VirtualKeyboard::apply(const KeyboardState& state) {
         switch (binding.action) {
         case RemotedKeyAction::NetcmdEdgeToggle:
             if (binding.netcmd != nullptr) {
-                send_retroarch_netcmd(binding.netcmd);
+                send_retroarch_netcmd(binding.netcmd, netcmd_port_);
             }
             break;
         case RemotedKeyAction::NetcmdPress:
-            if (is_down && binding.netcmd != nullptr) {
-                if (send_retroarch_netcmd(binding.netcmd)) {
-                    std::cout
-                        << "Keyboard netcmd: "
-                        << (binding.key == KeyP ? "P" : binding.key == KeyF1 ? "F1" : "?")
-                        << " → " << binding.netcmd << '\n';
+            if (!is_down) {
+                break;
+            }
+            if (binding.key == KeyP) {
+                // Desktop remoted P: toggle via explicit set (query when possible).
+                if (!switch_style_hotkeys_) {
+                    const auto current = query_retroarch_paused(netcmd_port_);
+                    set_paused(!(current.value_or(paused_)));
+                } else {
+                    set_paused(!paused_);
                 }
+                break;
+            }
+            if (binding.netcmd != nullptr &&
+                send_retroarch_netcmd(binding.netcmd, netcmd_port_)) {
+                std::cout
+                    << "Keyboard netcmd: "
+                    << (binding.key == KeyF1 ? "F1" : "?")
+                    << " → " << binding.netcmd << '\n';
             }
             break;
         case RemotedKeyAction::XTestHold:
             if (binding.key == KeySpace && is_down && !logged_ff_) {
                 logged_ff_ = true;
                 std::cout
-                    << "Fast-forward: Space tap via XTest on " << capture_display_
-                    << " (focused Ryujinx window; turbo toggle on press/release)\n";
+                    << "Fast-forward: Space via XTest on " << capture_display_
+                    << " (desktop hold / Switch edge taps)\n";
             }
             break;
         case RemotedKeyAction::Ignored:
@@ -751,21 +939,16 @@ void VirtualKeyboard::apply(const KeyboardState& state) {
         apply_xtest_edges(previous, next);
     }
 
-    // Ryujinx turbo_mode_while_held=false: each Space tap toggles turbo. Remoted hold
-    // becomes tap-on-press + tap-on-release (turbo on while the client holds Space).
+    // Space → fast-forward:
+    // - Switch/Ryujinx + RetroArch: hold Space while the remoted key is down
+    //   (Ryujinx turbo_mode_while_held; RetroArch input_hold_fast_forward).
+    //   EmulatorControl owns the hold when fast_forward_ is set; remoted Space
+    //   only applies when FF control is off.
     const bool space_down = bit_down(next, KeySpace);
     const bool space_was = bit_down(previous, KeySpace);
     if (space_down != space_was && display_ != nullptr) {
-        Display* display = as_display(display_);
-        const KeyCode code = XKeysymToKeycode(display, XK_space);
-        if (code != 0) {
-            focus_emulator_window(/*settle=*/true);
-            XTestFakeKeyEvent(display, code, True, CurrentTime);
-            XFlush(display);
-            // Avalonia can drop a same-flush press/release pair.
-            std::this_thread::sleep_for(std::chrono::milliseconds(25));
-            XTestFakeKeyEvent(display, code, False, CurrentTime);
-            XFlush(display);
+        if (!fast_forward_) {
+            xtest_set_keysym(XK_space, space_down);
         }
     }
 
@@ -774,6 +957,10 @@ void VirtualKeyboard::apply(const KeyboardState& state) {
 }
 
 void VirtualKeyboard::release_all() {
+    if (ff_space_held_) {
+        set_retroarch_ff_space_held(false);
+        fast_forward_ = false;
+    }
     KeyboardState empty{};
     apply(empty);
 }
@@ -802,12 +989,144 @@ std::vector<std::string> xtest_display_candidates(const std::string& preferred) 
     return names;
 }
 
+namespace {
+
+std::string normalize_display_name(std::string name) {
+    if (name.size() >= 2 && name.compare(0, 2, ".:") == 0) {
+        name.erase(0, 1);
+    }
+    const auto dot = name.find('.');
+    if (dot != std::string::npos) {
+        name.resize(dot);
+    }
+    return name;
+}
+
+std::string host_desktop_display_name() {
+    if (const char* display = std::getenv("DISPLAY"); display != nullptr && *display != '\0') {
+        return normalize_display_name(display);
+    }
+    return ":0";
+}
+
+bool is_host_desktop_display_name(const std::string& name) {
+    const auto host = host_desktop_display_name();
+    if (host.empty() || name.empty()) {
+        return false;
+    }
+    return normalize_display_name(name) == host;
+}
+
+std::optional<std::string> display_from_process_environ(int pid) {
+    if (pid <= 0) {
+        return std::nullopt;
+    }
+    std::ifstream in("/proc/" + std::to_string(pid) + "/environ");
+    if (!in) {
+        return std::nullopt;
+    }
+    std::string blob((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::size_t pos = 0;
+    while (pos < blob.size()) {
+        const auto end = blob.find('\0', pos);
+        const auto entry = blob.substr(
+            pos, end == std::string::npos ? std::string::npos : end - pos);
+        if (entry.rfind("DISPLAY=", 0) == 0) {
+            auto value = entry.substr(8);
+            if (!value.empty()) {
+                return value;
+            }
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        pos = end + 1;
+    }
+    return std::nullopt;
+}
+
+std::vector<int> child_pids_of(int parent_pid) {
+    std::vector<int> children;
+    if (parent_pid <= 0) {
+        return children;
+    }
+    std::error_code error;
+    const auto task_dir = std::filesystem::path("/proc") / std::to_string(parent_pid) / "task";
+    for (const auto& entry : std::filesystem::directory_iterator(task_dir, error)) {
+        if (error) {
+            break;
+        }
+        std::ifstream in(entry.path() / "children");
+        if (!in) {
+            continue;
+        }
+        int child = 0;
+        while (in >> child) {
+            children.push_back(child);
+        }
+    }
+    return children;
+}
+
+} // namespace
+
+std::vector<std::string> soft_keyboard_display_candidates(
+    const std::string& preferred,
+    int owner_pid) {
+    std::vector<std::string> names;
+    auto add = [&](const std::string& name) {
+        if (name.empty() || is_host_desktop_display_name(name)) {
+            return;
+        }
+        for (const auto& existing : names) {
+            if (existing == name) {
+                return;
+            }
+        }
+        names.push_back(name);
+    };
+
+    if (owner_pid > 0) {
+        // Children first: nested Xwayland / Ryujinx hold the real dialog DISPLAY.
+        std::vector<std::string> from_tree;
+        auto consider = [&](int pid) {
+            if (const auto display = display_from_process_environ(pid); display) {
+                from_tree.push_back(*display);
+            }
+        };
+        for (const int child : child_pids_of(owner_pid)) {
+            consider(child);
+            for (const int grand : child_pids_of(child)) {
+                consider(grand);
+                for (const int great : child_pids_of(grand)) {
+                    consider(great);
+                }
+            }
+        }
+        consider(owner_pid);
+        for (const auto& display : from_tree) {
+            add(display);
+        }
+        add(preferred);
+        return names;
+    }
+
+    // No owner: never blanket-scan every local X socket (that is what dual-prompted
+    // concurrent phones). Preferred alone, or the old wide list only when unset.
+    if (!preferred.empty()) {
+        add(preferred);
+        return names;
+    }
+    return xtest_display_candidates(preferred);
+}
+
 void schedule_soft_keyboard(
     std::shared_ptr<SoftKeyboardHostBridge> bridge,
     std::string fallback_text,
     std::string prompt,
-    std::string preferred_display) {
-    fallback_text = title_case_fallback(std::move(fallback_text));
+    std::string preferred_display,
+    int owner_pid) {
+    (void)fallback_text; // Callers still pass a profile name; we never invent text.
     if (prompt.empty()) {
         prompt = "The game is asking for text. Enter it with the pad.";
     }
@@ -820,18 +1139,9 @@ void schedule_soft_keyboard(
     std::weak_ptr<SoftKeyboardHostBridge> weak_bridge = bridge;
 
     std::thread([weak_bridge = std::move(weak_bridge),
-                 fallback_text = std::move(fallback_text),
                  prompt = std::move(prompt),
-                 preferred_display = std::move(preferred_display)]() {
-        struct DisplayProbe {
-            std::string name;
-            // Attempt index before which we do not retry XOpenDisplay on this slot.
-            int retry_at = 0;
-        };
-        std::vector<DisplayProbe> probes;
-        for (auto& name : xtest_display_candidates(preferred_display)) {
-            probes.push_back({std::move(name), 0});
-        }
+                 preferred_display = std::move(preferred_display),
+                 owner_pid]() {
         // Once a dialog has been served somewhere, stay on that display. Sibling session
         // slots run their own emulator on their own display and we must not answer theirs.
         std::string pinned_display;
@@ -841,7 +1151,17 @@ void schedule_soft_keyboard(
         constexpr auto kFastInterval = std::chrono::milliseconds(150);
         constexpr auto kIdleInterval = std::chrono::milliseconds(500);
         constexpr int kFastAttempts = 400; // ~60s
-        constexpr int kUnavailableBackoff = 13; // ~2s before re-probing a dead slot
+
+        enum class ServeOutcome {
+            Abort,       // session bridge gone
+            Injected,    // typed into the dialog — wait for it to dismiss
+            NeedsReprompt, // cancel/empty/timeout and dialog still wants input
+            DialogGone,  // cancel/empty/timeout and dialog no longer Ready
+        };
+
+        const auto candidate_displays = [&]() {
+            return soft_keyboard_display_candidates(preferred_display, owner_pid);
+        };
 
         const auto try_manual_inject = [&](const std::string& text) {
             std::string trimmed = text;
@@ -856,16 +1176,16 @@ void schedule_soft_keyboard(
             if (!pinned_display.empty()) {
                 displays.push_back(pinned_display);
             }
-            for (const auto& probe : probes) {
+            for (const auto& name : candidate_displays()) {
                 bool seen = false;
                 for (const auto& existing : displays) {
-                    if (existing == probe.name) {
+                    if (existing == name) {
                         seen = true;
                         break;
                     }
                 }
                 if (!seen) {
-                    displays.push_back(probe.name);
+                    displays.push_back(name);
                 }
             }
 
@@ -903,9 +1223,6 @@ void schedule_soft_keyboard(
         // False once the session drops the bridge.
         // Also services manual pad-OSK injects so the escape hatch works while idle.
         const auto wait_for_dialog = [&](std::string& out) {
-            for (auto& probe : probes) {
-                probe.retry_at = 0;
-            }
             for (int attempt = 0;; ++attempt) {
                 if (weak_bridge.expired()) {
                     return false;
@@ -925,17 +1242,11 @@ void schedule_soft_keyboard(
                         pinned_display.clear();
                     }
                 } else {
-                    // Most candidate slots are empty, so back those off: a tick then only
-                    // pays for the one or two displays that actually exist.
-                    for (auto& probe : probes) {
-                        if (attempt < probe.retry_at) {
-                            continue;
-                        }
-                        const auto result = probe_text_dialog(probe.name);
-                        if (result == TextDialogProbe::Unavailable) {
-                            probe.retry_at = attempt + kUnavailableBackoff;
-                        } else if (result == TextDialogProbe::Ready) {
-                            out = probe.name;
+                    // Rebuild each tick: nested Xwayland may appear after gamescope start.
+                    for (const auto& name : candidate_displays()) {
+                        const auto result = probe_text_dialog(name);
+                        if (result == TextDialogProbe::Ready) {
+                            out = name;
                             return true;
                         }
                     }
@@ -946,18 +1257,17 @@ void schedule_soft_keyboard(
         };
 
         // False once the session drops the bridge.
-        const auto serve_dialog = [&](const std::string& display_name) {
+        const auto serve_dialog = [&](const std::string& display_name) -> ServeOutcome {
             SoftKeyboardRequest request;
             {
                 auto bridge = weak_bridge.lock();
                 if (!bridge) {
-                    return false;
+                    return ServeOutcome::Abort;
                 }
                 {
                     std::lock_guard lock(bridge->mutex);
                     // Blank field: the player is being asked to type a name, and
                     // prefilling it just means erasing it on a pad keyboard first.
-                    // fallback_text is only for the no-answer path below.
                     request = bridge->make_request(prompt, /*initial_text=*/{}, 12);
                 }
                 bridge->publish_request(request);
@@ -971,7 +1281,7 @@ void schedule_soft_keyboard(
             for (int wait = 0; wait < 360; ++wait) {
                 auto bridge = weak_bridge.lock();
                 if (!bridge) {
-                    return false;
+                    return ServeOutcome::Abort;
                 }
                 // Prefer an explicit answer to this host-driven prompt; otherwise accept a
                 // concurrent manual pad-OSK submit as the typed value.
@@ -991,23 +1301,38 @@ void schedule_soft_keyboard(
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
             }
 
-            std::string text = fallback_text;
-            if (manual_text.has_value() && !manual_text->empty()) {
+            std::string text;
+            const bool from_manual = manual_text.has_value() && !manual_text->empty();
+            const bool from_accept = response.has_value() && response->accepted &&
+                !response->text.empty();
+            if (from_manual) {
                 text = *manual_text;
                 std::cout
                     << "Ryujinx Software Keyboard: using manual pad OSK text for id="
                     << request.request_id << '\n';
-            } else if (response.has_value() && response->accepted && !response->text.empty()) {
+            } else if (from_accept) {
                 text = response->text;
-            } else if (!response.has_value() && !manual_text.has_value()) {
-                std::cerr
-                    << "Ryujinx Software Keyboard: no pad OSK response; using fallback \""
-                    << fallback_text << "\"\n";
             } else {
-                std::cerr
-                    << "Ryujinx Software Keyboard: pad OSK cancelled; using fallback \""
-                    << fallback_text << "\"\n";
+                // Cancel, empty submit, or timeout: never invent a name. The game still
+                // owns the dialog — if it is Ready, publish another SoftKeyboardRequest.
+                if (!response.has_value() && !manual_text.has_value()) {
+                    std::cerr
+                        << "Ryujinx Software Keyboard: no pad OSK response for id="
+                        << request.request_id << " — not injecting\n";
+                } else {
+                    std::cout
+                        << "Ryujinx Software Keyboard: pad OSK cancelled/empty for id="
+                        << request.request_id << " — not injecting\n";
+                }
+                if (auto bridge = weak_bridge.lock()) {
+                    bridge->clear();
+                }
+                if (probe_text_dialog(display_name) == TextDialogProbe::Ready) {
+                    return ServeOutcome::NeedsReprompt;
+                }
+                return ServeOutcome::DialogGone;
             }
+
             if (text.size() > 12) {
                 text.resize(12);
             }
@@ -1015,7 +1340,7 @@ void schedule_soft_keyboard(
             bool injected = false;
             for (int attempt = 0; attempt < 20 && !injected; ++attempt) {
                 if (try_autofill_on_display(
-                        display_name, text, /*allow_any_focused=*/manual_text.has_value())) {
+                        display_name, text, /*allow_any_focused=*/from_manual)) {
                     injected = true;
                     break;
                 }
@@ -1023,11 +1348,20 @@ void schedule_soft_keyboard(
             }
             if (!injected) {
                 std::cerr << "Ryujinx Software Keyboard: failed to inject text into dialog\n";
+                if (auto bridge = weak_bridge.lock()) {
+                    bridge->clear();
+                }
+                // Injection failed but dialog may still be up — re-prompt rather than
+                // inventing text or assuming the game moved on.
+                if (probe_text_dialog(display_name) == TextDialogProbe::Ready) {
+                    return ServeOutcome::NeedsReprompt;
+                }
+                return ServeOutcome::DialogGone;
             }
             if (auto bridge = weak_bridge.lock()) {
                 bridge->clear();
             }
-            return true;
+            return ServeOutcome::Injected;
         };
 
         // Re-arming while the answered dialog is still up would instantly re-prompt for
@@ -1051,6 +1385,8 @@ void schedule_soft_keyboard(
 
         // Games ask more than once: declining the "is this right?" confirmation reopens
         // the same prompt, so keep serving dialogs for as long as the session lives.
+        // Cancel with empty input while the dialog is still Ready → new SoftKeyboardRequest
+        // (game still blocked); we do not invent nicknames.
         try {
             while (true) {
                 std::string found_display;
@@ -1058,10 +1394,30 @@ void schedule_soft_keyboard(
                     return;
                 }
                 pinned_display = found_display;
-                if (!serve_dialog(found_display)) {
-                    return;
+                for (;;) {
+                    const auto outcome = serve_dialog(found_display);
+                    if (outcome == ServeOutcome::Abort) {
+                        return;
+                    }
+                    if (outcome == ServeOutcome::NeedsReprompt) {
+                        // Brief settle so the client can dismiss the cancelled OSK
+                        // before the next SoftKeyboardRequest arrives.
+                        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                        if (weak_bridge.expired()) {
+                            return;
+                        }
+                        if (probe_text_dialog(found_display) != TextDialogProbe::Ready) {
+                            break;
+                        }
+                        continue;
+                    }
+                    if (outcome == ServeOutcome::DialogGone) {
+                        break;
+                    }
+                    // Injected — wait until this dialog dismisses before arming again.
+                    wait_for_dialog_to_close(found_display);
+                    break;
                 }
-                wait_for_dialog_to_close(found_display);
             }
         } catch (...) {
         }
@@ -1072,7 +1428,8 @@ void ensure_soft_keyboard(
     std::shared_ptr<SoftKeyboardHostBridge>& bridge,
     std::string fallback_text,
     std::string prompt,
-    std::string preferred_display) {
+    std::string preferred_display,
+    int owner_pid) {
     if (!bridge) {
         bridge = std::make_shared<SoftKeyboardHostBridge>();
     }
@@ -1080,7 +1437,8 @@ void ensure_soft_keyboard(
         bridge,
         std::move(fallback_text),
         std::move(prompt),
-        std::move(preferred_display));
+        std::move(preferred_display),
+        owner_pid);
 }
 
 } // namespace archstreamer
@@ -1104,17 +1462,23 @@ void VirtualKeyboard::rebind_display(std::string capture_display) {
 void VirtualKeyboard::plug() {}
 void VirtualKeyboard::unplug() {}
 void VirtualKeyboard::apply(const KeyboardState&) {}
+void VirtualKeyboard::apply_emulator_control(const EmulatorControl&) {}
+void VirtualKeyboard::set_paused(bool) {}
+void VirtualKeyboard::set_fast_forward(bool) {}
 void VirtualKeyboard::release_all() {}
+void VirtualKeyboard::xtest_tap_keysym(unsigned long) {}
 
 void ensure_soft_keyboard(
     std::shared_ptr<SoftKeyboardHostBridge>& bridge,
     std::string fallback_text,
     std::string prompt,
-    std::string preferred_display) {
+    std::string preferred_display,
+    int owner_pid) {
     (void)bridge;
     (void)fallback_text;
     (void)prompt;
     (void)preferred_display;
+    (void)owner_pid;
 }
 
 } // namespace archstreamer

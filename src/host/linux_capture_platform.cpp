@@ -3,6 +3,7 @@
 #include "common/platform/process_utils.hpp"
 #include "host/gstreamer_media_server.hpp"
 #include "host/gpu_select.hpp"
+#include "host/gamescope_pipewire_node.hpp"
 #include "host/retroarch_config_writer.hpp"
 #include "host/virtual_display.hpp"
 
@@ -169,9 +170,10 @@ void start_deferred_gamescope_video_if_needed(
     if (gst == nullptr || !gst->video_deferred()) {
         return;
     }
-    if (config.verbose) {
-        std::cout << "Waiting for gamescope PipeWire video node...\n";
-    }
+    std::cout
+        << "Waiting for gamescope PipeWire video node"
+        << (owner_pid > 0 ? (" (owner pid " + std::to_string(owner_pid) + ")") : "")
+        << "...\n";
     int expect_w = 1280;
     int expect_h = 720;
     parse_resolution(config.video_resolution, expect_w, expect_h);
@@ -182,11 +184,10 @@ void start_deferred_gamescope_video_if_needed(
         owner_pid);
     if (!node.has_value()) {
         throw std::runtime_error(
-            "gamescope did not publish a PipeWire Video/Source (media.name=gamescope)");
+            "gamescope did not publish a PipeWire Video/Source for this session "
+            "(media.name=gamescope; timed out waiting for this slot's node)");
     }
-    if (config.verbose) {
-        std::cout << "Gamescope PipeWire node: " << *node << '\n';
-    }
+    std::cout << "Gamescope PipeWire node: " << *node << '\n';
     gst->start_pipewire_video(*node, media_streams);
 }
 

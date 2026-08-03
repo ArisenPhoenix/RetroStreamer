@@ -131,6 +131,8 @@ int HostApp::run_direct_session(
     // Soft-keyboard bridge for the no-session launch path. The watcher holds a weak
     // reference, so this has to outlive the launch block or it retires immediately.
     std::shared_ptr<SoftKeyboardHostBridge> standalone_soft_keyboard;
+    std::string soft_keyboard_fallback;
+    bool arm_soft_keyboard = false;
     std::unique_ptr<SwitchBackend> switch_backend;
     std::optional<std::string> session_end_reason;
 
@@ -462,6 +464,7 @@ int HostApp::run_direct_session(
     }
 
     if (launch_config.standalone) {
+        keyboard.set_switch_style_hotkeys(true);
         if (!switch_backend) {
             throw std::runtime_error("Switch standalone launch missing backend");
         }
@@ -492,11 +495,11 @@ int HostApp::run_direct_session(
             config.resolution.switch_scale,
             resolved_gpu);
         if (switch_backend->enable_soft_keyboard()) {
-            ensure_soft_keyboard(
-                standalone_soft_keyboard,
-                profile_name,
-                "What is your name?",
-                capture_display);
+            if (!standalone_soft_keyboard) {
+                standalone_soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();
+            }
+            soft_keyboard_fallback = profile_name;
+            arm_soft_keyboard = true;
         }
 
     } else {
@@ -659,6 +662,19 @@ int HostApp::run_direct_session(
         &keyboard,
         gamescope_capture,
         capture_display);
+
+    if (arm_soft_keyboard && standalone_soft_keyboard) {
+        std::string display = capture_display;
+        if (keyboard.plugged()) {
+            display = keyboard.capture_display();
+        }
+        schedule_soft_keyboard(
+            standalone_soft_keyboard,
+            soft_keyboard_fallback,
+            "What is your name?",
+            display,
+            session_runtime->emulator().process_id().value_or(0));
+    }
 
     // Start UDP input after the optional A-pulse so it does not race uinput updates.
     if (network_receiver.has_value()) {

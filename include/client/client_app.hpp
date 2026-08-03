@@ -30,6 +30,7 @@ struct ClientHeartbeatPrefs {
     MediaStreamSize wanted_size = MediaStreamSize::Auto;
     std::uint16_t max_bitrate_kbps = 0;
     bool show_framecount = false;
+    DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto;
 
     void set_wanted_tier(MediaQualityTier tier) {
         std::lock_guard lock(mutex);
@@ -46,16 +47,23 @@ struct ClientHeartbeatPrefs {
         show_framecount = enabled;
     }
 
+    void set_display_layout(DisplayLayoutPreference layout) {
+        std::lock_guard lock(mutex);
+        display_layout = layout;
+    }
+
     void snapshot(
         MediaQualityTier& tier,
         MediaStreamSize& size,
         std::uint16_t& max_bitrate,
-        bool& framecount) {
+        bool& framecount,
+        DisplayLayoutPreference& layout) {
         std::lock_guard lock(mutex);
         tier = wanted_tier;
         size = wanted_size;
         max_bitrate = max_bitrate_kbps;
         framecount = show_framecount;
+        layout = display_layout;
     }
 };
 
@@ -236,6 +244,8 @@ struct ClientAppConfig {
     std::optional<std::uint16_t> input_port;
     std::string username;
     std::string display_name;
+    /** Session-only; not persisted. Required for host auth (protocol v18). */
+    std::string password;
     ClientParticipantRole role = ClientParticipantRole::Player;
     GameFilter filter;
     GameSessionMode session_mode = GameSessionMode::SinglePlayer;
@@ -255,6 +265,8 @@ struct ClientAppConfig {
     std::uint16_t max_bitrate_kbps = 0;
     // Request host RetroArch "Frames:" OSD (default off). Prefer heartbeat_prefs for live updates.
     bool show_framecount = false;
+    // DS: Landscape→Hybrid Top, Portrait→Top/Bottom (sent on Hello + heartbeats).
+    DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto;
     /**
      * When non-zero (or video_embed set), Legacy video uses in-process appsink
      * into the Qt surface. session_client leaves 0 for a standalone gst-launch window.
@@ -284,6 +296,11 @@ struct ClientAppCallbacks {
     std::function<void(const std::string& host, std::uint16_t input_port)> on_input_streaming_started;
     std::function<void()> on_waiting_without_input;
     std::function<void(const std::string& message)> on_status;
+    /**
+     * Host sent PasswordChangeRequired during join. Return the new password.
+     * Called on the session worker thread — use BlockingQueuedConnection for UI.
+     */
+    std::function<std::string(const std::string& current_password)> on_password_change_required;
     std::shared_ptr<DiscControlBridge> disc_control;
     std::shared_ptr<LinkControlBridge> link_control;
     std::shared_ptr<SoftKeyboardBridge> soft_keyboard;

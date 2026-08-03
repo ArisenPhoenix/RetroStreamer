@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/protocol.hpp"
 #include "host/capture_platform.hpp"
 #include "host/host_app_config.hpp"
 #include "host/launch_environment.hpp"
@@ -67,7 +68,13 @@ struct RetroArchOverrideParams {
     int resolution_scale = 1;
     int slot_index = 0;
     std::uint16_t network_cmd_port = 55355;
+    DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto;
 };
+
+/** Prefer Portrait if any video client asks for it; else first explicit preference; else Auto. */
+DisplayLayoutPreference resolve_display_layout_preference(
+    const std::optional<ClientHello>& host_hello,
+    const std::vector<ClientHello>& client_hellos);
 
 /**
  * Write a RetroArch input override and set/replace the launch_config -c arg.

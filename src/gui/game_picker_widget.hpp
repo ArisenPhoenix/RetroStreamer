@@ -3,6 +3,7 @@
 #include "client/game_filter.hpp"
 #include "common/protocol.hpp"
 
+#include <QString>
 #include <QWidget>
 #include <filesystem>
 #include <optional>
@@ -22,6 +23,8 @@ public:
     void setArtRoot(std::filesystem::path art_root);
     void setCatalog(const GameList& catalog);
     void setSessionFilter(GameFilter filter);
+    /** QSettings key for dialog Recents (e.g. "client/recent_game_ids"). */
+    void setRecentSettingsKey(QString key);
     void setSelectedGameId(const std::string& game_id);
     void clearSelection();
     void refreshArtDisplay();
@@ -40,6 +43,7 @@ private:
     GameFilter session_filter_;
     std::optional<std::string> selected_id_;
     std::filesystem::path art_root_;
+    QString recent_settings_key_;
     QLabel* thumbnail_ = nullptr;
     QLabel* summary_ = nullptr;
     QPushButton* choose_ = nullptr;

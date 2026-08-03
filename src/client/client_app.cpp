@@ -275,7 +275,7 @@ ClientRunResult ClientApp::join_session(
         controllers = controller_info_for_selection(devices, config);
     }
 
-    const auto hello = draft.pending_session.session.make_hello(
+    const auto hello_base = draft.pending_session.session.make_hello(
         config.username,
         config.display_name.empty() ? config.username : config.display_name,
         result.selected_game_id,
@@ -283,9 +283,15 @@ ClientRunResult ClientApp::join_session(
         config.filter.requested_players,
         std::move(controllers),
         config.wants_video,
-        config.wants_audio);
+        config.wants_audio,
+        config.password);
+    auto hello = hello_base;
+    hello.display_layout = config.display_layout;
     ClientSessionService session_service(config.host, config.control_port);
-    auto joined_session = session_service.finish_join(std::move(draft.pending_session), hello);
+    auto joined_session = session_service.finish_join(
+        std::move(draft.pending_session),
+        hello,
+        callbacks.on_password_change_required);
     auto& session = joined_session.session;
 
     result.client_id = session.client_id();
@@ -763,12 +769,14 @@ ClientRunResult ClientApp::join_session(
             auto wanted_size = config.wanted_size;
             auto max_bitrate_kbps = config.max_bitrate_kbps;
             auto show_framecount = config.show_framecount;
+            auto display_layout = config.display_layout;
             if (callbacks.heartbeat_prefs) {
                 callbacks.heartbeat_prefs->snapshot(
                     wanted_tier,
                     wanted_size,
                     max_bitrate_kbps,
-                    show_framecount);
+                    show_framecount,
+                    display_layout);
             }
             if (wanted_size == MediaStreamSize::Auto) {
                 const int display_h = primary_display_height();
@@ -785,6 +793,7 @@ ClientRunResult ClientApp::join_session(
                 max_bitrate_kbps,
                 show_framecount,
                 wanted_size,
+                display_layout,
             }));
             next_heartbeat = now + std::chrono::seconds(1);
         }

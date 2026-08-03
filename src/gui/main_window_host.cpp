@@ -128,6 +128,7 @@ QWidget* MainWindow::build_host_tab() {
     host_status_ = new QLabel("Host stopped", page);
     host_game_picker_ = new archstreamer::gui::GamePickerWidget(page);
     host_game_picker_->setArtRoot(art_root_path());
+    host_game_picker_->setRecentSettingsKey(QStringLiteral("host/recent_game_ids"));
     connect(host_game_picker_, &archstreamer::gui::GamePickerWidget::selectionChanged, this, [this] {
         if (host_game_picker_->hasSelection()) {
             persisted_host_game_id_ =
@@ -498,6 +499,8 @@ void MainWindow::start_host() {
         host_cfg.input_port = static_cast<std::uint16_t>(host_input_port_->value());
         host_cfg.clients = static_cast<std::uint8_t>(host_clients_->value());
         host_cfg.session_timeout_seconds = static_cast<std::uint16_t>(session_timeout_seconds());
+        host_cfg.allow_new_users =
+            settings_allow_new_users_ != nullptr && settings_allow_new_users_->isChecked();
         host_cfg.host_role = host_role_is_viewer(host_role_)
             ? archstreamer::ParticipantRole::Viewer
             : archstreamer::ParticipantRole::Player;

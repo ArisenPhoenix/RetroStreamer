@@ -12,19 +12,22 @@ Open **this folder** (`mobile/android`) in Android Studio — not the C++ repo r
 
 `local.properties` is created by Studio with your SDK path; it is gitignored.
 
-## What works in v0.1
+## What works in v0.1+
 
 - Connect to host LAN IP (default control `45555`, input `45454`)
 - Fetch game catalog over TCP (`GameListRequest` / `GameList`)
 - Start a single-player session (`ClientHello` → welcome / seats / ready)
-- On-screen gamepad overlay → UDP `ControllerInput` (~250 Hz)
+- RTP H.264 receive + MediaCodec decode to fullscreen Surface
+- Viewer heartbeats (keeps the host session alive)
+- On-screen gamepad overlay → UDP `ControllerInput`
+- Optional physical USB/Bluetooth gamepad (Game Options); Home/Guide opens the play menu
 
 ## Not yet
 
-- H.264 / Opus decode (MediaCodec) — play screen shows the media URI only
+- Opus audio decode
 - Soft keyboard OSK for Ryujinx prompts
 - LAN discovery / art download
-- Bluetooth gamepads
+- Stream quality / size picker (defaults Medium / 720p in heartbeats)
 
 ## Host reminder
 

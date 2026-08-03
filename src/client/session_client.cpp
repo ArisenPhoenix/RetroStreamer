@@ -13,7 +13,8 @@ ClientHello SessionClient::make_hello(
     std::uint8_t requested_players,
     std::vector<ControllerInfo> controllers,
     bool wants_video,
-    bool wants_audio) const {
+    bool wants_audio,
+    std::string password) const {
     if (!valid_player_count(requested_players)) {
         throw std::runtime_error("invalid requested player count");
     }
@@ -36,6 +37,8 @@ ClientHello SessionClient::make_hello(
         std::move(controllers),
         wants_video,
         wants_audio,
+        DisplayLayoutPreference::Auto,
+        std::move(password),
     };
 }
 

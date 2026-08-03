@@ -4,13 +4,40 @@
 #include "gui_logging.hpp"
 
 #include <QApplication>
+#include <QCoreApplication>
+#include <QDir>
 #include <QEvent>
+#include <QFile>
+#include <QIcon>
 #include <QKeyEvent>
+#include <QPixmap>
 #include <QTimer>
 
 #include <iostream>
 
 namespace {
+
+QIcon archstreamer_app_icon() {
+    // Prefer the embedded Qt resource (works from any cwd).
+    const QPixmap from_qrc(QStringLiteral(":/branding/archstreamer-icon-256.png"));
+    if (!from_qrc.isNull()) {
+        return QIcon(from_qrc);
+    }
+    // Fallbacks for incomplete builds / tooling.
+    const QStringList candidates = {
+        QStringLiteral("branding/archstreamer-icon-256.png"),
+        QDir(QCoreApplication::applicationDirPath())
+            .absoluteFilePath(QStringLiteral("../branding/archstreamer-icon-256.png")),
+        QDir(QCoreApplication::applicationDirPath())
+            .absoluteFilePath(QStringLiteral("branding/archstreamer-icon-256.png")),
+    };
+    for (const QString& path : candidates) {
+        if (QFile::exists(path)) {
+            return QIcon(path);
+        }
+    }
+    return {};
+}
 
 class RemotedKeyboardEventFilter final : public QObject {
 public:
@@ -60,9 +87,16 @@ int main(int argc, char** argv) {
     // would run heavy GStreamer teardown on the signal itself.
 
     QApplication app(argc, argv);
+    app.setApplicationName(QStringLiteral("ArchStreamer"));
+    app.setOrganizationName(QStringLiteral("ArchStreamer"));
+    // Wayland/GNOME ignore setWindowIcon and resolve the mark via the desktop file.
+    app.setDesktopFileName(QStringLiteral("io.github.ArisenPhoenix.ArchStreamer"));
+    const QIcon app_icon = archstreamer_app_icon();
+    app.setWindowIcon(app_icon);
     RemotedKeyboardEventFilter keyboard_filter;
     app.installEventFilter(&keyboard_filter);
     archstreamer::gui::MainWindow window;
+    window.setWindowIcon(app_icon);
     window.show();
 
     for (int index = 1; index + 1 < argc; ++index) {

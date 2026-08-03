@@ -45,6 +45,7 @@ function New-ArchStreamerShortcut {
     $lnk.WorkingDirectory = $WorkingDirectory
     $lnk.Description = $Description
     if (Test-Path $TargetPath) {
+        # Prefer the icon embedded in archstreamer_gui.exe (branding .ico at build time).
         $lnk.IconLocation = "$TargetPath,0"
     }
     $lnk.Save()

@@ -41,6 +41,8 @@ std::optional<AcceptedControlHello> try_accept_control_hello(
     TcpListener& listener,
     const GameList& game_list,
     const std::filesystem::path& art_root,
-    const std::function<ActiveSessionInfo()>& active_info_fn = {});
+    const std::function<ActiveSessionInfo()>& active_info_fn = {},
+    const std::filesystem::path& save_root = {},
+    bool allow_new_users = false);
 
 } // namespace archstreamer

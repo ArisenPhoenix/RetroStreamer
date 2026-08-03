@@ -54,6 +54,14 @@ void ClientVideoController::setVideoEmbedBridge(
     }
 }
 
+void ClientVideoController::setHeartbeatPrefs(
+    std::shared_ptr<archstreamer::ClientHeartbeatPrefs> prefs) {
+    heartbeat_prefs_ = std::move(prefs);
+    if (surface_ && heartbeat_prefs_) {
+        pushGeometryToBridge(surface_->width(), surface_->height());
+    }
+}
+
 void ClientVideoController::prepareForSession() {
     if (!surface_) {
         surface_ = std::make_unique<ArchStreamerVideoSurface>();
@@ -127,6 +135,11 @@ void ClientVideoController::raiseVideo() {
 void ClientVideoController::pushGeometryToBridge(int width, int height) {
     if (embed_bridge_) {
         embed_bridge_->set_size(width, height);
+    }
+    if (heartbeat_prefs_ && width > 0 && height > 0) {
+        heartbeat_prefs_->set_display_layout(
+            width >= height ? archstreamer::DisplayLayoutPreference::Landscape
+                            : archstreamer::DisplayLayoutPreference::Portrait);
     }
 }
 

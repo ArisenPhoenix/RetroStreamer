@@ -1,11 +1,13 @@
 #include "host/host_session_helpers.hpp"
 
+#include "common/client_logs.hpp"
 #include "common/art_transfer.hpp"
 #include "common/catalog_paths.hpp"
 #include "common/serialization.hpp"
 #include "host/host_app_config.hpp"
 #include "host/host_launch_planner.hpp"
 #include "host/session_lobby.hpp"
+#include "host/user_credentials.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -124,6 +126,17 @@ void poll_active_session_joins(
                 config.audio)));
             return;
         }
+        if (const auto* log_bundle = std::get_if<ClientLogBundle>(&first_payload);
+            log_bundle != nullptr) {
+            stream->send_packet(serialize_packet(acknowledge_client_log_bundle(*log_bundle)));
+            return;
+        }
+        if (const auto* password_change = std::get_if<PasswordChange>(&first_payload);
+            password_change != nullptr) {
+            stream->send_packet(serialize_packet(
+                acknowledge_password_change(config.save_root, *password_change)));
+            return;
+        }
         const auto art_root = config.art_root.empty() ? std::filesystem::path{DefaultArtRoot} : config.art_root;
         if (const auto* art_request = std::get_if<ArtAssetRequest>(&first_payload); art_request != nullptr) {
             stream->send_packet(serialize_packet(load_art_asset_response(
@@ -134,7 +147,12 @@ void poll_active_session_joins(
         }
         const auto* game_list_request = std::get_if<GameListRequest>(&first_payload);
         if (game_list_request == nullptr) {
-            throw std::runtime_error("expected GameListRequest from active-session client");
+            const auto got = static_cast<int>(std::visit(
+                [](const auto& payload) { return packet_type_for(payload); },
+                first_payload));
+            throw std::runtime_error(
+                "expected GameListRequest from active-session client (got packet type " +
+                std::to_string(got) + ")");
         }
         stream->send_packet(serialize_packet(catalog_delta_for_request(game_list, *game_list_request)));
 
@@ -163,26 +181,29 @@ void poll_active_session_joins(
         if (hello == nullptr) {
             throw std::runtime_error("expected ClientHello from active-session client");
         }
-        if (!valid_username(hello->username)) {
+        auto authenticated_hello = *hello;
+        if (!valid_username(authenticated_hello.username)) {
             throw std::runtime_error("active-session client supplied an invalid username");
         }
-        if (!hello->selected_game_id.has_value() || *hello->selected_game_id != plan.selected_game_id) {
+        authenticate_client_hello(*stream, config.save_root, authenticated_hello, config.allow_new_users);
+        if (!authenticated_hello.selected_game_id.has_value() ||
+            *authenticated_hello.selected_game_id != plan.selected_game_id) {
             throw std::runtime_error("active-session client selected a different game");
         }
-        if (hello->session_mode != plan.session_mode) {
+        if (authenticated_hello.session_mode != plan.session_mode) {
             throw std::runtime_error("active-session client selected a different session mode");
         }
-        if (!valid_player_count(hello->requested_players)) {
+        if (!valid_player_count(authenticated_hello.requested_players)) {
             throw std::runtime_error("active-session client requested too many players");
         }
-        if (hello->controllers.size() > hello->requested_players) {
+        if (authenticated_hello.controllers.size() > authenticated_hello.requested_players) {
             throw std::runtime_error("active-session client supplied controller metadata for unrequested players");
         }
 
         auto* reconnected_player = static_cast<SessionClientConnection*>(nullptr);
         auto client_id = next_session_client_id(plan);
-        if (hello->requested_players > 0) {
-            reconnected_player = disconnected_player_for_reconnect(plan, *hello);
+        if (authenticated_hello.requested_players > 0) {
+            reconnected_player = disconnected_player_for_reconnect(plan, authenticated_hello);
             if (reconnected_player == nullptr) {
                 throw std::runtime_error("active sessions only accept late viewers or reconnecting players");
             }
@@ -205,13 +226,13 @@ void poll_active_session_joins(
             media_plan_config_for(config),
             stream->peer_address());
         auto endpoint = MediaEndpoint{};
-        if (hello->wants_video || hello->wants_audio) {
+        if (authenticated_hello.wants_video || authenticated_hello.wants_audio) {
             endpoint = media_server.add_client(
                 client_id,
                 destination_host,
                 media_index,
-                hello->wants_video,
-                hello->wants_audio);
+                authenticated_hello.wants_video,
+                authenticated_hello.wants_audio);
             if (!endpoint.video_uri.empty() || !endpoint.audio_uri.empty()) {
                 ++media_index;
                 stream->send_packet(serialize_packet(endpoint));
@@ -225,23 +246,37 @@ void poll_active_session_joins(
         }));
 
         if (reconnected_player != nullptr) {
-            reconnected_player->hello = *hello;
+            reconnected_player->hello = authenticated_hello;
             reconnected_player->stream = std::move(*stream);
             reconnected_player->connection_state = SessionConnectionState::Connected;
             reconnected_player->last_seen = std::chrono::steady_clock::now();
             reconnected_player->disconnected_at = {};
+            reconnected_player->disconnect_reason.clear();
+            reconnected_player->applied_tier = MediaQualityTier::Medium;
+            reconnected_player->applied_size = MediaStreamSize::P720;
+            reconnected_player->pending_tier.reset();
+            reconnected_player->pending_size.reset();
+            reconnected_player->pending_video_uri.reset();
+            reconnected_player->video_cutover_started = {};
+            reconnected_player->video_cutover_failures = 0;
+            reconnected_player->video_cutover_suppressed = false;
+            if (!endpoint.video_uri.empty() || !endpoint.audio_uri.empty()) {
+                reconnected_player->media_endpoint = endpoint;
+            } else {
+                reconnected_player->media_endpoint.reset();
+            }
             std::cout
                 << "Player " << static_cast<int>(client_id)
-                << " reconnected username=" << hello->username << ".\n";
+                << " reconnected username=" << authenticated_hello.username << ".\n";
         } else {
             plan.clients.push_back(SessionClientConnection{
                 client_id,
-                *hello,
+                authenticated_hello,
                 std::move(*stream),
             });
             std::cout
                 << "Late viewer " << static_cast<int>(client_id)
-                << " joined username=" << hello->username << ".\n";
+                << " joined username=" << authenticated_hello.username << ".\n";
         }
     } catch (const std::exception& error) {
         try {
@@ -256,7 +291,9 @@ std::optional<AcceptedControlHello> try_accept_control_hello(
     TcpListener& listener,
     const GameList& game_list,
     const std::filesystem::path& art_root,
-    const std::function<ActiveSessionInfo()>& active_info_fn) {
+    const std::function<ActiveSessionInfo()>& active_info_fn,
+    const std::filesystem::path& save_root,
+    bool allow_new_users) {
     auto stream = listener.accept_for(std::chrono::milliseconds(0));
     if (!stream.has_value()) {
         return std::nullopt;
@@ -283,9 +320,25 @@ std::optional<AcceptedControlHello> try_accept_control_hello(
                 art_request->role)));
             return AcceptedControlHello{};
         }
+        if (const auto* log_bundle = std::get_if<ClientLogBundle>(&first_payload);
+            log_bundle != nullptr) {
+            stream->send_packet(serialize_packet(acknowledge_client_log_bundle(*log_bundle)));
+            return AcceptedControlHello{};
+        }
+        if (const auto* password_change = std::get_if<PasswordChange>(&first_payload);
+            password_change != nullptr) {
+            stream->send_packet(serialize_packet(
+                acknowledge_password_change(save_root, *password_change)));
+            return AcceptedControlHello{};
+        }
         const auto* game_list_request = std::get_if<GameListRequest>(&first_payload);
         if (game_list_request == nullptr) {
-            throw std::runtime_error("expected GameListRequest from control client");
+            const auto got = static_cast<int>(std::visit(
+                [](const auto& payload) { return packet_type_for(payload); },
+                first_payload));
+            throw std::runtime_error(
+                "expected GameListRequest from control client (got packet type " +
+                std::to_string(got) + ")");
         }
         stream->send_packet(serialize_packet(catalog_delta_for_request(game_list, *game_list_request)));
 
@@ -315,22 +368,24 @@ std::optional<AcceptedControlHello> try_accept_control_hello(
         if (hello == nullptr) {
             throw std::runtime_error("expected ClientHello from control client");
         }
-        if (!valid_username(hello->username)) {
+        auto authenticated_hello = *hello;
+        if (!valid_username(authenticated_hello.username)) {
             throw std::runtime_error("control client supplied an invalid username");
         }
-        if (!valid_player_count(hello->requested_players)) {
+        authenticate_client_hello(*stream, save_root, authenticated_hello, allow_new_users);
+        if (!valid_player_count(authenticated_hello.requested_players)) {
             throw std::runtime_error("control client requested too many players");
         }
-        if (hello->controllers.size() > hello->requested_players) {
+        if (authenticated_hello.controllers.size() > authenticated_hello.requested_players) {
             throw std::runtime_error("control client supplied controller metadata for unrequested players");
         }
-        if (!hello->selected_game_id.has_value()) {
+        if (!authenticated_hello.selected_game_id.has_value()) {
             throw std::runtime_error("control client did not select a game");
         }
 
         AcceptedControlHello accepted;
         accepted.have_hello = true;
-        accepted.hello = *hello;
+        accepted.hello = std::move(authenticated_hello);
         accepted.stream = std::move(*stream);
         return accepted;
     } catch (const std::exception& error) {

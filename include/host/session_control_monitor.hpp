@@ -6,6 +6,7 @@
 #include "host/session_lobby.hpp"
 
 #include <chrono>
+#include <filesystem>
 #include <optional>
 #include <string>
 
@@ -23,7 +24,8 @@ public:
         std::chrono::seconds reconnect_timeout,
         HostSessionHub* host_hub = nullptr,
         std::uint16_t capture_width = 1920,
-        std::uint16_t capture_height = 1080);
+        std::uint16_t capture_height = 1080,
+        std::filesystem::path save_root = {});
 
     std::optional<std::string> poll();
 
@@ -47,6 +49,7 @@ private:
     HostSessionHub* host_hub_ = nullptr;
     std::uint16_t capture_width_ = 1920;
     std::uint16_t capture_height_ = 1080;
+    std::filesystem::path save_root_;
 };
 
 } // namespace archstreamer

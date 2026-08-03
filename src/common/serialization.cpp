@@ -192,6 +192,8 @@ ByteBuffer serialize_payload(const ClientHello& payload) {
     write_controller_infos(writer, payload.controllers);
     writer.write_bool(payload.wants_video);
     writer.write_bool(payload.wants_audio);
+    writer.write_pod<std::uint8_t>(static_cast<std::uint8_t>(payload.display_layout));
+    writer.write_string(payload.password);
     return writer.take();
 }
 
@@ -259,6 +261,7 @@ ByteBuffer serialize_payload(const ViewerHeartbeat& payload) {
     writer.write_pod<std::uint16_t>(payload.max_bitrate_kbps);
     writer.write_bool(payload.show_framecount);
     writer.write_pod<std::uint8_t>(static_cast<std::uint8_t>(payload.wanted_size));
+    writer.write_pod<std::uint8_t>(static_cast<std::uint8_t>(payload.display_layout));
     return writer.take();
 }
 
@@ -452,6 +455,34 @@ ByteBuffer serialize_payload(const MediaVideoReady& payload) {
     return writer.take();
 }
 
+ByteBuffer serialize_payload(const EmulatorControl& payload) {
+    Writer writer;
+    writer.write_pod<ClientId>(payload.client_id);
+    writer.write_pod<std::uint8_t>(static_cast<std::uint8_t>(payload.pause));
+    writer.write_pod<std::uint8_t>(static_cast<std::uint8_t>(payload.fast_forward));
+    return writer.take();
+}
+
+ByteBuffer serialize_payload(const ClientLogBundle& payload) {
+    Writer writer;
+    writer.write_string(payload.username);
+    writer.write_pod<std::uint32_t>(payload.session_count);
+    writer.write_bytes(payload.text);
+    return writer.take();
+}
+
+ByteBuffer serialize_payload(const PasswordChangeRequired&) {
+    return {};
+}
+
+ByteBuffer serialize_payload(const PasswordChange& payload) {
+    Writer writer;
+    writer.write_string(payload.username);
+    writer.write_string(payload.current_password);
+    writer.write_string(payload.new_password);
+    return writer.take();
+}
+
 PacketType packet_type_for(const ClientHello&) { return PacketType::ClientHello; }
 PacketType packet_type_for(const HostWelcome&) { return PacketType::HostWelcome; }
 PacketType packet_type_for(const ClientConfig&) { return PacketType::ClientConfig; }
@@ -479,6 +510,10 @@ PacketType packet_type_for(const SoftKeyboardRequest&) { return PacketType::Soft
 PacketType packet_type_for(const SoftKeyboardResponse&) { return PacketType::SoftKeyboardResponse; }
 PacketType packet_type_for(const MediaVideoPending&) { return PacketType::MediaVideoPending; }
 PacketType packet_type_for(const MediaVideoReady&) { return PacketType::MediaVideoReady; }
+PacketType packet_type_for(const EmulatorControl&) { return PacketType::EmulatorControl; }
+PacketType packet_type_for(const ClientLogBundle&) { return PacketType::ClientLogBundle; }
+PacketType packet_type_for(const PasswordChangeRequired&) { return PacketType::PasswordChangeRequired; }
+PacketType packet_type_for(const PasswordChange&) { return PacketType::PasswordChange; }
 
 template <typename Payload>
 ByteBuffer serialize_packet_impl(const Payload& payload) {
@@ -603,6 +638,22 @@ ByteBuffer serialize_packet(const MediaVideoReady& payload) {
     return serialize_packet_impl(payload);
 }
 
+ByteBuffer serialize_packet(const EmulatorControl& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const ClientLogBundle& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const PasswordChangeRequired& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const PasswordChange& payload) {
+    return serialize_packet_impl(payload);
+}
+
 ClientHello read_client_hello(Reader& reader) {
     ClientHello payload;
     payload.username = reader.read_string();
@@ -613,6 +664,13 @@ ClientHello read_client_hello(Reader& reader) {
     payload.controllers = read_controller_infos(reader);
     payload.wants_video = reader.read_bool();
     payload.wants_audio = reader.read_bool();
+    if (reader.remaining() >= 1) {
+        payload.display_layout =
+            static_cast<DisplayLayoutPreference>(reader.read_pod<std::uint8_t>());
+    }
+    if (reader.remaining() > 0) {
+        payload.password = reader.read_string();
+    }
     return payload;
 }
 
@@ -683,6 +741,10 @@ ViewerHeartbeat read_viewer_heartbeat(Reader& reader) {
     }
     if (reader.remaining() >= 1) {
         payload.wanted_size = static_cast<MediaStreamSize>(reader.read_pod<std::uint8_t>());
+    }
+    if (reader.remaining() >= 1) {
+        payload.display_layout =
+            static_cast<DisplayLayoutPreference>(reader.read_pod<std::uint8_t>());
     }
     return payload;
 }
@@ -860,6 +922,34 @@ MediaVideoReady read_media_video_ready(Reader& reader) {
     return MediaVideoReady{reader.read_string()};
 }
 
+EmulatorControl read_emulator_control(Reader& reader) {
+    EmulatorControl payload;
+    payload.client_id = reader.read_pod<ClientId>();
+    payload.pause = static_cast<EmulatorControlState>(reader.read_pod<std::uint8_t>());
+    payload.fast_forward = static_cast<EmulatorControlState>(reader.read_pod<std::uint8_t>());
+    return payload;
+}
+
+ClientLogBundle read_client_log_bundle(Reader& reader) {
+    ClientLogBundle payload;
+    payload.username = reader.read_string();
+    payload.session_count = reader.read_pod<std::uint32_t>();
+    payload.text = reader.read_bytes();
+    return payload;
+}
+
+PasswordChangeRequired read_password_change_required(Reader&) {
+    return PasswordChangeRequired{};
+}
+
+PasswordChange read_password_change(Reader& reader) {
+    PasswordChange payload;
+    payload.username = reader.read_string();
+    payload.current_password = reader.read_string();
+    payload.new_password = reader.read_string();
+    return payload;
+}
+
 PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
     Reader header_reader(packet);
     const auto magic = header_reader.read_pod<std::uint32_t>();
@@ -935,6 +1025,14 @@ PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
             return read_media_video_pending(payload_reader);
         case PacketType::MediaVideoReady:
             return read_media_video_ready(payload_reader);
+        case PacketType::EmulatorControl:
+            return read_emulator_control(payload_reader);
+        case PacketType::ClientLogBundle:
+            return read_client_log_bundle(payload_reader);
+        case PacketType::PasswordChangeRequired:
+            return read_password_change_required(payload_reader);
+        case PacketType::PasswordChange:
+            return read_password_change(payload_reader);
     }
 
     throw std::runtime_error("unknown packet type");

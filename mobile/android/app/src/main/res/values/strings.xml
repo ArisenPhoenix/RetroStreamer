@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">ArchStreamer</string>
+    <string name="keep_alive_channel_name">Game session</string>
+    <string name="keep_alive_channel_desc">Keeps the stream connected while you switch apps</string>
+    <string name="keep_alive_title">ArchStreamer</string>
+    <string name="keep_alive_text">Streaming in background — tap to return</string>
 </resources>

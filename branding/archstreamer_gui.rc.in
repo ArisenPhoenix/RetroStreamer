@@ -1,0 +1,3 @@
+/* Application icon for archstreamer_gui.exe (shell, taskbar, shortcuts).
+ * Path is rewritten by CMake to the branding .ico under the source tree. */
+IDI_ICON1 ICON "@ARCHSTREAMER_WIN_ICO@"

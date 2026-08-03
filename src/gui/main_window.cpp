@@ -207,6 +207,15 @@ QWidget* MainWindow::build_client_tab() {
     form->addRow("Host", host_row);
     form->addRow("Control port", client_port_);
     form->addRow("Input port", client_input_port_);
+
+    client_password_ = new QLineEdit(form_box);
+    client_password_->setEchoMode(QLineEdit::Password);
+    client_password_->setPlaceholderText("session only — cleared when GUI exits");
+    client_password_->setToolTip(
+        "Password for joining sessions. Not saved to disk; re-enter each time you open the app.\n"
+        "Existing users often start with archstreamer until changed.");
+    form->addRow("Password", client_password_);
+
     form->addRow("Role", client_role_);
     form->addRow("Mode", client_mode_);
     form->addRow("Players", client_players_);
@@ -214,6 +223,7 @@ QWidget* MainWindow::build_client_tab() {
 
     client_game_picker_ = new archstreamer::gui::GamePickerWidget(page);
     client_game_picker_->setArtRoot(art_root_path());
+    client_game_picker_->setRecentSettingsKey(QStringLiteral("client/recent_game_ids"));
     connect(client_game_picker_, &archstreamer::gui::GamePickerWidget::selectionChanged, this, [this] {
         if (client_game_picker_->hasSelection()) {
             persisted_client_game_id_ =
@@ -717,6 +727,44 @@ QWidget* MainWindow::build_profile_tab() {
     form->addRow("Host name", profile_host_name_);
     form->addRow("Steam account ID", steam_row);
 
+    auto* change_box = new QGroupBox("Change password", page);
+    auto* change_form = new QFormLayout(change_box);
+    profile_change_current_password_ = new QLineEdit(change_box);
+    profile_change_current_password_->setEchoMode(QLineEdit::Password);
+    profile_change_current_password_->setPlaceholderText("required when Client password is empty");
+    profile_change_current_password_->setToolTip(
+        "Only needed if you have not entered your password on the Client tab yet.");
+    change_form->addRow("Current password", profile_change_current_password_);
+    profile_change_current_row_ = profile_change_current_password_;
+    const auto sync_change_current_visibility = [this, change_form] {
+        const bool show =
+            client_password_ == nullptr || client_password_->text().isEmpty();
+        if (profile_change_current_password_ != nullptr) {
+            profile_change_current_password_->setVisible(show);
+            if (QWidget* label = change_form->labelForField(profile_change_current_password_)) {
+                label->setVisible(show);
+            }
+        }
+    };
+    sync_change_current_visibility();
+    if (client_password_ != nullptr) {
+        connect(client_password_, &QLineEdit::textChanged, this, [sync_change_current_visibility](const QString&) {
+            sync_change_current_visibility();
+        });
+    }
+
+    profile_new_password_ = new QLineEdit(change_box);
+    profile_new_password_->setEchoMode(QLineEdit::Password);
+    profile_confirm_password_ = new QLineEdit(change_box);
+    profile_confirm_password_->setEchoMode(QLineEdit::Password);
+    change_form->addRow("New password", profile_new_password_);
+    change_form->addRow("Confirm new", profile_confirm_password_);
+    profile_change_password_ = new QPushButton("Change password on host", change_box);
+    change_form->addRow("", profile_change_password_);
+    connect(profile_change_password_, &QPushButton::clicked, this, [this] {
+        change_profile_password_on_host();
+    });
+
     connect(profile_username_, &QLineEdit::editingFinished, this, [this] {
         persist_settings_if_idle();
     });
@@ -738,10 +786,12 @@ QWidget* MainWindow::build_profile_tab() {
 
     auto* left = new QVBoxLayout();
     left->addWidget(form_box);
+    left->addWidget(change_box);
     left->addWidget(new QLabel(
         "Username is used when joining as a client.\n"
         "Host name is what others see in Select Host (LAN advertise).\n"
         "They default to the same value; set them apart if you host and play under different identities.\n"
+        "Enter your session password on the Client tab. Use this page to change it on the host.\n"
         "Steam account ID is used for art import (leave blank to auto-detect).",
         page));
     left->addStretch();
@@ -829,6 +879,30 @@ QWidget* MainWindow::build_settings_tab() {
     form->addRow("Log level", settings_log_level_);
     form->addRow("", settings_show_framecount_);
 
+#ifdef ARCHSTREAMER_HAS_HOST
+    settings_allow_new_users_ = new QCheckBox("Allow new users", form_box);
+    settings_allow_new_users_->setChecked(false);
+    settings_allow_new_users_->setToolTip(
+        "When checked, clients may create a new save profile with a first-time username.\n"
+        "When unchecked (default), only existing save-profile users can join.");
+    form->addRow("", settings_allow_new_users_);
+    connect(settings_allow_new_users_, &QCheckBox::toggled, this, [this](bool) {
+        persist_settings_if_idle();
+    });
+#endif
+
+    settings_log_sessions_ = new QSpinBox(form_box);
+    settings_log_sessions_->setRange(1, 20);
+    settings_log_sessions_->setValue(3);
+    settings_log_sessions_->setSuffix(" sessions");
+    settings_log_sessions_->setToolTip(
+        "How many recent app sessions from gui.log to include when sending logs to the host.");
+    settings_send_logs_ = new QPushButton("Send logs to host", form_box);
+    settings_send_logs_->setToolTip(
+        "Opens a short control connection and uploads recent gui.log sessions for host-side inspection.");
+    form->addRow("Send log depth", settings_log_sessions_);
+    form->addRow("", settings_send_logs_);
+
     connect(settings_art_root_, &QLineEdit::editingFinished, this, [this] {
         apply_art_root_to_pickers();
         persist_settings_if_idle();
@@ -856,6 +930,12 @@ QWidget* MainWindow::build_settings_tab() {
             heartbeat_prefs_->set_show_framecount(checked);
         }
         persist_settings_if_idle();
+    });
+    connect(settings_log_sessions_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
+        persist_settings_if_idle();
+    });
+    connect(settings_send_logs_, &QPushButton::clicked, this, [this] {
+        send_client_logs_to_host();
     });
     connect(settings_audio_out_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
         apply_audio_output_from_settings();

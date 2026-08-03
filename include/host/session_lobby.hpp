@@ -39,6 +39,7 @@ struct SessionClientConnection {
     MediaQualityTier applied_tier = MediaQualityTier::Medium;
     MediaStreamSize wanted_size = MediaStreamSize::Auto;
     MediaStreamSize applied_size = MediaStreamSize::P720;
+    DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto;
     /** Tier/size being warmed on a staging RTP path (cutover in flight). */
     std::optional<MediaQualityTier> pending_tier;
     std::optional<MediaStreamSize> pending_size;
@@ -51,6 +52,10 @@ struct SessionClientConnection {
     // After Auto steps down from High due to loss/no frames, hold off retrying High.
     std::chrono::steady_clock::time_point high_tier_cooldown_until = {};
     std::chrono::steady_clock::time_point last_video_reconfigure = {};
+    // Consecutive MediaVideoPending timeouts without MediaVideoReady (e.g. older
+    // clients). After a few, stop staging size changes until reconnect.
+    std::uint8_t video_cutover_failures = 0;
+    bool video_cutover_suppressed = false;
     // Last advertised RTP endpoints (resent after video ladder restart so the
     // client can one-shot resync A/V without the host bouncing shared audio).
     std::optional<MediaEndpoint> media_endpoint;
@@ -120,7 +125,9 @@ SessionPlan gather_session_clients(
     std::optional<ClientHello> host_hello = std::nullopt,
     std::function<bool()> should_stop = {},
     std::filesystem::path art_root = {},
-    std::optional<SessionClientConnection> first_client = std::nullopt);
+    std::optional<SessionClientConnection> first_client = std::nullopt,
+    std::filesystem::path save_root = {},
+    bool allow_new_users = false);
 
 /** Assign seats, send HostWelcome/SeatAssignment/SessionReady, set save_username. */
 void finalize_session_plan_ready(SessionPlan& plan);

@@ -186,6 +186,69 @@ enum class EmulatorControlState(val id: Int) {
     On(2),
 }
 
+/** Matches DiscControlAction in protocol.hpp. */
+enum class DiscControlAction(val id: Int) {
+    SetIndex(0),
+    Next(1),
+    Prev(2),
+}
+
+data class DiscControlRequest(
+    val gameId: String,
+    val action: DiscControlAction = DiscControlAction.SetIndex,
+    val discIndex: Int = 0,
+)
+
+data class DiscControlResponse(
+    val ok: Boolean,
+    val discIndex: Int,
+    val discCount: Int,
+    val message: String,
+)
+
+/** Matches LinkAction in protocol.hpp. */
+enum class LinkAction(val id: Int) {
+    Request(0),
+    Cancel(1),
+}
+
+/** Matches LinkStatus in protocol.hpp. */
+enum class LinkStatus(val id: Int) {
+    Pending(0),
+    Matched(1),
+    Cancelled(2),
+    Error(3),
+    ;
+
+    companion object {
+        fun fromId(id: Int): LinkStatus =
+            entries.firstOrNull { it.id == id } ?: Error
+    }
+}
+
+data class LinkRequest(
+    val gameId: String,
+    val targetUsername: String,
+    val action: LinkAction = LinkAction.Request,
+)
+
+data class LinkResponse(
+    val ok: Boolean,
+    val status: LinkStatus,
+    val peerUsername: String,
+    val message: String,
+)
+
+/**
+ * Systems that can participate in ArchStreamer link (cable / LDN / etc.).
+ * Mirrors include/common/link_capability.hpp (release build — no debug GB link).
+ */
+fun systemSupportsLink(systemKey: String): Boolean =
+    when (systemKey.lowercase()) {
+        "gba", "nds", "switch" -> true
+        else -> false
+    }
+
 /** RemotedKey bits — UDP KeyboardInput (keyboard_state.hpp). */
 object RemotedKey {
     const val SPACE = 1 shl 0
@@ -289,6 +352,8 @@ sealed class IncomingPacket {
     data class VideoPending(val videoUri: String) : IncomingPacket()
     data class Catalog(val value: GameList) : IncomingPacket()
     data class SoftKeyboard(val value: SoftKeyboardRequest) : IncomingPacket()
+    data class DiscControl(val value: DiscControlResponse) : IncomingPacket()
+    data class Link(val value: LinkResponse) : IncomingPacket()
     data class Art(val value: ArtAssetResponse) : IncomingPacket()
     data class Error(val value: ErrorPacket) : IncomingPacket()
     data object PasswordChangeRequired : IncomingPacket()

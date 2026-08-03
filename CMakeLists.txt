@@ -286,6 +286,10 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/switch/ryujinx_backend.cpp
         src/host/switch/yuzu_backend.cpp
         src/host/switch/switch_runtime.cpp
+        src/host/nds_display_layout.cpp
+        src/host/nds/melonds_user_profile.cpp
+        src/host/nds/melonds_ctrl_client.cpp
+        src/host/nds/melonds_backend.cpp
         src/host/switch_save_share.cpp
         src/host/link_coordinator.cpp
         src/host/link_cable_backend.cpp
@@ -315,6 +319,7 @@ if(ARCHSTREAMER_BUILD_HOST)
             src/host/switch/windows_switch_paths.cpp
             src/host/switch/windows_yuzu_runtime.cpp
             src/host/switch/windows_ryujinx_runtime.cpp
+            src/host/nds/windows_melonds_runtime.cpp
         )
     else()
         list(APPEND ARCHSTREAMER_HOST_SOURCES
@@ -333,6 +338,7 @@ if(ARCHSTREAMER_BUILD_HOST)
             src/host/switch/posix_switch_paths.cpp
             src/host/switch/posix_yuzu_runtime.cpp
             src/host/switch/posix_ryujinx_runtime.cpp
+            src/host/nds/posix_melonds_runtime.cpp
         )
     endif()
 

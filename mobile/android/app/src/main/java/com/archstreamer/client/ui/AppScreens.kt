@@ -41,6 +41,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
@@ -951,6 +952,101 @@ private fun GameOptionsSection(state: UiState, viewModel: ClientViewModel) {
 
         TextButton(onClick = viewModel::resetOverlayProfile) {
             Text("Reset ${state.editingOverlayFamily.title} to defaults")
+        }
+
+        if (state.playing && state.playlistDiscs.size >= 2) {
+            HorizontalDivider()
+            Text("Disc control", style = MaterialTheme.typography.titleMedium)
+            Text(
+                state.discStatus.ifBlank {
+                    "Disc ${state.discIndex + 1} / ${state.playlistDiscs.size}"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text("Select disc", style = MaterialTheme.typography.titleSmall)
+            state.playlistDiscs.withIndex().chunked(2).forEach { row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    row.forEach { (index, label) ->
+                        FilterChip(
+                            selected = state.discIndex == index,
+                            onClick = { viewModel.requestDiscSetIndex(index) },
+                            label = {
+                                Text(
+                                    label.ifBlank { "Disc ${index + 1}" },
+                                    maxLines = 1,
+                                )
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    if (row.size == 1) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(
+                    onClick = viewModel::requestDiscPrev,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Previous")
+                }
+                OutlinedButton(
+                    onClick = viewModel::requestDiscNext,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Next")
+                }
+            }
+        }
+
+        if (state.playing && state.linkCapable) {
+            HorizontalDivider()
+            Text("Link with player", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Both players type each other's username and tap Request. " +
+                    "The host matches when the requests are mutual.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+                value = state.linkPeerDraft,
+                onValueChange = viewModel::onLinkPeerChange,
+                label = { Text("Other player's username") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (state.linkStatus.isNotBlank()) {
+                Text(
+                    state.linkStatus,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(
+                    onClick = viewModel::requestLink,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Request link")
+                }
+                OutlinedButton(
+                    onClick = viewModel::cancelLink,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Cancel")
+                }
+            }
         }
 
         HorizontalDivider()

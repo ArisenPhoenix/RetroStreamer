@@ -1,6 +1,7 @@
 #include "host/game_catalog_scanner.hpp"
 
 #include "common/sha256.hpp"
+#include "host/nds/melonds_backend.hpp"
 #include "host/standalone_emulator.hpp"
 
 #include <nlohmann/json.hpp>
@@ -404,6 +405,7 @@ GameCatalog scan_game_catalog(
 
     std::size_t skipped_switch_missing_runtime = 0;
     const auto resolved_switch = resolve_switch_runtime();
+    const auto resolved_melonds = resolve_melonds_runtime();
 
     for (const auto& entry : std::filesystem::recursive_directory_iterator(content_root)) {
         if (!entry.is_regular_file()) {
@@ -440,6 +442,13 @@ GameCatalog scan_game_catalog(
                 resolved_switch->path};
             standalone = true;
             standalone_args = resolved_switch->args_before_content;
+        } else if (system_key.has_value() && *system_key == "nds" && resolved_melonds.has_value()) {
+            core = CoreChoice{
+                "Nintendo DS",
+                resolved_melonds->display_name,
+                resolved_melonds->path};
+            standalone = true;
+            standalone_args = resolved_melonds->args_before_content;
         } else if (system_key.has_value()) {
             core = core_registry.system_core(*system_key);
         } else {

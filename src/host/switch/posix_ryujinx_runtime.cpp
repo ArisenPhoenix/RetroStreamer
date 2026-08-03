@@ -31,9 +31,13 @@ std::optional<std::filesystem::path> PosixRyujinxRuntime::find_source_binary() {
 
     const auto home = switch_home_dir();
     const std::vector<std::filesystem::path> candidates{
+        "/srv/emus/Ryujinx.AppImage",
+        "/srv/emus/Ryujinx",
+        "/srv/emus/ryujinx",
+        // Legacy layout (pre-standalone consolidation).
+        "/srv/emus/Switch/Ryujinx.AppImage",
         "/srv/emus/Switch/Ryujinx",
         "/srv/emus/Switch/ryujinx",
-        "/srv/emus/Switch/Ryujinx.AppImage",
         home / "Applications/Ryujinx.AppImage",
         home / "Applications/Ryujinx",
         home / ".local/bin/Ryujinx",

@@ -20,6 +20,7 @@
 #include "host/session_run_helpers.hpp"
 #include "host/standalone_emulator.hpp"
 #include "host/switch/switch_backend.hpp"
+#include "host/nds/melonds_backend.hpp"
 #include "host/virtual_joypad_resolve.hpp"
 #include "host/virtual_keyboard.hpp"
 #include "host/soft_keyboard_host.hpp"
@@ -485,6 +486,7 @@ void ActiveSessionSlot::run_session() {
     auto& launch_plan = config_.launch_plan;
     auto& plan = config_.plan;
     std::unique_ptr<SwitchBackend> switch_backend;
+    std::unique_ptr<MelonDsBackend> melonds_backend;
 
     // Concurrent slots each get archstreamer-N so pulsesrc does not mix sessions.
     if (config.audio && config_.streaming_audio != nullptr &&
@@ -743,7 +745,7 @@ void ActiveSessionSlot::run_session() {
         virtual_joypad_index_ = resolved_indices.front();
     }
 
-    if (launch_config.standalone || system_key_ == "switch") {
+    if (system_key_ == "switch") {
         const auto runtime = resolve_switch_runtime();
         if (!runtime.has_value()) {
             const auto message = switch_runtime_unavailable_message();
@@ -754,19 +756,34 @@ void ActiveSessionSlot::run_session() {
         launch_config.core_path = runtime->path;
         launch_config.standalone_args_before_content = runtime->args_before_content;
         switch_backend = make_switch_backend(*runtime);
+    } else if (system_key_ == "nds" && melonds_runtime_available()) {
+        const auto runtime = resolve_melonds_runtime();
+        if (!runtime.has_value()) {
+            const auto message = melonds_unavailable_message();
+            send_error_to_session_clients(plan, message);
+            throw std::runtime_error(message);
+        }
+        launch_config.standalone = true;
+        launch_config.core_path = runtime->path;
+        launch_config.standalone_args_before_content = runtime->args_before_content;
+        melonds_backend = make_melonds_backend();
+    } else if (launch_config.standalone) {
+        // Legacy catalog flag without a known standalone system — refuse rather
+        // than accidentally treating NDS as Switch.
+        const auto message =
+            "standalone launch requested for unsupported system_key=" + system_key_;
+        send_error_to_session_clients(plan, message);
+        throw std::runtime_error(message);
     }
 
-    if (launch_config.standalone && keyboard_ != nullptr) {
+    if (switch_backend && keyboard_ != nullptr) {
         keyboard_->set_switch_style_hotkeys(true);
     }
 
     std::string soft_keyboard_fallback;
     bool arm_soft_keyboard = false;
 
-    if (launch_config.standalone) {
-        if (!switch_backend) {
-            throw std::runtime_error("Switch standalone launch missing backend");
-        }
+    if (switch_backend) {
         std::vector<ClientHello> client_hellos;
         client_hellos.reserve(plan.clients.size());
         for (const auto& client : plan.clients) {
@@ -800,14 +817,42 @@ void ActiveSessionSlot::run_session() {
             resolved_gpu,
             slot);
         if (switch_backend->enable_soft_keyboard()) {
-            // Bridge must exist before SessionControlMonitor starts; arm the X11
-            // watcher only after gamescope has a pid so we don't scan sibling slots.
             if (!plan.soft_keyboard) {
                 plan.soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();
             }
             soft_keyboard_fallback = profile_name;
             arm_soft_keyboard = true;
         }
+    } else if (melonds_backend) {
+        std::vector<ClientHello> client_hellos;
+        client_hellos.reserve(plan.clients.size());
+        for (const auto& client : plan.clients) {
+            client_hellos.push_back(client.hello);
+        }
+        const auto profile_name = resolve_switch_profile_display_name(
+            save_profile_.username, plan.host_hello, client_hellos);
+        const auto nds_layout =
+            resolve_display_layout_preference(plan.host_hello, client_hellos);
+        auto melonds_prep = melonds_backend->prepare(
+            launch_config,
+            MelonDsBackendPrepContext{
+                save_profile_,
+                launch_plan.players,
+                config.verbose,
+                product_id_base,
+                config.ignore_controller.value_or(""),
+                virtualgl_capture,
+                gamescope_capture_,
+                slot,
+                profile_name,
+                nds_layout,
+                std::move(resolved_pads),
+            });
+        resolved_pads = std::move(melonds_prep.resolved_pads);
+        melonds_backend->assign_launch_env_profile(launch_env_request, melonds_prep);
+        log_melonds_backend_prep(*melonds_backend, launch_env_request, melonds_prep, slot);
+    } else if (launch_config.standalone) {
+        throw std::runtime_error("standalone launch missing backend for system=" + system_key_);
     } else {
         RetroArchOverrideParams override_params;
         override_params.first_virtual_joypad_index = virtual_joypad_index_;
@@ -1020,7 +1065,12 @@ void ActiveSessionSlot::run_session() {
 
     // Pull Ryujinx/Yuzu Switch saves into the shared canonical tree after exit.
     // (Launch already synced; in-session Ryujinx writes stay in bis until now.)
-    sync_and_log_post_exit_switch_saves(save_profile_, slot, switch_backend.get());
+    if (switch_backend) {
+        sync_and_log_post_exit_switch_saves(save_profile_, slot, switch_backend.get());
+    }
+    if (melonds_backend) {
+        (void)melonds_backend->post_exit_sync(save_profile_);
+    }
 
     const std::string end_reason = should_stop()
         ? "host stopped"

@@ -37,6 +37,7 @@ private:
     std::map<ClientId, std::uint64_t> last_keyboard_timestamp_by_client_;
     std::optional<ClientId> last_keyboard_client_;
     bool first_input_logged_ = false;
+    bool first_nonzero_input_logged_ = false;
     bool first_keyboard_logged_ = false;
     bool first_nonzero_keyboard_logged_ = false;
     mutable std::mutex mutex_;

@@ -22,13 +22,17 @@ import com.archstreamer.client.protocol.IncomingPacket
 import com.archstreamer.client.protocol.PacketCodec
 import com.archstreamer.client.protocol.ControllerState
 import com.archstreamer.client.protocol.DisplayLayoutPreference
+import com.archstreamer.client.protocol.DiscControlAction
 import com.archstreamer.client.protocol.EmulatorControlState
 import com.archstreamer.client.protocol.GameInfo
+import com.archstreamer.client.protocol.LinkAction
+import com.archstreamer.client.protocol.LinkStatus
 import com.archstreamer.client.protocol.MediaQualityTier
 import com.archstreamer.client.protocol.MediaStreamSize
 import com.archstreamer.client.protocol.Protocol
 import com.archstreamer.client.protocol.SoftKeyboardRequest
 import com.archstreamer.client.protocol.SoftKeyboardResponse
+import com.archstreamer.client.protocol.systemSupportsLink
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -125,6 +129,16 @@ data class UiState(
     val fastForward: Boolean = false,
     /** Explicit host pause (EmulatorControl); play-menu switch + auto menu-open pause. */
     val paused: Boolean = false,
+    /** Multi-disc playlist labels from the active game (empty when single-file). */
+    val playlistDiscs: List<String> = emptyList(),
+    /** Host-confirmed disc index (0-based). */
+    val discIndex: Int = 0,
+    val discStatus: String = "",
+    /** True when the active game's system supports link (GBA / NDS / Switch). */
+    val linkCapable: Boolean = false,
+    val linkPeerDraft: String = "",
+    val linkStatus: String = "",
+    val linkStatusKind: LinkStatus? = null,
     /**
      * User preference: physical USB/BT pad instead of the touch overlay.
      * Default is virtual unless a controller was already present on first launch.
@@ -1537,6 +1551,17 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                         editingOverlayProfile = profile,
                         editingMapProfile = mapProfile,
                         reconnectHintGameId = null,
+                        playlistDiscs = game.playlistDiscs,
+                        discIndex = 0,
+                        discStatus = if (game.playlistDiscs.size >= 2) {
+                            "Disc 1 / ${game.playlistDiscs.size}"
+                        } else {
+                            ""
+                        },
+                        linkCapable = systemSupportsLink(game.systemKey),
+                        linkPeerDraft = "",
+                        linkStatus = "",
+                        linkStatusKind = null,
                         status = "Playing ${game.displayName}",
                         mediaHint = run {
                             val video = joined.videoPlayer
@@ -1604,10 +1629,100 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 reconnectHintGameId = null,
                 fastForward = false,
                 paused = false,
+                playlistDiscs = emptyList(),
+                discIndex = 0,
+                discStatus = "",
+                linkCapable = false,
+                linkPeerDraft = "",
+                linkStatus = "",
+                linkStatusKind = null,
                 status = "Left session.",
             )
         }
         refreshPhysicalPads()
+    }
+
+    fun onLinkPeerChange(value: String) {
+        _state.update { it.copy(linkPeerDraft = value) }
+    }
+
+    fun requestDiscSetIndex(index: Int) {
+        val game = _state.value.selectedGame ?: return
+        val discs = _state.value.playlistDiscs
+        if (!_state.value.playing || discs.size < 2) return
+        val clamped = index.coerceIn(0, discs.lastIndex)
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                session?.sendDiscControl(game.id, DiscControlAction.SetIndex, clamped)
+            }.onFailure { err ->
+                _state.update {
+                    it.copy(discStatus = "Disc failed: ${err.message ?: err}")
+                }
+            }
+        }
+    }
+
+    fun requestDiscNext() {
+        val game = _state.value.selectedGame ?: return
+        if (!_state.value.playing || _state.value.playlistDiscs.size < 2) return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                session?.sendDiscControl(game.id, DiscControlAction.Next)
+            }.onFailure { err ->
+                _state.update {
+                    it.copy(discStatus = "Disc failed: ${err.message ?: err}")
+                }
+            }
+        }
+    }
+
+    fun requestDiscPrev() {
+        val game = _state.value.selectedGame ?: return
+        if (!_state.value.playing || _state.value.playlistDiscs.size < 2) return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                session?.sendDiscControl(game.id, DiscControlAction.Prev)
+            }.onFailure { err ->
+                _state.update {
+                    it.copy(discStatus = "Disc failed: ${err.message ?: err}")
+                }
+            }
+        }
+    }
+
+    fun requestLink() {
+        val snap = _state.value
+        val game = snap.selectedGame ?: return
+        if (!snap.playing || !snap.linkCapable) return
+        val peer = snap.linkPeerDraft.trim()
+        if (peer.isEmpty()) {
+            _state.update { it.copy(linkStatus = "Enter the other player's username.") }
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                session?.sendLinkRequest(game.id, peer, LinkAction.Request)
+            }.onFailure { err ->
+                _state.update {
+                    it.copy(linkStatus = "Link failed: ${err.message ?: err}")
+                }
+            }
+        }
+    }
+
+    fun cancelLink() {
+        val snap = _state.value
+        val game = snap.selectedGame ?: return
+        if (!snap.playing || !snap.linkCapable) return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                session?.sendLinkRequest(game.id, "", LinkAction.Cancel)
+            }.onFailure { err ->
+                _state.update {
+                    it.copy(linkStatus = "Link cancel failed: ${err.message ?: err}")
+                }
+            }
+        }
     }
 
     /** Manual escape hatch (request_id=0) — same as desktop Game Options pad OSK. */
@@ -1769,6 +1884,41 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 when (packet) {
                     is IncomingPacket.SoftKeyboard -> showSoftKeyboard(packet.value)
+                    is IncomingPacket.DiscControl -> {
+                        val response = packet.value
+                        _state.update {
+                            it.copy(
+                                discIndex = response.discIndex.coerceAtLeast(0),
+                                discStatus = if (response.ok) {
+                                    response.message.ifBlank {
+                                        "Disc ${response.discIndex + 1} / ${response.discCount}"
+                                    }
+                                } else {
+                                    "Disc failed: ${response.message}"
+                                },
+                            )
+                        }
+                    }
+                    is IncomingPacket.Link -> {
+                        val response = packet.value
+                        val prefix = when {
+                            !response.ok -> "Link failed"
+                            response.status == LinkStatus.Matched -> "Link matched"
+                            response.status == LinkStatus.Pending -> "Link pending"
+                            response.status == LinkStatus.Cancelled -> "Link cancelled"
+                            else -> "Link"
+                        }
+                        _state.update {
+                            it.copy(
+                                linkStatusKind = response.status,
+                                linkStatus = if (response.message.isNotBlank()) {
+                                    "$prefix: ${response.message}"
+                                } else {
+                                    prefix
+                                },
+                            )
+                        }
+                    }
                     is IncomingPacket.VideoPending -> {
                         val ok = session?.beginVideoPending(packet.videoUri) == true
                         if (!ok) {
@@ -1834,6 +1984,13 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 mediaHint = "",
                 videoPlayer = null,
                 softKeyboard = null,
+                playlistDiscs = emptyList(),
+                discIndex = 0,
+                discStatus = "",
+                linkCapable = false,
+                linkPeerDraft = "",
+                linkStatus = "",
+                linkStatusKind = null,
                 reconnectHintGameId = if (reconnectHint) gameId else null,
                 status = message,
             )

@@ -2,6 +2,7 @@
 
 #include "host/gpu_select.hpp"
 #include "host/standalone_emulator.hpp"
+#include "host/nds/melonds_user_profile.hpp"
 
 #include <optional>
 #include <string>
@@ -19,6 +20,8 @@ struct ProcessEnvironment {
 
     void set(std::string key, std::string value);
     void add_unset(std::string key);
+    /** Remove from entries and unset on spawn (avoids setenv putting a stale value back). */
+    void clear_var(const std::string& key);
     void merge(const ProcessEnvironment& other);
     void merge_pairs(const std::vector<std::pair<std::string, std::string>>& pairs);
 };
@@ -40,6 +43,7 @@ struct EmulatorLaunchEnvRequest {
     std::optional<GpuDevice> render_gpu;
     std::optional<YuzuUserProfile> yuzu_profile; // set for standalone Yuzu
     std::optional<RyujinxUserProfile> ryujinx_profile; // set for standalone Ryujinx
+    std::optional<MelonDsUserProfile> melonds_profile; // set for standalone melonDS
 };
 
 // Layer builders (also usable for tests / diagnostics).

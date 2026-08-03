@@ -69,6 +69,18 @@ void NetworkInputReceiver::poll() {
                         << ", buttons=0x" << std::hex << input->state.buttons << std::dec
                         << ")\n";
                 }
+                if (!logged_first_nonzero_receive_ &&
+                    (input->state.buttons != 0 || input->state.left_trigger != 0 ||
+                     input->state.right_trigger != 0 || input->state.left_x != 0 ||
+                     input->state.left_y != 0 || input->state.right_x != 0 ||
+                     input->state.right_y != 0)) {
+                    logged_first_nonzero_receive_ = true;
+                    std::cout
+                        << "First non-zero controller UDP from client "
+                        << static_cast<int>(input->client_id)
+                        << " buttons=0x" << std::hex << input->state.buttons << std::dec
+                        << '\n';
+                }
                 bool applied = false;
                 if (auto* router = std::get_if<InputRouter*>(&target_); router != nullptr) {
                     applied = (*router)->route(*input);

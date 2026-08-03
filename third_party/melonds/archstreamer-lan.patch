@@ -1,0 +1,421 @@
+diff --git a/src/frontend/qt_sdl/ArchStreamerCtrl.cpp b/src/frontend/qt_sdl/ArchStreamerCtrl.cpp
+new file mode 100644
+index 00000000..e3233714
+--- /dev/null
++++ b/src/frontend/qt_sdl/ArchStreamerCtrl.cpp
+@@ -0,0 +1,229 @@
++/*
++    ArchStreamer control socket for mid-session LAN host/connect.
++
++    Line-oriented commands (UTF-8, newline-terminated):
++      LAN_HOST <player> [numplayers]
++      LAN_CONNECT <player> <host>
++      LAN_END
++      PING
++    Replies: OK / ERR <message> / PONG
++*/
++
++#include "ArchStreamerCtrl.h"
++
++#include <QStringList>
++
++#include "Config.h"
++#include "LAN.h"
++#include "main.h"
++
++using namespace melonDS;
++
++namespace {
++
++LAN& lanInterface()
++{
++    return static_cast<LAN&>(MPInterface::Get());
++}
++
++} // namespace
++
++ArchStreamerCtrl::ArchStreamerCtrl(QObject* parent) : QObject(parent) {}
++
++ArchStreamerCtrl::~ArchStreamerCtrl()
++{
++    if (server_)
++    {
++        server_->close();
++        QLocalServer::removeServer(server_->serverName());
++    }
++}
++
++bool ArchStreamerCtrl::start(const QString& serverName)
++{
++    if (serverName.isEmpty())
++        return false;
++
++    if (server_)
++    {
++        server_->close();
++        delete server_;
++        server_ = nullptr;
++    }
++
++    QLocalServer::removeServer(serverName);
++    server_ = new QLocalServer(this);
++    server_->setSocketOptions(QLocalServer::UserAccessOption);
++    if (!server_->listen(serverName))
++    {
++        printf("ArchStreamerCtrl: failed to listen on '%s': %s\n",
++               serverName.toUtf8().constData(),
++               server_->errorString().toUtf8().constData());
++        return false;
++    }
++
++    connect(server_, &QLocalServer::newConnection, this, &ArchStreamerCtrl::onNewConnection);
++    printf("ArchStreamerCtrl: listening on '%s'\n", serverName.toUtf8().constData());
++    return true;
++}
++
++bool ArchStreamerCtrl::applyLanHost(const QString& playerName, int numPlayers)
++{
++    QString player = playerName.trimmed();
++    if (player.isEmpty())
++        player = QString::fromStdString(Config::GetGlobalTable().GetString("LAN.PlayerName"));
++    if (player.isEmpty())
++        player = QStringLiteral("Player");
++
++    if (numPlayers < 2)
++        numPlayers = 2;
++    if (numPlayers > 16)
++        numPlayers = 16;
++
++    if (MPInterface::GetType() == MPInterface_LAN)
++        applyLanEnd();
++
++    setMPInterface(MPInterface_LAN);
++    if (!lanInterface().StartHost(player.toUtf8().constData(), numPlayers))
++    {
++        printf("ArchStreamerCtrl: StartHost failed\n");
++        setMPInterface(MPInterface_Local);
++        return false;
++    }
++
++    auto cfg = Config::GetGlobalTable();
++    cfg.SetString("LAN.PlayerName", player.toStdString());
++    cfg.SetInt("LAN.HostNumPlayers", numPlayers);
++    Config::Save();
++    printf("ArchStreamerCtrl: LAN host '%s' (%d players)\n",
++           player.toUtf8().constData(), numPlayers);
++    return true;
++}
++
++bool ArchStreamerCtrl::applyLanConnect(const QString& playerName, const QString& host)
++{
++    QString player = playerName.trimmed();
++    if (player.isEmpty())
++        player = QString::fromStdString(Config::GetGlobalTable().GetString("LAN.PlayerName"));
++    if (player.isEmpty())
++        player = QStringLiteral("Player");
++
++    QString hostAddr = host.trimmed();
++    if (hostAddr.isEmpty())
++        hostAddr = QStringLiteral("127.0.0.1");
++
++    if (MPInterface::GetType() == MPInterface_LAN)
++        applyLanEnd();
++
++    setMPInterface(MPInterface_LAN);
++    if (!lanInterface().StartClient(player.toUtf8().constData(), hostAddr.toUtf8().constData()))
++    {
++        printf("ArchStreamerCtrl: StartClient failed (host=%s)\n", hostAddr.toUtf8().constData());
++        setMPInterface(MPInterface_Local);
++        return false;
++    }
++
++    auto cfg = Config::GetGlobalTable();
++    cfg.SetString("LAN.PlayerName", player.toStdString());
++    Config::Save();
++    printf("ArchStreamerCtrl: LAN connect '%s' -> %s\n",
++           player.toUtf8().constData(), hostAddr.toUtf8().constData());
++    return true;
++}
++
++void ArchStreamerCtrl::applyLanEnd()
++{
++    if (MPInterface::GetType() == MPInterface_LAN)
++        lanInterface().EndSession();
++    setMPInterface(MPInterface_Local);
++    printf("ArchStreamerCtrl: LAN session ended\n");
++}
++
++void ArchStreamerCtrl::onNewConnection()
++{
++    while (server_ && server_->hasPendingConnections())
++    {
++        QLocalSocket* sock = server_->nextPendingConnection();
++        if (!sock)
++            continue;
++        connect(sock, &QLocalSocket::readyRead, this, &ArchStreamerCtrl::onReadyRead);
++        connect(sock, &QLocalSocket::disconnected, sock, &QObject::deleteLater);
++    }
++}
++
++void ArchStreamerCtrl::onReadyRead()
++{
++    auto* sock = qobject_cast<QLocalSocket*>(sender());
++    if (!sock)
++        return;
++
++    pending_.append(sock->readAll());
++    int idx;
++    while ((idx = pending_.indexOf('\n')) >= 0)
++    {
++        QByteArray line = pending_.left(idx).trimmed();
++        pending_.remove(0, idx + 1);
++        if (!line.isEmpty())
++            handleLine(sock, line);
++    }
++}
++
++void ArchStreamerCtrl::writeReply(QLocalSocket* sock, const QByteArray& reply)
++{
++    if (!sock)
++        return;
++    sock->write(reply);
++    sock->write("\n");
++    sock->flush();
++}
++
++void ArchStreamerCtrl::handleLine(QLocalSocket* sock, const QByteArray& line)
++{
++    const QString text = QString::fromUtf8(line).trimmed();
++    const QStringList parts = text.split(QChar(' '), Qt::SkipEmptyParts);
++    if (parts.isEmpty())
++        return;
++
++    const QString cmd = parts[0].toUpper();
++    if (cmd == QStringLiteral("PING"))
++    {
++        writeReply(sock, "PONG");
++        return;
++    }
++
++    if (cmd == QStringLiteral("LAN_END"))
++    {
++        applyLanEnd();
++        writeReply(sock, "OK");
++        return;
++    }
++
++    if (cmd == QStringLiteral("LAN_HOST"))
++    {
++        QString player = parts.size() >= 2 ? parts[1] : QString();
++        int num = 2;
++        if (parts.size() >= 3)
++            num = parts[2].toInt();
++        if (applyLanHost(player, num))
++            writeReply(sock, "OK");
++        else
++            writeReply(sock, "ERR StartHost failed");
++        return;
++    }
++
++    if (cmd == QStringLiteral("LAN_CONNECT"))
++    {
++        if (parts.size() < 3)
++        {
++            writeReply(sock, "ERR usage: LAN_CONNECT <player> <host>");
++            return;
++        }
++        if (applyLanConnect(parts[1], parts[2]))
++            writeReply(sock, "OK");
++        else
++            writeReply(sock, "ERR StartClient failed");
++        return;
++    }
++
++    writeReply(sock, "ERR unknown command");
++}
+diff --git a/src/frontend/qt_sdl/ArchStreamerCtrl.h b/src/frontend/qt_sdl/ArchStreamerCtrl.h
+new file mode 100644
+index 00000000..a4ba6089
+--- /dev/null
++++ b/src/frontend/qt_sdl/ArchStreamerCtrl.h
+@@ -0,0 +1,42 @@
++/*
++    ArchStreamer control socket for mid-session LAN host/connect.
++    Enabled when --archstreamer-ctrl <name> is passed (QLocalServer name).
++*/
++
++#ifndef ARCHSTREAMER_CTRL_H
++#define ARCHSTREAMER_CTRL_H
++
++#include <QObject>
++#include <QByteArray>
++#include <QLocalServer>
++#include <QLocalSocket>
++#include <QString>
++
++class ArchStreamerCtrl : public QObject
++{
++    Q_OBJECT
++
++public:
++    explicit ArchStreamerCtrl(QObject* parent = nullptr);
++    ~ArchStreamerCtrl() override;
++
++    /** Bind a QLocalServer under @p serverName (abstract/local name, not a path). */
++    bool start(const QString& serverName);
++
++    static bool applyLanHost(const QString& playerName, int numPlayers);
++    static bool applyLanConnect(const QString& playerName, const QString& host);
++    static void applyLanEnd();
++
++private slots:
++    void onNewConnection();
++    void onReadyRead();
++
++private:
++    void handleLine(QLocalSocket* sock, const QByteArray& line);
++    void writeReply(QLocalSocket* sock, const QByteArray& reply);
++
++    QLocalServer* server_ = nullptr;
++    QByteArray pending_;
++};
++
++#endif // ARCHSTREAMER_CTRL_H
+diff --git a/src/frontend/qt_sdl/CLI.cpp b/src/frontend/qt_sdl/CLI.cpp
+index 5e352cae..6bc13ef7 100644
+--- a/src/frontend/qt_sdl/CLI.cpp
++++ b/src/frontend/qt_sdl/CLI.cpp
+@@ -44,6 +44,23 @@ CommandLineOptions* ManageArgs(QApplication& melon)
+     parser.addOption(QCommandLineOption({"b", "boot"}, "Whether to boot firmware on startup. Defaults to \"auto\" (boot if NDS rom given)", "auto/always/never", "auto"));
+     parser.addOption(QCommandLineOption({"f", "fullscreen"}, "Start melonDS in fullscreen mode"));
+ 
++    // ArchStreamer extensions: headless LAN + mid-session control socket.
++    parser.addOption(QCommandLineOption(QStringLiteral("lan-host"),
++        QStringLiteral("Start a melonDS LAN session as host after boot (ArchStreamer)")));
++    parser.addOption(QCommandLineOption(QStringLiteral("lan-connect"),
++        QStringLiteral("Join a melonDS LAN session at host address after boot (ArchStreamer)"),
++        QStringLiteral("host")));
++    parser.addOption(QCommandLineOption(QStringLiteral("lan-player"),
++        QStringLiteral("Player name used with --lan-host / --lan-connect"),
++        QStringLiteral("name")));
++    parser.addOption(QCommandLineOption(QStringLiteral("lan-players"),
++        QStringLiteral("Max players for --lan-host (2-16, default 2)"),
++        QStringLiteral("count"),
++        QStringLiteral("2")));
++    parser.addOption(QCommandLineOption(QStringLiteral("archstreamer-ctrl"),
++        QStringLiteral("QLocalServer name for ArchStreamer mid-session LAN commands"),
++        QStringLiteral("name")));
++
+ #ifdef ARCHIVE_SUPPORT_ENABLED
+     parser.addOption(QCommandLineOption({"a", "archive-file"}, "Specify file to load inside an archive given (NDS)", "rom"));
+     parser.addOption(QCommandLineOption({"A", "archive-file-gba"}, "Specify file to load inside an archive given (GBA)", "rom"));
+@@ -54,6 +71,15 @@ CommandLineOptions* ManageArgs(QApplication& melon)
+     CommandLineOptions* options = new CommandLineOptions;
+ 
+     options->fullscreen = parser.isSet("fullscreen");
++    options->lanHost = parser.isSet("lan-host");
++    if (parser.isSet("lan-connect"))
++        options->lanConnectHost = parser.value("lan-connect");
++    if (parser.isSet("lan-player"))
++        options->lanPlayerName = parser.value("lan-player");
++    if (parser.isSet("lan-players"))
++        options->lanHostNumPlayers = parser.value("lan-players").toInt();
++    if (parser.isSet("archstreamer-ctrl"))
++        options->archstreamerCtrl = parser.value("archstreamer-ctrl");
+ 
+     QStringList posargs = parser.positionalArguments();
+     switch (posargs.size())
+@@ -87,6 +113,12 @@ CommandLineOptions* ManageArgs(QApplication& melon)
+         exit(1);
+     }
+ 
++    if (options->lanHost && !options->lanConnectHost.isEmpty())
++    {
++        Log(LogLevel::Error, "ERROR: --lan-host and --lan-connect are mutually exclusive\n");
++        exit(1);
++    }
++
+ #ifdef ARCHIVE_SUPPORT_ENABLED
+     if (parser.isSet("archive-file"))
+     {
+diff --git a/src/frontend/qt_sdl/CLI.h b/src/frontend/qt_sdl/CLI.h
+index beb120bf..8f375441 100644
+--- a/src/frontend/qt_sdl/CLI.h
++++ b/src/frontend/qt_sdl/CLI.h
+@@ -20,6 +20,7 @@
+ #define CLI_H
+ 
+ #include <QApplication>
++#include <QString>
+ #include <QStringList>
+ 
+ #include <optional>
+@@ -34,6 +35,15 @@ struct CommandLineOptions
+     std::optional<QString> gbaRomArchivePath;
+     bool fullscreen;
+     bool boot;
++
++    /** ArchStreamer: start LAN host after boot (no UI dialog). */
++    bool lanHost = false;
++    /** ArchStreamer: connect to this LAN host after boot (empty = disabled). */
++    QString lanConnectHost;
++    QString lanPlayerName;
++    int lanHostNumPlayers = 2;
++    /** ArchStreamer: QLocalServer name for mid-session LAN commands. */
++    QString archstreamerCtrl;
+ };
+ 
+ extern CommandLineOptions* ManageArgs(QApplication& melon);
+diff --git a/src/frontend/qt_sdl/CMakeLists.txt b/src/frontend/qt_sdl/CMakeLists.txt
+index b0b6e5ab..5934fea5 100644
+--- a/src/frontend/qt_sdl/CMakeLists.txt
++++ b/src/frontend/qt_sdl/CMakeLists.txt
+@@ -55,6 +55,9 @@ set(SOURCES_QT_SDL
+     CLI.h
+     CLI.cpp
+ 
++    ArchStreamerCtrl.h
++    ArchStreamerCtrl.cpp
++
+     LANDialog.cpp
+     NetplayDialog.cpp
+ )
+diff --git a/src/frontend/qt_sdl/main.cpp b/src/frontend/qt_sdl/main.cpp
+index d940340a..313012da 100644
+--- a/src/frontend/qt_sdl/main.cpp
++++ b/src/frontend/qt_sdl/main.cpp
+@@ -64,6 +64,7 @@
+ #include "Net.h"
+ 
+ #include "CLI.h"
++#include "ArchStreamerCtrl.h"
+ 
+ #include "Net_PCap.h"
+ #include "Net_Slirp.h"
+@@ -379,6 +380,26 @@ int main(int argc, char** argv)
+             win->toggleFullscreen();
+     }
+ 
++    // ArchStreamer: optional startup LAN + mid-session control socket.
++    ArchStreamerCtrl* archstreamerCtrl = nullptr;
++    if (!options->archstreamerCtrl.isEmpty())
++    {
++        archstreamerCtrl = new ArchStreamerCtrl(&melon);
++        if (!archstreamerCtrl->start(options->archstreamerCtrl))
++        {
++            delete archstreamerCtrl;
++            archstreamerCtrl = nullptr;
++        }
++    }
++    if (options->lanHost)
++    {
++        ArchStreamerCtrl::applyLanHost(options->lanPlayerName, options->lanHostNumPlayers);
++    }
++    else if (!options->lanConnectHost.isEmpty())
++    {
++        ArchStreamerCtrl::applyLanConnect(options->lanPlayerName, options->lanConnectHost);
++    }
++
+     int ret = melon.exec();
+ 
+     delete options;

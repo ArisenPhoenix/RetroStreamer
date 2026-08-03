@@ -32,6 +32,7 @@
 #include "host/session_lobby.hpp"
 #include "host/session_runtime.hpp"
 #include "host/switch/switch_backend.hpp"
+#include "host/nds/melonds_backend.hpp"
 #include "host/virtual_joypad_resolve.hpp"
 
 #include <algorithm>
@@ -134,6 +135,7 @@ int HostApp::run_direct_session(
     std::string soft_keyboard_fallback;
     bool arm_soft_keyboard = false;
     std::unique_ptr<SwitchBackend> switch_backend;
+    std::unique_ptr<MelonDsBackend> melonds_backend;
     std::optional<std::string> session_end_reason;
 
     // Direct (non-lobby) launch path — single local session, no control port.
@@ -453,8 +455,7 @@ int HostApp::run_direct_session(
             << " yet; defaulting RetroArch joypad index to 0.\n";
     }
 
-    if (launch_config.standalone || system_key == "switch") {
-        // Re-verify at launch so a stale catalog / missing install cannot start.
+    if (system_key == "switch") {
         const auto runtime = resolve_switch_runtime();
         if (!runtime.has_value()) {
             throw std::runtime_error(switch_runtime_unavailable_message());
@@ -463,13 +464,22 @@ int HostApp::run_direct_session(
         launch_config.core_path = runtime->path;
         launch_config.standalone_args_before_content = runtime->args_before_content;
         switch_backend = make_switch_backend(*runtime);
+    } else if (system_key == "nds" && melonds_runtime_available()) {
+        const auto runtime = resolve_melonds_runtime();
+        if (!runtime.has_value()) {
+            throw std::runtime_error(melonds_unavailable_message());
+        }
+        launch_config.standalone = true;
+        launch_config.core_path = runtime->path;
+        launch_config.standalone_args_before_content = runtime->args_before_content;
+        melonds_backend = make_melonds_backend();
+    } else if (launch_config.standalone) {
+        throw std::runtime_error(
+            "standalone launch requested for unsupported system_key=" + system_key);
     }
 
-    if (launch_config.standalone) {
+    if (switch_backend) {
         keyboard.set_switch_style_hotkeys(true);
-        if (!switch_backend) {
-            throw std::runtime_error("Switch standalone launch missing backend");
-        }
         const auto profile_name =
             preferred_steam_or_username_display_name(save_profile.username);
         auto switch_prep = switch_backend->prepare(
@@ -503,7 +513,27 @@ int HostApp::run_direct_session(
             soft_keyboard_fallback = profile_name;
             arm_soft_keyboard = true;
         }
-
+    } else if (melonds_backend) {
+        const auto profile_name =
+            preferred_steam_or_username_display_name(save_profile.username);
+        auto melonds_prep = melonds_backend->prepare(
+            launch_config,
+            MelonDsBackendPrepContext{
+                save_profile,
+                launch_plan.players,
+                config.verbose,
+                /*product_id_base=*/0,
+                config.ignore_controller.value_or(""),
+                virtualgl_capture,
+                gamescope_capture,
+                /*slot_index=*/0,
+                profile_name,
+                DisplayLayoutPreference::Auto,
+                std::move(resolved_pads),
+            });
+        resolved_pads = std::move(melonds_prep.resolved_pads);
+        melonds_backend->assign_launch_env_profile(launch_env_request, melonds_prep);
+        log_melonds_backend_prep(*melonds_backend, launch_env_request, melonds_prep);
     } else {
         RetroArchOverrideParams override_params;
         override_params.first_virtual_joypad_index = virtual_joypad_index;
@@ -731,7 +761,12 @@ int HostApp::run_direct_session(
             }
         }
     }
-    sync_and_log_post_exit_switch_saves(save_profile, std::nullopt, switch_backend.get());
+    if (switch_backend) {
+        sync_and_log_post_exit_switch_saves(save_profile, std::nullopt, switch_backend.get());
+    }
+    if (melonds_backend) {
+        (void)melonds_backend->post_exit_sync(save_profile);
+    }
     stop_session_media(media_server);
     if (config.audio) {
         streaming_audio.restore_default_sink();

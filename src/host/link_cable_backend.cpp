@@ -3,6 +3,7 @@
 #include "common/link_capability.hpp"
 #include "common/platform/paths.hpp"
 #include "host/libretro_core_registry.hpp"
+#include "host/nds/melonds_backend.hpp"
 #include "host/standalone_emulator.hpp"
 
 #include <fstream>
@@ -200,7 +201,22 @@ std::optional<std::filesystem::path> LinkCableBackend::resolve_link_core(std::st
     if (system_key == "gba") {
         return find_gpsp_core();
     }
-    (void)system_key;
+    if (system_key == "nds") {
+        for (const auto& dir : LibretroCoreRegistry::default_core_dirs()) {
+            for (const char* name : {
+                     "melondsds_libretro.so",
+                     "melonds_libretro.so",
+                     "melondsds_libretro.dll",
+                     "melonds_libretro.dll",
+                 }) {
+                const auto path = dir / name;
+                if (std::filesystem::is_regular_file(path)) {
+                    return path;
+                }
+            }
+        }
+        return std::nullopt;
+    }
     return std::nullopt;
 }
 
@@ -305,12 +321,45 @@ LinkCableBackend::StartResult LinkCableBackend::begin(
     }
 
     if (system_key == "nds") {
+        if (melonds_runtime_available() && peers_already_running) {
+            mode_ = LinkCableMode::NdsMelonLan;
+            result.ok = true;
+            result.mode = mode_;
+            result.needs_nds_lan = true;
+            result.message =
+                "Matched " + user_a_ + " ↔ " + user_b_ +
+                ". melonDS LAN armed — open Local Wireless in-game. "
+                "(standalone melonDS; no relaunch)";
+            return result;
+        }
+
+        const auto core = resolve_link_core("nds");
+        if (!core.has_value()) {
+            result.message =
+                "NDS Link needs standalone melonDS under /srv/emus/melonDS "
+                "(or ARCHSTREAMER_MELONDS), or a melonds_libretro core for the "
+                "RetroArch netplay fallback.";
+            return result;
+        }
         mode_ = LinkCableMode::GbaNetpacket;
+        pending_core_path_ = *core;
         result.ok = true;
         result.mode = mode_;
-        result.message =
-            "Matched " + user_a_ + " ↔ " + user_b_ +
-            " on nds. In-game link transport for this system is not wired yet.";
+        result.core_path = *core;
+        if (peers_already_running) {
+            result.needs_nds_netplay = true;
+            result.message =
+                "Matched " + user_a_ + " ↔ " + user_b_ +
+                ". Starting melonDS (libretro) netplay cable on 127.0.0.1:" +
+                std::to_string(netplay_port_) + " (host=" + user_a_ +
+                "). Enter Local Wireless in-game.";
+        } else {
+            result.needs_runtime_promotion = true;
+            result.message =
+                "Matched " + user_a_ + " ↔ " + user_b_ +
+                ". Same-slot NDS link still needs a second emulator instance "
+                "(use two concurrent singleplayer sessions, then Link).";
+        }
         return result;
     }
 

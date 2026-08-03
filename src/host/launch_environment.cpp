@@ -1,5 +1,8 @@
 #include "host/launch_environment.hpp"
 
+#include "host/nds/melonds_user_profile.hpp"
+
+#include <algorithm>
 #include <utility>
 #include <vector>
 
@@ -32,6 +35,16 @@ void ProcessEnvironment::add_unset(std::string key) {
         }
     }
     unset.push_back(std::move(key));
+}
+
+void ProcessEnvironment::clear_var(const std::string& key) {
+    add_unset(key);
+    entries.erase(
+        std::remove_if(
+            entries.begin(),
+            entries.end(),
+            [&](const auto& entry) { return entry.first == key; }),
+        entries.end());
 }
 
 void ProcessEnvironment::merge(const ProcessEnvironment& other) {
@@ -79,6 +92,23 @@ ProcessEnvironment build_emulator_launch_environment(const EmulatorLaunchEnvRequ
     }
     if (request.ryujinx_profile.has_value()) {
         env.merge_pairs(ryujinx_launch_environment(*request.ryujinx_profile));
+        // Exclusive whitelist must be alone: a present IGNORE var (even "") can fight
+        // EXCEPT inside some SDL builds / AppImage wrappers. Unset, don't set empty.
+        if (!request.ryujinx_profile->sdl_device_filter.empty()) {
+            env.clear_var("SDL_GAMECONTROLLER_IGNORE_DEVICES");
+            env.set(
+                "SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT",
+                request.ryujinx_profile->sdl_device_filter);
+        }
+    }
+    if (request.melonds_profile.has_value()) {
+        env.merge_pairs(melonds_launch_environment(*request.melonds_profile));
+        if (!request.melonds_profile->sdl_device_filter.empty()) {
+            env.clear_var("SDL_GAMECONTROLLER_IGNORE_DEVICES");
+            env.set(
+                "SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT",
+                request.melonds_profile->sdl_device_filter);
+        }
     }
     return env;
 }

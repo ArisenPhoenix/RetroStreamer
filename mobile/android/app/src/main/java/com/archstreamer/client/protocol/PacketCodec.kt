@@ -260,6 +260,32 @@ object PacketCodec {
         return wrap(PacketType.EmulatorControl, payload)
     }
 
+    fun discControlRequest(
+        gameId: String,
+        action: DiscControlAction,
+        discIndex: Int = 0,
+    ): ByteArray {
+        val payload = WireWriter().apply {
+            writeString(gameId)
+            writeU8(action.id)
+            writeU8(discIndex.coerceIn(0, 255))
+        }.toByteArray()
+        return wrap(PacketType.DiscControlRequest, payload)
+    }
+
+    fun linkRequest(
+        gameId: String,
+        targetUsername: String,
+        action: LinkAction,
+    ): ByteArray {
+        val payload = WireWriter().apply {
+            writeString(gameId)
+            writeString(targetUsername)
+            writeU8(action.id)
+        }.toByteArray()
+        return wrap(PacketType.LinkRequest, payload)
+    }
+
     fun clientLogBundle(
         username: String,
         sessionCount: Int,
@@ -386,6 +412,22 @@ object PacketCodec {
                     prompt = reader.readString(),
                     initialText = reader.readString(),
                     maxLength = reader.readU8().let { if (it == 0) 12 else it },
+                ),
+            )
+            PacketType.DiscControlResponse -> IncomingPacket.DiscControl(
+                DiscControlResponse(
+                    ok = reader.readBool(),
+                    discIndex = reader.readU8(),
+                    discCount = reader.readU8(),
+                    message = reader.readString(),
+                ),
+            )
+            PacketType.LinkResponse -> IncomingPacket.Link(
+                LinkResponse(
+                    ok = reader.readBool(),
+                    status = LinkStatus.fromId(reader.readU8()),
+                    peerUsername = reader.readString(),
+                    message = reader.readString(),
                 ),
             )
             PacketType.ArtAssetResponse -> IncomingPacket.Art(

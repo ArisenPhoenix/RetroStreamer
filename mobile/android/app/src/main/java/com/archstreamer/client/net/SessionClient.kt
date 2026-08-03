@@ -5,12 +5,14 @@ import com.archstreamer.client.media.RtpOpusPlayer
 import com.archstreamer.client.media.RtpVideoPlayer
 import com.archstreamer.client.protocol.ControllerInfo
 import com.archstreamer.client.protocol.ControllerState
+import com.archstreamer.client.protocol.DiscControlAction
 import com.archstreamer.client.protocol.DisplayLayoutPreference
 import com.archstreamer.client.protocol.EmulatorControlState
 import com.archstreamer.client.protocol.GameInfo
 import com.archstreamer.client.protocol.GameSessionMode
 import com.archstreamer.client.protocol.HostWelcome
 import com.archstreamer.client.protocol.IncomingPacket
+import com.archstreamer.client.protocol.LinkAction
 import com.archstreamer.client.protocol.MediaEndpoint
 import com.archstreamer.client.protocol.MediaQualityTier
 import com.archstreamer.client.protocol.MediaStreamSize
@@ -190,6 +192,34 @@ data class JoinedPlaySession(
                 clientId = welcome.clientId,
                 pause = pause,
                 fastForward = fastForward,
+            ),
+        )
+    }
+
+    fun sendDiscControl(
+        gameId: String,
+        action: DiscControlAction,
+        discIndex: Int = 0,
+    ) {
+        control.send(
+            PacketCodec.discControlRequest(
+                gameId = gameId,
+                action = action,
+                discIndex = discIndex,
+            ),
+        )
+    }
+
+    fun sendLinkRequest(
+        gameId: String,
+        targetUsername: String,
+        action: LinkAction,
+    ) {
+        control.send(
+            PacketCodec.linkRequest(
+                gameId = gameId,
+                targetUsername = targetUsername,
+                action = action,
             ),
         )
     }

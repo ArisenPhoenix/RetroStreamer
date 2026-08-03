@@ -22,7 +22,7 @@ Integrated host-runner session smoke test:
 ./build/session_client --host 127.0.0.1 --port 45555 --input-port 45454 --username test_user --mode singleplayer --players 1 --controller 0 --game 0
 ```
 
-In session mode, `host_runner` receives the selected game, requested session mode, and controller metadata from clients before launching RetroArch. It uses the first player client's username for the current RetroArch save profile. If client controller VID/PID metadata is available, `host_runner` hides those physical devices from RetroArch's SDL2 controller discovery and exposes only the ArchStreamer virtual pads.
+In session mode, `host_runner` receives the selected game, requested session mode, and controller metadata from clients before launching RetroArch. Save-profile username prefers the host player when Host is Player (`host_hello` username); otherwise the first remote client with `requested_players > 0`; otherwise the first connected client. If client controller VID/PID metadata is available, `host_runner` hides those physical devices from RetroArch's SDL2 controller discovery and exposes only the ArchStreamer virtual pads.
 
 The client declares whether it wants a `singleplayer` or `multiplayer` session. A singleplayer session can start as soon as one player is available. A multiplayer session waits until the selected game's minimum player count is available; until external metadata exists, scanned games default to `min_players=1` and `max_players=2`, and multiplayer mode requires at least two players. Direct `host_runner` launches use the same metadata checks through `--mode singleplayer|multiplayer`. If the session timeout elapses before enough players arrive, the host sends an `ErrorPacket` to connected clients and does not launch RetroArch.
 
@@ -109,17 +109,23 @@ region=<region>
 
 `game_id` is `sha256:<hex>` of that identity key. `language` defaults to `en`; `version` and `region` default to `unknown`. Metadata can override `system_key`, `canonical_name`, `version`, `language`, and `region`. This keeps ids stable across ROM path changes, while still allowing the client to inspect/filter the readable identity fields.
 
-Catalog sync is revision-based. Each `GameInfo` carries an opaque host `updated_at` value, and each `GameList` carries the max `catalog_revision`. Clients cache the full catalog locally and send their cached revision in `GameListRequest.client_catalog_revision`. The host replies with:
+Catalog sync is revision-aware in the protocol (`GameListRequest.client_catalog_revision`,
+`GameList.catalog_revision` / `full` / `deleted_game_ids`), but **the live host path always
+full-replaces**: every reply sets `full=true` and clears `deleted_game_ids`. Incremental
+deltas are a TODO — catalogs are small enough that replace-all is correct and avoids stale
+entries after membership shrinks. Clients still cache the catalog locally and send their
+cached revision; the host currently ignores it for filtering.
 
-- a full catalog when the client revision is `0`;
-- a delta containing games with `updated_at` newer than the client revision;
-- an empty delta when the client is already current.
-
-The CLI client stores this at `$XDG_CACHE_HOME/archstreamer/catalog.json`, or `~/.cache/archstreamer/catalog.json` when `XDG_CACHE_HOME` is not set. Deleted game ids are represented in the protocol, but the current host scanner does not yet emit deletions from a persistent manifest.
+The CLI client stores this at `$XDG_CACHE_HOME/archstreamer/catalog.json`, or
+`~/.cache/archstreamer/catalog.json` when `XDG_CACHE_HOME` is not set (Windows:
+`%LOCALAPPDATA%\archstreamer\catalog.json`).
 
 ## Game Assets
 
-Artwork is local data, not session protocol payload. Hosts and clients should use the same local asset provider against a configurable art root. With ROM root `<Gaming>/ROMS/Games`, art defaults to the sibling `<Gaming>/ROMS/Art`.
+The **host** art root is authoritative. With ROM root `<Gaming>/ROMS/Games` (Settings /
+`--rom-root`; no built-in absolute Gaming path), art defaults to the sibling
+`<Gaming>/ROMS/Art` when `--art-root` / Settings art root is empty. Absolute catalog
+defaults are empty until the user configures them.
 
 The art tree is based on `asset_key`, not ROM path. `asset_key` is:
 
@@ -138,15 +144,19 @@ Art/snes/super-bomberman/en/unknown/unknown/boxart.png
 Art/snes/super-bomberman/en/unknown/unknown/screenshot.png
 ```
 
-Artwork root defaults to the sibling `Art` directory next to `Games` / `Meta`
-(under your configured Gaming tree). Until a game has local art, the GUI uses
-`Art/default/default_image.png` as a placeholder. Artwork is never sent over the
-session protocol; each machine resolves art locally (for example via Steam ROM
-Manager on client PCs).
+Until a game has art on the host, the GUI uses `Art/default/default_image.png` as a
+placeholder. After `GameList`, clients request missing roles over the control channel
+(`ArtAssetRequest` / `ArtAssetResponse`) and cache bytes under
+`$XDG_CACHE_HOME/archstreamer/hosts/<host-id>/Art` (Windows:
+`%LOCALAPPDATA%\archstreamer\hosts\<host-id>\Art`). Clients do **not** need a shared
+Gaming art tree; Steam ROM Manager / `sync_srm_art_into_catalog` populate the **host**
+art root.
 
-The local provider also accepts common aliases such as `portrait`, `capsule`, `wide`, `background`, `cover`, and `screen`. Steam ROM Manager can populate or help choose those local images, while ArchStreamer only resolves paths from the local assets root.
+The host asset provider also accepts common aliases such as `portrait`, `capsule`,
+`wide`, `background`, `cover`, and `screen`.
 
-`asset_probe <content-root> [metadata-root] [assets-root] [--create-dirs]` lists the expected asset directories and can create the empty directory tree.
+`asset_probe <content-root> [metadata-root] [assets-root] [--create-dirs]` lists the
+expected asset directories and can create the empty directory tree.
 
 Multiple clients can select the same `game_id` before RetroArch is launched. `session_lobby` tracks connected clients in `SessionPlan` and validates that late joins match the active game and session mode.
 
@@ -240,14 +250,14 @@ Flatpak GUI Host tab launches a **native** `host_runner` via `flatpak-spawn --ho
 
 ### Remaining follow-ups
 
-- Embedded GUI media later needs platform-specific GStreamer window integration
+- Windows video sink is still a separate top-level window (xid embed is Linux-first); cutover placement restore is also Linux-first
 - RetroArch-on-Windows host parity (paths / joypad drivers) after Switch stream proof
-- Windows video-window geometry restore across cutovers (raise-to-front is implemented; full placement restore is still Linux-first)
 - Windows host backends now follow the same `using` / CMake twin pattern as pads/media (`HostVirtualKeyboard`, `SaveProfilePaths`, `windows_*_resolve` / soft-keyboard / audio-sink). Linux reference implementations stay in place until a matching `Posix*` wrapper is introduced without behaviour change. Windows soft-keyboard typing uses EnumWindows + SendInput; audio parking mutes tracked emulator WASAPI sessions (speakers quiet while `wasapisrc` loopback continues).
+- Catalog revision deltas (`deleted_game_ids` / incremental `updated_at` filtering) once catalogs grow large enough to matter
 
 ## Save Profiles
 
-The host keeps save data under a configurable save root (Settings → **Client save root**, or `host_runner --save-root`). The default root is `~/.local/share/archstreamer/saves`. Flatpak builds must use a path visible to the sandbox (home, or an explicit `flatpak override --filesystem=…:rw`).
+The host keeps save data under a configurable save root (Settings → **Client save root**, or `host_runner --save-root`). The default root is `~/.local/share/archstreamer/saves` (Windows: under `%LOCALAPPDATA%\archstreamer\…`). Flatpak builds must use a path visible to the sandbox (home, or an explicit `flatpak override --filesystem=…:rw`).
 
 Each username gets its own profile directory:
 
@@ -255,7 +265,18 @@ Each username gets its own profile directory:
 <save-root>/<username>/saves
 <save-root>/<username>/states
 <save-root>/<username>/system   # RetroArch system_directory (BIOS / shared system files, per user)
+<save-root>/<username>/credentials.json
 ```
+
+### Credentials
+
+Joining a session requires a non-empty password on `ClientHello`. Profiles without a
+`credentials.json` yet get the default password `archstreamer` with `must_change=true`
+(client is forced through a password change before play continues). New usernames are
+created only when the host allows it (Settings **Allow new users** /
+`host_runner --allow-new-users`); otherwise unknown users are rejected. The GUI Client
+tab holds a session-only password (not persisted); Profile can change the password on
+the host.
 
 Switch emulators additionally keep per-user Yuzu/Ryujinx config and NAND under the same username tree, with optional shared title saves synced across profiles where configured.
 
@@ -293,10 +314,11 @@ Example with host as player and two remote clients:
 
 GStreamer stays outside of the controller input path. The TCP control channel negotiates whether a client wants media, then the host sends a `MediaEndpoint` packet before `SessionStarting`.
 
-The first implemented video path is opt-in on the host:
+Video streaming is **enabled by default** on the host (`--video`; disable with `--no-video`):
 
 ```text
 host_runner --video --video-dest <client-ip> --video-port <udp-port>
+host_runner --no-video   # local Host Player / no RTP fanout
 ```
 
 When video is enabled, capture depends on the emulator:
@@ -326,10 +348,11 @@ Clients request video by default and can opt out with `session_client --no-video
 
 Session launches use per-client fanout. `--video-port` is the base UDP video port, `--audio-port` is the base UDP audio port, and each media client gets incremented ports. If `--video-dest` is omitted, the host sends media to each client's TCP peer address. If `--video-dest` is supplied, every stream uses that address with separate ports, which is useful for local multi-client testing on one machine.
 
-Audio is opt-in on the host:
+Audio streaming is also **enabled by default** (`--audio`; disable with `--no-audio`):
 
 ```text
 host_runner --audio --audio-source <source>
+host_runner --no-audio
 ```
 
 The first audio path captures a PulseAudio/PipeWire source with `pulsesrc`, encodes Opus with `opusenc`, packetizes with `rtpopuspay`, and fans the **same** RTP packets to every destination with `multiudpsink` (Watch locally on `127.0.0.1` plus remotes). One capture/encode per session slot — not one `pulsesrc` per client. If `--audio-source` is omitted on a streaming host (Viewer), the host creates a dedicated null sink (`archstreamer` or `archstreamer-N` for concurrent slots) and captures its `.monitor` so RetroArch audio does not play on the host speakers unless **Watch stream locally** is enabled. Host Player keeps the default sink for local speakers. The client receives `rtp+opus://` endpoints with `udpsrc`, `rtpopusdepay`, `opusdec`, and `autoaudiosink` / WASAPI.
@@ -340,7 +363,7 @@ Current limitations:
 
 - Cutover still briefly dual-encodes; a fully seamless single-decoder switch is future work.
 - Separate (non-synced) A/V streams rely on receiver buffering rather than a shared clock.
-- The video sink is still an external `gst-launch` window; embedding into the Qt GUI is later.
+- Linux Qt can embed video via `VideoEmbedBridge` / in-process overlay when GStreamer libs are available; Windows still prefers a separate top-level sink. CLI/`session_client` may still open a standalone `gst-launch` (or equivalent) window as a fallback.
 
 ## Input Direction
 
@@ -383,9 +406,23 @@ Client key capture uses `RemotedKeyboardSource`:
 
 ### Soft keyboard (pad OSK)
 
-Some emulators (notably Ryujinx Avalonia swkbd) open a real text dialog on the capture display that cannot be typed with a gamepad alone. The host watches for a focused soft-keyboard dialog, publishes `SoftKeyboardRequest` on the control channel, and the client GUI opens a pad-driven on-screen keyboard. `SoftKeyboardResponse` carries the accepted text (or cancel); the host XTest-types it into the dialog (clearing any seeded nickname first).
+Some emulators (notably Ryujinx Avalonia swkbd) open a real text dialog on the capture display that cannot be typed with a gamepad alone. The host watches for a focused soft-keyboard dialog, publishes `SoftKeyboardRequest` on the control channel, and the client GUI opens a pad-driven on-screen keyboard. `SoftKeyboardResponse` carries the accepted text (or cancel); the host injects it into the dialog (clearing any seeded nickname first) — **XTest** on the Linux capture display, **SendInput** on Windows.
 
 The watcher is session-scoped and re-arms after each dialog closes, so declining an in-game “is this name correct?” confirmation still prompts again. Closing a host-requested OSK raises the video sink window back to the foreground so the Qt GUI does not leave the game buried.
+
+## Link / cable play
+
+After mutual match through `LinkCoordinator`, `LinkCableBackend` can activate a
+system-specific virtual link:
+
+| Mode | Behavior |
+| --- | --- |
+| `LocalDualGb` | One RetroArch + DoubleCherryGB dual machines (experimental; needs `-DARCHSTREAMER_DEBUG_GB_LINK=ON`) |
+| `GbaNetpacket` | Dual gpSP (or melonDS libretro fallback) session slots relaunch into localhost RetroArch netplay (default port 55435) |
+| `SwitchLdnMitm` | Dual Ryujinx with ldn_mitm (Local Wireless) — no mid-session relaunch |
+| `NdsMelonLan` | Dual standalone melonDS; Link arms LAN via patched `--archstreamer-ctrl` (no relaunch). See `third_party/melonds/README.md`. |
+
+NDS prefers standalone melonDS when `/srv/emus/melonDS` (or managed/`ARCHSTREAMER_MELONDS`) is present; otherwise Link falls back to RetroArch melonds netplay relaunch.
 
 ## Concurrent sessions
 
@@ -399,13 +436,11 @@ The Qt GUI tabs are organized by concern:
 - **Host** — ports, lobby mode, stream toggles, advertise
 - **Stream** — client quality/size and A/V receive options; host capture resolution, GPU, renderer scales
 - **Game Options** — per-family controller remaps + face-button swaps, pad OSK test button, per-game helpers
-- **Profile** — usernames / Steam account
-- **Settings** — art/ROM/meta roots, audio device refresh, lobby wait, log level
+- **Profile** — usernames, Steam account, change password on host
+- **Settings** — art/ROM/meta/save roots, allow new users, audio device refresh, lobby wait, log level
 
 Host and client last-selected games are persisted independently.
 
 ## RetroArch Direction
 
-The host launches RetroArch with an executable path, a libretro core path, and the selected content path. The current POSIX process implementation starts RetroArch as a child process and can terminate it when the session ends.
-
-The remaining RetroArch work is catalog construction: each `GameInfo` needs a host-side record that includes the display fields sent to clients plus the local core/content paths needed for launch.
+The host launches RetroArch with an executable path, a libretro core path, and the selected content path. The current POSIX process implementation starts RetroArch as a child process and can terminate it when the session ends. Catalog scan already builds `HostedGame` records (display fields for clients plus local core/content paths for launch). Remaining host work is mostly platform parity (especially Windows RetroArch paths / joypad drivers) and link-cable coverage beyond GBA/Switch.

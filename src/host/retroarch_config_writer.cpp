@@ -1,6 +1,7 @@
 #include "host/retroarch_config_writer.hpp"
 
 #include "common/platform/paths.hpp"
+#include "host/nds_display_layout.hpp"
 #include "host/retroarch_netcmd.hpp"
 
 #include <algorithm>
@@ -324,10 +325,9 @@ void apply_nds_screen_layout(DisplayLayoutPreference preference) {
         }
     };
 
-    const bool portrait = preference == DisplayLayoutPreference::Portrait;
-    const char* layout = portrait ? "Top/Bottom" : "Hybrid Top";
+    const auto layout = resolve_nds_display_layout(preference);
     write("melonDS", {
-        {"melonds_screen_layout", layout},
+        {"melonds_screen_layout", layout.core_layout},
         {"melonds_hybrid_small_screen", "Bottom"},
         {"melonds_hybrid_ratio", "3"},
         {"melonds_screen_gap", "0"},

@@ -49,7 +49,20 @@ bool InputRouter::route(const ControllerInput& input) {
         std::cout
             << "First controller input applied: client " << static_cast<int>(input.client_id)
             << " local P" << static_cast<int>(input.local_player) + 1
-            << " -> RetroArch P" << static_cast<int>(*port) + 1 << '\n';
+            << " -> RetroArch P" << static_cast<int>(*port) + 1
+            << " buttons=0x" << std::hex << input.state.buttons << std::dec << '\n';
+    }
+    if (!first_nonzero_input_logged_ &&
+        (input.state.buttons != 0 || input.state.left_trigger != 0 ||
+         input.state.right_trigger != 0 || input.state.left_x != 0 || input.state.left_y != 0 ||
+         input.state.right_x != 0 || input.state.right_y != 0)) {
+        first_nonzero_input_logged_ = true;
+        std::cout
+            << "First non-zero controller state applied: client "
+            << static_cast<int>(input.client_id)
+            << " buttons=0x" << std::hex << input.state.buttons << std::dec
+            << " triggers=" << input.state.left_trigger << "/" << input.state.right_trigger
+            << '\n';
     }
     return true;
 }

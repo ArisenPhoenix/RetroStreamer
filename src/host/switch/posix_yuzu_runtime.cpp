@@ -33,6 +33,10 @@ std::optional<std::filesystem::path> PosixYuzuRuntime::find_source_binary() {
 
     const auto home = switch_home_dir();
     const std::vector<std::filesystem::path> candidates{
+        "/srv/emus/yuzu.AppImage",
+        "/srv/emus/yuzu-20231111-030c140c0.AppImage",
+        "/srv/emus/yuzu",
+        // Legacy layout (pre-standalone consolidation).
         "/srv/emus/Switch/yuzu.AppImage",
         "/srv/emus/Switch/yuzu-20231111-030c140c0.AppImage",
         home / "Applications/yuzu.AppImage",

@@ -32,6 +32,7 @@ private:
     std::uint64_t packets_received_ = 0;
     std::uint64_t packets_applied_ = 0;
     bool logged_first_receive_ = false;
+    bool logged_first_nonzero_receive_ = false;
     std::atomic<bool> running_{false};
     std::thread worker_;
 };

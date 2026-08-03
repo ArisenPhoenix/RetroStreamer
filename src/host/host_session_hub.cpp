@@ -2,6 +2,8 @@
 
 #include "host/active_session_slot.hpp"
 #include "host/host_session_helpers.hpp"
+#include "host/nds/melonds_ctrl_client.hpp"
+#include "host/nds/melonds_user_profile.hpp"
 #include "host/retroarch_netcmd.hpp"
 #include "host/session_lobby.hpp"
 
@@ -299,6 +301,68 @@ std::vector<LinkOutbound> HostSessionHub::handle_link(
                             << "host_slot=" << host_slot->slot_index()
                             << " client_slot=" << client_slot->slot_index()
                             << " port=" << start.netplay_port << '\n';
+                    }
+                }
+                if (start.needs_nds_netplay && cross_slot && peer_slot != nullptr) {
+                    ActiveSessionSlot* host_slot =
+                        slot_for_client(start.logical_host_client_id);
+                    ActiveSessionSlot* client_slot =
+                        slot_for_client(start.logical_client_client_id);
+                    if (host_slot == nullptr || client_slot == nullptr) {
+                        std::cerr
+                            << "Link cable: NDS netplay matched but could not resolve both slots\n";
+                    } else {
+                        GbaNetplayRelaunchRequest host_req;
+                        host_req.is_host = true;
+                        host_req.port = start.netplay_port;
+                        host_req.nick = start.logical_host_username;
+                        host_req.core_path = start.core_path;
+                        GbaNetplayRelaunchRequest client_req;
+                        client_req.is_host = false;
+                        client_req.port = start.netplay_port;
+                        client_req.nick = start.logical_client_username;
+                        client_req.core_path = start.core_path;
+                        host_slot->request_gba_netplay_relaunch(std::move(host_req));
+                        client_slot->request_gba_netplay_relaunch(std::move(client_req));
+                        std::cout
+                            << "Link cable: queued melonDS libretro netplay "
+                            << "host_slot=" << host_slot->slot_index()
+                            << " client_slot=" << client_slot->slot_index()
+                            << " port=" << start.netplay_port << '\n';
+                    }
+                }
+                if (start.needs_nds_lan && cross_slot && peer_slot != nullptr) {
+                    ActiveSessionSlot* host_slot =
+                        slot_for_client(start.logical_host_client_id);
+                    ActiveSessionSlot* client_slot =
+                        slot_for_client(start.logical_client_client_id);
+                    if (host_slot == nullptr || client_slot == nullptr) {
+                        std::cerr
+                            << "Link cable: NDS LAN matched but could not resolve both slots\n";
+                    } else {
+                        MelonDsCtrlClient host_ctrl(
+                            melonds_ctrl_server_name_for_slot(host_slot->slot_index()));
+                        MelonDsCtrlClient client_ctrl(
+                            melonds_ctrl_server_name_for_slot(client_slot->slot_index()));
+                        const bool host_ok = host_ctrl.lan_host(start.logical_host_username, 2);
+                        if (!host_ok) {
+                            std::cerr
+                                << "Link cable: melonDS LAN_HOST failed: "
+                                << host_ctrl.last_error() << '\n';
+                        }
+                        const bool client_ok =
+                            client_ctrl.lan_connect(start.logical_client_username, "127.0.0.1");
+                        if (!client_ok) {
+                            std::cerr
+                                << "Link cable: melonDS LAN_CONNECT failed: "
+                                << client_ctrl.last_error() << '\n';
+                        }
+                        if (host_ok && client_ok) {
+                            std::cout
+                                << "Link cable: melonDS LAN armed "
+                                << "host_slot=" << host_slot->slot_index()
+                                << " client_slot=" << client_slot->slot_index() << '\n';
+                        }
                     }
                 }
                 send_retroarch_netcmd(

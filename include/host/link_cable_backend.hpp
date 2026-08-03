@@ -19,6 +19,8 @@ enum class LinkCableMode : std::uint8_t {
     GbaNetpacket = 2,
     /** Dual Ryujinx with ldn_mitm (Local Wireless) — no mid-session relaunch. */
     SwitchLdnMitm = 3,
+    /** Dual standalone melonDS with LAN (patched ctrl socket) — no relaunch. */
+    NdsMelonLan = 4,
 };
 
 /** Queued onto an ActiveSessionSlot after a GBA Link match. */
@@ -44,6 +46,16 @@ public:
         bool needs_runtime_promotion = false;
         /** Cross-slot GBA: hub should queue GbaNetplayRelaunchRequest on both slots. */
         bool needs_gba_netplay = false;
+        /**
+         * Cross-slot NDS with standalone melonDS: hub should LAN_HOST / LAN_CONNECT
+         * via MelonDsCtrlClient (no process restart).
+         */
+        bool needs_nds_lan = false;
+        /**
+         * Cross-slot NDS without standalone melonDS: reuse GBA-style RetroArch
+         * netplay relaunch with the melonds libretro core.
+         */
+        bool needs_nds_netplay = false;
         LinkCableMode mode = LinkCableMode::None;
         std::string message;
         std::filesystem::path core_path;

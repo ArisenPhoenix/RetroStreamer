@@ -33,7 +33,7 @@ QString windows_ssh_askpass_path() {
         }
     }
     // Dev builds sometimes keep helpers one level up from Release/.
-    const QDir parent = app_dir;
+    QDir parent(app_dir);
     if (parent.cdUp()) {
         for (const auto& name : names) {
             const auto path = parent.absoluteFilePath(name);

@@ -1,7 +1,10 @@
 #pragma once
 
+#include "common/protocol.hpp"
+
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -38,11 +41,22 @@ public:
     bool touch_end();
     void close_touch_channel();
 
+    /**
+     * Query top/bottom screen AABBs in melonDS window pixels (SCREENS).
+     * Updates with swap/emphasis; optional top rect is reported when present.
+     */
+    bool query_screens(
+        DsScreenLayout& out,
+        std::chrono::milliseconds timeout = std::chrono::milliseconds(500)) const;
+
     const std::string& server_name() const { return server_name_; }
     const std::string& last_error() const { return last_error_; }
 
 private:
     bool send_command(
+        std::string_view command,
+        std::chrono::milliseconds timeout) const;
+    std::optional<std::string> transact(
         std::string_view command,
         std::chrono::milliseconds timeout) const;
     bool ensure_touch_connected(std::chrono::milliseconds timeout);

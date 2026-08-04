@@ -15,7 +15,7 @@
 namespace archstreamer {
 
 constexpr std::uint32_t ProtocolMagic = 0x41525354; // "ARST"
-constexpr std::uint16_t ProtocolVersion = 19;
+constexpr std::uint16_t ProtocolVersion = 21;
 constexpr std::uint8_t MaxRemoteClients = 2;
 constexpr std::uint8_t MaxPlayersPerClient = 2;
 constexpr std::uint8_t MaxRetroArchPorts = 5; // Ports 0-3 plus a host player if desired.
@@ -67,8 +67,10 @@ enum class PacketType : std::uint8_t {
     PasswordChangeRequired = 30,
     // Client → host: set a new password (join handshake or Profile side-channel).
     PasswordChange = 31,
-    // Client → host: absolute DS stylus / bottom-screen touch (0–255 × 0–191).
+    // Client → host: normalized % within DS bottom screen (0..65535); host → DS pixels.
     TouchInput = 32,
+    // Host → client: melonDS top/bottom screen AABBs in window pixels (follows swap).
+    DsScreenLayout = 33,
 };
 
 enum class ClientRole : std::uint8_t {
@@ -135,6 +137,9 @@ struct ActiveSessionInfo {
     std::uint8_t viewer_count = 0;
     bool video_enabled = false;
     bool audio_enabled = false;
+    // Trailing (protocol v21+) — omitted by older hosts → treat as unknown.
+    std::optional<std::uint8_t> active_slots;
+    std::optional<std::uint8_t> max_slots;
 };
 
 struct ControllerInfo {
@@ -245,15 +250,40 @@ struct KeyboardInput {
     KeyboardState state;
 };
 
-/** Absolute DS touchscreen sample (client → host UDP). */
+/** Normalized touch within the DS bottom pane (client → host UDP).
+ *  x/y are 0..65535 (= 0..1 of the bottom screen content). Host maps to DS
+ *  stylus pixels 0–255 × 0–191 via ds_coords_from_normalized_u16 — the bottom
+ *  framebuffer is always that size, so no host window rect is required. */
 struct TouchInput {
     ClientId client_id = 0;
     LocalPlayerIndex local_player = 0;
     std::uint32_t sequence = 0;
     std::uint64_t timestamp_us = 0;
-    std::uint16_t x = 0; // 0–255
-    std::uint16_t y = 0; // 0–191
+    std::uint16_t x = 0; // 0..DsTouchNormMax within bottom screen
+    std::uint16_t y = 0; // 0..DsTouchNormMax within bottom screen
     bool pressed = false; // true = down/move, false = up
+};
+
+/**
+ * Optional host → client: DS screen panes in melonDS window pixels.
+ * Clients normally locate the bottom pane themselves (shared layout policy);
+ * this packet is available if a client wants host-authoritative rects.
+ */
+struct DsScreenLayout {
+    std::uint16_t window_w = 0;
+    std::uint16_t window_h = 0;
+    bool has_top = false;
+    std::int16_t top_x = 0;
+    std::int16_t top_y = 0;
+    std::int16_t top_w = 0;
+    std::int16_t top_h = 0;
+    bool has_bot = false;
+    std::int16_t bot_x = 0;
+    std::int16_t bot_y = 0;
+    std::int16_t bot_w = 0;
+    std::int16_t bot_h = 0;
+
+    bool operator==(const DsScreenLayout&) const = default;
 };
 
 /**
@@ -714,6 +744,7 @@ using PacketPayload = std::variant<
     MediaVideoReady,
     KeyboardInput,
     TouchInput,
+    DsScreenLayout,
     EmulatorControl,
     ClientLogBundle,
     PasswordChangeRequired,

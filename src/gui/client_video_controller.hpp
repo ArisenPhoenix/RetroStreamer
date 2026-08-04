@@ -43,6 +43,7 @@ public:
 
     /** Drive Hello/heartbeat display_layout from video window aspect. */
     void setHeartbeatPrefs(std::shared_ptr<archstreamer::ClientHeartbeatPrefs> prefs);
+    void setDsTouchBridge(std::shared_ptr<archstreamer::DsTouchBridge> bridge);
 
     /** Show/raise the surface for a live session; creates native window handle. */
     void prepareForSession();
@@ -66,6 +67,7 @@ private:
     QWidget* embed_parent_ = nullptr;
     std::shared_ptr<archstreamer::VideoEmbedBridge> embed_bridge_;
     std::shared_ptr<archstreamer::ClientHeartbeatPrefs> heartbeat_prefs_;
+    std::shared_ptr<archstreamer::DsTouchBridge> ds_touch_;
     std::unique_ptr<ArchStreamerVideoSurface> surface_;
     QTimer* refresh_timer_ = nullptr;
 };

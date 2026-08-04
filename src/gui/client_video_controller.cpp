@@ -62,6 +62,14 @@ void ClientVideoController::setHeartbeatPrefs(
     }
 }
 
+void ClientVideoController::setDsTouchBridge(
+    std::shared_ptr<archstreamer::DsTouchBridge> bridge) {
+    ds_touch_ = std::move(bridge);
+    if (surface_) {
+        surface_->setDsTouchBridge(ds_touch_);
+    }
+}
+
 void ClientVideoController::prepareForSession() {
     if (!surface_) {
         surface_ = std::make_unique<ArchStreamerVideoSurface>();
@@ -86,6 +94,7 @@ void ClientVideoController::prepareForSession() {
             });
     }
     surface_->setFrameBridge(embed_bridge_);
+    surface_->setDsTouchBridge(ds_touch_);
     surface_->setWindowTitle(title_);
     applyMode();
     surface_->show();

@@ -96,6 +96,11 @@ bool handle_control_message(TcpStream& stream, const ClientAppCallbacks& callbac
                      : (": " + soft_keyboard->prompt)));
         }
     }
+    if (const auto* screens = std::get_if<DsScreenLayout>(&payload); screens != nullptr) {
+        if (callbacks.ds_touch) {
+            callbacks.ds_touch->set_layout(*screens);
+        }
+    }
     // Mid-session MediaEndpoint after a quality cutover updates the video URI only.
     // Do not realign audio — Opus is still on the live timeline.
     if (const auto* endpoint = std::get_if<MediaEndpoint>(&payload); endpoint != nullptr) {
@@ -450,7 +455,11 @@ ClientRunResult ClientApp::join_session(
         config.input_port.has_value() &&
         config.send_keyboard &&
         result.client_id.has_value();
-    if (want_pads || want_keyboard) {
+    const bool want_touch =
+        config.input_port.has_value() &&
+        callbacks.ds_touch != nullptr &&
+        result.client_id.has_value();
+    if (want_pads || want_keyboard || want_touch) {
         if (want_pads) {
             controller_backend.emplace();
             controller_backend->open_selected(controller_device_ids);
@@ -468,10 +477,13 @@ ClientRunResult ClientApp::join_session(
         }
         if (want_pads && callbacks.on_input_streaming_started) {
             callbacks.on_input_streaming_started(config.host, *config.input_port);
-        } else if (want_keyboard && callbacks.on_status) {
+        } else if ((want_keyboard || want_touch) && callbacks.on_status) {
             callbacks.on_status(
-                "Sending remoted keyboard to " + config.host + ":" +
-                std::to_string(*config.input_port));
+                "Sending remoted " +
+                std::string(want_keyboard && want_touch
+                                ? "keyboard+touch"
+                                : (want_touch ? "touch" : "keyboard")) +
+                " to " + config.host + ":" + std::to_string(*config.input_port));
         }
 
         // Dedicated thread: media/TCP work on the session loop must not stall pads.
@@ -485,6 +497,7 @@ ClientRunResult ClientApp::join_session(
             want_pads,
             controller_map_prefs = callbacks.controller_map_prefs,
             emulator_control = callbacks.emulator_control,
+            ds_touch = callbacks.ds_touch,
             keyboard_poller = std::move(keyboard_poller)
         ]() mutable {
             std::array<ControllerState, MaxPlayersPerClient> last_sent{};
@@ -566,6 +579,21 @@ ClientRunResult ClientApp::join_session(
                         }
                         last_keys = *keys;
                         have_last_keys = true;
+                    }
+                }
+
+                if (ds_touch) {
+                    // Drain the whole queue so press+release in one tick both go out.
+                    while (const auto touch = ds_touch->take_sample()) {
+                        try {
+                            const auto packet = input_sender->make_touch(
+                                0, touch->norm_x, touch->norm_y, touch->pressed);
+                            input_socket->send_to(
+                                serialize_packet(packet),
+                                config.host,
+                                *config.input_port);
+                        } catch (...) {
+                        }
                     }
                 }
 

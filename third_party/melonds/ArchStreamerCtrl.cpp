@@ -7,8 +7,11 @@
       LAN_END
       TOUCH <x> <y>          // absolute DS coords; x 0-255, y 0-191
       TOUCH_END
+      SCREENS               // window + top/bottom AABBs (follows swap/emphasis)
       PING
     Replies: OK / ERR <message> / PONG
+    SCREENS OK:
+      OK <ww> <wh> <hasTop:0|1> <tx> <ty> <tw> <th> <hasBot:0|1> <bx> <by> <bw> <bh>
 */
 
 #include "ArchStreamerCtrl.h"
@@ -18,6 +21,8 @@
 
 #include "Config.h"
 #include "LAN.h"
+#include "Screen.h"
+#include "Window.h"
 #include "main.h"
 
 using namespace melonDS;
@@ -121,7 +126,7 @@ bool ArchStreamerCtrl::applyLanConnect(const QString& playerName, const QString&
     setMPInterface(MPInterface_LAN);
     if (!lanInterface().StartClient(player.toUtf8().constData(), hostAddr.toUtf8().constData()))
     {
-        printf("ArchStreamerCtrl: StartClient failed (host=%s)\n", hostAddr.toUtf8().constData());
+        printf("ArchStreamerCtrl: StartClient failed\n");
         setMPInterface(MPInterface_Local);
         return false;
     }
@@ -129,7 +134,7 @@ bool ArchStreamerCtrl::applyLanConnect(const QString& playerName, const QString&
     auto cfg = Config::GetGlobalTable();
     cfg.SetString("LAN.PlayerName", player.toStdString());
     Config::Save();
-    printf("ArchStreamerCtrl: LAN connect '%s' -> %s\n",
+    printf("ArchStreamerCtrl: LAN connect '%s' → %s\n",
            player.toUtf8().constData(), hostAddr.toUtf8().constData());
     return true;
 }
@@ -157,6 +162,32 @@ void ArchStreamerCtrl::applyTouchEnd()
 {
     if (EmuInstance* inst = firstEmuInstance())
         inst->releaseScreen();
+}
+
+bool ArchStreamerCtrl::queryScreens(ScreenRects& out)
+{
+    EmuInstance* inst = firstEmuInstance();
+    if (!inst)
+        return false;
+    MainWindow* win = inst->getMainWindow();
+    if (!win || !win->panel)
+        return false;
+    ScreenPanel::ScreenRectQuery q;
+    if (!win->panel->queryScreenRects(q))
+        return false;
+    out.windowW = q.windowW;
+    out.windowH = q.windowH;
+    out.hasTop = q.hasTop;
+    out.topX = q.topX;
+    out.topY = q.topY;
+    out.topW = q.topW;
+    out.topH = q.topH;
+    out.hasBot = q.hasBot;
+    out.botX = q.botX;
+    out.botY = q.botY;
+    out.botW = q.botW;
+    out.botH = q.botH;
+    return true;
 }
 
 void ArchStreamerCtrl::onNewConnection()
@@ -276,6 +307,31 @@ void ArchStreamerCtrl::handleLine(QLocalSocket* sock, const QByteArray& line)
     {
         applyTouchEnd();
         writeReply(sock, "OK");
+        return;
+    }
+
+    if (cmd == QStringLiteral("SCREENS"))
+    {
+        ScreenRects q;
+        if (!queryScreens(q))
+        {
+            writeReply(sock, "ERR no screen layout");
+            return;
+        }
+        const QByteArray reply = QByteArrayLiteral("OK ")
+            + QByteArray::number(q.windowW) + ' '
+            + QByteArray::number(q.windowH) + ' '
+            + QByteArray::number(q.hasTop ? 1 : 0) + ' '
+            + QByteArray::number(q.topX) + ' '
+            + QByteArray::number(q.topY) + ' '
+            + QByteArray::number(q.topW) + ' '
+            + QByteArray::number(q.topH) + ' '
+            + QByteArray::number(q.hasBot ? 1 : 0) + ' '
+            + QByteArray::number(q.botX) + ' '
+            + QByteArray::number(q.botY) + ' '
+            + QByteArray::number(q.botW) + ' '
+            + QByteArray::number(q.botH);
+        writeReply(sock, reply);
         return;
     }
 

@@ -1,18 +1,20 @@
 package com.archstreamer.client.protocol
 
 /**
- * Wire types matching include/common/protocol.hpp (ProtocolVersion 19).
+ * Wire types matching include/common/protocol.hpp (ProtocolVersion 21).
  * Keep field order identical to the C++ serializers.
  */
 object Protocol {
     const val MAGIC: Int = 0x41525354 // "ARST"
-    const val VERSION: Int = 19
+    const val VERSION: Int = 21
     const val HEADER_SIZE: Int = 11 // u32 + u16 + u8 + u32, little-endian, no padding
 
     const val DEFAULT_CONTROL_PORT: Int = 45555
     const val DEFAULT_INPUT_PORT: Int = 45454
     /** UDP LAN / VPN host advertise + probe (ASDISC01 / ASDISCQ1). */
     const val DEFAULT_DISCOVERY_PORT: Int = 45550
+    const val DEFAULT_VIDEO_PORT: Int = 5004
+    const val DEFAULT_AUDIO_PORT: Int = 6004
 }
 
 enum class PacketType(val id: Int) {
@@ -47,7 +49,8 @@ enum class PacketType(val id: Int) {
     ClientLogBundle(29),
     PasswordChangeRequired(30),
     PasswordChange(31),
-    TouchInput(32);
+    TouchInput(32),
+    DsScreenLayout(33);
 
     companion object {
         fun fromId(id: Int): PacketType =
@@ -129,6 +132,21 @@ data class ErrorPacket(
     val message: String,
 )
 
+/** Lobby capacity probe (ActiveSessionInfo). Trailing slots are optional (v21+). */
+data class ActiveSessionInfo(
+    val active: Boolean,
+    val selectedGameId: String?,
+    val sessionMode: GameSessionMode,
+    val playerCount: Int,
+    val connectedPlayers: Int,
+    val disconnectedPlayers: Int,
+    val viewerCount: Int,
+    val videoEnabled: Boolean,
+    val audioEnabled: Boolean,
+    val activeSlots: Int? = null,
+    val maxSlots: Int? = null,
+)
+
 /** Host → client: open pad OSK for Ryujinx Software Keyboard (TCP). */
 data class SoftKeyboardRequest(
     val requestId: Long,
@@ -142,6 +160,25 @@ data class SoftKeyboardResponse(
     val requestId: Long,
     val accepted: Boolean,
     val text: String,
+)
+
+/**
+ * Host → client: melonDS top/bottom panes in window pixels.
+ * Map as fractions of windowW/windowH onto the letterboxed video surface.
+ */
+data class DsScreenLayout(
+    val windowW: Int,
+    val windowH: Int,
+    val hasTop: Boolean,
+    val topX: Int,
+    val topY: Int,
+    val topW: Int,
+    val topH: Int,
+    val hasBot: Boolean,
+    val botX: Int,
+    val botY: Int,
+    val botW: Int,
+    val botH: Int,
 )
 
 /** Host art blob for a catalog asset_key + role (boxart/grid/…). */
@@ -353,10 +390,12 @@ sealed class IncomingPacket {
     data class VideoPending(val videoUri: String) : IncomingPacket()
     data class Catalog(val value: GameList) : IncomingPacket()
     data class SoftKeyboard(val value: SoftKeyboardRequest) : IncomingPacket()
+    data class DsScreens(val value: DsScreenLayout) : IncomingPacket()
     data class DiscControl(val value: DiscControlResponse) : IncomingPacket()
     data class Link(val value: LinkResponse) : IncomingPacket()
     data class Art(val value: ArtAssetResponse) : IncomingPacket()
     data class Error(val value: ErrorPacket) : IncomingPacket()
+    data class ActiveSession(val value: ActiveSessionInfo) : IncomingPacket()
     data object PasswordChangeRequired : IncomingPacket()
     data class Unknown(val type: PacketType) : IncomingPacket()
 }

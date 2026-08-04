@@ -1,5 +1,7 @@
 #ifndef _WIN32
 #include "host/streaming_audio_sink.hpp"
+#include "host/session_audio_channel.hpp"
+#include "host/launch_environment.hpp"
 
 #include "common/platform/process_utils.hpp"
 
@@ -635,6 +637,92 @@ void StreamingAudioSink::track_emulator_process(int process_id, int slot_index) 
 void StreamingAudioSink::untrack_emulator_process(int slot_index) {
     std::lock_guard lock(g_track_mutex);
     g_tracked_roots.erase(slot_index);
+}
+
+SessionAudioChannel::SessionAudioChannel(int slot_index)
+    : slot_index_(slot_index < 0 ? 0 : slot_index)
+    , sink_name_(StreamingAudioSink::slot_sink_name(slot_index_))
+    , application_id_(StreamingAudioSink::slot_application_id(slot_index_)) {
+    const auto description = "ArchStreamer slot " + std::to_string(slot_index_);
+    ensure_named_null_sink(sink_name_.c_str(), description.c_str());
+    // Do not steal the session default onto the silent capture sink.
+    StreamingAudioSink{}.restore_default_sink();
+    sink_owned_ = true;
+}
+
+SessionAudioChannel::~SessionAudioChannel() {
+    clear_emulator_pid();
+    if (!sink_owned_) {
+        return;
+    }
+    unload_null_sink_modules_named(sink_name_);
+    sink_owned_ = false;
+}
+
+std::string SessionAudioChannel::monitor_source() const {
+    return sink_name_ + ".monitor";
+}
+
+ProcessEnvironment SessionAudioChannel::launch_env() const {
+    // Reuse the shared audio layer so PULSE_PROP / PULSE_SERVER stay consistent.
+    return audio_launch_environment(
+        /*stream_media=*/true,
+        /*stream_audio=*/true,
+        /*host_plays_locally=*/false,
+        monitor_source());
+}
+
+int SessionAudioChannel::park() {
+    const auto matches = [this](const std::string& block) {
+        return block_has_application_id(block, application_id_);
+    };
+
+    int matched = 0;
+    {
+        const auto dump = read_command_output("pactl list sink-inputs 2>/dev/null");
+        std::string::size_type pos = 0;
+        while (pos < dump.size()) {
+            const auto next = dump.find("Sink Input #", pos + 1);
+            const auto block = dump.substr(
+                pos,
+                next == std::string::npos ? std::string::npos : next - pos);
+            pos = next == std::string::npos ? dump.size() : next;
+            if (matches(block)) {
+                ++matched;
+            }
+        }
+    }
+
+    const int moved = move_matching_sink_inputs_to(sink_name_.c_str(), matches);
+    if (moved > 0) {
+        std::cout
+            << "Parked " << moved
+            << " stream(s) on '" << sink_name_
+            << "' (slot " << slot_index_ << ", id " << application_id_ << ").\n";
+    } else if (matched == 0) {
+        static thread_local int warn_slot = -1;
+        static thread_local int warn_count = 0;
+        if (warn_slot != slot_index_) {
+            warn_slot = slot_index_;
+            warn_count = 0;
+        }
+        if (warn_count < 3) {
+            ++warn_count;
+            std::cerr
+                << "Warning: no Pulse sink-input with application.id=\""
+                << application_id_ << "\" for slot " << slot_index_
+                << " — remotes may hear silence while speakers get the game\n";
+        }
+    }
+    return moved;
+}
+
+void SessionAudioChannel::set_emulator_pid(int process_id) {
+    emulator_pid_ = process_id > 0 ? process_id : 0;
+}
+
+void SessionAudioChannel::clear_emulator_pid() {
+    emulator_pid_ = 0;
 }
 
 } // namespace archstreamer

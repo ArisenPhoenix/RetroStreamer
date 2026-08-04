@@ -592,7 +592,8 @@ private fun MenuPadButton(
                 if (enabled) {
                     Modifier.pointerInput(Unit) {
                         awaitEachGesture {
-                            awaitFirstDown(requireUnconsumed = false)
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            down.consume()
                             do {
                                 val event = awaitPointerEvent()
                                 val change = event.changes.firstOrNull()
@@ -641,6 +642,7 @@ private fun ShoulderButton(
                     Modifier.pointerInput(width, height) {
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
+                            down.consume()
                             pressed = true
                             onPress(true)
                             try {
@@ -823,6 +825,7 @@ private fun PadButton(
                     Modifier.pointerInput(mask, size) {
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
+                            down.consume()
                             pressed = true
                             onButton(mask, true)
                             try {

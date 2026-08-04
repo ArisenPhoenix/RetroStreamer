@@ -10,8 +10,9 @@ namespace archstreamer {
  *
  * Standalone note: melonDS "Hybrid" (layout=3) draws a large pane plus *both*
  * screens as minis, so the small pane is often another copy of the top screen.
- * Landscape instead uses Horizontal + EmphTop (large top, small bottom) to match
- * libretro "Hybrid Top" / hybrid_small_screen=Bottom.
+ * Landscape instead uses Horizontal + EmphTop (large top left, small bottom right
+ * centered at ~⅓ height). SwapScreenEmphasis toggles EmphTop ↔ EmphBot (sizes only;
+ * top stays left, bottom stays right).
  */
 struct NdsDisplayLayout {
     bool portrait = false;

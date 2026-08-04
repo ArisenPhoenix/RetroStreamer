@@ -15,6 +15,7 @@
 #include "host/session_runtime.hpp"
 #include "host/session_slot_lease.hpp"
 #include "host/streaming_audio_sink.hpp"
+#include "host/session_audio_channel.hpp"
 #include "host/virtual_keyboard.hpp"
 #include "host/platform/default_host_platform.hpp"
 #include "client/controller_manager.hpp"
@@ -139,6 +140,11 @@ private:
     std::unique_ptr<InputRouter> input_router_;
     /** Persistent melonDS ctrl socket for remoted stylus (TouchInput). */
     std::unique_ptr<MelonDsCtrlClient> melonds_touch_ctrl_;
+    /** Last DS screen layout broadcast to clients (for change detection + late joins). */
+    std::optional<DsScreenLayout> last_ds_screen_layout_;
+    std::chrono::steady_clock::time_point last_ds_screen_query_{};
+    /** Owns per-slot Pulse sink + application.id for concurrent audio. */
+    std::unique_ptr<SessionAudioChannel> audio_channel_;
     std::unique_ptr<MediaServer> media_server_;
     std::unique_ptr<SessionRuntime> session_runtime_;
     std::optional<SessionControlMonitor> session_monitor_;

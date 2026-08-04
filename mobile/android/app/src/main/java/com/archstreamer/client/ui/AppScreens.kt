@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -201,6 +202,7 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
                 ) {
                     when (state.section) {
                         NavSection.Client -> ClientSection(state, viewModel)
+                        NavSection.Remote -> RemoteSection(state, viewModel)
                         NavSection.Games -> GamesSection(state, viewModel)
                         NavSection.Stream -> StreamSection(state, viewModel)
                         NavSection.GameOptions -> GameOptionsSection(state, viewModel)
@@ -540,6 +542,125 @@ private fun ClientSection(state: UiState, viewModel: ClientViewModel) {
             CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
         }
         Text(state.status, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+private fun RemoteSection(state: UiState, viewModel: ClientViewModel) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Remote host (SSH)", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Ensure Host probes the base control port, reuses a free lobby, or SSH-starts host_runner. " +
+                "Successful ensure writes IP/ports onto the Client tab.",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        OutlinedTextField(
+            value = state.remoteSshHost,
+            onValueChange = viewModel::onRemoteSshHostChange,
+            label = { Text("SSH host") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = state.remoteSshUser,
+            onValueChange = viewModel::onRemoteSshUserChange,
+            label = { Text("SSH user") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = state.remoteSshPassword,
+            onValueChange = viewModel::onRemoteSshPasswordChange,
+            label = { Text("SSH password (not saved)") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = state.remoteSshPort,
+            onValueChange = viewModel::onRemoteSshPortChange,
+            label = { Text("SSH port") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = state.remoteDirectory,
+            onValueChange = viewModel::onRemoteDirectoryChange,
+            label = { Text("Remote directory") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("/home/user/ArchStreamer/build") },
+        )
+        OutlinedTextField(
+            value = state.remoteRomRoot,
+            onValueChange = viewModel::onRemoteRomRootChange,
+            label = { Text("Remote ROM root") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = state.remoteBinary,
+            onValueChange = viewModel::onRemoteBinaryChange,
+            label = { Text("host_runner path") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("./host_runner or …/build/host_runner") },
+            supportingText = {
+                Text("If you paste the build directory, /host_runner is appended automatically.")
+            },
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = state.remoteBaseControlPort,
+                onValueChange = viewModel::onRemoteBaseControlPortChange,
+                label = { Text("Base control") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedTextField(
+                value = state.remoteBaseInputPort,
+                onValueChange = viewModel::onRemoteBaseInputPortChange,
+                label = { Text("Base input") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = viewModel::ensureRemoteHost,
+                enabled = !state.remoteBusy,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(if (state.remoteBusy) "Working…" else "Ensure Host")
+            }
+            OutlinedButton(
+                onClick = viewModel::stopRemoteHost,
+                enabled = !state.remoteBusy,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Stop Host")
+            }
+        }
+        if (state.remoteBusy) {
+            CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+        }
+        OutlinedTextField(
+            value = state.remoteStatus,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Status / errors") },
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 140.dp, max = 240.dp),
+            minLines = 6,
+            maxLines = 16,
+        )
     }
 }
 
@@ -1197,14 +1318,17 @@ private fun PlayScreen(
         StreamVideoView(
             player = state.videoPlayer,
             modifier = Modifier.fillMaxSize(),
-            hybridPortraitStack = dualScreen && isPortrait,
+            dualScreen = dualScreen,
+            portraitStack = isPortrait,
+            emphBottom = DsTouchMapping.layoutEmphasizesBottom(state.dsScreenLayout),
         )
-        // Touch under gamepad: Compose draw order is z-order, so overlapping
-        // pad controls keep hit-testing priority when both cover the same pixels.
+        // Stylus under pad chrome: overlapping face/dpad/shoulders win hit-testing.
+        // Empty areas of the pad pass through so the bottom screen stays tappable.
         if (dualScreen && !state.overlayEditing) {
             DsBottomTouchOverlay(
                 modifier = Modifier.fillMaxSize(),
                 portraitHybridStack = isPortrait,
+                layout = state.dsScreenLayout,
                 onTouch = viewModel::onDsTouch,
             )
         }

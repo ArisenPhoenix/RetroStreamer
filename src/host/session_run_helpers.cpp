@@ -326,6 +326,14 @@ void park_session_game_audio(
     audio->park_game_audio();
 }
 
+void park_session_game_audio(SessionAudioChannel* channel) {
+    if (channel == nullptr) {
+        return;
+    }
+    std::lock_guard lock(g_audio_park_mutex);
+    channel->park();
+}
+
 bool wait_emulator_running(SessionRuntime& runtime, int settle_attempts) {
     for (int i = 0; i < settle_attempts && runtime.emulator_running(); ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -391,11 +399,13 @@ SessionLoopCadence::SessionLoopCadence(
     InputRouter* router,
     StreamingAudioSink* audio,
     std::optional<int> audio_slot_index,
-    bool audio_enabled)
+    bool audio_enabled,
+    SessionAudioChannel* audio_channel)
     : bridge_(bridge)
     , router_(router)
     , audio_(audio)
     , audio_slot_index_(audio_slot_index)
+    , audio_channel_(audio_channel)
     , audio_enabled_(audio_enabled)
     , next_audio_park_(std::chrono::steady_clock::now()) {}
 
@@ -406,7 +416,11 @@ void SessionLoopCadence::tick() {
     if (audio_enabled_) {
         const auto now = std::chrono::steady_clock::now();
         if (now >= next_audio_park_) {
-            park_session_game_audio(audio_, audio_slot_index_);
+            if (audio_channel_ != nullptr) {
+                park_session_game_audio(audio_channel_);
+            } else {
+                park_session_game_audio(audio_, audio_slot_index_);
+            }
             next_audio_park_ = now + std::chrono::seconds(3);
         }
     }
@@ -430,7 +444,8 @@ void post_emulator_start_warmup(
     VirtualKeyboard* keyboard,
     bool gamescope_capture,
     const std::string& preferred_display,
-    std::string_view log_prefix) {
+    std::string_view log_prefix,
+    SessionAudioChannel* audio_channel) {
     start_deferred_gamescope_video_if_needed(
         media,
         config,
@@ -447,14 +462,20 @@ void post_emulator_start_warmup(
 
     if (config.audio) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        if (audio != nullptr) {
-            if (const auto pid = runtime.emulator().process_id(); pid.has_value()) {
+        if (const auto pid = runtime.emulator().process_id(); pid.has_value()) {
+            if (audio_channel != nullptr) {
+                audio_channel->set_emulator_pid(*pid);
+            } else if (audio != nullptr) {
                 audio->track_emulator_process(
                     *pid,
                     audio_slot_index.value_or(-1));
             }
         }
-        park_session_game_audio(audio, audio_slot_index);
+        if (audio_channel != nullptr) {
+            park_session_game_audio(audio_channel);
+        } else {
+            park_session_game_audio(audio, audio_slot_index);
+        }
     }
 
     if (pulse_input && players > 0) {

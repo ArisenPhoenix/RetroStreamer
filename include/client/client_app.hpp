@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -255,6 +256,50 @@ struct SoftKeyboardBridge {
     }
 };
 
+/** Host DsScreenLayout + GUI stylus samples → UDP TouchInput on the input thread. */
+struct DsTouchBridge {
+    struct Sample {
+        std::uint16_t norm_x = 0;
+        std::uint16_t norm_y = 0;
+        bool pressed = false;
+    };
+
+    std::mutex mutex;
+    std::optional<DsScreenLayout> layout;
+    /** Queue so a press+release in one input tick is not collapsed to release-only. */
+    std::deque<Sample> pending;
+
+    void set_layout(DsScreenLayout value) {
+        std::lock_guard lock(mutex);
+        layout = value;
+    }
+
+    std::optional<DsScreenLayout> snapshot_layout() {
+        std::lock_guard lock(mutex);
+        return layout;
+    }
+
+    void push_sample(std::uint16_t norm_x, std::uint16_t norm_y, bool pressed) {
+        std::lock_guard lock(mutex);
+        // Cap so a stuck sender cannot grow without bound.
+        constexpr std::size_t kMaxQueued = 32;
+        if (pending.size() >= kMaxQueued) {
+            pending.pop_front();
+        }
+        pending.push_back(Sample{norm_x, norm_y, pressed});
+    }
+
+    std::optional<Sample> take_sample() {
+        std::lock_guard lock(mutex);
+        if (pending.empty()) {
+            return std::nullopt;
+        }
+        Sample value = pending.front();
+        pending.pop_front();
+        return value;
+    }
+};
+
 struct MediaResyncBridge {
     std::atomic_bool requested{false};
 
@@ -349,6 +394,7 @@ struct ClientAppCallbacks {
     std::shared_ptr<DiscControlBridge> disc_control;
     std::shared_ptr<LinkControlBridge> link_control;
     std::shared_ptr<SoftKeyboardBridge> soft_keyboard;
+    std::shared_ptr<DsTouchBridge> ds_touch;
     std::shared_ptr<ClientHeartbeatPrefs> heartbeat_prefs;
     std::shared_ptr<ClientControllerMapPrefs> controller_map_prefs;
     std::shared_ptr<EmulatorControlBridge> emulator_control;

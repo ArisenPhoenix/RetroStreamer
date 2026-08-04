@@ -1,0 +1,74 @@
+diff --git a/src/frontend/qt_sdl/Screen.cpp b/src/frontend/qt_sdl/Screen.cpp
+index bc63d3ac..94ba32be 100644
+--- a/src/frontend/qt_sdl/Screen.cpp
++++ b/src/frontend/qt_sdl/Screen.cpp
+@@ -18,6 +18,7 @@
+ 
+ #include <string.h>
+ 
++#include <algorithm>
+ #include <optional>
+ #include <cmath>
+ 
+@@ -232,6 +233,61 @@ void ScreenPanel::onScreenLayoutChanged()
+     setupScreenLayout();
+ }
+ 
++bool ScreenPanel::queryScreenRects(ScreenRectQuery& out)
++{
++    // Ensure layout matches the current widget size (swap/emphasis already applied
++    // via loadConfig → setupScreenLayout on screenLayoutChange).
++    setupScreenLayout();
++
++    out = {};
++    out.windowW = width();
++    out.windowH = height();
++    if (out.windowW <= 0 || out.windowH <= 0)
++        return false;
++
++    float transforms[kMaxScreenTransforms][6];
++    int kinds[kMaxScreenTransforms];
++    const int n = layout.GetScreenTransforms(transforms[0], kinds);
++
++    auto aabbFromMtx = [](const float* m, int& x, int& y, int& w, int& h) {
++        // Screen matrices map DS pixel space (0..256 × 0..192) → window pixels.
++        // Must match M23_Transform: x' = x*m0 + y*m2 + m4; y' = x*m1 + y*m3 + m5.
++        const float corners[4][2] = {
++            {0.f, 0.f}, {256.f, 0.f}, {0.f, 192.f}, {256.f, 192.f},
++        };
++        float minX = 1e9f, minY = 1e9f, maxX = -1e9f, maxY = -1e9f;
++        for (const auto& c : corners)
++        {
++            const float px = m[0] * c[0] + m[2] * c[1] + m[4];
++            const float py = m[1] * c[0] + m[3] * c[1] + m[5];
++            minX = std::min(minX, px);
++            minY = std::min(minY, py);
++            maxX = std::max(maxX, px);
++            maxY = std::max(maxY, py);
++        }
++        x = (int)std::floor(minX);
++        y = (int)std::floor(minY);
++        w = std::max(1, (int)std::ceil(maxX) - x);
++        h = std::max(1, (int)std::ceil(maxY) - y);
++    };
++
++    for (int i = 0; i < n; i++)
++    {
++        // kind 0 = top screen, 1 = bottom (hybrid duplicate uses HybScreen id).
++        if (kinds[i] == 0)
++        {
++            out.hasTop = true;
++            aabbFromMtx(transforms[i], out.topX, out.topY, out.topW, out.topH);
++        }
++        else if (kinds[i] == 1)
++        {
++            out.hasBot = true;
++            aabbFromMtx(transforms[i], out.botX, out.botY, out.botW, out.botH);
++        }
++    }
++    return out.hasTop || out.hasBot;
++}
++
+ void ScreenPanel::onAutoScreenSizingChanged(int sizing)
+ {
+     autoScreenSizing = sizing;

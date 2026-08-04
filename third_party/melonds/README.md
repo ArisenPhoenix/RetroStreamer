@@ -23,16 +23,26 @@ can arm Local Wireless mid-session without opening the melonDS UI.
 ```
 
 Control lines (newline-terminated): `LAN_HOST <player> [n]`, `LAN_CONNECT <player> <host>`,
-`LAN_END`, `PING` → replies `OK` / `ERR …` / `PONG`.
+`LAN_END`, `TOUCH <x> <y>`, `TOUCH_END`, `SCREENS`, `PING`
+→ replies `OK` / `ERR …` / `PONG`.
+
+`SCREENS` → `OK <ww> <wh> <hasTop> <tx> <ty> <tw> <th> <hasBot> <bx> <by> <bw> <bh>`
+(window + top/bottom AABBs in panel pixels; follows swap/emphasis).
+
+Also apply [screens-aabb-matrix.patch](screens-aabb-matrix.patch) so `queryScreenRects`
+matches melonDS `M23_Transform` (otherwise bottom AABB is wrong and clients
+mis-detect emphasis / miss stylus hits).
 
 ## Rebuild local tree
 
 ```bash
 cd ~/Games/melonDS   # or your melonDS checkout
 git apply /path/to/ArchStreamer/third_party/melonds/archstreamer-lan.patch
+git apply /path/to/ArchStreamer/third_party/melonds/screens-aabb-matrix.patch
 # or copy ArchStreamerCtrl.{h,cpp} and merge CLI/main/CMake changes
 cmake --build build -j"$(nproc)"
 cp -v build/melonDS /srv/emus/melonDS
+cp -v build/melonDS ~/.local/share/archstreamer/melonds/melonDS
 ```
 
 ArchStreamer host code talks only through `MelonDsBackend` (`include/host/nds/`).

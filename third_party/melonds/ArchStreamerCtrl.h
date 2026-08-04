@@ -18,6 +18,15 @@ class ArchStreamerCtrl : public QObject
     Q_OBJECT
 
 public:
+    struct ScreenRects {
+        int windowW = 0;
+        int windowH = 0;
+        bool hasTop = false;
+        int topX = 0, topY = 0, topW = 0, topH = 0;
+        bool hasBot = false;
+        int botX = 0, botY = 0, botW = 0, botH = 0;
+    };
+
     explicit ArchStreamerCtrl(QObject* parent = nullptr);
     ~ArchStreamerCtrl() override;
 
@@ -30,6 +39,8 @@ public:
     /** Absolute DS stylus: x in [0,255], y in [0,191]. */
     static bool applyTouch(int x, int y);
     static void applyTouchEnd();
+    /** Top/bottom AABBs in window pixels (updates with swap/emphasis). */
+    static bool queryScreens(ScreenRects& out);
 
 private slots:
     void onNewConnection();

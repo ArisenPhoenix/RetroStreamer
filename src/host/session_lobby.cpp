@@ -117,6 +117,8 @@ ActiveSessionInfo active_session_info_for(
         viewer_count,
         video_enabled,
         audio_enabled,
+        /*active_slots=*/1,
+        /*max_slots=*/1,
     };
 }
 
@@ -511,7 +513,10 @@ SessionPlan gather_session_clients(
         try {
             const auto first_payload = receive_control_payload(*stream);
             if (std::holds_alternative<ActiveSessionInfoRequest>(first_payload)) {
-                stream->send_packet(serialize_packet(ActiveSessionInfo{}));
+                ActiveSessionInfo idle{};
+                idle.active_slots = 0;
+                idle.max_slots = 1;
+                stream->send_packet(serialize_packet(idle));
                 continue;
             }
             if (const auto* art_request = std::get_if<ArtAssetRequest>(&first_payload); art_request != nullptr) {

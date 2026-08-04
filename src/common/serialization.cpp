@@ -263,6 +263,29 @@ ByteBuffer serialize_payload(const TouchInput& payload) {
     return writer.take();
 }
 
+ByteBuffer serialize_payload(const DsScreenLayout& payload) {
+    Writer writer;
+    writer.write_pod<std::uint16_t>(payload.window_w);
+    writer.write_pod<std::uint16_t>(payload.window_h);
+    std::uint8_t flags = 0;
+    if (payload.has_top) {
+        flags |= 0x01;
+    }
+    if (payload.has_bot) {
+        flags |= 0x02;
+    }
+    writer.write_pod<std::uint8_t>(flags);
+    writer.write_pod<std::int16_t>(payload.top_x);
+    writer.write_pod<std::int16_t>(payload.top_y);
+    writer.write_pod<std::int16_t>(payload.top_w);
+    writer.write_pod<std::int16_t>(payload.top_h);
+    writer.write_pod<std::int16_t>(payload.bot_x);
+    writer.write_pod<std::int16_t>(payload.bot_y);
+    writer.write_pod<std::int16_t>(payload.bot_w);
+    writer.write_pod<std::int16_t>(payload.bot_h);
+    return writer.take();
+}
+
 ByteBuffer serialize_payload(const ViewerHeartbeat& payload) {
     Writer writer;
     writer.write_pod<ClientId>(payload.client_id);
@@ -348,6 +371,9 @@ ByteBuffer serialize_payload(const ActiveSessionInfo& payload) {
     writer.write_pod<std::uint8_t>(payload.viewer_count);
     writer.write_bool(payload.video_enabled);
     writer.write_bool(payload.audio_enabled);
+    // v21+: always emit slot counts when known; 0/0 when unset is still valid capacity.
+    writer.write_pod<std::uint8_t>(payload.active_slots.value_or(0));
+    writer.write_pod<std::uint8_t>(payload.max_slots.value_or(0));
     return writer.take();
 }
 
@@ -502,6 +528,7 @@ PacketType packet_type_for(const SeatAssignment&) { return PacketType::SeatAssig
 PacketType packet_type_for(const ControllerInput&) { return PacketType::ControllerInput; }
 PacketType packet_type_for(const KeyboardInput&) { return PacketType::KeyboardInput; }
 PacketType packet_type_for(const TouchInput&) { return PacketType::TouchInput; }
+PacketType packet_type_for(const DsScreenLayout&) { return PacketType::DsScreenLayout; }
 PacketType packet_type_for(const ViewerHeartbeat&) { return PacketType::ViewerHeartbeat; }
 PacketType packet_type_for(const ErrorPacket&) { return PacketType::Error; }
 PacketType packet_type_for(const GameListRequest&) { return PacketType::GameListRequest; }
@@ -568,6 +595,10 @@ ByteBuffer serialize_packet(const KeyboardInput& payload) {
 }
 
 ByteBuffer serialize_packet(const TouchInput& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const DsScreenLayout& payload) {
     return serialize_packet_impl(payload);
 }
 
@@ -756,6 +787,24 @@ TouchInput read_touch_input(Reader& reader) {
     return payload;
 }
 
+DsScreenLayout read_ds_screen_layout(Reader& reader) {
+    DsScreenLayout payload;
+    payload.window_w = reader.read_pod<std::uint16_t>();
+    payload.window_h = reader.read_pod<std::uint16_t>();
+    const auto flags = reader.read_pod<std::uint8_t>();
+    payload.has_top = (flags & 0x01) != 0;
+    payload.has_bot = (flags & 0x02) != 0;
+    payload.top_x = reader.read_pod<std::int16_t>();
+    payload.top_y = reader.read_pod<std::int16_t>();
+    payload.top_w = reader.read_pod<std::int16_t>();
+    payload.top_h = reader.read_pod<std::int16_t>();
+    payload.bot_x = reader.read_pod<std::int16_t>();
+    payload.bot_y = reader.read_pod<std::int16_t>();
+    payload.bot_w = reader.read_pod<std::int16_t>();
+    payload.bot_h = reader.read_pod<std::int16_t>();
+    return payload;
+}
+
 ViewerHeartbeat read_viewer_heartbeat(Reader& reader) {
     ViewerHeartbeat payload;
     payload.client_id = reader.read_pod<ClientId>();
@@ -831,7 +880,7 @@ ActiveSessionInfoRequest read_active_session_info_request(Reader&) {
 }
 
 ActiveSessionInfo read_active_session_info(Reader& reader) {
-    return ActiveSessionInfo{
+    ActiveSessionInfo payload{
         reader.read_bool(),
         reader.read_optional_string(),
         reader.read_pod<GameSessionMode>(),
@@ -842,6 +891,11 @@ ActiveSessionInfo read_active_session_info(Reader& reader) {
         reader.read_bool(),
         reader.read_bool(),
     };
+    if (reader.remaining() >= 2) {
+        payload.active_slots = reader.read_pod<std::uint8_t>();
+        payload.max_slots = reader.read_pod<std::uint8_t>();
+    }
+    return payload;
 }
 
 SessionReady read_session_ready(Reader& reader) {
@@ -1014,6 +1068,8 @@ PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
             return read_keyboard_input(payload_reader);
         case PacketType::TouchInput:
             return read_touch_input(payload_reader);
+        case PacketType::DsScreenLayout:
+            return read_ds_screen_layout(payload_reader);
         case PacketType::ViewerHeartbeat:
             return read_viewer_heartbeat(payload_reader);
         case PacketType::Error:

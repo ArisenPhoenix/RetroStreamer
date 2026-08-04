@@ -180,6 +180,11 @@ MelonDsUserProfile prepare_melonds_user_profile(
     out << "Interpolation = 0\n";
     out << "BitDepth = 0\n";
 
+    // Default Melon Mic.InputType=1 opens the host mic as a Pulse source-output
+    // under the same application.id; silence is enough for streaming.
+    out << "\n[Mic]\n";
+    out << "InputType = 0\n";
+
     out << "\n[Emu]\n";
     out << "DirectBoot = true\n";
     out << "ExternalBIOSEnable = true\n";

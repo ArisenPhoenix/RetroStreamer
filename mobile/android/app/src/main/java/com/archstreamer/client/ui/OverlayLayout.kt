@@ -163,8 +163,10 @@ object OverlayPresets {
             // R2 = melonDS "Swap screens" (same as desktop right trigger).
             item(OverlayControlKind.ShoulderR2, 0.78f, 0.08f),
             item(OverlayControlKind.ShoulderR, 0.90f, 0.08f),
-            item(OverlayControlKind.Dpad, 0.18f, 0.72f),
-            item(OverlayControlKind.FaceAbxy, 0.82f, 0.72f),
+            // Keep dpad/face on the top screen so the bottom pane stays tappable.
+            // Landscape: left ~75% is top (EmphTop). Portrait stack: upper half is top.
+            item(OverlayControlKind.Dpad, 0.16f, 0.40f),
+            item(OverlayControlKind.FaceAbxy, 0.55f, 0.40f),
         )
     }
 

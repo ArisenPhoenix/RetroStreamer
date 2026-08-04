@@ -27,20 +27,25 @@ import com.archstreamer.client.media.RtpVideoPlayer
  * TextureView (not SurfaceView) so Compose pad overlays stay on top and receive touches.
  * Letterboxes to the stream aspect ratio.
  *
- * When [hybridPortraitStack] is true and the stream is still wide (Hybrid), crops the
- * left/right Hybrid panes into a stacked portrait presentation that fills the phone.
+ * When [dualScreen] is true, a single [DsHybridPortraitView] is kept for both orientations
+ * so MediaCodec is not rebuilt on rotate (portrait stacks panes; landscape letterboxes).
  */
 @Composable
 fun StreamVideoView(
     player: RtpVideoPlayer?,
     modifier: Modifier = Modifier,
     aspectRatio: Float = 16f / 9f,
+    /** DS DualScreen session: keep one GL decoder surface across orientation. */
+    dualScreen: Boolean = false,
+    /** Portrait + dualScreen → stacked UV crops; landscape → full-frame letterbox. */
+    portraitStack: Boolean = false,
+    emphBottom: Boolean = false,
+    /** @deprecated Use [dualScreen] + [portraitStack]. */
     hybridPortraitStack: Boolean = false,
 ) {
     var reportedAspect by remember(player) { mutableFloatStateOf(aspectRatio) }
     val ratio = if (reportedAspect > 0.1f) reportedAspect else aspectRatio
-    // Hybrid is wide (~16:9); Top/Bottom is tall (~2:3). Only rearrange Hybrid.
-    val useHybridStack = hybridPortraitStack && ratio > 1.15f
+    val useDualGl = dualScreen || hybridPortraitStack
 
     DisposableEffect(player) {
         player?.onVideoSize = { w, h ->
@@ -53,7 +58,13 @@ fun StreamVideoView(
         }
     }
 
-    if (useHybridStack) {
+    if (useDualGl) {
+        val stack = if (dualScreen) {
+            portraitStack
+        } else {
+            // Legacy: hybridPortraitStack meant "stack only while portrait+wide".
+            hybridPortraitStack && ratio > 1.15f
+        }
         AndroidView(
             modifier = modifier
                 .fillMaxSize()
@@ -61,6 +72,8 @@ fun StreamVideoView(
             factory = { context ->
                 DsHybridPortraitView(context).also { view ->
                     view.streamAspect = ratio
+                    view.emphBottom = emphBottom
+                    view.portraitStack = stack
                     view.onSurfaceReady = { surface ->
                         (view.tag as? RtpVideoPlayer)?.attachSurface(surface)
                     }
@@ -71,10 +84,12 @@ fun StreamVideoView(
             },
             update = { view ->
                 view.streamAspect = ratio
+                view.emphBottom = emphBottom
+                view.portraitStack = stack
                 val previous = view.tag as? RtpVideoPlayer
                 if (previous !== player) {
                     view.tag = player
-                    // Surface attach is driven by onSurfaceReady; rebind only on player swap.
+                    // Same Surface — attach only on player identity change.
                     view.currentDecoderSurface()?.let { surface ->
                         player?.attachSurface(surface)
                     }

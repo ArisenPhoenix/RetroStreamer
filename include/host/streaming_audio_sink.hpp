@@ -11,9 +11,9 @@ namespace archstreamer {
 // system loopback capture continues via WindowsMediaServer.
 //
 // Single-session host uses sink name "archstreamer".
-// Concurrent session slots use "archstreamer-0", "archstreamer-1", … so each
-// GStreamer capture hears only that slot's emulator (Pulse). On Windows, slots
-// are targeted via track_emulator_process(pid, slot).
+// Concurrent session slots own a SessionAudioChannel (archstreamer-N + exact
+// application.id park); StreamingAudioSink remains for legacy single-session
+// and lobby prune/restore helpers.
 class StreamingAudioSink {
 public:
     static constexpr const char* kName = "archstreamer";

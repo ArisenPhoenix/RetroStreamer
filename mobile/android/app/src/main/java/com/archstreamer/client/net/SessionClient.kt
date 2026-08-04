@@ -149,7 +149,7 @@ data class JoinedPlaySession(
         inputSocket.send(datagram)
     }
 
-    /** Absolute DS stylus (0–255 × 0–191). [pressed]=false sends TOUCH_END on the host. */
+    /** Normalized DS bottom-screen touch (0..65535); host converts to stylus pixels. */
     fun sendTouch(x: Int, y: Int, pressed: Boolean, localPlayer: Int = 0) {
         inputSequence += 1
         val packet = PacketCodec.touchInput(

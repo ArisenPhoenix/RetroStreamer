@@ -121,8 +121,23 @@ class RtpVideoPlayer(
         if (surface === newSurface && attachedSurfaceIdentity == identity && codecConfigured) {
             return
         }
+        val previous = surface
         surface = newSurface
         attachedSurfaceIdentity = identity
+
+        // Prefer a live output-surface swap so orientation / view resize does not
+        // wait on a new IDR (full codec rebuild).
+        val existing = codec
+        if (existing != null && codecConfigured && previous != null && previous !== newSurface) {
+            try {
+                existing.setOutputSurface(newSurface)
+                scheduleDecode()
+                return
+            } catch (t: Throwable) {
+                Log.w(TAG, "setOutputSurface failed; reconfiguring codec", t)
+            }
+        }
+
         codecConfigured = false
         runCatching { codec?.stop() }
         runCatching { codec?.release() }

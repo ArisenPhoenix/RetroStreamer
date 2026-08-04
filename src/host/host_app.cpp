@@ -1,5 +1,6 @@
 #include "common/catalog_presenter.hpp"
 #include "common/cli_common.hpp"
+#include "common/ds_touch_mapping.hpp"
 #include "common/participant_role.hpp"
 #include "common/platform/default_platform.hpp"
 #include "common/platform/process_utils.hpp"
@@ -616,7 +617,10 @@ int HostApp::run_direct_session(
                 return false;
             }
             if (input.pressed) {
-                return touch_ctrl->touch(input.x, input.y);
+                std::uint16_t x = 0;
+                std::uint16_t y = 0;
+                ds_coords_from_normalized_u16(input.x, input.y, x, y);
+                return touch_ctrl->touch(x, y);
             }
             return touch_ctrl->touch_end();
         });

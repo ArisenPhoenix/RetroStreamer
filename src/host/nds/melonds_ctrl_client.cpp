@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <climits>
 #include <cstdio>
 #include <cstring>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -51,13 +53,43 @@ MelonDsCtrlClient::~MelonDsCtrlClient() {
     close_touch_channel();
 }
 
+namespace {
+
+std::int16_t clamp_i16(int value) {
+    if (value < INT16_MIN) {
+        return static_cast<std::int16_t>(INT16_MIN);
+    }
+    if (value > INT16_MAX) {
+        return static_cast<std::int16_t>(INT16_MAX);
+    }
+    return static_cast<std::int16_t>(value);
+}
+
+std::uint16_t clamp_u16(int value) {
+    if (value < 0) {
+        return 0;
+    }
+    if (value > UINT16_MAX) {
+        return static_cast<std::uint16_t>(UINT16_MAX);
+    }
+    return static_cast<std::uint16_t>(value);
+}
+
+} // namespace
+
 #if defined(_WIN32)
 
-bool MelonDsCtrlClient::send_command(
+std::optional<std::string> MelonDsCtrlClient::transact(
     std::string_view,
     std::chrono::milliseconds) const {
     last_error_ = "melonDS control socket is not implemented on Windows yet";
-    return false;
+    return std::nullopt;
+}
+
+bool MelonDsCtrlClient::send_command(
+    std::string_view command,
+    std::chrono::milliseconds timeout) const {
+    return transact(command, timeout).has_value();
 }
 
 bool MelonDsCtrlClient::ensure_touch_connected(std::chrono::milliseconds) {
@@ -74,19 +106,19 @@ void MelonDsCtrlClient::close_touch_channel() {}
 
 #else
 
-bool MelonDsCtrlClient::send_command(
+std::optional<std::string> MelonDsCtrlClient::transact(
     std::string_view command,
     std::chrono::milliseconds timeout) const {
     last_error_.clear();
     if (server_name_.empty()) {
         last_error_ = "empty melonDS control server name";
-        return false;
+        return std::nullopt;
     }
 
     const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) {
         last_error_ = "socket() failed";
-        return false;
+        return std::nullopt;
     }
 
     sockaddr_un addr{};
@@ -95,7 +127,7 @@ bool MelonDsCtrlClient::send_command(
     if (path.size() >= sizeof(addr.sun_path)) {
         last_error_ = "control socket path too long";
         ::close(fd);
-        return false;
+        return std::nullopt;
     }
     std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path.c_str());
 
@@ -109,14 +141,14 @@ bool MelonDsCtrlClient::send_command(
         if (errno != ECONNREFUSED && errno != ENOENT) {
             last_error_ = std::string("connect failed: ") + std::strerror(errno);
             ::close(fd);
-            return false;
+            return std::nullopt;
         }
         ::usleep(50 * 1000);
     }
     if (!connected) {
         last_error_ = "timed out connecting to " + path;
         ::close(fd);
-        return false;
+        return std::nullopt;
     }
 
     std::string payload(command);
@@ -130,7 +162,7 @@ bool MelonDsCtrlClient::send_command(
             }
             last_error_ = std::string("write failed: ") + std::strerror(errno);
             ::close(fd);
-            return false;
+            return std::nullopt;
         }
         written += static_cast<std::size_t>(n);
     }
@@ -151,7 +183,7 @@ bool MelonDsCtrlClient::send_command(
             }
             last_error_ = std::string("poll failed: ") + std::strerror(errno);
             ::close(fd);
-            return false;
+            return std::nullopt;
         }
         if (pr == 0) {
             break;
@@ -163,7 +195,7 @@ bool MelonDsCtrlClient::send_command(
             }
             last_error_ = std::string("read failed: ") + std::strerror(errno);
             ::close(fd);
-            return false;
+            return std::nullopt;
         }
         if (n == 0) {
             break;
@@ -178,10 +210,24 @@ bool MelonDsCtrlClient::send_command(
     while (!reply.empty() && (reply.back() == '\n' || reply.back() == '\r')) {
         reply.pop_back();
     }
-    if (reply == "OK" || reply == "PONG") {
+    if (reply.empty()) {
+        last_error_ = "empty reply from melonDS ctrl";
+        return std::nullopt;
+    }
+    return reply;
+}
+
+bool MelonDsCtrlClient::send_command(
+    std::string_view command,
+    std::chrono::milliseconds timeout) const {
+    const auto reply = transact(command, timeout);
+    if (!reply.has_value()) {
+        return false;
+    }
+    if (*reply == "OK" || *reply == "PONG" || reply->rfind("OK ", 0) == 0) {
         return true;
     }
-    last_error_ = reply.empty() ? "empty reply from melonDS ctrl" : reply;
+    last_error_ = *reply;
     return false;
 }
 
@@ -329,6 +375,53 @@ bool MelonDsCtrlClient::touch(std::uint16_t x, std::uint16_t y) {
 
 bool MelonDsCtrlClient::touch_end() {
     return write_touch_line("TOUCH_END");
+}
+
+bool MelonDsCtrlClient::query_screens(
+    DsScreenLayout& out,
+    std::chrono::milliseconds timeout) const {
+    const auto reply = transact("SCREENS", timeout);
+    if (!reply.has_value()) {
+        return false;
+    }
+    if (reply->rfind("OK ", 0) != 0) {
+        last_error_ = *reply;
+        return false;
+    }
+
+    // OK <ww> <wh> <hasTop> <tx> <ty> <tw> <th> <hasBot> <bx> <by> <bw> <bh>
+    std::istringstream in(reply->substr(3));
+    int ww = 0;
+    int wh = 0;
+    int has_top = 0;
+    int tx = 0;
+    int ty = 0;
+    int tw = 0;
+    int th = 0;
+    int has_bot = 0;
+    int bx = 0;
+    int by = 0;
+    int bw = 0;
+    int bh = 0;
+    if (!(in >> ww >> wh >> has_top >> tx >> ty >> tw >> th >> has_bot >> bx >> by >> bw >> bh)) {
+        last_error_ = "malformed SCREENS reply: " + *reply;
+        return false;
+    }
+
+    out = {};
+    out.window_w = clamp_u16(ww);
+    out.window_h = clamp_u16(wh);
+    out.has_top = has_top != 0;
+    out.top_x = clamp_i16(tx);
+    out.top_y = clamp_i16(ty);
+    out.top_w = clamp_i16(tw);
+    out.top_h = clamp_i16(th);
+    out.has_bot = has_bot != 0;
+    out.bot_x = clamp_i16(bx);
+    out.bot_y = clamp_i16(by);
+    out.bot_w = clamp_i16(bw);
+    out.bot_h = clamp_i16(bh);
+    return out.has_top || out.has_bot;
 }
 
 } // namespace archstreamer

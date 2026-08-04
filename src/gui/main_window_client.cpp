@@ -504,6 +504,7 @@ void MainWindow::start_client() {
     disc_control_ = std::make_shared<archstreamer::DiscControlBridge>();
     link_control_ = std::make_shared<archstreamer::LinkControlBridge>();
     soft_keyboard_ = std::make_shared<archstreamer::SoftKeyboardBridge>();
+    ds_touch_ = std::make_shared<archstreamer::DsTouchBridge>();
     heartbeat_prefs_ = std::make_shared<archstreamer::ClientHeartbeatPrefs>();
     media_resync_ = std::make_shared<archstreamer::MediaResyncBridge>();
     if (client_resync_av_ != nullptr) {
@@ -524,6 +525,7 @@ void MainWindow::start_client() {
         client_video_controller_ = std::make_unique<ClientVideoController>(this);
         client_video_controller_->setVideoEmbedBridge(video_embed);
         client_video_controller_->setHeartbeatPrefs(heartbeat_prefs_);
+        client_video_controller_->setDsTouchBridge(ds_touch_);
         QObject::connect(
             client_video_controller_.get(),
             &ClientVideoController::userClosed,
@@ -560,6 +562,7 @@ void MainWindow::start_client() {
             callbacks.disc_control = disc_control_;
             callbacks.link_control = link_control_;
             callbacks.soft_keyboard = soft_keyboard_;
+            callbacks.ds_touch = ds_touch_;
             callbacks.heartbeat_prefs = heartbeat_prefs_;
             callbacks.controller_map_prefs = controller_map_prefs_;
             callbacks.emulator_control = emulator_control_;
@@ -711,6 +714,7 @@ void MainWindow::stop_client() {
         link_control_->link_capable = false;
     }
     soft_keyboard_.reset();
+    ds_touch_.reset();
     soft_keyboard_request_id_ = 0;
     close_pad_on_screen_keyboard();
     heartbeat_prefs_.reset();

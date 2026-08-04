@@ -73,6 +73,7 @@ MainWindow::MainWindow() {
 
     tabs_ = new QTabWidget(this);
     tabs_->addTab(build_client_tab(), "Client");
+    tabs_->addTab(build_remote_tab(), "Remote");
 #ifdef ARCHSTREAMER_HAS_HOST
     tabs_->addTab(build_host_tab(), "Host");
 #endif

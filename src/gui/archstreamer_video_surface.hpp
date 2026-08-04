@@ -1,5 +1,6 @@
 #pragma once
 
+#include "client/client_app.hpp"
 #include "client/video_embed_bridge.hpp"
 
 #include <QImage>
@@ -10,6 +11,7 @@
 #include <memory>
 #include <vector>
 
+class QMouseEvent;
 class QPaintEngine;
 class QResizeEvent;
 
@@ -28,6 +30,8 @@ public:
     quint64 embedXid() const;
 
     void setFrameBridge(std::shared_ptr<archstreamer::VideoEmbedBridge> bridge);
+    /** Optional: DS bottom-screen stylus via host DsScreenLayout + TouchInput. */
+    void setDsTouchBridge(std::shared_ptr<archstreamer::DsTouchBridge> bridge);
 
     /** Pull latest frame from the bridge (call from a GUI timer). */
     void refreshFromBridge();
@@ -46,13 +50,19 @@ protected:
     void paintEvent(QPaintEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
 
 private:
     void emitGeometry();
+    void handleDsTouch(const QPointF& pos, bool pressed);
 
     bool force_close_ = false;
     bool shutdown_started_ = false;
+    bool ds_touching_ = false;
     std::shared_ptr<archstreamer::VideoEmbedBridge> frame_bridge_;
+    std::shared_ptr<archstreamer::DsTouchBridge> ds_touch_;
     QImage frame_;
     std::vector<std::uint8_t> frame_bytes_;
     std::uint64_t frame_serial_ = 0;

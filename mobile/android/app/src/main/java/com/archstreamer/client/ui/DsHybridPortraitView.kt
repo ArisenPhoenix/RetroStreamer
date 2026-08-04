@@ -17,18 +17,30 @@ import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
 /**
- * Decodes a melonDS Hybrid stream and presents large/small panes stacked for portrait.
+ * Decodes a landscape DS stream (Horizontal + EmphTop/EmphBot) into a single
+ * MediaCodec SurfaceTexture, then either letterboxes the full frame (landscape)
+ * or UV-crops left/right into a stacked portrait presentation.
  *
- * Hybrid ratio R (we use 3): buffer is roughly `(R·256 + 256) × (R·192)`.
- * Large DS screen is the left `R/(R+1…)` of the frame; small screen is the right
- * column, bottom-aligned (`melonds_hybrid_small_screen = Bottom`).
+ * Keep this view alive across orientation changes so the decoder surface is not
+ * torn down (avoids multi-second black waits for the next IDR).
  *
- * UVs follow the Android SurfaceTexture convention: pass coords as if (0,0) is the
- * bottom-left of the buffer, then multiply by [getTransformMatrix] in the shader.
+ * Host keeps top=left / bottom=right; SwapScreenEmphasis only swaps sizes.
+ * UV fractions come from shared [DsTouchMapping.horizontalEmphFracs].
  */
 class DsHybridPortraitView(context: Context) : GLSurfaceView(context), GLSurfaceView.Renderer {
-    /** melonDS hybrid_ratio (ArchStreamer writes 3). */
+    /** Width emphasis ratio matching host EmphTop / hybrid_ratio (ArchStreamer uses 3). */
     var hybridRatio: Float = 3f
+
+    /** When true, bottom (right) is emphasized — left top screen is the small centered one. */
+    @Volatile
+    var emphBottom: Boolean = false
+
+    /**
+     * When true and the stream is wide, stack left→top / right→bottom phone panes.
+     * When false, letterbox the full stream frame (landscape DualScreen path).
+     */
+    @Volatile
+    var portraitStack: Boolean = false
 
     @Volatile
     var streamAspect: Float = 16f / 9f
@@ -67,7 +79,7 @@ class DsHybridPortraitView(context: Context) : GLSurfaceView(context), GLSurface
         )
         setEGLContextClientVersion(2)
         setRenderer(this)
-        // Continuous: Hybrid crops stay live even if a frame-available callback is delayed.
+        // Continuous: EmphTop crops stay live even if a frame-available callback is delayed.
         renderMode = RENDERMODE_CONTINUOUSLY
         keepScreenOn = true
         Matrix.setIdentityM(texMatrix, 0)
@@ -112,14 +124,37 @@ class DsHybridPortraitView(context: Context) : GLSurfaceView(context), GLSurface
 
         val viewW = surfaceW.toFloat()
         val viewH = surfaceH.toFloat()
-        val r = hybridRatio.coerceIn(2f, 4f)
-        // melonDS: width = R*256 + 256 + 2*R, height = R*192
-        val nativeW = 256f
-        val primaryW = nativeW * r
-        val bufferW = primaryW + nativeW + 2f * r
-        val split = (primaryW / bufferW).coerceIn(0.5f, 0.9f)
-        // Small screen is native 192 tall in a R*192 buffer, bottom-aligned.
-        val smallHeightFrac = (1f / r).coerceIn(0.15f, 0.5f)
+        val aspect = if (streamAspect > 0.1f) streamAspect else (16f / 9f)
+        val stack = portraitStack && aspect > 1.15f
+
+        if (!stack) {
+            // Landscape (or tall stream): letterbox the full frame into the view.
+            val viewAspect = viewW / viewH
+            val drawW: Float
+            val drawH: Float
+            if (viewAspect > aspect) {
+                drawH = viewH
+                drawW = viewH * aspect
+            } else {
+                drawW = viewW
+                drawH = viewW / aspect
+            }
+            val drawX = (viewW - drawW) * 0.5f
+            val drawY = (viewH - drawH) * 0.5f
+            drawPane(
+                drawX = drawX,
+                drawY = drawY,
+                drawW = drawW,
+                drawH = drawH,
+                imageLeft = 0f,
+                imageRight = 1f,
+                imageTop = 0f,
+                imageBottom = 1f,
+            )
+            return
+        }
+
+        val fr = DsTouchMapping.horizontalEmphFracs(hybridRatio, emphBottom)
 
         // Two 4:3 panes, full width, stacked and vertically centered.
         val paneH = viewW * 0.75f
@@ -127,33 +162,31 @@ class DsHybridPortraitView(context: Context) : GLSurfaceView(context), GLSurface
         val originY = ((viewH - totalH) * 0.5f).coerceAtLeast(0f)
         val usedPaneH = if (totalH > viewH) viewH * 0.5f else paneH
 
-        // Image-space crops: (0,0)=top-left of Hybrid frame, (1,1)=bottom-right.
-        // Top phone pane ← large (left) screen.
+        // Top phone pane ← left column (DS top). Bottom phone pane ← right (DS bottom).
         drawPane(
             drawX = 0f,
             drawY = originY,
             drawW = viewW,
             drawH = usedPaneH,
-            imageLeft = 0f,
-            imageRight = split,
-            imageTop = 0f,
-            imageBottom = 1f,
+            imageLeft = fr.leftU0,
+            imageRight = fr.leftU1,
+            imageTop = fr.leftV0,
+            imageBottom = fr.leftV1,
         )
-        // Bottom phone pane ← small (right, bottom-aligned) screen.
         drawPane(
             drawX = 0f,
             drawY = originY + usedPaneH,
             drawW = viewW,
             drawH = usedPaneH,
-            imageLeft = split,
-            imageRight = (primaryW + nativeW) / bufferW,
-            imageTop = 1f - smallHeightFrac,
-            imageBottom = 1f,
+            imageLeft = fr.rightU0,
+            imageRight = fr.rightU1,
+            imageTop = fr.rightV0,
+            imageBottom = fr.rightV1,
         )
     }
 
     /**
-     * @param imageTop/imageBottom top-left-origin fractions of the Hybrid frame
+     * @param imageTop/imageBottom top-left-origin fractions of the stream frame
      *   (0 = top of video, 1 = bottom of video).
      */
     private fun drawPane(

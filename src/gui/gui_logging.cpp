@@ -101,6 +101,8 @@ void append_log(QPlainTextEdit* log, QString message, GuiLogLevel level) {
             message = "[host] " + message;
         } else if (name == QLatin1String("clientLog") && !message.startsWith("[client]")) {
             message = "[client] " + message;
+        } else if (name == QLatin1String("remoteLog") && !message.startsWith("[remote]")) {
+            message = "[remote] " + message;
         }
     }
     message = QString("[%1] %2").arg(log_timestamp(), message);

@@ -260,6 +260,9 @@ object PacketCodec {
         return wrap(PacketType.EmulatorControl, payload)
     }
 
+    fun activeSessionInfoRequest(): ByteArray =
+        wrap(PacketType.ActiveSessionInfoRequest, ByteArray(0))
+
     fun discControlRequest(
         gameId: String,
         action: DiscControlAction,
@@ -351,8 +354,8 @@ object PacketCodec {
             writeU8(localPlayer)
             writeU32(sequence)
             writeU64(timestampUs)
-            writeU16(x.coerceIn(0, 255))
-            writeU16(y.coerceIn(0, 191))
+            writeU16(x.coerceIn(0, 65535))
+            writeU16(y.coerceIn(0, 65535))
             writeBool(pressed)
         }.toByteArray()
         return wrap(PacketType.TouchInput, payload)
@@ -435,6 +438,27 @@ object PacketCodec {
                     maxLength = reader.readU8().let { if (it == 0) 12 else it },
                 ),
             )
+            PacketType.DsScreenLayout -> {
+                val windowW = reader.readU16()
+                val windowH = reader.readU16()
+                val flags = reader.readU8()
+                IncomingPacket.DsScreens(
+                    DsScreenLayout(
+                        windowW = windowW,
+                        windowH = windowH,
+                        hasTop = flags and 0x01 != 0,
+                        topX = reader.readI16().toInt(),
+                        topY = reader.readI16().toInt(),
+                        topW = reader.readI16().toInt(),
+                        topH = reader.readI16().toInt(),
+                        hasBot = flags and 0x02 != 0,
+                        botX = reader.readI16().toInt(),
+                        botY = reader.readI16().toInt(),
+                        botW = reader.readI16().toInt(),
+                        botH = reader.readI16().toInt(),
+                    ),
+                )
+            }
             PacketType.DiscControlResponse -> IncomingPacket.DiscControl(
                 DiscControlResponse(
                     ok = reader.readBool(),
@@ -461,6 +485,34 @@ object PacketCodec {
                 ),
             )
             PacketType.Error -> IncomingPacket.Error(ErrorPacket(reader.readString()))
+            PacketType.ActiveSessionInfo -> {
+                val active = reader.readBool()
+                val selectedGameId = reader.readOptionalString()
+                val sessionMode = modeFromId(reader.readU8())
+                val playerCount = reader.readU8()
+                val connectedPlayers = reader.readU8()
+                val disconnectedPlayers = reader.readU8()
+                val viewerCount = reader.readU8()
+                val videoEnabled = reader.readBool()
+                val audioEnabled = reader.readBool()
+                val activeSlots = if (reader.remaining() >= 2) reader.readU8() else null
+                val maxSlots = if (activeSlots != null) reader.readU8() else null
+                IncomingPacket.ActiveSession(
+                    ActiveSessionInfo(
+                        active = active,
+                        selectedGameId = selectedGameId,
+                        sessionMode = sessionMode,
+                        playerCount = playerCount,
+                        connectedPlayers = connectedPlayers,
+                        disconnectedPlayers = disconnectedPlayers,
+                        viewerCount = viewerCount,
+                        videoEnabled = videoEnabled,
+                        audioEnabled = audioEnabled,
+                        activeSlots = activeSlots,
+                        maxSlots = maxSlots,
+                    ),
+                )
+            }
             PacketType.PasswordChangeRequired -> IncomingPacket.PasswordChangeRequired
             else -> IncomingPacket.Unknown(type)
         }

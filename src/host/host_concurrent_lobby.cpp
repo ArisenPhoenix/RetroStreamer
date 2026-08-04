@@ -156,6 +156,8 @@ int run_concurrent_session_host(
                         info.active = live_count() > 0;
                         info.video_enabled = config.video;
                         info.audio_enabled = config.audio;
+                        info.active_slots = static_cast<std::uint8_t>(live_count());
+                        info.max_slots = max_slots;
                         if (info.active && !slots.empty()) {
                             // Summarize first live slot for discovery UIs.
                             for (const auto& slot : slots) {

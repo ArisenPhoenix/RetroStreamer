@@ -469,8 +469,11 @@ if(Qt6Widgets_FOUND)
         src/gui/main_window.hpp
         src/gui/main_window.cpp
         src/gui/main_window_client.cpp
+        src/gui/main_window_remote.cpp
         src/gui/main_window_settings.cpp
         src/gui/main_window_game_options.cpp
+        src/gui/remote_ssh.cpp
+        src/gui/remote_ssh.hpp
         src/tools/archstreamer_gui.cpp
     )
     if(ARCHSTREAMER_BUILD_HOST)

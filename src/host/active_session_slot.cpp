@@ -1,6 +1,7 @@
 #include "host/active_session_slot.hpp"
 
 #include "common/cli_common.hpp"
+#include "common/ds_touch_mapping.hpp"
 #include "common/participant_role.hpp"
 #include "common/serialization.hpp"
 #include "client/controller_backend.hpp"
@@ -18,6 +19,7 @@
 #include "host/session_lobby.hpp"
 #include "host/session_launch_assemble.hpp"
 #include "host/session_run_helpers.hpp"
+#include "host/session_audio_channel.hpp"
 #include "host/standalone_emulator.hpp"
 #include "host/switch/switch_backend.hpp"
 #include "host/nds/melonds_backend.hpp"
@@ -47,6 +49,27 @@ bool should_use_slot_streaming_sink(const std::string& audio_source) {
     }
     const auto sink = audio_source.substr(0, audio_source.size() - 8);
     return StreamingAudioSink::is_streaming_sink_name(sink);
+}
+
+void send_ds_screen_layout_to_client(
+    SessionClientConnection& client,
+    const DsScreenLayout& layout) {
+    if (client.connection_state != SessionConnectionState::Connected) {
+        return;
+    }
+    try {
+        client.stream.send_packet(serialize_packet(layout));
+    } catch (const std::exception& error) {
+        std::cerr
+            << "Failed to send DsScreenLayout to client "
+            << static_cast<int>(client.client_id) << ": " << error.what() << '\n';
+    }
+}
+
+void broadcast_ds_screen_layout(SessionPlan& plan, const DsScreenLayout& layout) {
+    for (auto& client : plan.clients) {
+        send_ds_screen_layout_to_client(client, layout);
+    }
 }
 
 } // namespace
@@ -455,6 +478,17 @@ void ActiveSessionSlot::drain_pending_joins() {
             if (config_.input_demux != nullptr && input_router_ != nullptr) {
                 config_.input_demux->register_router(client_id, input_router_.get());
             }
+
+            // Late join / reconnect: push current bottom-screen hit target if known.
+            if (last_ds_screen_layout_.has_value()) {
+                auto* target = reconnected_player;
+                if (target == nullptr && !plan.clients.empty()) {
+                    target = &plan.clients.back();
+                }
+                if (target != nullptr) {
+                    send_ds_screen_layout_to_client(*target, *last_ds_screen_layout_);
+                }
+            }
         } catch (const std::exception& error) {
             try {
                 pending.stream.send_packet(serialize_packet(ErrorPacket{error.what()}));
@@ -489,16 +523,17 @@ void ActiveSessionSlot::run_session() {
     std::unique_ptr<SwitchBackend> switch_backend;
     std::unique_ptr<MelonDsBackend> melonds_backend;
 
-    // Concurrent slots each get archstreamer-N so pulsesrc does not mix sessions.
-    if (config.audio && config_.streaming_audio != nullptr &&
-        should_use_slot_streaming_sink(config.audio_source)) {
+    // Concurrent slots each own a SessionAudioChannel (archstreamer-N + app id).
+    if (config.audio && should_use_slot_streaming_sink(config.audio_source)) {
         try {
-            config.audio_source =
-                config_.streaming_audio->monitor_source_for_slot(slot);
+            audio_channel_ = std::make_unique<SessionAudioChannel>(slot);
+            config.audio_source = audio_channel_->monitor_source();
             std::cout
                 << "session slot " << slot << ": audio capture "
-                << config.audio_source << '\n';
+                << config.audio_source
+                << " (id " << audio_channel_->application_id() << ")\n";
         } catch (const std::exception& error) {
+            audio_channel_.reset();
             std::cerr
                 << "session slot " << slot << ": warning: per-slot audio sink failed: "
                 << error.what() << '\n';
@@ -895,8 +930,20 @@ void ActiveSessionSlot::run_session() {
         resolved_gpu,
         launch_env_request);
 
+    // Channel owns the authoritative Pulse identity for this slot.
+    if (audio_channel_ != nullptr) {
+        ProcessEnvironment env;
+        env.merge_pairs(launch_config.environment);
+        for (const auto& key : launch_config.unset_environment) {
+            env.add_unset(key);
+        }
+        env.merge(audio_channel_->launch_env());
+        launch_config.environment = std::move(env.entries);
+        launch_config.unset_environment = std::move(env.unset);
+    }
+
     if (config.audio) {
-        park_session_game_audio(config_.streaming_audio, slot);
+        park_session_game_audio(audio_channel_.get());
     }
 
     input_router_ = std::make_unique<InputRouter>(*gamepads_, keyboard_.get());
@@ -911,7 +958,10 @@ void ActiveSessionSlot::run_session() {
                 return false;
             }
             if (input.pressed) {
-                return touch_ctrl->touch(input.x, input.y);
+                std::uint16_t x = 0;
+                std::uint16_t y = 0;
+                ds_coords_from_normalized_u16(input.x, input.y, x, y);
+                return touch_ctrl->touch(x, y);
             }
             return touch_ctrl->touch_end();
         });
@@ -984,15 +1034,16 @@ void ActiveSessionSlot::run_session() {
         config,
         media_streams,
         *session_runtime_,
-        config_.streaming_audio,
-        slot,
+        /*audio=*/nullptr,
+        /*audio_slot_index=*/std::nullopt,
         *gamepads_,
         launch_plan.players,
         config.pulse_input,
         keyboard_.get(),
         gamescope_capture_,
         capture_display,
-        slot_prefix);
+        slot_prefix,
+        audio_channel_.get());
 
     if (arm_soft_keyboard && plan.soft_keyboard) {
         std::string display = capture_display;
@@ -1016,9 +1067,10 @@ void ActiveSessionSlot::run_session() {
     SessionLoopCadence loop_cadence(
         local_bridge.has_value() ? &*local_bridge : nullptr,
         input_router_.get(),
-        config_.streaming_audio,
-        slot,
-        config.audio);
+        /*audio=*/nullptr,
+        /*audio_slot_index=*/std::nullopt,
+        config.audio,
+        audio_channel_.get());
 
     while (!should_stop() && session_runtime_->emulator_running()) {
         drain_pending_joins();
@@ -1038,6 +1090,25 @@ void ActiveSessionSlot::run_session() {
             session_end_reason = reason;
             break;
         }
+
+        // Poll melonDS screen AABBs so client touch hit-target follows swap/emphasis.
+        if (melonds_touch_ctrl_ != nullptr) {
+            const auto now = std::chrono::steady_clock::now();
+            constexpr auto kDsScreenPollInterval = std::chrono::milliseconds(250);
+            if (last_ds_screen_query_.time_since_epoch().count() == 0 ||
+                now - last_ds_screen_query_ >= kDsScreenPollInterval) {
+                last_ds_screen_query_ = now;
+                DsScreenLayout layout;
+                if (melonds_touch_ctrl_->query_screens(layout)) {
+                    if (!last_ds_screen_layout_.has_value() ||
+                        *last_ds_screen_layout_ != layout) {
+                        last_ds_screen_layout_ = layout;
+                        broadcast_ds_screen_layout(config_.plan, layout);
+                    }
+                }
+            }
+        }
+
         loop_cadence.tick();
     }
 
@@ -1079,10 +1150,10 @@ void ActiveSessionSlot::run_session() {
         melonds_touch_ctrl_->close_touch_channel();
         melonds_touch_ctrl_.reset();
     }
+    last_ds_screen_layout_.reset();
+    last_ds_screen_query_ = {};
     unplug_session_keyboard(keyboard_.get());
     keyboard_.reset();
-
-    untrack_session_audio(config_.streaming_audio, config_.slot_index);
 
     // The runtime destructor also stops any process it still owns; stop here so
     // teardown ordering stays predictable.
@@ -1101,6 +1172,9 @@ void ActiveSessionSlot::run_session() {
         ? "host stopped"
         : session_end_reason.value_or("session ended");
     shutdown_media_and_clients(end_reason);
+
+    // Drop the null sink after capture stops so the mixer only shows live slots.
+    audio_channel_.reset();
 }
 
 } // namespace archstreamer

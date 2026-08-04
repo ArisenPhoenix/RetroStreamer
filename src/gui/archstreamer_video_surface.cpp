@@ -1,6 +1,9 @@
 #include "archstreamer_video_surface.hpp"
 
+#include "common/ds_touch_mapping.hpp"
+
 #include <QCloseEvent>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
 #include <QShowEvent>
@@ -25,6 +28,11 @@ quint64 ArchStreamerVideoSurface::embedXid() const {
 void ArchStreamerVideoSurface::setFrameBridge(
     std::shared_ptr<archstreamer::VideoEmbedBridge> bridge) {
     frame_bridge_ = std::move(bridge);
+}
+
+void ArchStreamerVideoSurface::setDsTouchBridge(
+    std::shared_ptr<archstreamer::DsTouchBridge> bridge) {
+    ds_touch_ = std::move(bridge);
 }
 
 void ArchStreamerVideoSurface::refreshFromBridge() {
@@ -93,6 +101,81 @@ void ArchStreamerVideoSurface::showEvent(QShowEvent* event) {
 void ArchStreamerVideoSurface::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     emitGeometry();
+}
+
+void ArchStreamerVideoSurface::mousePressEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton) {
+        handleDsTouch(event->position(), true);
+    }
+    QWidget::mousePressEvent(event);
+}
+
+void ArchStreamerVideoSurface::mouseMoveEvent(QMouseEvent* event) {
+    if (ds_touching_ && (event->buttons() & Qt::LeftButton)) {
+        handleDsTouch(event->position(), true);
+    }
+    QWidget::mouseMoveEvent(event);
+}
+
+void ArchStreamerVideoSurface::mouseReleaseEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton && ds_touching_) {
+        handleDsTouch(event->position(), false);
+        ds_touching_ = false;
+    }
+    QWidget::mouseReleaseEvent(event);
+}
+
+void ArchStreamerVideoSurface::handleDsTouch(const QPointF& pos, bool pressed) {
+    if (!ds_touch_) {
+        return;
+    }
+    // Prefer host SCREENS when present (follows EmphTop ↔ EmphBot); else heuristic.
+    const bool portrait_stack = height() > width();
+    archstreamer::DsScreenRects rects{};
+    const auto layout = ds_touch_->snapshot_layout();
+    const archstreamer::DsScreenRects* layout_ptr = nullptr;
+    if (layout.has_value()) {
+        rects.window_w = layout->window_w;
+        rects.window_h = layout->window_h;
+        rects.has_top = layout->has_top;
+        rects.top_x = layout->top_x;
+        rects.top_y = layout->top_y;
+        rects.top_w = layout->top_w;
+        rects.top_h = layout->top_h;
+        rects.has_bot = layout->has_bot;
+        rects.bot_x = layout->bot_x;
+        rects.bot_y = layout->bot_y;
+        rects.bot_w = layout->bot_w;
+        rects.bot_h = layout->bot_h;
+        layout_ptr = &rects;
+    }
+    const auto hit = archstreamer::resolve_bottom_screen_hit_rect(
+        static_cast<float>(width()),
+        static_cast<float>(height()),
+        portrait_stack,
+        layout_ptr);
+    if (!hit.valid()) {
+        return;
+    }
+    float nx = 0.f;
+    float ny = 0.f;
+    if (!archstreamer::view_point_to_normalized(
+            static_cast<float>(pos.x()),
+            static_cast<float>(pos.y()),
+            hit,
+            nx,
+            ny)) {
+        if (!pressed && ds_touching_) {
+            ds_touch_->push_sample(0, 0, false);
+            ds_touching_ = false;
+        }
+        return;
+    }
+    std::uint16_t norm_x = 0;
+    std::uint16_t norm_y = 0;
+    archstreamer::encode_normalized_u16(nx, ny, norm_x, norm_y);
+    ds_touch_->push_sample(norm_x, norm_y, pressed);
+    ds_touching_ = pressed;
 }
 
 void ArchStreamerVideoSurface::emitGeometry() {

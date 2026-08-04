@@ -17,12 +17,14 @@ import com.archstreamer.client.net.ControlConnection
 import com.archstreamer.client.net.DiscoveredHost
 import com.archstreamer.client.net.HostDiscovery
 import com.archstreamer.client.net.JoinedPlaySession
+import com.archstreamer.client.net.RemoteHost
 import com.archstreamer.client.net.SessionJoiner
 import com.archstreamer.client.protocol.IncomingPacket
 import com.archstreamer.client.protocol.PacketCodec
 import com.archstreamer.client.protocol.ControllerState
 import com.archstreamer.client.protocol.DisplayLayoutPreference
 import com.archstreamer.client.protocol.DiscControlAction
+import com.archstreamer.client.protocol.DsScreenLayout
 import com.archstreamer.client.protocol.EmulatorControlState
 import com.archstreamer.client.protocol.GameInfo
 import com.archstreamer.client.protocol.LinkAction
@@ -52,6 +54,7 @@ import java.io.File
 /** Mirrors the desktop GUI top-level tabs (client-only subset). */
 enum class NavSection(val title: String) {
     Client("Client"),
+    Remote("Remote"),
     Games("Games"),
     Stream("Stream"),
     GameOptions("Game Options"),
@@ -89,6 +92,8 @@ data class UiState(
     val receiveAudio: Boolean = true,
     /** Non-null while the host SoftKeyboard / manual OSK dialog should show. */
     val softKeyboard: SoftKeyboardRequest? = null,
+    /** Host melonDS top/bottom panes (follows swap); drives DS touch hit target. */
+    val dsScreenLayout: DsScreenLayout? = null,
     /** Heartbeat wanted quality (mobile defaults Medium). */
     val streamQuality: MediaQualityTier = MediaQualityTier.Medium,
     /** Heartbeat wanted encode size (mobile defaults 540p). */
@@ -162,6 +167,19 @@ data class UiState(
     /** How many recent app sessions to include when sending logs. */
     val logSessions: String = "3",
     val logSendStatus: String = "",
+    // Remote tab (SSH) — password is session-only, not persisted.
+    val remoteSshHost: String = "",
+    val remoteSshUser: String = "",
+    val remoteSshPassword: String = "",
+    val remoteSshPort: String = "22",
+    val remoteDirectory: String = "",
+    val remoteRomRoot: String = "",
+    val remoteBinary: String = "./host_runner",
+    val remoteBaseControlPort: String = Protocol.DEFAULT_CONTROL_PORT.toString(),
+    val remoteBaseInputPort: String = Protocol.DEFAULT_INPUT_PORT.toString(),
+    val remoteStatus: String = "Ensure Host probes the base port, reuses a free lobby, or SSH-starts host_runner.",
+    val remoteBusy: Boolean = false,
+    val remoteTrackedControlPort: Int = 0,
 )
 
 class ClientViewModel(application: Application) : AndroidViewModel(application) {
@@ -197,6 +215,22 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                     .ifBlank { Protocol.DEFAULT_CONTROL_PORT.toString() },
             ),
             usePhysicalController = resolveInitialPreferPhysical(),
+            remoteSshHost = prefs.getString(KEY_REMOTE_SSH_HOST, "").orEmpty(),
+            remoteSshUser = prefs.getString(KEY_REMOTE_SSH_USER, "").orEmpty(),
+            remoteSshPort = prefs.getString(KEY_REMOTE_SSH_PORT, "22").orEmpty().ifBlank { "22" },
+            remoteDirectory = prefs.getString(KEY_REMOTE_DIRECTORY, "").orEmpty(),
+            remoteRomRoot = prefs.getString(KEY_REMOTE_ROM_ROOT, "").orEmpty(),
+            remoteBinary = prefs.getString(KEY_REMOTE_BINARY, "./host_runner").orEmpty()
+                .ifBlank { "./host_runner" },
+            remoteBaseControlPort = prefs.getString(
+                KEY_REMOTE_BASE_CONTROL,
+                Protocol.DEFAULT_CONTROL_PORT.toString(),
+            ).orEmpty().ifBlank { Protocol.DEFAULT_CONTROL_PORT.toString() },
+            remoteBaseInputPort = prefs.getString(
+                KEY_REMOTE_BASE_INPUT,
+                Protocol.DEFAULT_INPUT_PORT.toString(),
+            ).orEmpty().ifBlank { Protocol.DEFAULT_INPUT_PORT.toString() },
+            remoteTrackedControlPort = prefs.getInt(KEY_REMOTE_TRACKED_CONTROL, 0),
         ).let { base ->
             val pads = PhysicalGamepad.connectedPads()
             val connected = pads.isNotEmpty()
@@ -227,6 +261,9 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     /** Latest user/overlay intent while [ffJob] coalesces + rate-limits. */
     private var ffWanted: Boolean? = null
     private var latestPad = ControllerState()
+    /** Stylus samples from the UI thread; drained on the input IO loop (avoid NetworkOnMainThread). */
+    private val pendingDsTouches =
+        java.util.concurrent.ConcurrentLinkedQueue<Triple<Int, Int, Boolean>>()
     private val gamepadTracker = PhysicalGamepadTracker(
         actionFor = { kind -> overlayActionFor(kind) },
         onState = { pad -> onPhysicalPadState(pad) },
@@ -977,6 +1014,250 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         prefs.edit().putString(KEY_INPUT_PORT, port).apply()
     }
 
+    fun onRemoteSshHostChange(value: String) {
+        _state.update { it.copy(remoteSshHost = value) }
+        prefs.edit().putString(KEY_REMOTE_SSH_HOST, value.trim()).apply()
+    }
+
+    fun onRemoteSshUserChange(value: String) {
+        _state.update { it.copy(remoteSshUser = value) }
+        prefs.edit().putString(KEY_REMOTE_SSH_USER, value.trim()).apply()
+    }
+
+    fun onRemoteSshPasswordChange(value: String) {
+        _state.update { it.copy(remoteSshPassword = value) }
+    }
+
+    fun onRemoteSshPortChange(value: String) {
+        _state.update { it.copy(remoteSshPort = value) }
+        prefs.edit().putString(KEY_REMOTE_SSH_PORT, value.trim()).apply()
+    }
+
+    fun onRemoteDirectoryChange(value: String) {
+        _state.update { it.copy(remoteDirectory = value) }
+        prefs.edit().putString(KEY_REMOTE_DIRECTORY, value.trim()).apply()
+    }
+
+    fun onRemoteRomRootChange(value: String) {
+        _state.update { it.copy(remoteRomRoot = value) }
+        prefs.edit().putString(KEY_REMOTE_ROM_ROOT, value.trim()).apply()
+    }
+
+    fun onRemoteBinaryChange(value: String) {
+        _state.update { it.copy(remoteBinary = value) }
+        prefs.edit().putString(KEY_REMOTE_BINARY, value.trim()).apply()
+    }
+
+    fun onRemoteBaseControlPortChange(value: String) {
+        _state.update { it.copy(remoteBaseControlPort = value) }
+        prefs.edit().putString(KEY_REMOTE_BASE_CONTROL, value.trim()).apply()
+    }
+
+    fun onRemoteBaseInputPortChange(value: String) {
+        _state.update { it.copy(remoteBaseInputPort = value) }
+        prefs.edit().putString(KEY_REMOTE_BASE_INPUT, value.trim()).apply()
+    }
+
+    private fun setRemoteStatus(status: String, busy: Boolean? = null) {
+        ClientFileLog.append("[remote] $status")
+        _state.update {
+            if (busy == null) it.copy(remoteStatus = status)
+            else it.copy(remoteBusy = busy, remoteStatus = status)
+        }
+    }
+
+    fun ensureRemoteHost() {
+        val snap = _state.value
+        if (snap.remoteBusy) return
+        val host = snap.remoteSshHost.trim()
+        val user = snap.remoteSshUser.trim()
+        val password = snap.remoteSshPassword
+        val directory = snap.remoteDirectory.trim()
+        val romRoot = snap.remoteRomRoot.trim()
+        val binary = snap.remoteBinary.trim().ifBlank { "./host_runner" }
+        val sshPort = snap.remoteSshPort.trim().toIntOrNull() ?: RemoteHost.DEFAULT_SSH_PORT
+        val baseControl = snap.remoteBaseControlPort.trim().toIntOrNull()
+            ?: Protocol.DEFAULT_CONTROL_PORT
+        val baseInput = snap.remoteBaseInputPort.trim().toIntOrNull()
+            ?: Protocol.DEFAULT_INPUT_PORT
+
+        // Fields already persist on each change; flush again so a failed Ensure still keeps them.
+        prefs.edit()
+            .putString(KEY_REMOTE_SSH_HOST, host)
+            .putString(KEY_REMOTE_SSH_USER, user)
+            .putString(KEY_REMOTE_SSH_PORT, snap.remoteSshPort.trim().ifBlank { "22" })
+            .putString(KEY_REMOTE_DIRECTORY, directory)
+            .putString(KEY_REMOTE_ROM_ROOT, romRoot)
+            .putString(KEY_REMOTE_BINARY, binary)
+            .putString(KEY_REMOTE_BASE_CONTROL, baseControl.toString())
+            .putString(KEY_REMOTE_BASE_INPUT, baseInput.toString())
+            .apply()
+
+        if (host.isEmpty() || user.isEmpty() || directory.isEmpty() || romRoot.isEmpty()) {
+            setRemoteStatus("SSH host, user, remote directory, and ROM root are required.")
+            return
+        }
+        if (password.isEmpty()) {
+            setRemoteStatus("Enter the SSH password (it is not saved).")
+            return
+        }
+
+        setRemoteStatus("Probing $host:$baseControl…", busy = true)
+
+        viewModelScope.launch(Dispatchers.IO) {
+            fun applyPorts(control: Int, input: Int, status: String) {
+                prefs.edit()
+                    .putString(KEY_HOST, host)
+                    .putString(KEY_CONTROL_PORT, control.toString())
+                    .putString(KEY_INPUT_PORT, input.toString())
+                    .putInt(KEY_REMOTE_TRACKED_CONTROL, control)
+                    .apply()
+                ClientFileLog.append("[remote] $status")
+                _state.update {
+                    it.copy(
+                        remoteBusy = false,
+                        remoteStatus = status,
+                        host = host,
+                        controlPort = control.toString(),
+                        inputPort = input.toString(),
+                        remoteTrackedControlPort = control,
+                        recentGameIds = loadRecentGameIds(host, control.toString()),
+                    )
+                }
+            }
+
+            fun fail(status: String) {
+                setRemoteStatus(status, busy = false)
+            }
+
+            val resolvedBinary = RemoteHost.resolveBinary(directory, binary)
+            ClientFileLog.append(
+                "[remote] ensure host=$host user=$user dir=$directory rom=$romRoot binary=$resolvedBinary ports=$baseControl/$baseInput",
+            )
+
+            val baseInfo = RemoteHost.probeActiveSession(host, baseControl)
+            if (baseInfo != null && !RemoteHost.lobbyFull(baseInfo)) {
+                val slotText = if (baseInfo.activeSlots != null && baseInfo.maxSlots != null) {
+                    " (slots ${baseInfo.activeSlots}/${baseInfo.maxSlots})"
+                } else {
+                    ""
+                }
+                applyPorts(
+                    baseControl,
+                    baseInput,
+                    "Reusing existing host on $host:$baseControl$slotText",
+                )
+                return@launch
+            }
+
+            if (baseInfo != null && RemoteHost.lobbyFull(baseInfo)) {
+                for (n in 1..8) {
+                    val ports = RemoteHost.portBlock(n, baseControl, baseInput)
+                    val overflow = RemoteHost.probeActiveSession(host, ports.controlPort)
+                    if (overflow != null && !RemoteHost.lobbyFull(overflow)) {
+                        applyPorts(
+                            ports.controlPort,
+                            ports.inputPort,
+                            "Reusing overflow host on $host:${ports.controlPort}",
+                        )
+                        return@launch
+                    }
+                    if (overflow == null) {
+                        setRemoteStatus(
+                            "Base lobby full — SSH-starting overflow instance $n on port ${ports.controlPort}…",
+                        )
+                        val cmd = RemoteHost.startShell(directory, binary, romRoot, ports)
+                        ClientFileLog.append("[remote] ssh start cmd: $cmd")
+                        val ssh = RemoteHost.runSshCommand(host, sshPort, user, password, cmd)
+                        if (!ssh.ok) {
+                            fail("SSH start failed: ${ssh.error}")
+                            return@launch
+                        }
+                        if (ssh.output.isNotBlank()) {
+                            ClientFileLog.append("[remote] ssh stdout: ${ssh.output}")
+                        }
+                        repeat(20) {
+                            delay(500)
+                            if (RemoteHost.probeActiveSession(host, ports.controlPort) != null) {
+                                applyPorts(
+                                    ports.controlPort,
+                                    ports.inputPort,
+                                    "Started overflow host on $host:${ports.controlPort}",
+                                )
+                                return@launch
+                            }
+                        }
+                        fail("SSH start reported success but control port ${ports.controlPort} never answered")
+                        return@launch
+                    }
+                }
+                fail("All probed overflow instances are full.")
+                return@launch
+            }
+
+            val ports = RemoteHost.portBlock(0, baseControl, baseInput)
+            setRemoteStatus("No host on base port — SSH-starting host_runner…")
+            val cmd = RemoteHost.startShell(directory, binary, romRoot, ports)
+            ClientFileLog.append("[remote] ssh start cmd: $cmd")
+            val ssh = RemoteHost.runSshCommand(host, sshPort, user, password, cmd)
+            if (!ssh.ok) {
+                fail("SSH start failed: ${ssh.error}")
+                return@launch
+            }
+            if (ssh.output.isNotBlank()) {
+                ClientFileLog.append("[remote] ssh stdout: ${ssh.output}")
+            }
+            repeat(20) {
+                delay(500)
+                if (RemoteHost.probeActiveSession(host, ports.controlPort) != null) {
+                    applyPorts(
+                        ports.controlPort,
+                        ports.inputPort,
+                        "Started host on $host:${ports.controlPort}",
+                    )
+                    return@launch
+                }
+            }
+            fail("SSH start reported success but control port ${ports.controlPort} never answered")
+        }
+    }
+
+    fun stopRemoteHost() {
+        val snap = _state.value
+        if (snap.remoteBusy) return
+        val host = snap.remoteSshHost.trim()
+        val user = snap.remoteSshUser.trim()
+        val password = snap.remoteSshPassword
+        val directory = snap.remoteDirectory.trim()
+        val sshPort = snap.remoteSshPort.trim().toIntOrNull() ?: RemoteHost.DEFAULT_SSH_PORT
+        val tracked = if (snap.remoteTrackedControlPort > 0) {
+            snap.remoteTrackedControlPort
+        } else {
+            snap.remoteBaseControlPort.trim().toIntOrNull() ?: Protocol.DEFAULT_CONTROL_PORT
+        }
+
+        if (host.isEmpty() || user.isEmpty()) {
+            setRemoteStatus("SSH host and user are required to stop.")
+            return
+        }
+        if (password.isEmpty()) {
+            setRemoteStatus("Enter the SSH password (it is not saved).")
+            return
+        }
+
+        setRemoteStatus("Stopping remote host on control port $tracked…", busy = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            val cmd = RemoteHost.stopShell(tracked, directory)
+            ClientFileLog.append("[remote] ssh stop cmd: $cmd")
+            val ssh = RemoteHost.runSshCommand(host, sshPort, user, password, cmd)
+            if (ssh.ok) {
+                setRemoteStatus("Stopped remote host on control port $tracked.", busy = false)
+            } else {
+                setRemoteStatus("SSH stop failed: ${ssh.error}", busy = false)
+            }
+        }
+    }
+
     fun onUsernameChange(value: String) {
         val username = value.trim()
         _state.update { it.copy(username = username) }
@@ -1611,16 +1892,21 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         latestPad = ControllerState.applyFaceButtonSwaps(state, snap.swapNw, snap.swapSe)
     }
 
-    /** Remoted DS stylus; coords are already absolute 0–255 × 0–191. */
-    fun onDsTouch(x: Int, y: Int, pressed: Boolean) {
-        val active = session ?: return
-        if (!_state.value.playing) return
-        runCatching { active.sendTouch(x, y, pressed) }
+    /** Remoted DS stylus; coords are normalized 0..65535 within the bottom screen. */
+    fun onDsTouch(normX: Int, normY: Int, pressed: Boolean) {
+        if (!_state.value.playing || session == null) return
+        // Cap so a stuck gesture cannot grow without bound.
+        while (pendingDsTouches.size >= 32) {
+            pendingDsTouches.poll()
+        }
+        pendingDsTouches.add(Triple(normX, normY, pressed))
     }
 
     fun leavePlay() {
         menuDrawerOpen = false
         lastSentMenuPause = null
+        pendingDsTouches.clear()
+        latestPad = ControllerState()
         endSession()
         _state.update {
             it.copy(
@@ -1630,6 +1916,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 mediaHint = "",
                 videoPlayer = null,
                 softKeyboard = null,
+                dsScreenLayout = null,
                 padLayout = PadLayout.Standard,
                 overlayItems = OverlayPresets.forLayout(PadLayout.Standard),
                 overlayEditing = false,
@@ -1826,6 +2113,17 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             var lastSendAtMs = 0L
             while (isActive) {
                 val active = session ?: break
+                // Drain stylus first so press+release in one poll both go out.
+                while (true) {
+                    val touch = pendingDsTouches.poll() ?: break
+                    runCatching {
+                        active.sendTouch(touch.first, touch.second, touch.third)
+                    }.onFailure { err ->
+                        ClientFileLog.append(
+                            "Touch send failed: ${err.javaClass.simpleName}: ${err.message}",
+                        )
+                    }
+                }
                 val pad = latestPad
                 val now = System.currentTimeMillis()
                 val changed = !haveLast || !pad.sameControlsAs(lastSent)
@@ -1891,6 +2189,9 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 when (packet) {
                     is IncomingPacket.SoftKeyboard -> showSoftKeyboard(packet.value)
+                    is IncomingPacket.DsScreens -> {
+                        _state.update { it.copy(dsScreenLayout = packet.value) }
+                    }
                     is IncomingPacket.DiscControl -> {
                         val response = packet.value
                         _state.update {
@@ -2078,6 +2379,15 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         private const val KEY_DISCOVERY_SEEDS = "discovery_seeds"
         private const val KEY_LOG_SESSIONS = "log_sessions"
         private const val KEY_USE_PHYSICAL = "use_physical_controller"
+        private const val KEY_REMOTE_SSH_HOST = "remote_ssh_host"
+        private const val KEY_REMOTE_SSH_USER = "remote_ssh_user"
+        private const val KEY_REMOTE_SSH_PORT = "remote_ssh_port"
+        private const val KEY_REMOTE_DIRECTORY = "remote_directory"
+        private const val KEY_REMOTE_ROM_ROOT = "remote_rom_root"
+        private const val KEY_REMOTE_BINARY = "remote_binary"
+        private const val KEY_REMOTE_BASE_CONTROL = "remote_base_control"
+        private const val KEY_REMOTE_BASE_INPUT = "remote_base_input"
+        private const val KEY_REMOTE_TRACKED_CONTROL = "remote_tracked_control"
         private const val KEY_RECENT_PREFIX = "recent_games_"
         private const val MAX_DISCOVERY_SEEDS = 6
         private const val MAX_RECENT_GAMES = 8

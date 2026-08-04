@@ -375,6 +375,36 @@ void MainWindow::load_persisted_settings() {
         client_host_->setText(address);
         update_client_host_summary(client_host_label_);
     }
+    if (remote_ssh_host_ != nullptr) {
+        remote_ssh_host_->setText(settings.value("remote/sshHost").toString());
+    }
+    if (remote_ssh_user_ != nullptr) {
+        remote_ssh_user_->setText(settings.value("remote/sshUser").toString());
+    }
+    if (remote_ssh_port_ != nullptr) {
+        remote_ssh_port_->setValue(
+            qBound(settings.value("remote/sshPort", 22).toInt(), 1, 65535));
+    }
+    if (remote_directory_ != nullptr) {
+        remote_directory_->setText(settings.value("remote/directory").toString());
+    }
+    if (remote_rom_root_ != nullptr) {
+        remote_rom_root_->setText(settings.value("remote/romRoot").toString());
+    }
+    if (remote_binary_ != nullptr) {
+        const auto binary = settings.value("remote/binary", "./host_runner").toString();
+        remote_binary_->setText(binary.isEmpty() ? QStringLiteral("./host_runner") : binary);
+    }
+    if (remote_base_control_port_ != nullptr) {
+        remote_base_control_port_->setValue(
+            qBound(settings.value("remote/baseControlPort", 45555).toInt(), 1, 65535));
+    }
+    if (remote_base_input_port_ != nullptr) {
+        remote_base_input_port_->setValue(
+            qBound(settings.value("remote/baseInputPort", DefaultInputPort).toInt(), 1, 65535));
+    }
+    remote_tracked_control_port_ =
+        qBound(settings.value("remote/trackedControlPort", 0).toInt(), 0, 65535);
     if (client_role_ != nullptr) {
         const auto role = settings.value("client/role", "Player").toString();
         const auto index = client_role_->findText(role);
@@ -577,6 +607,31 @@ void MainWindow::save_persisted_settings() {
     if (client_input_port_ != nullptr) {
         settings.setValue("client/inputPort", client_input_port_->value());
     }
+    if (remote_ssh_host_ != nullptr) {
+        settings.setValue("remote/sshHost", remote_ssh_host_->text().trimmed());
+    }
+    if (remote_ssh_user_ != nullptr) {
+        settings.setValue("remote/sshUser", remote_ssh_user_->text().trimmed());
+    }
+    if (remote_ssh_port_ != nullptr) {
+        settings.setValue("remote/sshPort", remote_ssh_port_->value());
+    }
+    if (remote_directory_ != nullptr) {
+        settings.setValue("remote/directory", remote_directory_->text().trimmed());
+    }
+    if (remote_rom_root_ != nullptr) {
+        settings.setValue("remote/romRoot", remote_rom_root_->text().trimmed());
+    }
+    if (remote_binary_ != nullptr) {
+        settings.setValue("remote/binary", remote_binary_->text().trimmed());
+    }
+    if (remote_base_control_port_ != nullptr) {
+        settings.setValue("remote/baseControlPort", remote_base_control_port_->value());
+    }
+    if (remote_base_input_port_ != nullptr) {
+        settings.setValue("remote/baseInputPort", remote_base_input_port_->value());
+    }
+    settings.setValue("remote/trackedControlPort", remote_tracked_control_port_);
     if (client_role_ != nullptr) {
         settings.setValue("client/role", client_role_->currentText());
     }

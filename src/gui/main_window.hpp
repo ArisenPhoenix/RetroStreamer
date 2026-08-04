@@ -51,10 +51,14 @@ public:
 
 private:
     QWidget* build_client_tab();
+    QWidget* build_remote_tab();
     QWidget* build_stream_tab();
     QWidget* build_game_options_tab();
     QWidget* build_profile_tab();
     QWidget* build_settings_tab();
+    void ensure_remote_host();
+    void stop_remote_host();
+    void set_remote_status(const QString& text);
     void refresh_game_options_ui();
     void sync_controller_map_editor_ui();
     void commit_controller_map_editor_ui();
@@ -178,6 +182,21 @@ private:
     QLabel* client_host_summary_ = nullptr;
     /** Session-only join password (Client tab; not persisted). */
     QLineEdit* client_password_ = nullptr;
+
+    QLineEdit* remote_ssh_host_ = nullptr;
+    QLineEdit* remote_ssh_user_ = nullptr;
+    QLineEdit* remote_ssh_password_ = nullptr;
+    QSpinBox* remote_ssh_port_ = nullptr;
+    QLineEdit* remote_directory_ = nullptr;
+    QLineEdit* remote_rom_root_ = nullptr;
+    QLineEdit* remote_binary_ = nullptr;
+    QSpinBox* remote_base_control_port_ = nullptr;
+    QSpinBox* remote_base_input_port_ = nullptr;
+    QLabel* remote_status_ = nullptr;
+    QPlainTextEdit* remote_log_ = nullptr;
+    bool remote_busy_ = false;
+    int remote_tracked_control_port_ = 0;
+
     QSpinBox* client_port_ = nullptr;
     QSpinBox* client_input_port_ = nullptr;
     QComboBox* client_role_ = nullptr;
@@ -197,6 +216,7 @@ private:
     std::shared_ptr<DiscControlBridge> disc_control_;
     std::shared_ptr<LinkControlBridge> link_control_;
     std::shared_ptr<SoftKeyboardBridge> soft_keyboard_;
+    std::shared_ptr<DsTouchBridge> ds_touch_;
     std::shared_ptr<ClientHeartbeatPrefs> heartbeat_prefs_;
     std::shared_ptr<ClientControllerMapPrefs> controller_map_prefs_;
     std::shared_ptr<EmulatorControlBridge> emulator_control_;

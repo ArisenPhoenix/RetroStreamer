@@ -4,6 +4,7 @@
 #include "host/host_launch_planner.hpp"
 #include "host/media_capture.hpp"
 #include "host/media_server.hpp"
+#include "host/session_audio_channel.hpp"
 #include "host/session_runtime.hpp"
 #include "host/streaming_audio_sink.hpp"
 #include "host/virtual_gamepad.hpp"
@@ -76,7 +77,7 @@ void start_emulator_and_verify(
 
 /**
  * Deferred gamescope video latch, 500ms audio re-park, optional A-pulse.
- * audio_slot_index: nullopt → park_game_audio(); set → park_game_audio_for_slot.
+ * Prefer audio_channel (exact-id park). Legacy: audio + audio_slot_index.
  */
 void post_emulator_start_warmup(
     MediaServer* media,
@@ -91,12 +92,16 @@ void post_emulator_start_warmup(
     VirtualKeyboard* keyboard = nullptr,
     bool gamescope_capture = false,
     const std::string& preferred_display = {},
-    std::string_view log_prefix = {});
+    std::string_view log_prefix = {},
+    SessionAudioChannel* audio_channel = nullptr);
 
 /** Shared park for concurrent slots (mutex) or direct global park. */
 void park_session_game_audio(
     StreamingAudioSink* audio,
     std::optional<int> audio_slot_index = std::nullopt);
+
+/** Exact application.id park for an owned concurrent-session channel. */
+void park_session_game_audio(SessionAudioChannel* channel);
 
 /** Windows: drop tracked emulator PID for park targeting. Linux: no-op. */
 void untrack_session_audio(
@@ -106,6 +111,7 @@ void untrack_session_audio(
 /**
  * Per-session loop cadence: local bridge poll, periodic audio park, sleep.
  * Owns the park deadline; call tick() once per loop iteration.
+ * When audio_channel is set, park uses that channel only (concurrent path).
  */
 class SessionLoopCadence {
 public:
@@ -114,7 +120,8 @@ public:
         InputRouter* router,
         StreamingAudioSink* audio,
         std::optional<int> audio_slot_index,
-        bool audio_enabled);
+        bool audio_enabled,
+        SessionAudioChannel* audio_channel = nullptr);
 
     void tick();
 
@@ -123,6 +130,7 @@ private:
     InputRouter* router_ = nullptr;
     StreamingAudioSink* audio_ = nullptr;
     std::optional<int> audio_slot_index_;
+    SessionAudioChannel* audio_channel_ = nullptr;
     bool audio_enabled_ = false;
     std::chrono::steady_clock::time_point next_audio_park_{};
 };

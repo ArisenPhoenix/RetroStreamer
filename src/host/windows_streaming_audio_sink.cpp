@@ -1,4 +1,6 @@
 #include "host/streaming_audio_sink.hpp"
+#include "host/session_audio_channel.hpp"
+#include "host/launch_environment.hpp"
 
 #ifdef _WIN32
 
@@ -331,6 +333,53 @@ std::string StreamingAudioSink::default_monitor_source() {
     // WindowsMediaServer uses wasapisrc loopback on the default render device;
     // there is no Pulse-style ".monitor" name to return.
     return {};
+}
+
+SessionAudioChannel::SessionAudioChannel(int slot_index)
+    : slot_index_(slot_index < 0 ? 0 : slot_index)
+    , sink_name_(StreamingAudioSink::slot_sink_name(slot_index_))
+    , application_id_(StreamingAudioSink::slot_application_id(slot_index_))
+    , sink_owned_(false) {}
+
+SessionAudioChannel::~SessionAudioChannel() {
+    clear_emulator_pid();
+}
+
+std::string SessionAudioChannel::monitor_source() const {
+    return sink_name_ + ".monitor";
+}
+
+ProcessEnvironment SessionAudioChannel::launch_env() const {
+    return audio_launch_environment(
+        /*stream_media=*/true,
+        /*stream_audio=*/true,
+        /*host_plays_locally=*/false,
+        monitor_source());
+}
+
+int SessionAudioChannel::park() {
+    std::set<DWORD> prefer;
+    if (emulator_pid_ > 0) {
+        collect_process_tree(static_cast<DWORD>(emulator_pid_), prefer);
+    }
+    const int muted = set_mute_for_matching_sessions(
+        prefer,
+        /*mute=*/true,
+        /*by_name=*/prefer.empty());
+    if (muted > 0) {
+        std::cout
+            << "Parked " << muted
+            << " audio session(s) for slot " << slot_index_ << " (WASAPI mute).\n";
+    }
+    return muted;
+}
+
+void SessionAudioChannel::set_emulator_pid(int process_id) {
+    emulator_pid_ = process_id > 0 ? process_id : 0;
+}
+
+void SessionAudioChannel::clear_emulator_pid() {
+    emulator_pid_ = 0;
 }
 
 } // namespace archstreamer

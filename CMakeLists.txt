@@ -518,6 +518,20 @@ if(Qt6Widgets_FOUND)
         endif()
     endif()
     list(APPEND ARCHSTREAMER_INSTALL_TARGETS archstreamer_gui)
+
+    # Windows OpenSSH requires a real PE for SSH_ASKPASS (shell scripts → CreateProcess 193).
+    add_executable(archstreamer_ssh_askpass src/tools/archstreamer_ssh_askpass.cpp)
+    set_target_properties(archstreamer_ssh_askpass PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+    if(WIN32)
+        # Console subsystem + FreeConsole: stdout still works for OpenSSH pipes, no flash window.
+        add_custom_command(TARGET archstreamer_gui POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:archstreamer_ssh_askpass>
+                $<TARGET_FILE_DIR:archstreamer_gui>
+            VERBATIM
+        )
+    endif()
+    list(APPEND ARCHSTREAMER_INSTALL_TARGETS archstreamer_ssh_askpass)
 endif()
 
 install(TARGETS ${ARCHSTREAMER_INSTALL_TARGETS}

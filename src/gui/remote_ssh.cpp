@@ -1,9 +1,15 @@
 #include "remote_ssh.hpp"
 
+#include <QCoreApplication>
+#include <QDir>
 #include <QFile>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QTemporaryDir>
+
+#ifdef Q_OS_WIN
+#include <QFileInfo>
+#endif
 
 namespace archstreamer::gui {
 namespace {
@@ -12,6 +18,33 @@ QString read_process_output(QProcess& process) {
     return QString::fromLocal8Bit(process.readAllStandardOutput())
         + QString::fromLocal8Bit(process.readAllStandardError());
 }
+
+#ifdef Q_OS_WIN
+QString windows_ssh_askpass_path() {
+    const QStringList names = {
+        QStringLiteral("archstreamer_ssh_askpass.exe"),
+        QStringLiteral("archstreamer_ssh_askpass"),
+    };
+    const QDir app_dir(QCoreApplication::applicationDirPath());
+    for (const auto& name : names) {
+        const auto path = app_dir.absoluteFilePath(name);
+        if (QFileInfo::exists(path)) {
+            return QDir::toNativeSeparators(path);
+        }
+    }
+    // Dev builds sometimes keep helpers one level up from Release/.
+    const QDir parent = app_dir;
+    if (parent.cdUp()) {
+        for (const auto& name : names) {
+            const auto path = parent.absoluteFilePath(name);
+            if (QFileInfo::exists(path)) {
+                return QDir::toNativeSeparators(path);
+            }
+        }
+    }
+    return {};
+}
+#endif
 
 } // namespace
 
@@ -43,6 +76,7 @@ RemoteSshResult run_remote_ssh_command(
     }
 
     QTemporaryDir askpass_dir;
+#ifndef Q_OS_WIN
     if (!askpass_dir.isValid()) {
         result.error = QStringLiteral("failed to create temporary askpass directory");
         return result;
@@ -63,12 +97,28 @@ RemoteSshResult run_remote_ssh_command(
     askpass.close();
     askpass.setPermissions(
         QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+#else
+    const QString askpass_path = windows_ssh_askpass_path();
+    if (askpass_path.isEmpty()) {
+        result.error = QStringLiteral(
+            "archstreamer_ssh_askpass.exe not found next to the GUI "
+            "(required for SSH password auth on Windows)");
+        return result;
+    }
+#endif
 
     QProcess process;
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     env.insert(QStringLiteral("SSH_ASKPASS"), askpass_path);
     env.insert(QStringLiteral("SSH_ASKPASS_REQUIRE"), QStringLiteral("force"));
+#ifdef Q_OS_WIN
+    // Win32-OpenSSH only runs SSH_ASKPASS when DISPLAY is set.
+    env.insert(QStringLiteral("DISPLAY"), QStringLiteral("1:1"));
+    // Password reaches askpass via env (not argv). Cleared when this QProcess ends.
+    env.insert(QStringLiteral("ARCHSTREAMER_SSH_PASSWORD"), password);
+#else
     env.insert(QStringLiteral("DISPLAY"), env.value(QStringLiteral("DISPLAY"), QStringLiteral(":0")));
+#endif
     // Avoid inheriting an agent that might try keys first inconsistently.
     env.remove(QStringLiteral("SSH_AUTH_SOCK"));
     process.setProcessEnvironment(env);

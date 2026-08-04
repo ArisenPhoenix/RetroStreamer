@@ -42,7 +42,7 @@ data class CatalogResult(
 
 /**
  * Matches ClientSessionService::begin — open TCP, ask for GameList, return catalog.
- * Connection is closed afterward; joining a game uses a fresh session.
+ * [fetch] closes afterward; [fetchAndHoldPresence] keeps the TCP for Users-tab Connected.
  */
 object CatalogFetcher {
     fun fetch(
@@ -52,17 +52,54 @@ object CatalogFetcher {
     ): CatalogResult {
         ControlConnection(host, controlPort).use { conn ->
             conn.connect()
-            conn.send(PacketCodec.gameListRequest(knownRevision))
-            when (val packet = conn.receive()) {
-                is IncomingPacket.Catalog -> {
-                    val games = packet.value.games.sortedWith(
-                        compareBy({ it.systemName.lowercase() }, { it.displayName.lowercase() }),
-                    )
-                    return CatalogResult(host, controlPort, games, packet.value.catalogRevision)
-                }
-                is IncomingPacket.Error -> error(packet.value.message)
-                else -> error("expected GameList, got $packet")
+            return fetchOn(conn, host, controlPort, knownRevision)
+        }
+    }
+
+    /**
+     * Fetch catalog then announce LobbyPresence on the same socket.
+     * Caller owns the returned connection until play starts or disconnect.
+     */
+    fun fetchAndHoldPresence(
+        host: String,
+        controlPort: Int,
+        username: String,
+        password: String,
+        knownRevision: Long = 0L,
+    ): Pair<CatalogResult, ControlConnection> {
+        val conn = ControlConnection(host, controlPort)
+        try {
+            conn.connect()
+            val catalog = fetchOn(conn, host, controlPort, knownRevision)
+            conn.send(PacketCodec.lobbyPresence(username, password))
+            when (val ack = conn.receive()) {
+                is IncomingPacket.LobbyPresenceAck -> Unit
+                is IncomingPacket.Error -> error(ack.value.message)
+                else -> error("expected LobbyPresenceAck, got $ack")
             }
+            return catalog to conn
+        } catch (t: Throwable) {
+            runCatching { conn.close() }
+            throw t
+        }
+    }
+
+    private fun fetchOn(
+        conn: ControlConnection,
+        host: String,
+        controlPort: Int,
+        knownRevision: Long,
+    ): CatalogResult {
+        conn.send(PacketCodec.gameListRequest(knownRevision))
+        when (val packet = conn.receive()) {
+            is IncomingPacket.Catalog -> {
+                val games = packet.value.games.sortedWith(
+                    compareBy({ it.systemName.lowercase() }, { it.displayName.lowercase() }),
+                )
+                return CatalogResult(host, controlPort, games, packet.value.catalogRevision)
+            }
+            is IncomingPacket.Error -> error(packet.value.message)
+            else -> error("expected GameList, got $packet")
         }
     }
 }

@@ -27,6 +27,7 @@
 #include <string>
 #include <thread>
 
+class QAction;
 class QCheckBox;
 class QComboBox;
 class QLabel;
@@ -108,10 +109,13 @@ private:
     void update_saves_action_enabled();
     bool saves_host_busy() const;
     bool confirm_saves_destructive(const QString& title, const QString& detail);
+    void saves_show_context_menu(const QPoint& pos);
+    void saves_copy_selection();
     void saves_add_user();
     void saves_remove_user();
     void saves_remove_system();
     void saves_remove_game();
+    void saves_kick_user();
     SaveNameHints saves_name_hints() const;
 #endif
 
@@ -218,6 +222,8 @@ private:
     QLineEdit* remote_directory_ = nullptr;
     QLineEdit* remote_rom_root_ = nullptr;
     QLineEdit* remote_binary_ = nullptr;
+    /** Optional remote wrapper; when set, Ensure Host uses Path B (ports+GPU only). */
+    QLineEdit* remote_start_script_ = nullptr;
     QSpinBox* remote_base_control_port_ = nullptr;
     QSpinBox* remote_base_input_port_ = nullptr;
     QLineEdit* remote_gpu_ = nullptr;
@@ -304,11 +310,13 @@ private:
     QTreeWidget* saves_tree_ = nullptr;
     QLabel* saves_status_ = nullptr;
     QPushButton* saves_refresh_ = nullptr;
-    QPushButton* saves_add_user_ = nullptr;
-    QPushButton* saves_remove_user_ = nullptr;
-    QPushButton* saves_remove_system_ = nullptr;
-    QPushButton* saves_remove_game_ = nullptr;
+    QPushButton* saves_kick_ = nullptr;
+    QAction* saves_add_user_action_ = nullptr;
+    QAction* saves_remove_user_action_ = nullptr;
+    QAction* saves_remove_system_action_ = nullptr;
+    QAction* saves_remove_game_action_ = nullptr;
     SaveNameHints saves_hints_;
+    QTimer* saves_refresh_timer_ = nullptr;
 #endif
 
     QLineEdit* profile_username_ = nullptr;

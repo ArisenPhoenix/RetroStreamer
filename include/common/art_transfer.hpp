@@ -21,9 +21,16 @@ inline constexpr std::string_view kDisplayArtRoles[] = {
 ArtAssetResponse load_art_asset_response(
     const std::filesystem::path& art_root,
     std::string_view asset_key,
-    std::string_view role);
+    std::string_view role,
+    std::string_view cached_sha256 = {});
 
 bool art_asset_exists_locally(
+    const std::filesystem::path& art_root,
+    std::string_view asset_key,
+    std::string_view role);
+
+/** SHA-256 ("sha256:…") of the local role file, or empty if missing. */
+std::string local_art_asset_sha256(
     const std::filesystem::path& art_root,
     std::string_view asset_key,
     std::string_view role);

@@ -25,6 +25,12 @@ public:
     virtual bool delete_user(const std::string& username) = 0;
     virtual std::vector<UserRecord> list_users() = 0;
 
+    virtual bool upsert_controls(const ControlsRecord& controls) = 0;
+    virtual std::optional<ControlsRecord> find_controls(
+        const std::string& username,
+        const std::string& kind) = 0;
+    virtual std::vector<ControlsRecord> list_controls() = 0;
+
     virtual bool upsert_session(const SessionRecord& session) = 0;
     virtual bool end_session(const std::string& session_id, const std::string& end_reason) = 0;
     virtual std::optional<SessionRecord> find_session(const std::string& session_id) = 0;

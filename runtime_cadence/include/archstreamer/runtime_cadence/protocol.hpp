@@ -17,6 +17,9 @@ constexpr std::uint32_t kMaxProtocolPayload = 1u << 20; // 1 MiB
 nlohmann::json user_to_json(const UserRecord& user);
 UserRecord user_from_json(const nlohmann::json& j);
 
+nlohmann::json controls_to_json(const ControlsRecord& controls);
+ControlsRecord controls_from_json(const nlohmann::json& j);
+
 nlohmann::json session_to_json(const SessionRecord& session);
 SessionRecord session_from_json(const nlohmann::json& j);
 

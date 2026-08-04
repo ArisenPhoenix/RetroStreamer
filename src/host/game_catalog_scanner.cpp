@@ -1,6 +1,7 @@
 #include "host/game_catalog_scanner.hpp"
 
 #include "common/sha256.hpp"
+#include "host/game_meta_store.hpp"
 #include "host/nds/melonds_backend.hpp"
 #include "host/standalone_emulator.hpp"
 
@@ -11,6 +12,7 @@
 #include <chrono>
 #include <climits>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -198,6 +200,56 @@ std::string canonical_token(std::string value) {
         return "unknown";
     }
     return result;
+}
+
+std::string sanitize_game_display_name(std::string name) {
+    // Trim trailing whitespace first.
+    while (!name.empty() && (name.back() == ' ' || name.back() == '\t')) {
+        name.pop_back();
+    }
+    if (name.empty()) {
+        return name;
+    }
+
+    // Match trailing " Version" or " Version <digits>" (sequel), case-insensitive.
+    // Leave dotted builds ("1.3.2") and other mid-name numbers alone.
+    auto ends_with_ci = [](std::string_view hay, std::string_view needle) {
+        if (hay.size() < needle.size()) {
+            return false;
+        }
+        const auto tail = hay.substr(hay.size() - needle.size());
+        for (std::size_t i = 0; i < needle.size(); ++i) {
+            const auto a = static_cast<unsigned char>(tail[i]);
+            const auto b = static_cast<unsigned char>(needle[i]);
+            if (std::tolower(a) != std::tolower(b)) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    // "... Version 2" → keep the sequel digit(s).
+    {
+        std::size_t i = name.size();
+        while (i > 0 && std::isdigit(static_cast<unsigned char>(name[i - 1]))) {
+            --i;
+        }
+        if (i < name.size() && i > 0 && name[i - 1] == ' ') {
+            const auto sequel = name.substr(i);
+            const auto head = name.substr(0, i - 1);
+            if (ends_with_ci(head, " Version")) {
+                return head.substr(0, head.size() - std::strlen(" Version")) + " " + sequel;
+            }
+        }
+    }
+
+    if (ends_with_ci(name, " Version")) {
+        name.resize(name.size() - std::strlen(" Version"));
+        while (!name.empty() && name.back() == ' ') {
+            name.pop_back();
+        }
+    }
+    return name;
 }
 
 std::string identity_key_for(
@@ -473,6 +525,8 @@ GameCatalog scan_game_catalog(
         info.updated_at = game_update_time(entry.path(), metadata_path);
         apply_game_metadata(info, metadata_path);
         finalize_game_identity(info);
+        // Keep identity stable from the full ROM/meta name; only tidy the label.
+        info.display_name = sanitize_game_display_name(std::move(info.display_name));
 
         std::vector<std::string> playlist_members;
         if (normalized_extension(entry.path()) == "m3u") {
@@ -509,6 +563,7 @@ GameCatalog scan_game_catalog(
             << " Nintendo Switch title(s): " << switch_runtime_unavailable_message() << '\n';
     }
 
+    sync_game_meta_from_catalog(catalog);
     return catalog;
 }
 

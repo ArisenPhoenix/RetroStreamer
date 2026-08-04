@@ -395,6 +395,9 @@ void MainWindow::load_persisted_settings() {
         const auto binary = settings.value("remote/binary", "./host_runner").toString();
         remote_binary_->setText(binary.isEmpty() ? QStringLiteral("./host_runner") : binary);
     }
+    if (remote_start_script_ != nullptr) {
+        remote_start_script_->setText(settings.value("remote/startScript").toString());
+    }
     if (remote_base_control_port_ != nullptr) {
         remote_base_control_port_->setValue(
             qBound(settings.value("remote/baseControlPort", 45555).toInt(), 1, 65535));
@@ -630,6 +633,9 @@ void MainWindow::save_persisted_settings() {
     }
     if (remote_binary_ != nullptr) {
         settings.setValue("remote/binary", remote_binary_->text().trimmed());
+    }
+    if (remote_start_script_ != nullptr) {
+        settings.setValue("remote/startScript", remote_start_script_->text().trimmed());
     }
     if (remote_base_control_port_ != nullptr) {
         settings.setValue("remote/baseControlPort", remote_base_control_port_->value());

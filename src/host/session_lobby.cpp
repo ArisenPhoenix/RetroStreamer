@@ -3,6 +3,7 @@
 #include "common/art_transfer.hpp"
 #include "common/catalog_paths.hpp"
 #include "common/client_logs.hpp"
+#include "host/save_active_sessions.hpp"
 #include "host/user_credentials.hpp"
 
 #include <algorithm>
@@ -436,6 +437,29 @@ SessionPlan gather_session_clients(
     plan.clients.reserve(client_count);
     plan.host_hello = std::move(host_hello);
 
+    struct LobbyPresenceGuard {
+        std::filesystem::path root;
+        ~LobbyPresenceGuard() {
+            if (!root.empty()) {
+                clear_connected_clients_for_slot(root, -1);
+            }
+        }
+    } lobby_presence{save_root};
+
+    const auto publish_lobby_client = [&](const SessionClientConnection& client) {
+        if (save_root.empty() || client.hello.username.empty()) {
+            return;
+        }
+        ConnectedClientPresence presence;
+        presence.username = client.hello.username;
+        presence.client_id = client.client_id;
+        presence.slot_index = -1;
+        presence.game_id = client.hello.selected_game_id.value_or(GameId{});
+        presence.phase = "lobby";
+        presence.seated = client.hello.requested_players > 0;
+        publish_connected_client(save_root, presence);
+    };
+
     auto selected_game = std::optional<GameId>{};
     auto selected_game_info = std::optional<GameInfo>{};
     auto selected_mode = std::optional<GameSessionMode>{};
@@ -450,6 +474,7 @@ SessionPlan gather_session_clients(
             selected_game_info = game_info_for(game_list, *selected_game);
         }
         plan.clients.push_back(std::move(*first_client));
+        publish_lobby_client(plan.clients.back());
         plan.selected_game_id = selected_game.value_or(GameId{});
         plan.session_mode = selected_mode.value_or(GameSessionMode::Multiplayer);
         if (selected_game_info.has_value() &&
@@ -496,6 +521,26 @@ SessionPlan gather_session_clients(
             throw std::runtime_error("host stopped");
         }
 
+        // Users-tab Kick of lobby waiters.
+        for (std::size_t i = 0; i < plan.clients.size();) {
+            auto& client = plan.clients[i];
+            if (auto reason = take_connected_client_disconnect_request(
+                    save_root, client.client_id, -1);
+                reason.has_value()) {
+                std::cerr
+                    << "Lobby client " << static_cast<int>(client.client_id)
+                    << " (" << client.hello.username << ") kicked: " << *reason << '\n';
+                try {
+                    client.stream = TcpStream{};
+                } catch (const std::exception&) {
+                }
+                clear_connected_client(save_root, client.client_id, -1);
+                plan.clients.erase(plan.clients.begin() + static_cast<std::ptrdiff_t>(i));
+                continue;
+            }
+            ++i;
+        }
+
         const auto now = std::chrono::steady_clock::now();
         if (now >= deadline) {
             break;
@@ -523,7 +568,8 @@ SessionPlan gather_session_clients(
                 stream->send_packet(serialize_packet(load_art_asset_response(
                     art_root,
                     art_request->asset_key,
-                    art_request->role)));
+                    art_request->role,
+                    art_request->cached_sha256)));
                 continue;
             }
             if (const auto* log_bundle = std::get_if<ClientLogBundle>(&first_payload);
@@ -555,7 +601,8 @@ SessionPlan gather_session_clients(
                     stream->send_packet(serialize_packet(load_art_asset_response(
                         art_root,
                         art_request->asset_key,
-                        art_request->role)));
+                        art_request->role,
+                        art_request->cached_sha256)));
                     continue;
                 }
                 next_payload = std::move(payload);
@@ -616,6 +663,7 @@ SessionPlan gather_session_clients(
                 std::move(authenticated_hello),
                 std::move(*stream),
             });
+            publish_lobby_client(plan.clients.back());
             accepted_client = true;
             ++client_id;
 

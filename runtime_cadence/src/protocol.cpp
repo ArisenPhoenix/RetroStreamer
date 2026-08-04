@@ -69,6 +69,8 @@ nlohmann::json user_to_json(const UserRecord& user) {
         {"display_name", user.display_name},
         {"password_hash", user.password_hash},
         {"must_change", user.must_change},
+        {"profile_path", user.profile_path},
+        {"save_root", user.save_root},
         {"created_at", user.created_at},
         {"updated_at", user.updated_at},
     };
@@ -84,9 +86,31 @@ UserRecord user_from_json(const nlohmann::json& j) {
         user.password_hash = j.value("password", "");
     }
     user.must_change = j.value("must_change", false);
+    user.profile_path = j.value("profile_path", "");
+    user.save_root = j.value("save_root", "");
     user.created_at = j.value("created_at", std::int64_t{0});
     user.updated_at = j.value("updated_at", std::int64_t{0});
     return user;
+}
+
+nlohmann::json controls_to_json(const ControlsRecord& controls) {
+    return {
+        {"username", controls.username},
+        {"kind", controls.kind},
+        {"document_json", controls.document_json},
+        {"version", controls.version},
+        {"updated_at", controls.updated_at},
+    };
+}
+
+ControlsRecord controls_from_json(const nlohmann::json& j) {
+    ControlsRecord controls;
+    controls.username = j.value("username", "");
+    controls.kind = j.value("kind", std::string(kControlsKindButtonMap));
+    controls.document_json = j.value("document_json", "");
+    controls.version = j.value("version", 1);
+    controls.updated_at = j.value("updated_at", std::int64_t{0});
+    return controls;
 }
 
 nlohmann::json event_to_json(const RuntimeEvent& event) {

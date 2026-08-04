@@ -50,6 +50,14 @@ UserRecord make_new_user(
 
 } // namespace
 
+void apply_user_save_paths(UserRecord& user, const std::filesystem::path& save_root) {
+    if (save_root.empty() || user.username.empty()) {
+        return;
+    }
+    user.save_root = save_root.lexically_normal().string();
+    user.profile_path = (save_root / user.username).lexically_normal().string();
+}
+
 std::string make_password_hash(std::string_view password) {
     const auto salt = random_salt_hex();
     const auto digest = sha256_hex(std::string(salt) + ":" + std::string(password));
@@ -81,7 +89,8 @@ UserAuthResult verify_or_create_user(
     const std::string& username,
     const std::string& password,
     const std::string& display_name,
-    bool allow_new_users) {
+    bool allow_new_users,
+    const std::filesystem::path& save_root) {
     if (!valid_username(username) || password.empty()) {
         return UserAuthResult::Rejected;
     }
@@ -94,7 +103,8 @@ UserAuthResult verify_or_create_user(
         if (!allow_new_users) {
             return UserAuthResult::RejectedNewUser;
         }
-        const auto user = make_new_user(username, display_name, password, false);
+        auto user = make_new_user(username, display_name, password, false);
+        apply_user_save_paths(user, save_root);
         if (!store.upsert_user(user)) {
             return UserAuthResult::Unavailable;
         }
@@ -106,6 +116,7 @@ UserAuthResult verify_or_create_user(
     }
 
     // Upgrade plaintext / incomplete rows to salted hashes on successful login.
+    bool dirty = false;
     if (!looks_like_v1_hash(existing->password_hash) || existing->display_name.empty()) {
         existing->password_hash = make_password_hash(password);
         if (existing->display_name.empty()) {
@@ -114,6 +125,13 @@ UserAuthResult verify_or_create_user(
         if (existing->created_at <= 0) {
             existing->created_at = now_epoch_seconds();
         }
+        dirty = true;
+    }
+    if (existing->profile_path.empty() && !save_root.empty()) {
+        apply_user_save_paths(*existing, save_root);
+        dirty = true;
+    }
+    if (dirty) {
         existing->updated_at = now_epoch_seconds();
         (void)store.upsert_user(*existing);
     }
@@ -160,15 +178,47 @@ std::string change_user_password(
 bool ensure_default_user(
     RuntimeStore& store,
     const std::string& username,
-    const std::string& display_name) {
+    const std::string& display_name,
+    const std::filesystem::path& save_root) {
     if (!valid_username(username) || !store.ensure_ready()) {
         return false;
     }
-    if (store.find_user(username).has_value()) {
+    if (auto existing = store.find_user(username); existing.has_value()) {
+        if (existing->profile_path.empty() && !save_root.empty()) {
+            apply_user_save_paths(*existing, save_root);
+            existing->updated_at = now_epoch_seconds();
+            (void)store.upsert_user(*existing);
+        }
         return true;
     }
-    return store.upsert_user(
-        make_new_user(username, display_name, kDefaultPassword, true));
+    auto user = make_new_user(username, display_name, kDefaultPassword, true);
+    apply_user_save_paths(user, save_root);
+    return store.upsert_user(user);
+}
+
+std::size_t backfill_user_profile_paths(
+    RuntimeStore& store,
+    const std::filesystem::path& save_root) {
+    if (save_root.empty() || !store.ensure_ready()) {
+        return 0;
+    }
+    std::size_t updated = 0;
+    for (auto user : store.list_users()) {
+        if (!user.profile_path.empty()) {
+            continue;
+        }
+        const auto profile = save_root / user.username;
+        std::error_code ec;
+        if (!std::filesystem::is_directory(profile, ec) || ec) {
+            continue;
+        }
+        apply_user_save_paths(user, save_root);
+        user.updated_at = now_epoch_seconds();
+        if (store.upsert_user(user)) {
+            ++updated;
+        }
+    }
+    return updated;
 }
 
 std::size_t import_users_from_save_root(
@@ -188,13 +238,22 @@ std::size_t import_users_from_save_root(
             continue;
         }
         const auto username = entry.path().filename().string();
-        if (!valid_username(username) || store.find_user(username).has_value()) {
+        if (!valid_username(username)) {
+            continue;
+        }
+        if (auto existing = store.find_user(username); existing.has_value()) {
+            if (existing->profile_path.empty()) {
+                apply_user_save_paths(*existing, save_root);
+                existing->updated_at = now_epoch_seconds();
+                if (store.upsert_user(*existing)) {
+                    ++imported;
+                }
+            }
             continue;
         }
         const auto cred_path = entry.path() / "credentials.json";
         if (!std::filesystem::exists(cred_path)) {
-            // Save dir without credentials: seed default (must_change).
-            if (ensure_default_user(store, username)) {
+            if (ensure_default_user(store, username, username, save_root)) {
                 ++imported;
             }
             continue;
@@ -205,11 +264,11 @@ std::size_t import_users_from_save_root(
             in >> json;
             const auto password = json.value("password", std::string(kDefaultPassword));
             const bool must_change = json.value("must_change", true);
-            UserRecord user = make_new_user(username, username, password, must_change);
-            // Prefer hashing; make_new_user already hashed. If password empty, skip.
             if (password.empty()) {
                 continue;
             }
+            UserRecord user = make_new_user(username, username, password, must_change);
+            apply_user_save_paths(user, save_root);
             if (store.upsert_user(user)) {
                 ++imported;
             }

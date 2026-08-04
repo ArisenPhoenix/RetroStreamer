@@ -34,6 +34,7 @@
 #include "host/session_launch_assemble.hpp"
 #include "host/session_run_helpers.hpp"
 #include "host/standalone_emulator.hpp"
+#include "host/switch_save_share.hpp"
 #include "host/session_lobby.hpp"
 #include "host/session_runtime.hpp"
 #include "host/switch/switch_backend.hpp"
@@ -159,6 +160,8 @@ int HostApp::run_direct_session(
     std::string soft_keyboard_fallback;
     bool arm_soft_keyboard = false;
     std::unique_ptr<SwitchBackend> switch_backend;
+    std::string switch_launch_content_stem;
+    std::string switch_launch_title_id;
     std::unique_ptr<MelonDsBackend> melonds_backend;
     std::optional<std::string> session_end_reason;
 
@@ -509,6 +512,9 @@ int HostApp::run_direct_session(
         keyboard.set_switch_style_hotkeys(true);
         const auto profile_name =
             preferred_steam_or_username_display_name(save_profile.username);
+        const auto switch_content_stem = launch_config.content_path.stem().string();
+        const auto switch_title_id = resolve_switch_title_id_for_catalog(
+            save_profile, switch_content_stem, launch_config.content_path);
         auto switch_prep = switch_backend->prepare(
             launch_config,
             SwitchBackendPrepContext{
@@ -524,6 +530,9 @@ int HostApp::run_direct_session(
                 &resolved_gpu,
                 profile_name,
                 std::move(resolved_pads),
+                /*slot_index=*/0,
+                switch_content_stem,
+                switch_title_id,
             });
         resolved_pads = std::move(switch_prep.resolved_pads);
         switch_backend->assign_launch_env_profile(launch_env_request, switch_prep);
@@ -533,6 +542,8 @@ int HostApp::run_direct_session(
             switch_prep,
             config.resolution.switch_scale,
             resolved_gpu);
+        switch_launch_content_stem = switch_content_stem;
+        switch_launch_title_id = switch_title_id;
         if (switch_backend->enable_soft_keyboard()) {
             if (!standalone_soft_keyboard) {
                 standalone_soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();
@@ -838,7 +849,12 @@ int HostApp::run_direct_session(
         }
     }
     if (switch_backend) {
-        sync_and_log_post_exit_switch_saves(save_profile, std::nullopt, switch_backend.get());
+        sync_and_log_post_exit_switch_saves(
+            save_profile,
+            std::nullopt,
+            switch_backend.get(),
+            switch_launch_content_stem,
+            switch_launch_title_id);
     }
     if (melonds_backend) {
         (void)melonds_backend->post_exit_sync(save_profile);
@@ -901,6 +917,13 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                     std::cout
                         << "cadence: imported " << imported
                         << " user(s) from save profiles\n";
+                }
+                const auto backfilled =
+                    archstreamer::cadence::backfill_user_profile_paths(*cadence, save_root);
+                if (backfilled > 0) {
+                    std::cout
+                        << "cadence: backfilled profile paths for "
+                        << backfilled << " user(s)\n";
                 }
             }
         }

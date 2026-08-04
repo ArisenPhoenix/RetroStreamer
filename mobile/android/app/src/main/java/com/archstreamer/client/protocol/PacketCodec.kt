@@ -315,10 +315,19 @@ object PacketCodec {
         return wrap(PacketType.PasswordChange, payload)
     }
 
-    fun artAssetRequest(assetKey: String, role: String): ByteArray {
+    fun lobbyPresence(username: String, password: String): ByteArray {
+        val payload = WireWriter().apply {
+            writeString(username)
+            writeString(password)
+        }.toByteArray()
+        return wrap(PacketType.LobbyPresence, payload)
+    }
+
+    fun artAssetRequest(assetKey: String, role: String, cachedSha256: String = ""): ByteArray {
         val payload = WireWriter().apply {
             writeString(assetKey)
             writeString(role)
+            writeString(cachedSha256)
         }.toByteArray()
         return wrap(PacketType.ArtAssetRequest, payload)
     }
@@ -475,15 +484,24 @@ object PacketCodec {
                     message = reader.readString(),
                 ),
             )
-            PacketType.ArtAssetResponse -> IncomingPacket.Art(
-                ArtAssetResponse(
-                    assetKey = reader.readString(),
-                    role = reader.readString(),
-                    found = reader.readBool(),
-                    extension = reader.readString(),
-                    data = reader.readBytes(),
-                ),
-            )
+            PacketType.ArtAssetResponse -> {
+                val assetKey = reader.readString()
+                val role = reader.readString()
+                val found = reader.readBool()
+                val extension = reader.readString()
+                val data = reader.readBytes()
+                val contentSha256 = if (reader.remaining() > 0) reader.readString() else ""
+                IncomingPacket.Art(
+                    ArtAssetResponse(
+                        assetKey = assetKey,
+                        role = role,
+                        found = found,
+                        extension = extension,
+                        data = data,
+                        contentSha256 = contentSha256,
+                    ),
+                )
+            }
             PacketType.Error -> IncomingPacket.Error(ErrorPacket(reader.readString()))
             PacketType.ActiveSessionInfo -> {
                 val active = reader.readBool()
@@ -514,6 +532,7 @@ object PacketCodec {
                 )
             }
             PacketType.PasswordChangeRequired -> IncomingPacket.PasswordChangeRequired
+            PacketType.LobbyPresenceAck -> IncomingPacket.LobbyPresenceAck(reader.readU8())
             else -> IncomingPacket.Unknown(type)
         }
     }

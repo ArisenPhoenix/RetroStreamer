@@ -144,7 +144,8 @@ void poll_active_session_joins(
             stream->send_packet(serialize_packet(load_art_asset_response(
                 art_root,
                 art_request->asset_key,
-                art_request->role)));
+                art_request->role,
+                art_request->cached_sha256)));
             return;
         }
         const auto* game_list_request = std::get_if<GameListRequest>(&first_payload);
@@ -169,7 +170,8 @@ void poll_active_session_joins(
                 stream->send_packet(serialize_packet(load_art_asset_response(
                     art_root,
                     art_request->asset_key,
-                    art_request->role)));
+                    art_request->role,
+                    art_request->cached_sha256)));
                 continue;
             }
             next_payload = std::move(payload);
@@ -318,7 +320,8 @@ std::optional<AcceptedControlHello> try_accept_control_hello(
             stream->send_packet(serialize_packet(load_art_asset_response(
                 resolved_art,
                 art_request->asset_key,
-                art_request->role)));
+                art_request->role,
+                art_request->cached_sha256)));
             return AcceptedControlHello{};
         }
         if (const auto* log_bundle = std::get_if<ClientLogBundle>(&first_payload);
@@ -355,7 +358,8 @@ std::optional<AcceptedControlHello> try_accept_control_hello(
                 stream->send_packet(serialize_packet(load_art_asset_response(
                     resolved_art,
                     art_request->asset_key,
-                    art_request->role)));
+                    art_request->role,
+                    art_request->cached_sha256)));
                 continue;
             }
             next_payload = std::move(payload);
@@ -365,9 +369,29 @@ std::optional<AcceptedControlHello> try_accept_control_hello(
             return AcceptedControlHello{};
         }
 
+        if (const auto* presence = std::get_if<LobbyPresence>(&*next_payload); presence != nullptr) {
+            if (!valid_username(presence->username)) {
+                throw std::runtime_error("lobby presence supplied an invalid username");
+            }
+            // Auth without creating a save profile / session — MustChange is still Connected.
+            const auto auth = verify_or_create_on_hello(
+                save_root,
+                presence->username,
+                presence->password,
+                allow_new_users);
+            if (auth != UserAuthResult::Ok && auth != UserAuthResult::MustChange) {
+                throw std::runtime_error("lobby presence authentication failed");
+            }
+            AcceptedControlHello accepted;
+            accepted.have_presence = true;
+            accepted.presence = *presence;
+            accepted.stream = std::move(*stream);
+            return accepted;
+        }
+
         const auto* hello = std::get_if<ClientHello>(&*next_payload);
         if (hello == nullptr) {
-            throw std::runtime_error("expected ClientHello from control client");
+            throw std::runtime_error("expected ClientHello or LobbyPresence from control client");
         }
         auto authenticated_hello = *hello;
         if (!valid_username(authenticated_hello.username)) {

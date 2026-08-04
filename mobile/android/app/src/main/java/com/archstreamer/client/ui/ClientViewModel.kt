@@ -9,6 +9,7 @@ import android.view.MotionEvent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.archstreamer.client.SessionKeepAliveService
+import com.archstreamer.client.cadence.CadenceControlsStore
 import com.archstreamer.client.media.RtpVideoPlayer
 import com.archstreamer.client.net.ArtFetcher
 import com.archstreamer.client.net.CatalogFetcher
@@ -176,11 +177,15 @@ data class UiState(
     val remoteDirectory: String = "",
     val remoteRomRoot: String = "",
     val remoteBinary: String = "./host_runner",
+    /** Optional remote start script (Path B); blank = start host_runner (Path A). */
+    val remoteStartScript: String = "",
     /** Optional GPU preference for Ensure Host (fuzzy match); blank = host default. */
     val remoteGpu: String = "",
     val remoteBaseControlPort: String = Protocol.DEFAULT_CONTROL_PORT.toString(),
     val remoteBaseInputPort: String = Protocol.DEFAULT_INPUT_PORT.toString(),
-    val remoteStatus: String = "Ensure Host probes the base port, reuses a free lobby, or SSH-starts host_runner.",
+    val remoteStatus: String =
+        "Ensure Host probes the base port, reuses a free lobby, or SSH-starts host_runner " +
+            "(or an optional start script with ports + GPU).",
     val remoteBusy: Boolean = false,
     val remoteTrackedControlPort: Int = 0,
 )
@@ -188,6 +193,7 @@ data class UiState(
 class ClientViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = application.getSharedPreferences(PREFS_NAME, Application.MODE_PRIVATE)
     private var overlayProfiles = OverlayProfileStore.loadAll(prefs).toMutableMap()
+    private val cadenceControls = CadenceControlsStore(application)
     private val buttonMapFile =
         File(application.filesDir, ControllerMapDocument.FILE_NAME)
     private var buttonMapDocument = loadButtonMapDocument()
@@ -225,6 +231,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             remoteRomRoot = prefs.getString(KEY_REMOTE_ROM_ROOT, "").orEmpty(),
             remoteBinary = prefs.getString(KEY_REMOTE_BINARY, "./host_runner").orEmpty()
                 .ifBlank { "./host_runner" },
+            remoteStartScript = prefs.getString(KEY_REMOTE_START_SCRIPT, "").orEmpty(),
             remoteGpu = prefs.getString(KEY_REMOTE_GPU, "").orEmpty(),
             remoteBaseControlPort = prefs.getString(
                 KEY_REMOTE_BASE_CONTROL,
@@ -252,6 +259,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     val playMenuRequests: SharedFlow<Unit> = _playMenuRequests.asSharedFlow()
 
     private var session: JoinedPlaySession? = null
+    /** Open control TCP after Connect (Users-tab Connected) until play/disconnect. */
+    private var lobbyPresence: ControlConnection? = null
     private var inputJob: Job? = null
     private var heartbeatJob: Job? = null
     private var controlJob: Job? = null
@@ -325,13 +334,33 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private fun mapProfileFor(family: OverlaySystemFamily): ControllerMapProfile =
         buttonMapDocument.profile(OverlaySystemFamily.toMapFamily(family))
 
+    private fun controlsUsername(): String =
+        prefs.getString(KEY_USERNAME, "android").orEmpty().ifBlank { "android" }
+
     private fun loadButtonMapDocument(): ControllerMapDocument {
-        val loaded = ControllerMapStore.load(buttonMapFile)
+        val username = controlsUsername()
+        cadenceControls.findControls(username)?.let { json ->
+            return runCatching { ControllerMapStore.decode(json) }
+                .getOrDefault(ControllerMapDocument())
+        }
+        cadenceControls.findControls(CadenceControlsStore.DEFAULT_USERNAME)?.let { json ->
+            return runCatching { ControllerMapStore.decode(json) }
+                .getOrDefault(ControllerMapDocument())
+        }
+
+        // One-shot import from legacy filesDir JSON, then stop relying on the file.
         if (buttonMapFile.isFile) {
+            val loaded = ControllerMapStore.load(buttonMapFile)
+            cadenceControls.upsertControls(
+                username = username,
+                documentJson = ControllerMapStore.encode(loaded),
+                version = loaded.version,
+            )
             return loaded
         }
+
         // First run: migrate overlay face swaps into the portable document.
-        var doc = loaded
+        var doc = ControllerMapDocument()
         var changed = false
         OverlaySystemFamily.entries.forEach { family ->
             val overlay = overlayProfiles[family] ?: return@forEach
@@ -345,18 +374,25 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             changed = true
         }
         if (changed) {
-            ControllerMapStore.save(buttonMapFile, doc)
+            persistButtonMapDocument(doc, username)
         }
         return doc
     }
 
-    private fun persistButtonMapDocument() {
-        ControllerMapStore.save(buttonMapFile, buttonMapDocument)
+    private fun persistButtonMapDocument(
+        document: ControllerMapDocument = buttonMapDocument,
+        username: String = controlsUsername(),
+    ) {
+        cadenceControls.upsertControls(
+            username = username,
+            documentJson = ControllerMapStore.encode(document),
+            version = document.version,
+        )
     }
 
     /**
      * When a custom overlay is saved, mirror remappable control Actions into the shared
-     * controller_button_map.json so desktop can reuse the same remaps.
+     * button-map document (cadence user_controls) so desktop can reuse the same remaps.
      */
     private fun syncButtonMapRemapsFromItems(family: OverlaySystemFamily, items: List<OverlayItem>) {
         fun storedAction(kind: OverlayControlKind): ControllerMapAction {
@@ -1052,6 +1088,11 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         prefs.edit().putString(KEY_REMOTE_BINARY, value.trim()).apply()
     }
 
+    fun onRemoteStartScriptChange(value: String) {
+        _state.update { it.copy(remoteStartScript = value) }
+        prefs.edit().putString(KEY_REMOTE_START_SCRIPT, value.trim()).apply()
+    }
+
     fun onRemoteGpuChange(value: String) {
         _state.update { it.copy(remoteGpu = value) }
         prefs.edit().putString(KEY_REMOTE_GPU, value.trim()).apply()
@@ -1084,6 +1125,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         val directory = snap.remoteDirectory.trim()
         val romRoot = snap.remoteRomRoot.trim()
         val binary = snap.remoteBinary.trim().ifBlank { "./host_runner" }
+        val startScript = snap.remoteStartScript.trim()
         val wantGpu = snap.remoteGpu.trim()
         val sshPort = snap.remoteSshPort.trim().toIntOrNull() ?: RemoteHost.DEFAULT_SSH_PORT
         val baseControl = snap.remoteBaseControlPort.trim().toIntOrNull()
@@ -1099,13 +1141,21 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             .putString(KEY_REMOTE_DIRECTORY, directory)
             .putString(KEY_REMOTE_ROM_ROOT, romRoot)
             .putString(KEY_REMOTE_BINARY, binary)
+            .putString(KEY_REMOTE_START_SCRIPT, startScript)
             .putString(KEY_REMOTE_GPU, wantGpu)
             .putString(KEY_REMOTE_BASE_CONTROL, baseControl.toString())
             .putString(KEY_REMOTE_BASE_INPUT, baseInput.toString())
             .apply()
 
-        if (host.isEmpty() || user.isEmpty() || directory.isEmpty() || romRoot.isEmpty()) {
-            setRemoteStatus("SSH host, user, remote directory, and ROM root are required.")
+        if (host.isEmpty() || user.isEmpty() || directory.isEmpty()) {
+            setRemoteStatus("SSH host, user, and remote directory are required.")
+            return
+        }
+        if (startScript.isEmpty() && romRoot.isEmpty()) {
+            setRemoteStatus(
+                "Remote ROM root is required unless a start script is set " +
+                    "(Path B: the script owns ROM root / host_runner).",
+            )
             return
         }
         if (password.isEmpty()) {
@@ -1192,8 +1242,13 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                     romRoot,
                     ports,
                     encodeGpu = resolvedGpuId,
+                    startScript = startScript,
                 )
-                var msg = "SSH-starting host instance $instanceIndex on port ${ports.controlPort}"
+                var msg = if (startScript.isEmpty()) {
+                    "SSH-starting host instance $instanceIndex on port ${ports.controlPort}"
+                } else {
+                    "SSH-starting via script (instance $instanceIndex, port ${ports.controlPort})"
+                }
                 if (resolvedGpuLabel.isNotEmpty()) {
                     msg += " ($resolvedGpuLabel)"
                 }
@@ -1303,6 +1358,22 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         val username = value.trim()
         _state.update { it.copy(username = username) }
         prefs.edit().putString(KEY_USERNAME, username).apply()
+        // Load remaps for this username when present; otherwise keep current in-memory map.
+        val stored = username.ifBlank { "android" }.let { name ->
+            cadenceControls.findControls(name)
+                ?: cadenceControls.findControls(CadenceControlsStore.DEFAULT_USERNAME)
+        }
+        if (stored != null) {
+            buttonMapDocument = runCatching { ControllerMapStore.decode(stored) }
+                .getOrDefault(buttonMapDocument)
+            _state.update {
+                it.copy(
+                    editingMapProfile = buttonMapDocument.profile(
+                        OverlaySystemFamily.toMapFamily(it.editingOverlayFamily),
+                    ),
+                )
+            }
+        }
     }
 
     fun onPasswordChange(value: String) {
@@ -1692,17 +1763,30 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             _state.update { it.copy(busy = true, status = "Fetching catalog from $host:$port…") }
+            clearLobbyPresence()
+            val username = snap.username.ifBlank { "android" }
+            val password = snap.password
             runCatching {
                 withContext(Dispatchers.IO) {
-                    CatalogFetcher.fetch(host, port)
+                    if (password.isNotEmpty()) {
+                        CatalogFetcher.fetchAndHoldPresence(host, port, username, password)
+                    } else {
+                        CatalogFetcher.fetch(host, port) to null
+                    }
                 }
-            }.onSuccess { catalog ->
+            }.onSuccess { (catalog, presence) ->
+                lobbyPresence = presence
                 ClientFileLog.append("Catalog loaded: ${catalog.games.size} games from $host:$port")
                 val recentIds = loadRecentGameIds(host, snap.controlPort)
                 val expanded = if (recentIds.any { id -> catalog.games.any { it.id == id } }) {
                     setOf(RECENT_GROUP)
                 } else {
                     emptySet()
+                }
+                val presenceNote = if (presence != null) {
+                    " Connected on host."
+                } else {
+                    " (enter password to register Connected on host)."
                 }
                 _state.update {
                     it.copy(
@@ -1713,11 +1797,12 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                         recentGameIds = recentIds,
                         expandedSystems = expanded,
                         artByAssetKey = emptyMap(),
-                        status = "Loaded ${catalog.games.size} games (rev ${catalog.catalogRevision}).",
+                        status = "Loaded ${catalog.games.size} games (rev ${catalog.catalogRevision}).$presenceNote",
                     )
                 }
                 startArtPrefetch(catalog.games, host, port)
             }.onFailure { err ->
+                clearLobbyPresence()
                 _state.update {
                     it.copy(
                         busy = false,
@@ -1750,6 +1835,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     fun disconnect() {
         artJob?.cancel()
         artJob = null
+        clearLobbyPresence()
         endSession()
         _state.update {
             it.copy(
@@ -1797,6 +1883,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             }
             runCatching {
                 withContext(Dispatchers.IO) {
+                    clearLobbyPresence()
                     endSessionLocked()
                     val preferPhysical = snap.usePhysicalController
                     val pads = PhysicalGamepad.connectedPads()
@@ -2346,6 +2433,14 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    private fun clearLobbyPresence() {
+        val held = lobbyPresence
+        lobbyPresence = null
+        if (held != null) {
+            runCatching { held.close() }
+        }
+    }
+
     /**
      * Tear down the play session.
      *
@@ -2426,6 +2521,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         private const val KEY_REMOTE_DIRECTORY = "remote_directory"
         private const val KEY_REMOTE_ROM_ROOT = "remote_rom_root"
         private const val KEY_REMOTE_BINARY = "remote_binary"
+        private const val KEY_REMOTE_START_SCRIPT = "remote_start_script"
         private const val KEY_REMOTE_GPU = "remote_gpu"
         private const val KEY_REMOTE_BASE_CONTROL = "remote_base_control"
         private const val KEY_REMOTE_BASE_INPUT = "remote_base_input"

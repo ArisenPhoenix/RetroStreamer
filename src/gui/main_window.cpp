@@ -16,6 +16,8 @@
 #include "client/game_filter.hpp"
 #include "client/audio_playback_device.hpp"
 #include "client/video_window_geometry.hpp"
+#include "common/controller_button_map.hpp"
+#include "archstreamer/runtime_cadence/cadence.hpp"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -79,7 +81,7 @@ MainWindow::MainWindow() {
     tabs_->addTab(build_remote_tab(), "Remote");
 #ifdef ARCHSTREAMER_HAS_HOST
     tabs_->addTab(build_host_tab(), "Host");
-    tabs_->addTab(build_saves_tab(), "Saves");
+    tabs_->addTab(build_saves_tab(), "Users");
 #endif
     tabs_->addTab(build_stream_tab(), "Stream");
     tabs_->addTab(build_game_options_tab(), "Game Options");
@@ -868,21 +870,76 @@ std::filesystem::path MainWindow::controller_map_file_path() const {
     return (std::filesystem::path(root.toStdString()) / std::string(archstreamer::ControllerMapFileName));
 }
 
+namespace {
+
+bool upsert_controller_map_to_cadence(
+    const std::string& username,
+    const archstreamer::ControllerMapDocument& document) {
+    auto store = archstreamer::cadence::make_runtime_store();
+    if (!store || !store->ensure_ready()) {
+        return false;
+    }
+    archstreamer::cadence::ControlsRecord controls;
+    controls.username = username;
+    controls.kind = std::string(archstreamer::cadence::kControlsKindButtonMap);
+    controls.document_json = archstreamer::controller_map_document_to_json(document);
+    controls.version = archstreamer::ControllerMapDocumentVersion;
+    return store->upsert_controls(controls);
+}
+
+std::optional<archstreamer::ControllerMapDocument> load_controller_map_from_cadence(
+    const std::string& username) {
+    auto store = archstreamer::cadence::make_runtime_store();
+    if (!store || !store->ensure_ready()) {
+        return std::nullopt;
+    }
+    const auto kind = std::string(archstreamer::cadence::kControlsKindButtonMap);
+    auto found = store->find_controls(username, kind);
+    if (!found.has_value() &&
+        username != archstreamer::cadence::kControlsDefaultUsername) {
+        found = store->find_controls(
+            std::string(archstreamer::cadence::kControlsDefaultUsername),
+            kind);
+    }
+    if (!found.has_value()) {
+        return std::nullopt;
+    }
+    return archstreamer::controller_map_document_from_json(found->document_json);
+}
+
+} // namespace
+
 void MainWindow::load_controller_map_document() {
     if (!controller_map_prefs_) {
         return;
     }
-    const auto path = controller_map_file_path();
-    if (auto document = archstreamer::controller_map_document_load_file(path); document.has_value()) {
+
+    const auto apply_document = [this](const archstreamer::ControllerMapDocument& document) {
         for (std::size_t i = 0; i < archstreamer::ControllerMapFamilyCount; ++i) {
             const auto family = static_cast<archstreamer::ControllerMapFamily>(i);
-            controller_map_prefs_->set_profile(family, document->profile(family));
+            controller_map_prefs_->set_profile(family, document.profile(family));
         }
         sync_controller_map_editor_ui();
+    };
+
+    auto username = profile_client_username();
+    if (username.empty()) {
+        username = std::string(archstreamer::cadence::kControlsDefaultUsername);
+    }
+    if (auto document = load_controller_map_from_cadence(username); document.has_value()) {
+        apply_document(*document);
         return;
     }
 
-    // Migrate legacy QSettings keys into the portable JSON file once.
+    // One-shot import: AppConfig JSON → cadence user_controls.
+    const auto path = controller_map_file_path();
+    if (auto document = archstreamer::controller_map_document_load_file(path); document.has_value()) {
+        apply_document(*document);
+        (void)upsert_controller_map_to_cadence(username, *document);
+        return;
+    }
+
+    // Migrate legacy QSettings keys into cadence (and leave a JSON backup once).
     QSettings settings("ArchStreamer", "ArchStreamer");
     archstreamer::ControllerMapDocument document;
     const bool legacy_nw = settings.value("client/swapFaceNw", false).toBool();
@@ -921,6 +978,7 @@ void MainWindow::load_controller_map_document() {
         controller_map_prefs_->set_profile(family, profile);
     }
     if (migrated) {
+        (void)upsert_controller_map_to_cadence(username, document);
         archstreamer::controller_map_document_save_file(path, document);
     }
     sync_controller_map_editor_ui();
@@ -935,7 +993,14 @@ void MainWindow::save_controller_map_document() {
         const auto family = static_cast<archstreamer::ControllerMapFamily>(i);
         document.profile(family) = controller_map_prefs_->profile(family);
     }
-    archstreamer::controller_map_document_save_file(controller_map_file_path(), document);
+    auto username = profile_client_username();
+    if (username.empty()) {
+        username = std::string(archstreamer::cadence::kControlsDefaultUsername);
+    }
+    if (!upsert_controller_map_to_cadence(username, document)) {
+        // Cadence unavailable — keep AppConfig JSON so remaps are not lost.
+        archstreamer::controller_map_document_save_file(controller_map_file_path(), document);
+    }
 
     // Keep legacy keys in sync for older builds.
     const auto standard = document.profile(archstreamer::ControllerMapFamily::Standard);

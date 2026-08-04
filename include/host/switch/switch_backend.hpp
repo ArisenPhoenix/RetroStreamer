@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace archstreamer {
@@ -33,6 +34,10 @@ struct SwitchBackendPrepContext {
     std::vector<ArchStreamerSdlPad> resolved_pads;
     /** Concurrent session slot (0/1/…) for LDN netns IP assignment. */
     std::size_t slot_index = 0;
+    /** Catalog ROM stem (e.g. "Pokemon Shield 1.3.2") — keys save + addon dirs. */
+    std::string content_stem;
+    /** Nintendo application title id when known (0100…). */
+    std::string title_id;
 };
 
 struct SwitchBackendPrepResult {
@@ -74,10 +79,13 @@ public:
     virtual bool enable_soft_keyboard() const { return false; }
 
     /**
-     * Pull in-session Switch saves into the shared canonical tree after exit.
-     * Default: sync_switch_shared_saves_for_profile.
+     * Pull in-session Switch saves into the catalog stem leaf after exit.
+     * Uses content_stem/title_id from the last prepare when available.
      */
-    virtual std::vector<std::string> post_exit_sync(const SaveProfile& profile) const;
+    virtual std::vector<std::string> post_exit_sync(
+        const SaveProfile& profile,
+        std::string_view content_stem = {},
+        std::string_view title_id = {}) const;
 
 protected:
     /** Shared pad discovery, graphics-API forcing, and quiet_stdio. */

@@ -19,11 +19,13 @@
 #include "host/retroarch_netcmd.hpp"
 #include "host/retroarch_resolve.hpp"
 #include "host/save_active_sessions.hpp"
+#include "host/game_meta_store.hpp"
 #include "host/session_lobby.hpp"
 #include "host/session_launch_assemble.hpp"
 #include "host/session_run_helpers.hpp"
 #include "host/session_audio_channel.hpp"
 #include "host/standalone_emulator.hpp"
+#include "host/switch_save_share.hpp"
 #include "host/switch/switch_backend.hpp"
 #include "host/switch/ryujinx_controls.hpp"
 #include "host/nds/melonds_backend.hpp"
@@ -501,6 +503,16 @@ void ActiveSessionSlot::drain_pending_joins() {
                     plan.selected_game_id,
                     "reconnect",
                     cadence_tracker_.session_id());
+                {
+                    ConnectedClientPresence presence;
+                    presence.username = pending.hello.username;
+                    presence.client_id = client_id;
+                    presence.slot_index = config_.slot_index;
+                    presence.game_id = plan.selected_game_id;
+                    presence.phase = "session";
+                    presence.seated = pending.hello.requested_players > 0;
+                    publish_connected_client(config_.host_config.save_root, presence);
+                }
             } else {
                 plan.clients.push_back(SessionClientConnection{
                     client_id,
@@ -517,6 +529,16 @@ void ActiveSessionSlot::drain_pending_joins() {
                     plan.selected_game_id,
                     pending.hello.requested_players > 0 ? "player" : "viewer",
                     cadence_tracker_.session_id());
+                {
+                    ConnectedClientPresence presence;
+                    presence.username = pending.hello.username;
+                    presence.client_id = client_id;
+                    presence.slot_index = config_.slot_index;
+                    presence.game_id = plan.selected_game_id;
+                    presence.phase = "session";
+                    presence.seated = pending.hello.requested_players > 0;
+                    publish_connected_client(config_.host_config.save_root, presence);
+                }
             }
 
             if (config_.input_demux != nullptr && input_router_ != nullptr) {
@@ -547,15 +569,6 @@ void ActiveSessionSlot::drain_pending_joins() {
 
 void ActiveSessionSlot::run_session() {
     const int slot = config_.slot_index;
-    auto should_stop = [this]() {
-        if (stop_requested_.load()) {
-            return true;
-        }
-        if (config_.should_stop && config_.should_stop()) {
-            return true;
-        }
-        return false;
-    };
 
     if (config_.catalog == nullptr) {
         throw std::runtime_error("session slot missing game catalog");
@@ -566,6 +579,8 @@ void ActiveSessionSlot::run_session() {
     auto& plan = config_.plan;
     std::unique_ptr<SwitchBackend> switch_backend;
     std::unique_ptr<MelonDsBackend> melonds_backend;
+    std::string switch_launch_content_stem;
+    std::string switch_launch_title_id;
 
     // Concurrent slots each own a SessionAudioChannel (archstreamer-N + app id).
     if (config.audio && should_use_slot_streaming_sink(config.audio_source)) {
@@ -644,7 +659,7 @@ void ActiveSessionSlot::run_session() {
     }
     plan.system_key = system_key_;
 
-    // Advertise this live save profile to the host Saves browser (cleared on exit).
+    // Advertise this live save profile to the host Users browser (cleared on exit).
     struct ActiveSaveSessionGuard {
         std::filesystem::path root;
         int slot = -1;
@@ -663,6 +678,41 @@ void ActiveSessionSlot::run_session() {
         active.content_path = launch_config.content_path.string();
         active.slot_index = slot;
         publish_active_save_session(config.save_root, active);
+        record_user_game_played(active.username, active.game_id, active.system_key);
+    }
+
+    std::string admin_stop_reason;
+    auto should_stop = [this, &config, slot, &admin_stop_reason]() {
+        if (stop_requested_.load()) {
+            return true;
+        }
+        if (auto reason = take_active_session_stop_request(config.save_root, slot);
+            reason.has_value()) {
+            admin_stop_reason = *reason;
+            stop_requested_.store(true);
+            std::cerr
+                << "session slot " << slot << ": stop requested (" << admin_stop_reason << ")\n";
+            return true;
+        }
+        if (config_.should_stop && config_.should_stop()) {
+            return true;
+        }
+        return false;
+    };
+
+    // Advertise clients as Connected while the emulator boots (before Active).
+    for (const auto& client : plan.clients) {
+        if (client.hello.username.empty()) {
+            continue;
+        }
+        ConnectedClientPresence presence;
+        presence.username = client.hello.username;
+        presence.client_id = client.client_id;
+        presence.slot_index = slot;
+        presence.game_id = plan.selected_game_id;
+        presence.phase = "session";
+        presence.seated = client.hello.requested_players > 0;
+        publish_connected_client(config.save_root, presence);
     }
 
     if (!launch_config.standalone && system_key_ == "ps2") {
@@ -930,6 +980,9 @@ void ActiveSessionSlot::run_session() {
         }
         const auto profile_name = resolve_switch_profile_display_name(
             save_profile_.username, plan.host_hello, client_hellos);
+        const auto switch_content_stem = launch_config.content_path.stem().string();
+        const auto switch_title_id = resolve_switch_title_id_for_catalog(
+            save_profile_, switch_content_stem, launch_config.content_path);
         auto switch_prep = switch_backend->prepare(
             launch_config,
             SwitchBackendPrepContext{
@@ -946,6 +999,8 @@ void ActiveSessionSlot::run_session() {
                 profile_name,
                 std::move(resolved_pads),
                 static_cast<std::size_t>(std::max(0, slot)),
+                switch_content_stem,
+                switch_title_id,
             });
         resolved_pads = std::move(switch_prep.resolved_pads);
         switch_backend->assign_launch_env_profile(launch_env_request, switch_prep);
@@ -956,6 +1011,9 @@ void ActiveSessionSlot::run_session() {
             config.resolution.switch_scale,
             resolved_gpu,
             slot);
+        // Keep for post-exit scoped sync (same function scope).
+        switch_launch_content_stem = switch_content_stem;
+        switch_launch_title_id = switch_title_id;
         if (switch_backend->enable_soft_keyboard()) {
             if (!plan.soft_keyboard) {
                 plan.soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();
@@ -1175,6 +1233,14 @@ void ActiveSessionSlot::run_session() {
                 plan.selected_game_id,
                 client.hello.requested_players > 0 ? "player" : "viewer",
                 cadence_tracker_.session_id());
+            ConnectedClientPresence presence;
+            presence.username = client.hello.username;
+            presence.client_id = client.client_id;
+            presence.slot_index = slot;
+            presence.game_id = plan.selected_game_id;
+            presence.phase = "session";
+            presence.seated = client.hello.requested_players > 0;
+            publish_connected_client(config.save_root, presence);
         }
         if (plan.host_hello.has_value() && !plan.host_hello->username.empty()) {
             record_client_joined(
@@ -1333,15 +1399,22 @@ void ActiveSessionSlot::run_session() {
     // Pull Ryujinx/Yuzu Switch saves into the shared canonical tree after exit.
     // (Launch already synced; in-session Ryujinx writes stay in bis until now.)
     if (switch_backend) {
-        sync_and_log_post_exit_switch_saves(save_profile_, slot, switch_backend.get());
+        sync_and_log_post_exit_switch_saves(
+            save_profile_,
+            slot,
+            switch_backend.get(),
+            switch_launch_content_stem,
+            switch_launch_title_id);
     }
     if (melonds_backend) {
         (void)melonds_backend->post_exit_sync(save_profile_);
     }
 
-    const std::string end_reason = should_stop()
-        ? "host stopped"
-        : session_end_reason.value_or("session ended");
+    const std::string end_reason = !admin_stop_reason.empty()
+        ? admin_stop_reason
+        : (should_stop()
+            ? "host stopped"
+            : session_end_reason.value_or("session ended"));
     shutdown_media_and_clients(end_reason);
 
     // Drop the null sink after capture stops so the mixer only shows live slots.

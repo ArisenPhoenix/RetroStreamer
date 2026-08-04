@@ -192,16 +192,30 @@ object RemoteHost {
         return processMatch.id == wantResolvedId
     }
 
+    /**
+     * Absolute script path, or relative to [directory]. Blank → Path A (host_runner).
+     */
+    fun resolveStartScript(directory: String, startScript: String): String {
+        var trimmed = startScript.trim().trimEnd('/', '\\')
+        if (trimmed.isEmpty()) return ""
+        if (trimmed.startsWith("/")) return trimmed
+        if (trimmed.startsWith("./")) trimmed = trimmed.removePrefix("./")
+        val dir = directory.trim().trimEnd('/', '\\')
+        return if (dir.isEmpty()) trimmed else "$dir/$trimmed"
+    }
+
+    /**
+     * Path A ([startScript] blank): nohup host_runner with rom-root, ports, clients, GPU.
+     * Path B ([startScript] set): nohup that script with ports + GPU only.
+     */
     fun startShell(
         directory: String,
         binary: String,
         romRoot: String,
         ports: RemoteHostPortBlock,
         encodeGpu: String = "",
+        startScript: String = "",
     ): String {
-        val resolved = resolveBinary(directory, binary)
-        val qbin = shellSingleQuote(resolved)
-        val qrom = shellSingleQuote(romRoot)
         val dir = directory.trim().trimEnd('/', '\\').ifEmpty { "." }
         val qdir = shellSingleQuote(dir)
         val qlog = shellSingleQuote(logPath(directory, ports.controlPort))
@@ -211,23 +225,36 @@ object RemoteHost {
         } else {
             ""
         }
+        val portArgs =
+            " --control-port ${ports.controlPort}" +
+                " --input-port ${ports.inputPort}" +
+                " --video-port ${ports.videoPort}" +
+                " --audio-port ${ports.audioPort}" +
+                " --virtual-display :${ports.virtualDisplay}"
+        val resolvedScript = resolveStartScript(directory, startScript)
+        val useScript = resolvedScript.isNotEmpty()
+        val launchTarget = if (useScript) resolvedScript else resolveBinary(directory, binary)
+        val qlaunch = shellSingleQuote(launchTarget)
+        val missingLabel = if (useScript) "start script" else "host_runner"
+        val exitLabel = missingLabel
+        val launchArgs = if (useScript) {
+            portArgs + gpuArgs
+        } else {
+            " --rom-root ${shellSingleQuote(romRoot)}" +
+                portArgs +
+                " --clients 2 --allow-new-users" +
+                gpuArgs
+        }
         return "set -e; " +
             "mkdir -p $qdir; " +
-            "if [ ! -x $qbin ]; then echo \"host_runner not found or not executable: \" $qbin >&2; exit 127; fi; " +
-            "nohup $qbin" +
-            " --rom-root $qrom" +
-            " --control-port ${ports.controlPort}" +
-            " --input-port ${ports.inputPort}" +
-            " --video-port ${ports.videoPort}" +
-            " --audio-port ${ports.audioPort}" +
-            " --virtual-display :${ports.virtualDisplay}" +
-            " --clients 2 --allow-new-users" +
-            gpuArgs +
+            "if [ ! -x $qlaunch ]; then echo \"$missingLabel not found or not executable: \" $qlaunch >&2; exit 127; fi; " +
+            "nohup $qlaunch" +
+            launchArgs +
             " > $qlog 2>&1 & " +
             "pid=\$!; echo \"\$pid\" > $qpid; " +
             "sleep 0.7; " +
             "if ! kill -0 \"\$pid\" 2>/dev/null; then " +
-            "echo \"host_runner exited immediately (pid \$pid). Log:\" >&2; " +
+            "echo \"$exitLabel exited immediately (pid \$pid). Log:\" >&2; " +
             "cat $qlog >&2 || true; rm -f $qpid; exit 1; fi"
     }
 

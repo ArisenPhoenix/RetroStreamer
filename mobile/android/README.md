@@ -21,9 +21,22 @@ Open **this folder** (`mobile/android`) in Android Studio — not the C++ repo r
 - Viewer heartbeats (keeps the host session alive)
 - On-screen gamepad overlay → UDP `ControllerInput`
 - Optional physical USB/Bluetooth gamepad (Game Options); Home/Guide opens the play menu
+- Controller remaps persisted in local SQLite (`files/archstreamer_cadence.sqlite`,
+  `user_controls` — same document JSON as desktop cadence). First launch imports
+  legacy `controller_button_map.json` from `filesDir` if present.
+
+## Smoke: remaps survive process death
+
+1. Connect, open Game Options, change a button remap, leave the screen.
+2. Force-stop the app (or kill process); relaunch.
+3. Remaps should match. Confirm with:
+   `adb shell run-as com.archstreamer.client ls files/`
+   (expect `archstreamer_cadence.sqlite`; JSON file may remain as a one-shot backup).
 
 ## Not yet
 
+- Syncing mobile remaps up to the host over the wire
+- Overlay layout in SQL (still SharedPreferences)
 - Opus audio decode
 - Soft keyboard OSK for Ryujinx prompts
 - LAN discovery / art download

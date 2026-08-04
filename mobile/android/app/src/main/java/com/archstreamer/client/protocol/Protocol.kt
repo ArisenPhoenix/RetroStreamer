@@ -6,7 +6,7 @@ package com.archstreamer.client.protocol
  */
 object Protocol {
     const val MAGIC: Int = 0x41525354 // "ARST"
-    const val VERSION: Int = 21
+    const val VERSION: Int = 22
     const val HEADER_SIZE: Int = 11 // u32 + u16 + u8 + u32, little-endian, no padding
 
     const val DEFAULT_CONTROL_PORT: Int = 45555
@@ -50,7 +50,9 @@ enum class PacketType(val id: Int) {
     PasswordChangeRequired(30),
     PasswordChange(31),
     TouchInput(32),
-    DsScreenLayout(33);
+    DsScreenLayout(33),
+    LobbyPresence(34),
+    LobbyPresenceAck(35);
 
     companion object {
         fun fromId(id: Int): PacketType =
@@ -188,6 +190,8 @@ data class ArtAssetResponse(
     val found: Boolean,
     val extension: String,
     val data: ByteArray,
+    /** Host content hash (`sha256:…`); empty on older hosts. */
+    val contentSha256: String = "",
 )
 
 /** Matches MediaQualityTier in protocol.hpp */
@@ -397,5 +401,6 @@ sealed class IncomingPacket {
     data class Error(val value: ErrorPacket) : IncomingPacket()
     data class ActiveSession(val value: ActiveSessionInfo) : IncomingPacket()
     data object PasswordChangeRequired : IncomingPacket()
+    data class LobbyPresenceAck(val clientId: Int) : IncomingPacket()
     data class Unknown(val type: PacketType) : IncomingPacket()
 }

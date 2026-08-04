@@ -63,6 +63,8 @@ bool SidecarDb::ensure_schema() {
             "  display_name TEXT NOT NULL DEFAULT '',"
             "  password_hash TEXT NOT NULL DEFAULT '',"
             "  must_change INTEGER NOT NULL DEFAULT 0,"
+            "  profile_path TEXT NOT NULL DEFAULT '',"
+            "  save_root TEXT NOT NULL DEFAULT '',"
             "  created_at INTEGER NOT NULL DEFAULT 0,"
             "  updated_at INTEGER NOT NULL DEFAULT 0"
             ");")) {
@@ -71,6 +73,20 @@ bool SidecarDb::ensure_schema() {
     (void)exec_quiet("ALTER TABLE users ADD COLUMN password_hash TEXT NOT NULL DEFAULT '';");
     (void)exec_quiet("ALTER TABLE users ADD COLUMN must_change INTEGER NOT NULL DEFAULT 0;");
     (void)exec_quiet("ALTER TABLE users ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;");
+    (void)exec_quiet("ALTER TABLE users ADD COLUMN profile_path TEXT NOT NULL DEFAULT '';");
+    (void)exec_quiet("ALTER TABLE users ADD COLUMN save_root TEXT NOT NULL DEFAULT '';");
+
+    if (!exec(
+            "CREATE TABLE IF NOT EXISTS user_controls ("
+            "  username TEXT NOT NULL,"
+            "  kind TEXT NOT NULL DEFAULT 'button_map',"
+            "  document_json TEXT NOT NULL,"
+            "  version INTEGER NOT NULL DEFAULT 1,"
+            "  updated_at INTEGER NOT NULL DEFAULT 0,"
+            "  PRIMARY KEY (username, kind)"
+            ");")) {
+        return false;
+    }
 
     if (!exec(
             "CREATE TABLE IF NOT EXISTS sessions ("
@@ -156,12 +172,14 @@ bool SidecarDb::upsert_user(const UserRecord& user) {
     }
     sqlite3_stmt* stmt = nullptr;
     const char* sql =
-        "INSERT INTO users(username, display_name, password_hash, must_change, created_at, updated_at) "
-        "VALUES(?,?,?,?,?,?) "
+        "INSERT INTO users(username, display_name, password_hash, must_change, profile_path, save_root, "
+        "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?) "
         "ON CONFLICT(username) DO UPDATE SET "
         "display_name=excluded.display_name, "
         "password_hash=CASE WHEN excluded.password_hash='' THEN users.password_hash ELSE excluded.password_hash END, "
         "must_change=CASE WHEN excluded.password_hash='' THEN users.must_change ELSE excluded.must_change END, "
+        "profile_path=CASE WHEN excluded.profile_path='' THEN users.profile_path ELSE excluded.profile_path END, "
+        "save_root=CASE WHEN excluded.save_root='' THEN users.save_root ELSE excluded.save_root END, "
         "created_at=CASE WHEN users.created_at=0 THEN excluded.created_at ELSE users.created_at END, "
         "updated_at=excluded.updated_at;";
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
@@ -171,8 +189,10 @@ bool SidecarDb::upsert_user(const UserRecord& user) {
     sqlite3_bind_text(stmt, 2, stored.display_name.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 3, stored.password_hash.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_int(stmt, 4, stored.must_change ? 1 : 0);
-    sqlite3_bind_int64(stmt, 5, stored.created_at);
-    sqlite3_bind_int64(stmt, 6, stored.updated_at);
+    sqlite3_bind_text(stmt, 5, stored.profile_path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 6, stored.save_root.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 7, stored.created_at);
+    sqlite3_bind_int64(stmt, 8, stored.updated_at);
     const int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
     return rc == SQLITE_DONE;
@@ -185,8 +205,8 @@ std::optional<UserRecord> SidecarDb::find_user(const std::string& username) {
     std::lock_guard lock(mutex_);
     sqlite3_stmt* stmt = nullptr;
     const char* sql =
-        "SELECT username, display_name, password_hash, must_change, created_at, updated_at "
-        "FROM users WHERE username=? LIMIT 1;";
+        "SELECT username, display_name, password_hash, must_change, profile_path, save_root, "
+        "created_at, updated_at FROM users WHERE username=? LIMIT 1;";
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
         return std::nullopt;
     }
@@ -201,8 +221,16 @@ std::optional<UserRecord> SidecarDb::find_user(const std::string& username) {
             user.password_hash = hash;
         }
         user.must_change = sqlite3_column_int(stmt, 3) != 0;
-        user.created_at = sqlite3_column_int64(stmt, 4);
-        user.updated_at = sqlite3_column_int64(stmt, 5);
+        if (const auto* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+            path != nullptr) {
+            user.profile_path = path;
+        }
+        if (const auto* root = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
+            root != nullptr) {
+            user.save_root = root;
+        }
+        user.created_at = sqlite3_column_int64(stmt, 6);
+        user.updated_at = sqlite3_column_int64(stmt, 7);
         out = std::move(user);
     }
     sqlite3_finalize(stmt);
@@ -232,8 +260,8 @@ std::vector<UserRecord> SidecarDb::list_users() {
     std::lock_guard lock(mutex_);
     sqlite3_stmt* stmt = nullptr;
     const char* sql =
-        "SELECT username, display_name, password_hash, must_change, created_at, updated_at "
-        "FROM users ORDER BY username COLLATE NOCASE;";
+        "SELECT username, display_name, password_hash, must_change, profile_path, save_root, "
+        "created_at, updated_at FROM users ORDER BY username COLLATE NOCASE;";
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
         return {};
     }
@@ -247,9 +275,106 @@ std::vector<UserRecord> SidecarDb::list_users() {
             user.password_hash = hash;
         }
         user.must_change = sqlite3_column_int(stmt, 3) != 0;
-        user.created_at = sqlite3_column_int64(stmt, 4);
-        user.updated_at = sqlite3_column_int64(stmt, 5);
+        if (const auto* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+            path != nullptr) {
+            user.profile_path = path;
+        }
+        if (const auto* root = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
+            root != nullptr) {
+            user.save_root = root;
+        }
+        user.created_at = sqlite3_column_int64(stmt, 6);
+        user.updated_at = sqlite3_column_int64(stmt, 7);
         out.push_back(std::move(user));
+    }
+    sqlite3_finalize(stmt);
+    return out;
+}
+
+bool SidecarDb::upsert_controls(const ControlsRecord& controls) {
+    if (controls.username.empty() || controls.document_json.empty() || db_ == nullptr) {
+        return false;
+    }
+    std::lock_guard lock(mutex_);
+    ControlsRecord stored = controls;
+    if (stored.kind.empty()) {
+        stored.kind = std::string(kControlsKindButtonMap);
+    }
+    if (stored.updated_at <= 0) {
+        stored.updated_at = now_epoch_seconds();
+    }
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql =
+        "INSERT INTO user_controls(username, kind, document_json, version, updated_at) "
+        "VALUES(?,?,?,?,?) "
+        "ON CONFLICT(username, kind) DO UPDATE SET "
+        "document_json=excluded.document_json, version=excluded.version, "
+        "updated_at=excluded.updated_at;";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    sqlite3_bind_text(stmt, 1, stored.username.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, stored.kind.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, stored.document_json.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 4, stored.version);
+    sqlite3_bind_int64(stmt, 5, stored.updated_at);
+    const int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return rc == SQLITE_DONE;
+}
+
+std::optional<ControlsRecord> SidecarDb::find_controls(
+    const std::string& username,
+    const std::string& kind) {
+    if (username.empty() || db_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto use_kind = kind.empty() ? std::string(kControlsKindButtonMap) : kind;
+    std::lock_guard lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql =
+        "SELECT username, kind, document_json, version, updated_at "
+        "FROM user_controls WHERE username=? AND kind=? LIMIT 1;";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return std::nullopt;
+    }
+    sqlite3_bind_text(stmt, 1, username.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, use_kind.c_str(), -1, SQLITE_TRANSIENT);
+    std::optional<ControlsRecord> out;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        ControlsRecord controls;
+        controls.username = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        controls.kind = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        controls.document_json = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        controls.version = sqlite3_column_int(stmt, 3);
+        controls.updated_at = sqlite3_column_int64(stmt, 4);
+        out = std::move(controls);
+    }
+    sqlite3_finalize(stmt);
+    return out;
+}
+
+std::vector<ControlsRecord> SidecarDb::list_controls() {
+    if (db_ == nullptr) {
+        return {};
+    }
+    std::lock_guard lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql =
+        "SELECT username, kind, document_json, version, updated_at "
+        "FROM user_controls ORDER BY username COLLATE NOCASE, kind;";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return {};
+    }
+    std::vector<ControlsRecord> out;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        ControlsRecord controls;
+        controls.username = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        controls.kind = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        controls.document_json = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        controls.version = sqlite3_column_int(stmt, 3);
+        controls.updated_at = sqlite3_column_int64(stmt, 4);
+        out.push_back(std::move(controls));
     }
     sqlite3_finalize(stmt);
     return out;
@@ -630,6 +755,33 @@ std::string SidecarDb::handle_request_json(const std::string& request_json) {
             }
             resp["ok"] = true;
             resp["users"] = std::move(arr);
+            return resp.dump();
+        }
+        if (op == "upsert_controls") {
+            resp["ok"] = upsert_controls(controls_from_json(req));
+            return resp.dump();
+        }
+        if (op == "find_controls") {
+            if (const auto controls = find_controls(
+                    req.value("username", ""),
+                    req.value("kind", std::string(kControlsKindButtonMap)));
+                controls.has_value()) {
+                resp["ok"] = true;
+                resp["controls"] = controls_to_json(*controls);
+            } else {
+                resp["ok"] = true;
+                resp["controls"] = nullptr;
+            }
+            return resp.dump();
+        }
+        if (op == "list_controls") {
+            auto controls = list_controls();
+            nlohmann::json arr = nlohmann::json::array();
+            for (const auto& c : controls) {
+                arr.push_back(controls_to_json(c));
+            }
+            resp["ok"] = true;
+            resp["controls"] = std::move(arr);
             return resp.dump();
         }
         if (op == "upsert_session") {

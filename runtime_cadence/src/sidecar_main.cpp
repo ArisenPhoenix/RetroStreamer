@@ -65,11 +65,13 @@ int main(int argc, char** argv) {
         db_path = (archstreamer::cadence::default_cadence_data_root() / "cadence.sqlite").string();
     }
 
-    std::signal(SIGINT, on_signal);
-    std::signal(SIGTERM, on_signal);
-    // Ensure signals interrupt blocking accept()/read().
-    siginterrupt(SIGINT, 1);
-    siginterrupt(SIGTERM, 1);
+    // No SA_RESTART: SIGINT/SIGTERM must interrupt blocking accept()/read().
+    struct sigaction sa {};
+    sa.sa_handler = on_signal;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGINT, &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
 
     archstreamer::cadence::SidecarDb db(db_path);
     if (!db.open()) {

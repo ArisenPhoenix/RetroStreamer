@@ -2,10 +2,14 @@
 
 #include "common/game_assets.hpp"
 #include "common/platform/paths.hpp"
+#include "common/sha256.hpp"
 
 #include <fstream>
 #include <optional>
-#include <stdexcept>
+#include <span>
+#include <string_view>
+#include <system_error>
+#include <vector>
 
 namespace archstreamer {
 namespace {
@@ -51,12 +55,41 @@ std::string sanitize_path_component(std::string_view value) {
     return out;
 }
 
+std::string sha256_of_bytes(std::span<const std::uint8_t> bytes) {
+    const auto view = std::string_view(
+        reinterpret_cast<const char*>(bytes.data()),
+        bytes.size());
+    return sha256_hex(view);
+}
+
+std::optional<std::vector<std::uint8_t>> read_file_capped(
+    const std::filesystem::path& path,
+    std::size_t max_size) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        return std::nullopt;
+    }
+    file.seekg(0, std::ios::end);
+    const auto size = static_cast<std::size_t>(file.tellg());
+    if (size == 0 || size > max_size) {
+        return std::nullopt;
+    }
+    file.seekg(0, std::ios::beg);
+    std::vector<std::uint8_t> data(size);
+    file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size));
+    if (!file) {
+        return std::nullopt;
+    }
+    return data;
+}
+
 } // namespace
 
 ArtAssetResponse load_art_asset_response(
     const std::filesystem::path& art_root,
     std::string_view asset_key,
-    std::string_view role) {
+    std::string_view role,
+    std::string_view cached_sha256) {
     ArtAssetResponse response;
     response.asset_key = std::string(asset_key);
     response.role = std::string(role);
@@ -73,25 +106,19 @@ ArtAssetResponse load_art_asset_response(
         return response;
     }
 
-    std::ifstream file(*path, std::ios::binary);
-    if (!file) {
-        return response;
-    }
-    file.seekg(0, std::ios::end);
-    const auto size = static_cast<std::size_t>(file.tellg());
-    if (size == 0 || size > 16 * 1024 * 1024) {
-        return response;
-    }
-    file.seekg(0, std::ios::beg);
-    response.data.resize(size);
-    file.read(reinterpret_cast<char*>(response.data.data()), static_cast<std::streamsize>(size));
-    if (!file) {
-        response.data.clear();
+    auto data = read_file_capped(*path, 16 * 1024 * 1024);
+    if (!data.has_value()) {
         return response;
     }
 
     response.found = true;
     response.extension = path->extension().string();
+    response.content_sha256 = sha256_of_bytes(*data);
+    if (!cached_sha256.empty() && cached_sha256 == response.content_sha256) {
+        // Client already has this exact blob — omit body.
+        return response;
+    }
+    response.data = std::move(*data);
     return response;
 }
 
@@ -107,11 +134,35 @@ bool art_asset_exists_locally(
     return find_asset_file(provider.directory_for_asset_key(asset_key), *kind).has_value();
 }
 
+std::string local_art_asset_sha256(
+    const std::filesystem::path& art_root,
+    std::string_view asset_key,
+    std::string_view role) {
+    const auto kind = kind_for_role(role);
+    if (!kind.has_value() || asset_key.empty()) {
+        return {};
+    }
+    LocalGameAssetProvider provider({}, art_root);
+    const auto path = find_asset_file(provider.directory_for_asset_key(asset_key), *kind);
+    if (!path.has_value()) {
+        return {};
+    }
+    auto data = read_file_capped(*path, 16 * 1024 * 1024);
+    if (!data.has_value()) {
+        return {};
+    }
+    return sha256_of_bytes(*data);
+}
+
 bool write_art_asset_to_cache(
     const std::filesystem::path& cache_art_root,
     const ArtAssetResponse& response) {
-    if (!response.found || response.data.empty() || response.asset_key.empty() || response.role.empty()) {
+    if (!response.found || response.asset_key.empty() || response.role.empty()) {
         return false;
+    }
+    // Not-modified: host confirmed hash match with empty body.
+    if (response.data.empty()) {
+        return !response.content_sha256.empty();
     }
 
     auto extension = response.extension;
@@ -125,11 +176,25 @@ bool write_art_asset_to_cache(
     const auto directory = cache_art_root / response.asset_key;
     std::filesystem::create_directories(directory);
     const auto path = directory / (response.role + extension);
+
+    // Drop any other extension for this role so resolve picks the new file.
+    if (const auto kind = kind_for_role(response.role); kind.has_value()) {
+        LocalGameAssetProvider provider({}, cache_art_root);
+        if (const auto existing =
+                find_asset_file(provider.directory_for_asset_key(response.asset_key), *kind);
+            existing.has_value() && *existing != path) {
+            std::error_code ec;
+            std::filesystem::remove(*existing, ec);
+        }
+    }
+
     std::ofstream file(path, std::ios::binary | std::ios::trunc);
     if (!file) {
         return false;
     }
-    file.write(reinterpret_cast<const char*>(response.data.data()), static_cast<std::streamsize>(response.data.size()));
+    file.write(
+        reinterpret_cast<const char*>(response.data.data()),
+        static_cast<std::streamsize>(response.data.size()));
     return static_cast<bool>(file);
 }
 

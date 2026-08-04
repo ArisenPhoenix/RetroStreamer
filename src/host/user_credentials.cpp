@@ -36,8 +36,9 @@ std::filesystem::path credentials_path(const std::filesystem::path& user_directo
 
 void ensure_default_credentials(const std::filesystem::path& user_directory) {
     const auto username = user_directory.filename().string();
+    const auto save_root = user_directory.parent_path();
     auto store = cadence_store();
-    (void)cadence::ensure_default_user(*store, username);
+    (void)cadence::ensure_default_user(*store, username, username, save_root);
     // Mirror only if missing so we never clobber a real password with the default.
     if (!std::filesystem::exists(credentials_path(user_directory))) {
         (void)cadence::write_credentials_mirror(
@@ -87,7 +88,8 @@ UserAuthResult verify_or_create_on_hello(
         username,
         password,
         username,
-        allow_new_users);
+        allow_new_users,
+        root);
     if (cadence_result == cadence::UserAuthResult::Ok ||
         cadence_result == cadence::UserAuthResult::MustChange) {
         const bool must_change = cadence_result == cadence::UserAuthResult::MustChange;

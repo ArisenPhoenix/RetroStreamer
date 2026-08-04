@@ -1,13 +1,19 @@
 #include "host/save_manager.hpp"
 
 #include "archstreamer/runtime_cadence/cadence.hpp"
+#include "host/game_catalog_scanner.hpp"
+#include "host/game_meta_store.hpp"
+#include "host/save_active_sessions.hpp"
 #include "host/switch_save_share.hpp"
 #include "host/user_credentials.hpp"
+
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <fstream>
+#include <optional>
 #include <stdexcept>
 #include <system_error>
 #include <unordered_set>
@@ -91,6 +97,69 @@ std::string title_id_from_extra_data(const std::filesystem::path& extra_data) {
         }());
 }
 
+std::string read_ryujinx_gui_title(
+    const std::filesystem::path& user_dir,
+    std::string_view title_id) {
+    const auto tid = normalize_switch_title_id(title_id);
+    if (tid.empty()) {
+        return {};
+    }
+    const auto path = user_dir / "ryujinx" / "xdg-config" / "Ryujinx" / "games" / tid / "gui"
+        / "metadata.json";
+    std::ifstream in(path);
+    if (!in) {
+        return {};
+    }
+    try {
+        const auto json = nlohmann::json::parse(in);
+        auto title = json.value("title", "");
+        while (!title.empty() && (title.back() == ' ' || title.back() == '\n')) {
+            title.pop_back();
+        }
+        return title;
+    } catch (...) {
+        return {};
+    }
+}
+
+/** Learn title-id → catalog aliases from every user's Ryujinx GUI metadata. */
+void harvest_ryujinx_title_aliases(const std::filesystem::path& save_root) {
+    try {
+        GameMetaStore meta;
+        if (!meta.ready()) {
+            return;
+        }
+        std::error_code ec;
+        for (const auto& user : list_save_users(save_root)) {
+            const auto games_root =
+                save_root / user / "ryujinx" / "xdg-config" / "Ryujinx" / "games";
+            if (!std::filesystem::is_directory(games_root, ec)) {
+                continue;
+            }
+            for (const auto& entry : std::filesystem::directory_iterator(games_root, ec)) {
+                if (!entry.is_directory(ec)) {
+                    continue;
+                }
+                const auto leaf = entry.path().filename().string();
+                if (!looks_like_title_id(leaf)) {
+                    continue;
+                }
+                const auto tid = normalize_switch_title_id(leaf);
+                if (meta.resolve(tid, "switch").has_value()) {
+                    continue;
+                }
+                const auto title = read_ryujinx_gui_title(save_root / user, tid);
+                if (title.empty()) {
+                    continue;
+                }
+                (void)meta.learn_switch_title_id(tid, title);
+            }
+        }
+    } catch (...) {
+        // Soft-fail.
+    }
+}
+
 bool save_extension(std::string_view ext) {
     static const std::unordered_set<std::string> kExts{
         "srm", "sav", "dsv", "rtc", "mcd", "ldci", "raw", "eep", "fla", "sra"};
@@ -147,11 +216,24 @@ std::string infer_system_from_extension(std::string_view ext) {
 
 std::pair<std::string, std::string> resolve_file_labels(
     const std::filesystem::path& relative,
-    const SaveNameHints& hints) {
+    const SaveNameHints& hints,
+    GameMetaStore* meta) {
     const auto stem = to_lower(relative.stem().string());
     if (const auto it = hints.by_stem.find(stem); it != hints.by_stem.end()) {
         return it->second;
     }
+    if (meta != nullptr && meta->ready()) {
+        if (auto row = meta->resolve(stem, {})) {
+            return {row->system_key, row->display_name};
+        }
+        const auto folded = to_lower(fold_common_latin_accents(relative.stem().string()));
+        if (folded != stem) {
+            if (auto row = meta->resolve(folded, {})) {
+                return {row->system_key, row->display_name};
+            }
+        }
+    }
+    // Last resort: layout/extension heuristics (not title inventing from aliases).
     const auto parent = relative.parent_path().filename().string();
     if (auto from_parent = infer_system_from_parent(parent); !from_parent.empty()) {
         return {from_parent, relative.stem().string()};
@@ -167,13 +249,18 @@ void append_switch_entries(
     std::vector<SaveGameEntry>& out,
     const std::string& username,
     const std::filesystem::path& user_dir,
-    const SaveNameHints& hints) {
+    const SaveNameHints& hints,
+    GameMetaStore* meta) {
     const auto switch_root = user_dir / "switch" / "saves";
     std::error_code ec;
     if (!std::filesystem::is_directory(switch_root, ec)) {
         return;
     }
     for (const auto& entry : std::filesystem::directory_iterator(switch_root, ec)) {
+        // Friendly name symlinks are not save roots (catalog stems are real dirs).
+        if (entry.is_symlink(ec)) {
+            continue;
+        }
         if (!entry.is_directory(ec)) {
             continue;
         }
@@ -181,21 +268,53 @@ void append_switch_entries(
         if (leaf.empty() || leaf == "." || leaf == "..") {
             continue;
         }
-        const auto bytes = directory_bytes(entry.path());
-        // Skip empty placeholders.
+        // Count only payload files (ignore .title_id / claim markers).
+        std::uint64_t bytes = 0;
+        for (const auto& file : std::filesystem::directory_iterator(entry.path(), ec)) {
+            if (!file.is_regular_file(ec)) {
+                continue;
+            }
+            const auto name = file.path().filename().string();
+            if (!name.empty() && name.front() == '.') {
+                continue;
+            }
+            bytes += std::filesystem::file_size(file.path(), ec);
+        }
         if (bytes == 0) {
             continue;
         }
         std::string display = leaf;
         if (looks_like_title_id(leaf)) {
             const auto tid = normalize_switch_title_id(leaf);
+            std::string title;
             if (const auto it = hints.by_stem.find(tid); it != hints.by_stem.end()) {
-                display = it->second.second + " [" + tid + "]";
+                title = it->second.second;
+            } else if (meta != nullptr && meta->ready()) {
+                if (const auto row = meta->resolve(tid, "switch")) {
+                    title = row->display_name;
+                }
+            }
+            if (title.empty()) {
+                display = "Legacy Switch [" + tid + "]";
             } else {
-                display = "Switch " + tid;
+                display = title + " [legacy " + tid + "]";
             }
         } else if (const auto it = hints.by_stem.find(to_lower(leaf)); it != hints.by_stem.end()) {
             display = it->second.second;
+        } else if (meta != nullptr && meta->ready()) {
+            if (const auto row = meta->resolve(leaf, "switch")) {
+                display = row->display_name;
+            } else {
+                const auto folded = to_lower(fold_common_latin_accents(leaf));
+                if (const auto row = meta->resolve(folded, "switch")) {
+                    display = row->display_name;
+                }
+            }
+        } else {
+            const auto folded = to_lower(fold_common_latin_accents(leaf));
+            if (const auto it = hints.by_stem.find(folded); it != hints.by_stem.end()) {
+                display = it->second.second;
+            }
         }
         out.push_back(SaveGameEntry{
             username,
@@ -212,33 +331,28 @@ void append_switch_entries(
 void append_ps2_entries(
     std::vector<SaveGameEntry>& out,
     const std::string& username,
-    const std::filesystem::path& user_dir) {
-    const auto cards = user_dir / "pcsx2" / "memcards";
-    std::error_code ec;
-    if (!std::filesystem::is_directory(cards, ec)) {
+    GameMetaStore* meta) {
+    if (meta == nullptr || !meta->ready()) {
         return;
     }
-    for (const auto& entry : std::filesystem::directory_iterator(cards, ec)) {
-        if (!entry.is_regular_file(ec)) {
-            continue;
-        }
-        const auto name = entry.path().filename().string();
-        const auto lower = to_lower(name);
-        if (lower.size() < 4 || lower.substr(lower.size() - 4) != ".ps2") {
-            continue;
-        }
-        // Skip timestamped backups as separate games; delete_game removes companions.
-        if (lower.find(".ps2.") != std::string::npos) {
-            continue;
+    for (const auto& played : meta->list_user_games(username, "ps2")) {
+        std::string display = played.game_id;
+        if (const auto row = meta->find_by_id(played.game_id)) {
+            display = row->display_name.empty() ? row->canonical_name : row->display_name;
+            if (display.empty()) {
+                display = played.game_id;
+            }
+        } else if (const auto row = meta->resolve(played.game_id, "ps2")) {
+            display = row->display_name;
         }
         out.push_back(SaveGameEntry{
             username,
             "ps2",
             save_system_label("ps2"),
-            "ps2:" + name,
-            name,
-            entry.path(),
-            directory_bytes(entry.path()),
+            ps2_meta_game_key(played.game_id),
+            std::move(display),
+            {}, // no memcard path — association is user+game in meta DB
+            0,
         });
     }
 }
@@ -247,7 +361,8 @@ void append_file_entries(
     std::vector<SaveGameEntry>& out,
     const std::string& username,
     const std::filesystem::path& user_dir,
-    const SaveNameHints& hints) {
+    const SaveNameHints& hints,
+    GameMetaStore* meta) {
     const auto saves = user_dir / "saves";
     std::error_code ec;
     if (!std::filesystem::is_directory(saves, ec)) {
@@ -282,7 +397,7 @@ void append_file_entries(
             continue;
         }
         const auto group_key = to_lower(rel.parent_path().string()) + "|" + to_lower(rel.stem().string());
-        auto labels = resolve_file_labels(rel, hints);
+        auto labels = resolve_file_labels(rel, hints, meta);
         auto& group = groups[group_key];
         group.bytes += directory_bytes(entry.path());
         if (group.primary.empty() || ext_l == "srm" || ext_l == "sav" || ext_l == "dsv") {
@@ -312,12 +427,13 @@ void append_file_entries(
 std::vector<SaveGameEntry> list_user_games(
     const std::filesystem::path& save_root,
     const std::string& username,
-    const SaveNameHints& hints) {
+    const SaveNameHints& hints,
+    GameMetaStore* meta) {
     const auto user_dir = save_root / username;
     std::vector<SaveGameEntry> out;
-    append_switch_entries(out, username, user_dir, hints);
-    append_ps2_entries(out, username, user_dir);
-    append_file_entries(out, username, user_dir, hints);
+    append_switch_entries(out, username, user_dir, hints, meta);
+    append_ps2_entries(out, username, meta);
+    append_file_entries(out, username, user_dir, hints, meta);
     std::sort(out.begin(), out.end(), [](const SaveGameEntry& a, const SaveGameEntry& b) {
         if (a.system_label != b.system_label) {
             return a.system_label < b.system_label;
@@ -327,13 +443,37 @@ std::vector<SaveGameEntry> list_user_games(
     return out;
 }
 
+SaveNameHints merge_save_name_hints(const SaveNameHints& base) {
+    SaveNameHints merged = base;
+    try {
+        GameMetaStore meta;
+        if (!meta.ready()) {
+            return merged;
+        }
+        const auto from_meta = meta.save_name_hints();
+        for (const auto& [key, value] : from_meta.by_stem) {
+            merged.by_stem[key] = value;
+        }
+    } catch (...) {
+        // Soft-fail: callers still have catalog/in-memory hints.
+    }
+    return merged;
+}
+
 void delete_switch_game_mirrors(
     const std::filesystem::path& user_dir,
     std::string_view title_or_leaf) {
     const auto leaf = std::string(title_or_leaf);
     const auto tid = looks_like_title_id(leaf) ? normalize_switch_title_id(leaf) : std::string{};
 
-    // Yuzu NAND title dirs (any case).
+    // Catalog addon tree for stem-keyed saves.
+    if (!tid.empty()) {
+        // legacy title-id leaf — no addons dir by title id
+    } else if (!leaf.empty()) {
+        remove_path_best_effort(user_dir / "switch" / "addons" / leaf);
+    }
+
+    // Yuzu NAND title dirs (any case) — only when deleting a title-id leaf.
     const auto yuzu_save = user_dir / "yuzu" / "xdg-data" / "yuzu" / "nand" / "user" / "save";
     std::error_code ec;
     if (std::filesystem::is_directory(yuzu_save, ec) && !tid.empty()) {
@@ -357,7 +497,8 @@ void delete_switch_game_mirrors(
         }
     }
 
-    // Ryujinx BIS saves whose ExtraData title id matches.
+    // Ryujinx BIS saves whose ExtraData title id matches — only for title-id deletes.
+    // Stem deletes leave BIS alone (another stem may still use the same title id).
     const auto ryu_save = user_dir / "ryujinx" / "xdg-config" / "Ryujinx" / "bis" / "user" / "save";
     const auto ryu_meta = user_dir / "ryujinx" / "xdg-config" / "Ryujinx" / "bis" / "user" / "saveMeta";
     if (std::filesystem::is_directory(ryu_save, ec) && !tid.empty()) {
@@ -500,6 +641,27 @@ std::vector<SaveGameEntry> list_save_games(
     std::string_view username,
     std::string_view system_filter,
     const SaveNameHints& hints) {
+    harvest_ryujinx_title_aliases(save_root);
+    const auto merged_hints = merge_save_name_hints(hints);
+    std::optional<GameMetaStore> meta_store;
+    GameMetaStore* meta_ptr = nullptr;
+    try {
+        meta_store.emplace();
+        if (meta_store->ready()) {
+            meta_ptr = &*meta_store;
+        }
+    } catch (...) {
+        meta_ptr = nullptr;
+    }
+    // Ensure live sessions appear under the user (PS2 and others) as user+game rows.
+    if (meta_ptr != nullptr) {
+        for (const auto& active : list_active_save_sessions(save_root)) {
+            if (!active.username.empty() && !active.game_id.empty()) {
+                (void)meta_ptr->record_user_game(
+                    active.username, active.game_id, active.system_key);
+            }
+        }
+    }
     std::vector<SaveGameEntry> out;
     const auto users = username.empty()
         ? list_save_users(save_root)
@@ -511,7 +673,7 @@ std::vector<SaveGameEntry> list_save_games(
         if (is_reserved_user(user) || !valid_username(user)) {
             continue;
         }
-        auto games = list_user_games(save_root, user, hints);
+        auto games = list_user_games(save_root, user, merged_hints, meta_ptr);
         for (auto& game : games) {
             if (!system_filter.empty() && game.system_key != system_filter) {
                 continue;
@@ -601,6 +763,19 @@ std::size_t delete_save_system(
         std::filesystem::create_directories(
             user_dir / "ryujinx" / "xdg-config" / "Ryujinx" / "bis" / "user" / "save", ec);
     }
+    if (system_key == "ps2") {
+        try {
+            GameMetaStore meta;
+            if (meta.ready()) {
+                (void)meta.remove_user_games_for_system(username, "ps2");
+            }
+        } catch (...) {
+        }
+        const auto user_dir = save_root / username;
+        remove_path_best_effort(user_dir / "pcsx2" / "memcards");
+        std::error_code ec;
+        std::filesystem::create_directories(user_dir / "pcsx2" / "memcards", ec);
+    }
     return games.size();
 }
 
@@ -629,9 +804,21 @@ void delete_save_game(
         return;
     }
     if (kind == "ps2") {
+        // Meta-backed association: ps2:id:<catalog_game_id>
+        if (rest.rfind("id:", 0) == 0) {
+            const auto game_id = rest.substr(3);
+            try {
+                GameMetaStore meta;
+                if (meta.ready()) {
+                    (void)meta.remove_user_game(username, game_id);
+                }
+            } catch (...) {
+            }
+            return;
+        }
+        // Legacy memcard filename cleanup (no longer listed, but still removable).
         const auto cards = user_dir / "pcsx2" / "memcards";
         remove_path_best_effort(cards / rest);
-        // Companion timestamped backups: Mcd001.ps2.20260801-….bak
         std::error_code ec;
         if (std::filesystem::is_directory(cards, ec)) {
             const auto prefix = rest + ".";

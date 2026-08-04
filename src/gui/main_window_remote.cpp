@@ -90,8 +90,17 @@ QWidget* MainWindow::build_remote_tab() {
     remote_binary_->setText(QStringLiteral("./host_runner"));
     remote_binary_->setPlaceholderText(QStringLiteral("./host_runner or …/build/host_runner"));
     remote_binary_->setToolTip(
-        "Path to host_runner on the remote machine.\n"
-        "If you paste a build directory, /host_runner is appended automatically.");
+        "Path to host_runner on the remote machine (Path A, or GPU listing).\n"
+        "If you paste a build directory, /host_runner is appended automatically.\n"
+        "When a start script is set (Path B), this is only used for --list-gpus.");
+    remote_start_script_ = new QLineEdit(form_box);
+    remote_start_script_->setPlaceholderText(
+        QStringLiteral("optional — e.g. /home/alina/bin/archstreamer-start"));
+    remote_start_script_->setToolTip(
+        "Optional remote start script (Path B).\n"
+        "Empty: Ensure Host starts host_runner with full args (Path A).\n"
+        "Set: Ensure Host runs this script with ports + GPU only; the script\n"
+        "owns ROM root / host_runner path / setup. Absolute path preferred.");
     remote_base_control_port_ = new QSpinBox(form_box);
     remote_base_control_port_->setRange(1, 65535);
     remote_base_control_port_->setValue(static_cast<int>(RemoteDefaultControlPort));
@@ -114,6 +123,7 @@ QWidget* MainWindow::build_remote_tab() {
     form->addRow("Remote directory", remote_directory_);
     form->addRow("Remote ROM root", remote_rom_root_);
     form->addRow("host_runner path", remote_binary_);
+    form->addRow("Start script (optional)", remote_start_script_);
     form->addRow("Base control port", remote_base_control_port_);
     form->addRow("Base input port", remote_base_input_port_);
     form->addRow("GPU (optional)", remote_gpu_);
@@ -126,7 +136,8 @@ QWidget* MainWindow::build_remote_tab() {
     buttons->addStretch(1);
 
     remote_status_ = new QLabel(
-        "Ensure Host probes port blocks, reuses a free matching lobby, or SSH-starts host_runner.",
+        "Ensure Host probes port blocks, reuses a free matching lobby, or SSH-starts "
+        "host_runner (or an optional start script with ports + GPU).",
         page);
     remote_status_->setWordWrap(true);
     remote_log_ = new QPlainTextEdit(page);
@@ -142,6 +153,7 @@ QWidget* MainWindow::build_remote_tab() {
           remote_directory_,
           remote_rom_root_,
           remote_binary_,
+          remote_start_script_,
           remote_gpu_}) {
         connect(edit, &QLineEdit::editingFinished, this, [this] { persist_settings_if_idle(); });
     }
@@ -182,6 +194,8 @@ void MainWindow::ensure_remote_host() {
     const auto binary = remote_binary_->text().trimmed().isEmpty()
         ? QStringLiteral("./host_runner")
         : remote_binary_->text().trimmed();
+    const auto start_script =
+        remote_start_script_ != nullptr ? remote_start_script_->text().trimmed() : QString();
     const auto want_gpu = remote_gpu_ != nullptr ? remote_gpu_->text().trimmed() : QString();
     const int ssh_port = remote_ssh_port_->value();
     const auto base_control =
@@ -189,11 +203,20 @@ void MainWindow::ensure_remote_host() {
     const auto base_input =
         static_cast<std::uint16_t>(remote_base_input_port_->value());
 
-    if (ssh_host.isEmpty() || ssh_user.isEmpty() || directory.isEmpty() || rom_root.isEmpty()) {
+    if (ssh_host.isEmpty() || ssh_user.isEmpty() || directory.isEmpty()) {
         QMessageBox::warning(
             this,
             QStringLiteral("Remote host"),
-            QStringLiteral("SSH host, user, remote directory, and ROM root are required."));
+            QStringLiteral("SSH host, user, and remote directory are required."));
+        return;
+    }
+    if (start_script.isEmpty() && rom_root.isEmpty()) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("Remote host"),
+            QStringLiteral(
+                "Remote ROM root is required unless a start script is set "
+                "(Path B: the script owns ROM root / host_runner)."));
         return;
     }
     if (password.isEmpty()) {
@@ -223,6 +246,7 @@ void MainWindow::ensure_remote_host() {
                  directory,
                  rom_root,
                  binary,
+                 start_script,
                  want_gpu,
                  ssh_port,
                  base_control,
@@ -338,13 +362,18 @@ void MainWindow::ensure_remote_host() {
                 binary.toStdString(),
                 rom_root.toStdString(),
                 ports,
-                resolved_gpu_id));
+                resolved_gpu_id,
+                start_script.toStdString()));
             QMetaObject::invokeMethod(
                 this,
-                [this, instance_index, ports, resolved_gpu_label, cmd] {
-                    QString msg = QStringLiteral("SSH-starting host instance %1 on port %2")
-                        .arg(instance_index)
-                        .arg(ports.control_port);
+                [this, instance_index, ports, resolved_gpu_label, start_script, cmd] {
+                    QString msg = start_script.isEmpty()
+                        ? QStringLiteral("SSH-starting host instance %1 on port %2")
+                              .arg(instance_index)
+                              .arg(ports.control_port)
+                        : QStringLiteral("SSH-starting via script (instance %1, port %2)")
+                              .arg(instance_index)
+                              .arg(ports.control_port);
                     if (!resolved_gpu_label.isEmpty()) {
                         msg += QStringLiteral(" (%1)").arg(resolved_gpu_label);
                     }

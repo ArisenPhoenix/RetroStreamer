@@ -28,7 +28,9 @@ SwitchBackendPrepResult RyujinxBackend::prepare(
         /*enable_ldn_mitm=*/true,
         ctx.resolution_scale,
         ctx.profile_display_name,
-        lan_iface);
+        lan_iface,
+        ctx.content_stem,
+        ctx.title_id);
     auto pad_plan = resolve_exclusive_pad_plan(
         ctx.players,
         ctx.verbose,

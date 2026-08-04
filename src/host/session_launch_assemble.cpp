@@ -6,6 +6,8 @@
 
 #include <iostream>
 #include <stdexcept>
+#include <string_view>
+#include <vector>
 
 namespace archstreamer {
 
@@ -28,19 +30,24 @@ void apply_capture_and_launch_environment(
 void sync_and_log_post_exit_switch_saves(
     const SaveProfile& profile,
     std::optional<int> slot_index,
-    const SwitchBackend* backend) {
+    const SwitchBackend* backend,
+    std::string_view content_stem,
+    std::string_view title_id) {
     const auto synced = backend != nullptr
-        ? backend->post_exit_sync(profile)
-        : sync_switch_shared_saves_for_profile(profile);
-    if (synced.empty()) {
+        ? backend->post_exit_sync(profile, content_stem, title_id)
+        : (!content_stem.empty()
+            ? std::vector<std::string>{sync_catalog_switch_save_after_exit(
+                  profile, content_stem, title_id)}
+            : sync_switch_shared_saves_for_profile(profile));
+    if (synced.empty() || (synced.size() == 1 && synced.front().empty())) {
         return;
     }
     if (slot_index.has_value()) {
         std::cout
             << "session slot " << *slot_index << ": post-exit Switch save sync ("
-            << synced.size() << " title(s))\n";
+            << synced.size() << " leaf(s))\n";
     } else {
-        std::cout << "Post-exit Switch save sync: " << synced.size() << " title(s)\n";
+        std::cout << "Post-exit Switch save sync: " << synced.size() << " leaf(s)\n";
     }
 }
 

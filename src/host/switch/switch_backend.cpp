@@ -21,7 +21,16 @@ bool name_looks_like_ryujinx(std::string_view name) {
 
 } // namespace
 
-std::vector<std::string> SwitchBackend::post_exit_sync(const SaveProfile& profile) const {
+std::vector<std::string> SwitchBackend::post_exit_sync(
+    const SaveProfile& profile,
+    std::string_view content_stem,
+    std::string_view title_id) const {
+    if (!content_stem.empty()) {
+        const auto leaf = sync_catalog_switch_save_after_exit(profile, content_stem, title_id);
+        if (!leaf.empty()) {
+            return {leaf};
+        }
+    }
     return sync_switch_shared_saves_for_profile(profile);
 }
 
@@ -60,6 +69,17 @@ void SwitchBackend::apply_common_prep(
 void SwitchBackend::finish_prep_save_sync(
     const SwitchBackendPrepContext& ctx,
     SwitchBackendPrepResult& result) const {
+    if (!ctx.content_stem.empty()) {
+        auto tid = ctx.title_id;
+        if (tid.empty()) {
+            tid = resolve_switch_title_id_for_catalog(
+                ctx.save_profile, ctx.content_stem, {});
+        }
+        const auto leaf =
+            sync_catalog_switch_save_for_launch(ctx.save_profile, ctx.content_stem, tid);
+        result.synced_title_count = leaf.empty() ? 0 : 1;
+        return;
+    }
     const auto synced = sync_switch_shared_saves_for_profile(ctx.save_profile);
     result.synced_title_count = synced.size();
 }

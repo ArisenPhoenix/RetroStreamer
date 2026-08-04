@@ -36,44 +36,46 @@ target_link_libraries(archstreamer_cadence_file
         nlohmann_json::nlohmann_json
 )
 
-if(ARCHSTREAMER_RUNTIME_CADENCE STREQUAL "db")
-    set(ARCHSTREAMER_CADENCE_SQLITE_TARGET "")
-    if(PkgConfig_FOUND)
-        pkg_check_modules(ARCHSTREAMER_SQLITE QUIET IMPORTED_TARGET sqlite3)
-        if(ARCHSTREAMER_SQLITE_FOUND)
-            message(STATUS "Found sqlite3: ${ARCHSTREAMER_SQLITE_VERSION}")
-            set(ARCHSTREAMER_CADENCE_SQLITE_TARGET PkgConfig::ARCHSTREAMER_SQLITE)
-        endif()
+# SQLite is required for cadence=db and for the host game metadata store.
+set(ARCHSTREAMER_CADENCE_SQLITE_TARGET "")
+if(PkgConfig_FOUND)
+    pkg_check_modules(ARCHSTREAMER_SQLITE QUIET IMPORTED_TARGET sqlite3)
+    if(ARCHSTREAMER_SQLITE_FOUND)
+        message(STATUS "Found sqlite3: ${ARCHSTREAMER_SQLITE_VERSION}")
+        set(ARCHSTREAMER_CADENCE_SQLITE_TARGET PkgConfig::ARCHSTREAMER_SQLITE)
     endif()
-    if(NOT ARCHSTREAMER_CADENCE_SQLITE_TARGET)
-        message(STATUS "sqlite3 pkg-config not found; fetching amalgamation via FetchContent")
-        enable_language(C)
-        include(FetchContent)
-        FetchContent_Declare(
-            sqlite_amalgamation
-            URL https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip
-            URL_HASH SHA256=77823cb110929c2bcb0f5d48e4833b5c59a8a6e40cdea3936b99e199dbbe5784
-            DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-        )
-        FetchContent_MakeAvailable(sqlite_amalgamation)
-        if(NOT EXISTS "${sqlite_amalgamation_SOURCE_DIR}/sqlite3.c")
-            message(FATAL_ERROR
-                "SQLite amalgamation missing after FetchContent.\n"
-                "Install system sqlite3 devel, or allow network for FetchContent.")
-        endif()
-        add_library(archstreamer_sqlite3 STATIC
-            "${sqlite_amalgamation_SOURCE_DIR}/sqlite3.c"
-        )
-        set_target_properties(archstreamer_sqlite3 PROPERTIES LINKER_LANGUAGE C)
-        target_include_directories(archstreamer_sqlite3
-            PUBLIC
-                "${sqlite_amalgamation_SOURCE_DIR}"
-        )
-        find_package(Threads REQUIRED)
-        target_link_libraries(archstreamer_sqlite3 PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
-        set(ARCHSTREAMER_CADENCE_SQLITE_TARGET archstreamer_sqlite3)
+endif()
+if(NOT ARCHSTREAMER_CADENCE_SQLITE_TARGET)
+    message(STATUS "sqlite3 pkg-config not found; fetching amalgamation via FetchContent")
+    enable_language(C)
+    include(FetchContent)
+    FetchContent_Declare(
+        sqlite_amalgamation
+        URL https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip
+        URL_HASH SHA256=77823cb110929c2bcb0f5d48e4833b5c59a8a6e40cdea3936b99e199dbbe5784
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    )
+    FetchContent_MakeAvailable(sqlite_amalgamation)
+    if(NOT EXISTS "${sqlite_amalgamation_SOURCE_DIR}/sqlite3.c")
+        message(FATAL_ERROR
+            "SQLite amalgamation missing after FetchContent.\n"
+            "Install system sqlite3 devel, or allow network for FetchContent.")
     endif()
+    add_library(archstreamer_sqlite3 STATIC
+        "${sqlite_amalgamation_SOURCE_DIR}/sqlite3.c"
+    )
+    set_target_properties(archstreamer_sqlite3 PROPERTIES LINKER_LANGUAGE C)
+    target_include_directories(archstreamer_sqlite3
+        PUBLIC
+            "${sqlite_amalgamation_SOURCE_DIR}"
+    )
+    find_package(Threads REQUIRED)
+    target_link_libraries(archstreamer_sqlite3 PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
+    set(ARCHSTREAMER_CADENCE_SQLITE_TARGET archstreamer_sqlite3)
+endif()
+set(ARCHSTREAMER_SQLITE_TARGET "${ARCHSTREAMER_CADENCE_SQLITE_TARGET}" PARENT_SCOPE)
 
+if(ARCHSTREAMER_RUNTIME_CADENCE STREQUAL "db")
     add_library(archstreamer_cadence_db STATIC
         ${ARCHSTREAMER_CADENCE_COMMON_SOURCES}
         src/file_store.cpp

@@ -25,6 +25,12 @@ public:
     bool delete_user(const std::string& username) override;
     std::vector<UserRecord> list_users() override;
 
+    bool upsert_controls(const ControlsRecord& controls) override;
+    std::optional<ControlsRecord> find_controls(
+        const std::string& username,
+        const std::string& kind) override;
+    std::vector<ControlsRecord> list_controls() override;
+
     bool upsert_session(const SessionRecord& session) override;
     bool end_session(const std::string& session_id, const std::string& end_reason) override;
     std::optional<SessionRecord> find_session(const std::string& session_id) override;

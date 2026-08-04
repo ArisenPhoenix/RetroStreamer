@@ -33,6 +33,13 @@ std::string asset_key_for(
     std::string_view language,
     std::string_view region,
     std::string_view version);
+/**
+ * Drop Nintendo-style trailing "Version" from display names:
+ * "Pokemon Scarlet Version" → "Pokemon Scarlet",
+ * "Pokemon Black Version 2" → "Pokemon Black 2".
+ * Does not strip dotted build numbers (e.g. "Sword 1.3.2") or other numeric noise.
+ */
+std::string sanitize_game_display_name(std::string name);
 std::filesystem::path default_metadata_root_for(const std::filesystem::path& content_root);
 std::filesystem::path metadata_path_for(
     const std::filesystem::path& content_root,

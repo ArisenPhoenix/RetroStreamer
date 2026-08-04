@@ -30,16 +30,67 @@ that builds against `RuntimeStore` (file or db).
 | `display_name` | Optional label |
 | `password_hash` | `v1:<salt>:<sha256(salt:password)>` (legacy plaintext accepted once, then upgraded) |
 | `must_change` | Forced password change on next join |
+| `profile_path` | Absolute save profile dir: `<save_root>/<username>` |
+| `save_root` | Host save-root used when the row was written |
 | `created_at` / `updated_at` | Unix epoch seconds |
 
 Portable helpers live in `archstreamer/runtime_cadence/user_auth.hpp`
-(`verify_or_create_user`, `change_user_password`, `import_users_from_save_root`, …).
+(`verify_or_create_user`, `change_user_password`, `import_users_from_save_root`,
+`backfill_user_profile_paths`, …).
 
 Host join still creates **save profile directories** under the save root for game blobs.
 `credentials.json` is dual-written as a legacy mirror only.
 
 On host start (db/file), existing `<save-root>/<user>/credentials.json` rows are
-imported into cadence when missing.
+imported into cadence when missing, and empty `profile_path` values are backfilled
+when `<save_root>/<username>` exists.
+
+## User controls (button map)
+
+Portable controller remaps (`ControllerMapDocument` JSON — same schema as
+`shared/controller_button_map.json`) live in `user_controls`, keyed by username.
+
+| Field | Meaning |
+|-------|---------|
+| `username` | Profile / client username (`_default` for pre-profile device-wide import) |
+| `kind` | `button_map` for now |
+| `document_json` | Full map document JSON |
+| `version` | Document version (currently `1`) |
+| `updated_at` | Unix epoch seconds |
+
+Desktop GUI and Android load/save through `upsert_controls` / `find_controls`.
+Host cadence (file or SQLite sidecar) and Android local
+`archstreamer_cadence.sqlite` use the **same** table/column names and JSON body.
+Overlay chrome (touch layout) stays device-local (SharedPreferences) for now.
+
+Ops: `upsert_controls`, `find_controls`, `list_controls`.
+
+File backend: `controls.json` object keyed by `username\\nkind`.
+
+## Query examples (db)
+
+```bash
+sqlite3 ~/.local/share/archstreamer/cadence/cadence.sqlite
+```
+
+```sql
+-- Save-profile lookup for Saves tooling
+SELECT username, profile_path, save_root FROM users;
+
+-- Controller remaps after editing Game Options on desktop
+SELECT username, kind, version, updated_at,
+       length(document_json) AS json_bytes
+FROM user_controls
+WHERE kind = 'button_map';
+```
+
+Android (after editing remaps on device):
+
+```text
+adb shell run-as com.archstreamer.client \
+  sqlite3 files/archstreamer_cadence.sqlite \
+  "SELECT username, kind, length(document_json) FROM user_controls;"
+```
 
 Ops: `upsert_user`, `find_user`, `delete_user`, `list_users`, `ping`, `record_event`, `recent_events`.
 
@@ -49,11 +100,19 @@ Ops: `upsert_user`, `find_user`, `delete_user`, `list_users`, `ping`, `record_ev
 |---------|----------|
 | Data root | `~/.local/share/archstreamer/cadence/` |
 | File users | `…/users.json` |
+| File controls | `…/controls.json` |
 | File events | `…/events_YYYY-MM-DD.jsonl` |
 | SQLite | `…/cadence.sqlite` (WAL) |
 | Socket | `$XDG_RUNTIME_DIR/archstreamer/cadence.sock` (else under data root) |
+| Android local | `filesDir/archstreamer_cadence.sqlite` (`user_controls`) |
 
 Day event tables in SQLite: `events_YYYY_MM_DD`.
+
+## Related: game metadata
+
+Game titles / secondary ids (Switch title-id, content stems, …) live in a **separate**
+SQLite DB — see [docs/game_meta.md](../docs/game_meta.md)
+(`~/.local/share/archstreamer/meta/games.sqlite`). Not part of cadence.
 
 ## Session events
 
@@ -111,7 +170,11 @@ When cadence is `db`, `DbRuntimeStore::ensure_ready()` spawns this binary next t
 ## Protocol
 
 Length-prefixed JSON (`uint32` big-endian length + UTF-8 object).
-Ops: `ping`, `upsert_user`, `find_user`, `delete_user`, `list_users`, `record_event`, `recent_events`.
+Ops include: `ping`, `upsert_user`, `find_user`, `delete_user`, `list_users`,
+`upsert_controls`, `find_controls`, `list_controls`,
+`upsert_session`, `end_session`, `find_session`, `list_sessions`,
+`claim_resource`, `release_resource`, `release_session_resources`,
+`list_claims`, `find_held_resource`, `record_event`, `recent_events`.
 
 ## Dependencies (db cadence)
 

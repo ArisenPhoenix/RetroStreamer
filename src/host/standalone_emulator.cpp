@@ -84,13 +84,17 @@ RyujinxUserProfile prepare_ryujinx_user_profile(
     bool enable_ldn_mitm,
     int resolution_scale,
     std::string_view profile_display_name,
-    std::string_view lan_interface_id) {
+    std::string_view lan_interface_id,
+    std::string_view content_stem,
+    std::string_view title_id) {
     return RyujinxUserProfileService::prepare(
         save_profile,
         enable_ldn_mitm,
         resolution_scale,
         profile_display_name,
-        lan_interface_id);
+        lan_interface_id,
+        content_stem,
+        title_id);
 }
 
 void configure_ryujinx_archstreamer_controls(

@@ -7,6 +7,7 @@
 #include "host/host_session_hub.hpp"
 #include "host/retroarch_config_writer.hpp"
 #include "host/retroarch_netcmd.hpp"
+#include "host/save_active_sessions.hpp"
 #include "host/user_credentials.hpp"
 
 #include <algorithm>
@@ -76,9 +77,9 @@ bool any_connected_seated_player(const SessionPlan& plan) {
 }
 
 std::chrono::seconds reconnect_grace_for(const SessionClientConnection& client, std::chrono::seconds full) {
-    // Explicit ClientSessionLeave → end immediately (no reconnect hold).
+    // Explicit ClientSessionLeave / admin Kick → end immediately (no reconnect hold).
     // TCP close / heartbeat loss → full reconnect window for flaky links.
-    if (client.disconnect_reason == "left") {
+    if (client.disconnect_reason == "left" || client.disconnect_reason == "kicked") {
         return std::chrono::seconds(0);
     }
     return full;
@@ -125,6 +126,42 @@ SessionControlMonitor::SessionControlMonitor(
 std::optional<std::string> SessionControlMonitor::poll() {
     const auto now = std::chrono::steady_clock::now();
     const auto in_startup_grace = now - started_at_ < kStartupHeartbeatGrace;
+
+    // Users-tab Kick of a single connection (viewer or seated player).
+    for (std::size_t i = 0; i < plan_.clients.size();) {
+        auto& client = plan_.clients[i];
+        if (client.connection_state != SessionConnectionState::Connected) {
+            ++i;
+            continue;
+        }
+        auto reason = take_connected_client_disconnect_request(
+            save_root_, client.client_id, slot_index_);
+        if (!reason.has_value()) {
+            ++i;
+            continue;
+        }
+        std::cerr
+            << "Admin disconnect client " << static_cast<int>(client.client_id)
+            << " (" << client.hello.username << "): " << *reason << '\n';
+        try {
+            client.stream = TcpStream{};
+        } catch (const std::exception&) {
+        }
+        clear_connected_client(save_root_, client.client_id, slot_index_);
+        if (remove_viewer(i, *reason)) {
+            continue;
+        }
+        // Treat admin kick like an explicit leave (no reconnect grace).
+        mark_player_disconnected(client, "left");
+        client.disconnect_reason = *reason;
+        if (!any_connected_seated_player(plan_)) {
+            return client_label(client) + " kicked; ending session for a new lobby";
+        }
+        if (plan_.session_mode == GameSessionMode::SinglePlayer) {
+            return client_label(client) + " kicked; ending singleplayer session";
+        }
+        ++i;
+    }
 
     if (plan_.soft_keyboard) {
         // Only consume the request once somebody can actually receive it, otherwise it
@@ -764,6 +801,7 @@ bool SessionControlMonitor::remove_viewer(std::size_t index, std::string_view re
         plan_.link_cable.clear();
     }
     media_server_.remove_client(plan_.clients[index].client_id);
+    clear_connected_client(save_root_, plan_.clients[index].client_id, slot_index_);
     plan_.clients.erase(plan_.clients.begin() + static_cast<std::ptrdiff_t>(index));
     record_client_left(
         slot_index_,
@@ -784,6 +822,7 @@ void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& cl
         plan_.link_cable.clear();
     }
     media_server_.remove_client(client.client_id);
+    clear_connected_client(save_root_, client.client_id, slot_index_);
     client.connection_state = SessionConnectionState::Disconnected;
     client.disconnected_at = std::chrono::steady_clock::now();
     client.disconnect_reason = std::string(reason);

@@ -417,6 +417,7 @@ ByteBuffer serialize_payload(const ArtAssetRequest& payload) {
     Writer writer;
     writer.write_string(payload.asset_key);
     writer.write_string(payload.role);
+    writer.write_string(payload.cached_sha256);
     return writer.take();
 }
 
@@ -427,6 +428,7 @@ ByteBuffer serialize_payload(const ArtAssetResponse& payload) {
     writer.write_bool(payload.found);
     writer.write_string(payload.extension);
     writer.write_bytes(payload.data);
+    writer.write_string(payload.content_sha256);
     return writer.take();
 }
 
@@ -521,6 +523,19 @@ ByteBuffer serialize_payload(const PasswordChange& payload) {
     return writer.take();
 }
 
+ByteBuffer serialize_payload(const LobbyPresence& payload) {
+    Writer writer;
+    writer.write_string(payload.username);
+    writer.write_string(payload.password);
+    return writer.take();
+}
+
+ByteBuffer serialize_payload(const LobbyPresenceAck& payload) {
+    Writer writer;
+    writer.write_pod(payload.client_id);
+    return writer.take();
+}
+
 PacketType packet_type_for(const ClientHello&) { return PacketType::ClientHello; }
 PacketType packet_type_for(const HostWelcome&) { return PacketType::HostWelcome; }
 PacketType packet_type_for(const ClientConfig&) { return PacketType::ClientConfig; }
@@ -554,6 +569,8 @@ PacketType packet_type_for(const EmulatorControl&) { return PacketType::Emulator
 PacketType packet_type_for(const ClientLogBundle&) { return PacketType::ClientLogBundle; }
 PacketType packet_type_for(const PasswordChangeRequired&) { return PacketType::PasswordChangeRequired; }
 PacketType packet_type_for(const PasswordChange&) { return PacketType::PasswordChange; }
+PacketType packet_type_for(const LobbyPresence&) { return PacketType::LobbyPresence; }
+PacketType packet_type_for(const LobbyPresenceAck&) { return PacketType::LobbyPresenceAck; }
 
 template <typename Payload>
 ByteBuffer serialize_packet_impl(const Payload& payload) {
@@ -699,6 +716,14 @@ ByteBuffer serialize_packet(const PasswordChangeRequired& payload) {
 }
 
 ByteBuffer serialize_packet(const PasswordChange& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const LobbyPresence& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const LobbyPresenceAck& payload) {
     return serialize_packet_impl(payload);
 }
 
@@ -933,7 +958,11 @@ MediaEndpoint read_media_endpoint(Reader& reader) {
 }
 
 ArtAssetRequest read_art_asset_request(Reader& reader) {
-    return ArtAssetRequest{reader.read_string(), reader.read_string()};
+    ArtAssetRequest payload{reader.read_string(), reader.read_string()};
+    if (reader.remaining() > 0) {
+        payload.cached_sha256 = reader.read_string();
+    }
+    return payload;
 }
 
 ArtAssetResponse read_art_asset_response(Reader& reader) {
@@ -943,6 +972,9 @@ ArtAssetResponse read_art_asset_response(Reader& reader) {
     payload.found = reader.read_bool();
     payload.extension = reader.read_string();
     payload.data = reader.read_bytes();
+    if (reader.remaining() > 0) {
+        payload.content_sha256 = reader.read_string();
+    }
     return payload;
 }
 
@@ -1033,6 +1065,17 @@ PasswordChange read_password_change(Reader& reader) {
     return payload;
 }
 
+LobbyPresence read_lobby_presence(Reader& reader) {
+    LobbyPresence payload;
+    payload.username = reader.read_string();
+    payload.password = reader.read_string();
+    return payload;
+}
+
+LobbyPresenceAck read_lobby_presence_ack(Reader& reader) {
+    return LobbyPresenceAck{reader.read_pod<ClientId>()};
+}
+
 PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
     Reader header_reader(packet);
     const auto magic = header_reader.read_pod<std::uint32_t>();
@@ -1120,6 +1163,10 @@ PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
             return read_password_change_required(payload_reader);
         case PacketType::PasswordChange:
             return read_password_change(payload_reader);
+        case PacketType::LobbyPresence:
+            return read_lobby_presence(payload_reader);
+        case PacketType::LobbyPresenceAck:
+            return read_lobby_presence_ack(payload_reader);
     }
 
     throw std::runtime_error("unknown packet type");

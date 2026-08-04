@@ -258,7 +258,9 @@ RyujinxUserProfile RyujinxUserProfileService::prepare(
     bool enable_ldn_mitm,
     int resolution_scale,
     std::string_view profile_display_name,
-    std::string_view lan_interface_id) {
+    std::string_view lan_interface_id,
+    std::string_view content_stem,
+    std::string_view title_id) {
     RyujinxUserProfile profile;
     profile.xdg_config_home = save_profile.user_directory / "ryujinx" / "xdg-config";
     profile.data_root = profile.xdg_config_home / "Ryujinx";
@@ -267,6 +269,7 @@ RyujinxUserProfile RyujinxUserProfileService::prepare(
     std::filesystem::create_directories(profile.data_root / "bis" / "user" / "save");
     std::filesystem::create_directories(profile.keys_directory);
     std::filesystem::create_directories(save_profile.user_directory / "switch" / "saves");
+    std::filesystem::create_directories(save_profile.user_directory / "switch" / "addons");
 
     SwitchSystemDefaults::ensure();
     switch_copy_key_files(SwitchSystemDefaults::keys_directory(), profile.keys_directory);
@@ -283,7 +286,11 @@ RyujinxUserProfile RyujinxUserProfileService::prepare(
     }
 
     SwitchSystemDefaults::ensure_ryujinx_firmware(profile.data_root);
-    ensure_ryujinx_title_updates(profile.data_root);
+    if (!content_stem.empty()) {
+        ensure_ryujinx_catalog_addons(save_profile, profile.data_root, content_stem, title_id);
+    } else {
+        ensure_ryujinx_title_updates(profile.data_root);
+    }
 
     const auto updates_dir = switch_title_updates_directory();
     const std::string lan_iface{lan_interface_id};

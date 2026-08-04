@@ -145,21 +145,55 @@ inline std::string remote_host_resolve_binary(
 }
 
 /**
- * Start host_runner without cd — log/PID use absolute paths under directory.
- * directory/binary/rom_root are unquoted filesystem paths.
- * Verifies the binary exists and the process is still alive shortly after spawn
- * so "nohup: failed to run command" surfaces as an SSH failure instead of a
- * silent success + unanswered control port.
+ * Resolve an optional remote start-script path (absolute, or relative to directory).
+ * Empty script → empty result (caller uses host_runner Path A).
+ */
+inline std::string remote_host_resolve_start_script(
+    const std::string& directory,
+    const std::string& start_script) {
+    auto trimmed = start_script;
+    while (!trimmed.empty() && (trimmed.front() == ' ' || trimmed.front() == '\t')) {
+        trimmed.erase(trimmed.begin());
+    }
+    while (!trimmed.empty() && (trimmed.back() == ' ' || trimmed.back() == '\t'
+                                || trimmed.back() == '/' || trimmed.back() == '\\')) {
+        trimmed.pop_back();
+    }
+    if (trimmed.empty()) {
+        return {};
+    }
+    if (!trimmed.empty() && trimmed.front() == '/') {
+        return trimmed;
+    }
+    if (trimmed.size() >= 2 && trimmed[0] == '.' && trimmed[1] == '/') {
+        trimmed = trimmed.substr(2);
+    }
+    auto dir = directory;
+    while (!dir.empty() && (dir.back() == '/' || dir.back() == '\\')) {
+        dir.pop_back();
+    }
+    if (dir.empty()) {
+        return trimmed;
+    }
+    return dir + "/" + trimmed;
+}
+
+/**
+ * Start host without cd — log/PID use absolute paths under directory.
+ * directory/binary/rom_root/start_script are unquoted filesystem paths.
+ *
+ * Path A (start_script empty): nohup host_runner with rom-root, ports, clients, GPU.
+ * Path B (start_script set): nohup that script with ports + GPU only; the script owns
+ * ROM root / host_runner location / setup. Verifies the launched process is still alive
+ * shortly after spawn so spawn failures surface as SSH errors.
  */
 inline std::string remote_host_start_shell(
     const std::string& directory,
     const std::string& binary,
     const std::string& rom_root,
     const RemoteHostPortBlock& ports,
-    const std::string& encode_gpu = {}) {
-    const auto resolved = remote_host_resolve_binary(directory, binary);
-    const auto qbin = remote_shell_single_quote(resolved);
-    const auto qrom = remote_shell_single_quote(rom_root);
+    const std::string& encode_gpu = {},
+    const std::string& start_script = {}) {
     const auto qdir = remote_shell_single_quote([&] {
         auto d = directory;
         while (!d.empty() && (d.back() == '/' || d.back() == '\\')) {
@@ -173,21 +207,7 @@ inline std::string remote_host_start_shell(
     if (!encode_gpu.empty()) {
         gpu_args = " --gpu " + remote_shell_single_quote(encode_gpu);
     }
-    return std::string("set -e; ")
-        + "mkdir -p "
-        + qdir
-        + "; "
-        + "if [ ! -x "
-        + qbin
-        + " ]; then "
-        + "echo \"host_runner not found or not executable: \" "
-        + qbin
-        + " >&2; exit 127; fi; "
-        + "nohup "
-        + qbin
-        + " --rom-root "
-        + qrom
-        + " --control-port "
+    const auto port_args = std::string(" --control-port ")
         + std::to_string(ports.control_port)
         + " --input-port "
         + std::to_string(ports.input_port)
@@ -196,9 +216,41 @@ inline std::string remote_host_start_shell(
         + " --audio-port "
         + std::to_string(ports.audio_port)
         + " --virtual-display :"
-        + std::to_string(ports.virtual_display)
-        + " --clients 2 --allow-new-users"
-        + gpu_args
+        + std::to_string(ports.virtual_display);
+
+    const auto resolved_script = remote_host_resolve_start_script(directory, start_script);
+    const bool use_script = !resolved_script.empty();
+    const std::string launch_target = use_script
+        ? resolved_script
+        : remote_host_resolve_binary(directory, binary);
+    const auto qlaunch = remote_shell_single_quote(launch_target);
+    const char* missing_label = use_script ? "start script" : "host_runner";
+    const char* exit_label = use_script ? "start script" : "host_runner";
+
+    std::string launch_args = port_args + gpu_args;
+    if (!use_script) {
+        launch_args = std::string(" --rom-root ")
+            + remote_shell_single_quote(rom_root)
+            + port_args
+            + " --clients 2 --allow-new-users"
+            + gpu_args;
+    }
+
+    return std::string("set -e; ")
+        + "mkdir -p "
+        + qdir
+        + "; "
+        + "if [ ! -x "
+        + qlaunch
+        + " ]; then "
+        + "echo \""
+        + missing_label
+        + " not found or not executable: \" "
+        + qlaunch
+        + " >&2; exit 127; fi; "
+        + "nohup "
+        + qlaunch
+        + launch_args
         + " > "
         + qlog
         + " 2>&1 & "
@@ -208,7 +260,9 @@ inline std::string remote_host_start_shell(
         + "; "
         + "sleep 0.7; "
         + "if ! kill -0 \"$pid\" 2>/dev/null; then "
-        + "echo \"host_runner exited immediately (pid $pid). Log:\" >&2; "
+        + "echo \""
+        + exit_label
+        + " exited immediately (pid $pid). Log:\" >&2; "
         + "cat "
         + qlog
         + " >&2 || true; "

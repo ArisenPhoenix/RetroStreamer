@@ -4,8 +4,10 @@
 #include "gui_util.hpp"
 
 #ifdef ARCHSTREAMER_HAS_HOST
+#include "archstreamer/runtime_cadence/cadence.hpp"
 #include "host/game_catalog.hpp"
 #include "host/game_catalog_scanner.hpp"
+#include "host/game_meta_store.hpp"
 #include "host/libretro_core_registry.hpp"
 #include "host/save_active_sessions.hpp"
 #include "host/save_manager.hpp"
@@ -13,17 +15,24 @@
 #endif
 
 #include <QAbstractItemView>
+#include <QAction>
+#include <QApplication>
+#include <QClipboard>
 #include <QComboBox>
 #include <QDir>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QInputDialog>
+#include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMessageBox>
 #include <QProcess>
 #include <QPushButton>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QTimer>
 #include <QTreeWidget>
@@ -31,15 +40,83 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include <algorithm>
 #include <exception>
 #include <optional>
+#include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 namespace archstreamer::gui {
 
 #ifdef ARCHSTREAMER_HAS_HOST
 
 namespace {
+
+constexpr int kUserRoleUsername = Qt::UserRole;
+constexpr int kUserRoleSystemKey = Qt::UserRole + 1;
+constexpr int kUserRoleGameKey = Qt::UserRole + 2;
+constexpr int kUserRoleSlot = Qt::UserRole + 3;
+constexpr int kUserRoleSynthetic = Qt::UserRole + 4;
+constexpr int kUserRoleNodeKind = Qt::UserRole + 5;
+constexpr int kUserRoleSortBytes = Qt::UserRole + 6;
+
+enum class SavesNodeKind { User = 0, System = 1, Game = 2 };
+
+/** Sibling-level sort: Name/Status by text, Size by stored byte count. */
+class SavesTreeItem final : public QTreeWidgetItem {
+public:
+    using QTreeWidgetItem::QTreeWidgetItem;
+
+    bool operator<(const QTreeWidgetItem& other) const override {
+        const int col = treeWidget() != nullptr ? treeWidget()->sortColumn() : 0;
+        if (col == 1) {
+            return data(1, kUserRoleSortBytes).toULongLong()
+                < other.data(1, kUserRoleSortBytes).toULongLong();
+        }
+        return QString::compare(text(col), other.text(col), Qt::CaseInsensitive) < 0;
+    }
+};
+
+void apply_saves_node_roles(
+    QTreeWidgetItem* item,
+    SavesNodeKind kind,
+    const QString& username,
+    const QString& system_key = {},
+    const QString& game_key = {},
+    bool synthetic = false,
+    int slot = -1) {
+    item->setData(0, kUserRoleNodeKind, static_cast<int>(kind));
+    item->setData(0, kUserRoleUsername, username);
+    item->setData(0, kUserRoleSystemKey, system_key);
+    item->setData(0, kUserRoleGameKey, game_key);
+    item->setData(0, kUserRoleSynthetic, synthetic);
+    if (slot >= 0) {
+        item->setData(0, kUserRoleSlot, slot);
+    }
+}
+
+QSet<QString> collect_expanded_saves_keys(QTreeWidget* tree) {
+    QSet<QString> keys;
+    if (tree == nullptr) {
+        return keys;
+    }
+    for (int u = 0; u < tree->topLevelItemCount(); ++u) {
+        auto* user_item = tree->topLevelItem(u);
+        const auto username = user_item->data(0, kUserRoleUsername).toString();
+        if (user_item->isExpanded()) {
+            keys.insert(username);
+        }
+        for (int s = 0; s < user_item->childCount(); ++s) {
+            auto* system_item = user_item->child(s);
+            if (system_item->isExpanded()) {
+                keys.insert(
+                    username + QLatin1Char('\n') + system_item->data(0, kUserRoleSystemKey).toString());
+            }
+        }
+    }
+    return keys;
+}
 
 QString expand_user_path_local(QString path) {
     path = path.trimmed();
@@ -82,8 +159,133 @@ SaveNameHints hints_from_catalog(const GameCatalog& catalog) {
                 hints.by_stem[stem.toStdString()] = {game.system_key, game.display_name};
             }
         }
+        // Cadence sessions store catalog game ids — map those to display names too.
+        if (!game.id.empty()) {
+            hints.by_stem[game.id] = {game.system_key, game.display_name};
+        }
     }
     return hints;
+}
+
+SaveNameHints hints_from_meta_store() {
+    try {
+        GameMetaStore meta;
+        if (meta.ready()) {
+            return meta.save_name_hints();
+        }
+    } catch (...) {
+    }
+    return {};
+}
+
+/**
+ * Active play sessions for the Users tab.
+ * Prefer cadence DB rows; enrich display/content from .archstreamer_active side files.
+ */
+std::vector<ActiveSaveSession> load_users_active_sessions(
+    const std::filesystem::path& save_root) {
+    std::unordered_map<int, ActiveSaveSession> by_slot;
+    for (auto& side : list_active_save_sessions(save_root)) {
+        if (side.slot_index >= 0) {
+            by_slot[side.slot_index] = side;
+        }
+    }
+
+    std::vector<ActiveSaveSession> out;
+    try {
+        auto store = cadence::make_runtime_store();
+        if (store && store->ensure_ready()) {
+            for (const auto& session : store->list_sessions(true)) {
+                if (session.username.empty()) {
+                    continue;
+                }
+                ActiveSaveSession active;
+                active.username = session.username;
+                active.game_id = session.game_key;
+                active.system_key = session.system_key;
+                active.slot_index = session.slot;
+                if (const auto it = by_slot.find(session.slot); it != by_slot.end()) {
+                    if (active.game_id.empty()) {
+                        active.game_id = it->second.game_id;
+                    }
+                    if (active.system_key.empty()) {
+                        active.system_key = it->second.system_key;
+                    }
+                    active.display_name = it->second.display_name;
+                    active.content_path = it->second.content_path;
+                }
+                if (active.display_name.empty()) {
+                    active.display_name = active.game_id;
+                }
+                out.push_back(std::move(active));
+            }
+        }
+    } catch (...) {
+        // Fall through to side-channel only.
+    }
+
+    if (!out.empty()) {
+        return out;
+    }
+
+    // Cadence unavailable — still show what the host published to the save root.
+    for (auto& [_, side] : by_slot) {
+        out.push_back(std::move(side));
+    }
+    std::sort(out.begin(), out.end(), [](const ActiveSaveSession& a, const ActiveSaveSession& b) {
+        if (a.username != b.username) {
+            return a.username < b.username;
+        }
+        return a.slot_index < b.slot_index;
+    });
+    return out;
+}
+
+QString resolve_active_display_name(
+    const ActiveSaveSession& active,
+    const SaveNameHints& hints) {
+    // Meta DB is authoritative for catalog ids / aliases.
+    if (!active.game_id.empty() || !active.display_name.empty() || !active.content_path.empty()) {
+        try {
+            GameMetaStore meta;
+            if (meta.ready()) {
+                if (!active.game_id.empty()) {
+                    if (const auto row = meta.resolve(active.game_id, active.system_key)) {
+                        return QString::fromStdString(row->display_name);
+                    }
+                }
+                if (!active.content_path.empty()) {
+                    const auto stem =
+                        QString::fromStdString(
+                            std::filesystem::path(active.content_path).stem().string())
+                            .trimmed();
+                    if (!stem.isEmpty()) {
+                        if (const auto row =
+                                meta.resolve(stem.toStdString(), active.system_key)) {
+                            return QString::fromStdString(row->display_name);
+                        }
+                    }
+                }
+                if (!active.display_name.empty()) {
+                    if (const auto row =
+                            meta.resolve(active.display_name, active.system_key)) {
+                        return QString::fromStdString(row->display_name);
+                    }
+                }
+            }
+        } catch (...) {
+        }
+    }
+    if (!active.display_name.empty() && active.display_name != active.game_id) {
+        return QString::fromStdString(active.display_name);
+    }
+    if (!active.game_id.empty()) {
+        if (const auto it = hints.by_stem.find(active.game_id); it != hints.by_stem.end()) {
+            return QString::fromStdString(it->second.second);
+        }
+        return QString::fromStdString(active.game_id);
+    }
+    return QStringLiteral("(unknown game)");
 }
 
 } // namespace
@@ -93,10 +295,10 @@ QWidget* MainWindow::build_saves_tab() {
     auto* root = new QVBoxLayout(page);
 
     auto* intro = new QLabel(
-        "Browse and clean per-user save data under the host save root. "
-        "Filter by user and system, then remove a user, an entire system for that user, "
-        "or one game. Creating a user seeds the template profile (default password "
-        "\"archstreamer\", must change on first login).",
+        "Per-user save profiles under the host save root, grouped User → System → Game. "
+        "Right-click for Add / Remove. "
+        "Status sits on the user (Connected) or game (Active). "
+        "Kick ends a live slot or disconnects a connection (existing session rules still apply).",
         page);
     intro->setWordWrap(true);
     root->addWidget(intro);
@@ -107,42 +309,84 @@ QWidget* MainWindow::build_saves_tab() {
     saves_user_ = new QComboBox(filters);
     saves_system_ = new QComboBox(filters);
     saves_filter_ = new QLineEdit(filters);
-    saves_filter_->setPlaceholderText("Filter by game name…");
+    saves_filter_->setPlaceholderText("Filter by user, system, or game…");
     filter_form->addRow("Save root", saves_root_label_);
     filter_form->addRow("User", saves_user_);
     filter_form->addRow("System", saves_system_);
-    filter_form->addRow("Game filter", saves_filter_);
+    filter_form->addRow("Filter", saves_filter_);
     root->addWidget(filters);
 
     auto* actions = new QHBoxLayout();
     saves_refresh_ = new QPushButton("Refresh", page);
-    saves_add_user_ = new QPushButton("Add User…", page);
-    saves_remove_user_ = new QPushButton("Remove User", page);
-    saves_remove_system_ = new QPushButton("Remove System", page);
-    saves_remove_game_ = new QPushButton("Remove Game", page);
+    auto* saves_expand_all = new QPushButton("Expand all", page);
+    auto* saves_collapse_all = new QPushButton("Collapse all", page);
+    saves_kick_ = new QPushButton("Kick…", page);
+    saves_kick_->setToolTip(
+        "List Active sessions and Connected clients; kick a session or disconnect a link.");
+    saves_expand_all->setToolTip("Expand every user and system in the list.");
+    saves_collapse_all->setToolTip("Collapse every user and system in the list.");
     actions->addWidget(saves_refresh_);
-    actions->addWidget(saves_add_user_);
-    actions->addWidget(saves_remove_user_);
-    actions->addWidget(saves_remove_system_);
-    actions->addWidget(saves_remove_game_);
+    actions->addWidget(saves_expand_all);
+    actions->addWidget(saves_collapse_all);
+    actions->addWidget(saves_kick_);
     actions->addStretch();
     root->addLayout(actions);
 
     saves_tree_ = new QTreeWidget(page);
-    saves_tree_->setColumnCount(5);
-    saves_tree_->setHeaderLabels({"User", "System", "Game", "Size", "Status"});
-    saves_tree_->setSelectionMode(QAbstractItemView::SingleSelection);
+    saves_tree_->setColumnCount(3);
+    saves_tree_->setHeaderLabels({"Name", "Size", "Status"});
+    saves_tree_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     saves_tree_->setUniformRowHeights(true);
     saves_tree_->setAlternatingRowColors(true);
-    saves_tree_->setRootIsDecorated(false);
+    saves_tree_->setRootIsDecorated(true);
+    saves_tree_->setItemsExpandable(true);
+    saves_tree_->setAnimated(true);
     saves_tree_->setSortingEnabled(true);
+    saves_tree_->setContextMenuPolicy(Qt::CustomContextMenu);
+    {
+        auto* header = saves_tree_->header();
+        header->setSectionsClickable(true);
+        header->setSortIndicatorShown(true);
+        header->setStretchLastSection(false);
+        header->setCascadingSectionResizes(false);
+        header->setMinimumSectionSize(72);
+        // Name fills leftover width; Size/Status keep a stable interactive width.
+        header->setSectionResizeMode(0, QHeaderView::Stretch);
+        header->setSectionResizeMode(1, QHeaderView::Interactive);
+        header->setSectionResizeMode(2, QHeaderView::Interactive);
+        header->resizeSection(1, 100);
+        header->resizeSection(2, 120);
+    }
+    saves_tree_->sortByColumn(0, Qt::AscendingOrder);
     root->addWidget(saves_tree_, 1);
 
-    saves_status_ = new QLabel("Select a row to enable remove actions.", page);
+    saves_status_ = new QLabel(
+        "Right-click for Add / Remove. Kick lists Active and Connected targets.",
+        page);
     saves_status_->setWordWrap(true);
     root->addWidget(saves_status_);
 
+    saves_add_user_action_ = new QAction("User…", page);
+    saves_remove_user_action_ = new QAction("User…", page);
+    saves_remove_system_action_ = new QAction("System…", page);
+    saves_remove_game_action_ = new QAction("Game…", page);
+    auto* saves_copy_action = new QAction("Copy", page);
+    saves_copy_action->setShortcut(QKeySequence::Copy);
+    saves_copy_action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    saves_tree_->addAction(saves_copy_action);
+
     connect(saves_refresh_, &QPushButton::clicked, this, [this] { refresh_saves_browser(); });
+    connect(saves_expand_all, &QPushButton::clicked, this, [this] {
+        if (saves_tree_ != nullptr) {
+            saves_tree_->expandAll();
+        }
+    });
+    connect(saves_collapse_all, &QPushButton::clicked, this, [this] {
+        if (saves_tree_ != nullptr) {
+            saves_tree_->collapseAll();
+        }
+    });
+    connect(saves_kick_, &QPushButton::clicked, this, [this] { saves_kick_user(); });
     connect(saves_user_, &QComboBox::currentIndexChanged, this, [this] {
         refresh_saves_system_combo();
         refresh_saves_browser_list();
@@ -154,10 +398,27 @@ QWidget* MainWindow::build_saves_tab() {
     connect(saves_tree_, &QTreeWidget::itemSelectionChanged, this, [this] {
         update_saves_action_enabled();
     });
-    connect(saves_add_user_, &QPushButton::clicked, this, [this] { saves_add_user(); });
-    connect(saves_remove_user_, &QPushButton::clicked, this, [this] { saves_remove_user(); });
-    connect(saves_remove_system_, &QPushButton::clicked, this, [this] { saves_remove_system(); });
-    connect(saves_remove_game_, &QPushButton::clicked, this, [this] { saves_remove_game(); });
+    connect(saves_tree_, &QTreeWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
+        saves_show_context_menu(pos);
+    });
+    connect(saves_copy_action, &QAction::triggered, this, [this] { saves_copy_selection(); });
+    connect(saves_add_user_action_, &QAction::triggered, this, [this] { saves_add_user(); });
+    connect(saves_remove_user_action_, &QAction::triggered, this, [this] { saves_remove_user(); });
+    connect(saves_remove_system_action_, &QAction::triggered, this, [this] { saves_remove_system(); });
+    connect(saves_remove_game_action_, &QAction::triggered, this, [this] { saves_remove_game(); });
+
+    saves_refresh_timer_ = new QTimer(page);
+    saves_refresh_timer_->setInterval(3000);
+    connect(saves_refresh_timer_, &QTimer::timeout, this, [this] {
+        if (tabs_ == nullptr || saves_tree_ == nullptr) {
+            return;
+        }
+        if (tabs_->tabText(tabs_->currentIndex()) != QLatin1String("Users")) {
+            return;
+        }
+        refresh_saves_browser_list();
+    });
+    saves_refresh_timer_->start();
 
     QTimer::singleShot(0, this, [this] { refresh_saves_browser(); });
     return page;
@@ -171,6 +432,85 @@ SaveNameHints MainWindow::saves_name_hints() const {
     return saves_hints_;
 }
 
+void MainWindow::saves_show_context_menu(const QPoint& pos) {
+    if (saves_tree_ == nullptr) {
+        return;
+    }
+    update_saves_action_enabled();
+
+    QMenu menu(saves_tree_);
+    auto* copy_action = menu.addAction("Copy");
+    copy_action->setShortcut(QKeySequence::Copy);
+    copy_action->setEnabled(!saves_tree_->selectedItems().isEmpty());
+    connect(copy_action, &QAction::triggered, this, [this] { saves_copy_selection(); });
+    menu.addSeparator();
+    auto* add_menu = menu.addMenu("Add");
+    add_menu->addAction(saves_add_user_action_);
+    auto* remove_menu = menu.addMenu("Remove");
+    remove_menu->addAction(saves_remove_user_action_);
+    remove_menu->addAction(saves_remove_system_action_);
+    remove_menu->addAction(saves_remove_game_action_);
+    menu.exec(saves_tree_->viewport()->mapToGlobal(pos));
+}
+
+void MainWindow::saves_copy_selection() {
+    if (saves_tree_ == nullptr) {
+        return;
+    }
+    const auto selected = saves_tree_->selectedItems();
+    if (selected.isEmpty()) {
+        return;
+    }
+    QStringList lines;
+    for (const auto* item : selected) {
+        if (item == nullptr) {
+            continue;
+        }
+        const auto kind = item->data(0, kUserRoleNodeKind).toInt();
+        const auto username = item->data(0, kUserRoleUsername).toString();
+        const auto system_key = item->data(0, kUserRoleSystemKey).toString();
+        const auto game_key = item->data(0, kUserRoleGameKey).toString();
+        const auto name = item->text(0);
+        const auto size = item->text(1);
+        const auto status = item->text(2);
+        const auto path = item->toolTip(0);
+
+        QStringList parts;
+        if (kind == static_cast<int>(SavesNodeKind::User)) {
+            parts << username;
+        } else if (kind == static_cast<int>(SavesNodeKind::System)) {
+            parts << username << name;
+        } else {
+            parts << username;
+            if (!system_key.isEmpty()) {
+                parts << QString::fromStdString(save_system_label(system_key.toStdString()));
+            }
+            parts << name;
+            if (!size.isEmpty()) {
+                parts << size;
+            }
+            if (!status.isEmpty()) {
+                parts << status;
+            }
+            if (!game_key.isEmpty()) {
+                parts << game_key;
+            }
+            if (!path.isEmpty()) {
+                parts << path;
+            }
+        }
+        lines << parts.join(QLatin1Char('\t'));
+    }
+    if (lines.isEmpty()) {
+        return;
+    }
+    QApplication::clipboard()->setText(lines.join(QLatin1Char('\n')));
+    if (saves_status_ != nullptr) {
+        saves_status_->setText(
+            QStringLiteral("Copied %1 selected row(s) to the clipboard.").arg(lines.size()));
+    }
+}
+
 void MainWindow::refresh_saves_browser() {
     if (saves_root_label_ == nullptr) {
         return;
@@ -181,20 +521,29 @@ void MainWindow::refresh_saves_browser() {
     saves_hints_ = {};
     try {
         const auto rom = host_rom_root_ != nullptr ? host_rom_root_->text().trimmed() : QString();
+        std::optional<GameCatalog> scanned;
         if (!rom.isEmpty()) {
             std::filesystem::path meta;
             if (host_meta_root_ != nullptr && !host_meta_root_->text().trimmed().isEmpty()) {
                 meta = expand_user_path_local(host_meta_root_->text()).toStdString();
             }
-            const auto catalog = scan_game_catalog(
+            // Syncs game_meta; Users tab treats the meta DB as authoritative.
+            scanned = scan_game_catalog(
                 expand_user_path_local(rom).toStdString(),
                 LibretroCoreRegistry::ubuntu_defaults(),
                 meta);
-            saves_hints_ = hints_from_catalog(catalog);
+        }
+        saves_hints_ = hints_from_meta_store();
+        // Bootstrap only when the meta DB is empty (first run / open failure).
+        if (saves_hints_.by_stem.empty() && scanned.has_value()) {
+            saves_hints_ = hints_from_catalog(*scanned);
         }
     } catch (const std::exception& error) {
-        saves_status_->setText(
-            QStringLiteral("Catalog hints unavailable: %1").arg(error.what()));
+        saves_hints_ = hints_from_meta_store();
+        if (saves_hints_.by_stem.empty()) {
+            saves_status_->setText(
+                QStringLiteral("Catalog / meta hints unavailable: %1").arg(error.what()));
+        }
     }
 
     const auto users = list_save_users(root);
@@ -242,55 +591,292 @@ void MainWindow::refresh_saves_browser_list() {
     const auto user = saves_user_->currentData().toString().toStdString();
     const auto system = saves_system_->currentData().toString().toStdString();
     const auto filter = saves_filter_->text().trimmed().toLower();
+    const auto previously_expanded = collect_expanded_saves_keys(saves_tree_);
 
     const auto games = list_save_games(root, user, system, saves_hints_);
-    const auto active_sessions = list_active_save_sessions(root);
+    const auto active_sessions = load_users_active_sessions(root);
+    const auto connected_clients = list_connected_clients(root);
+
+    std::unordered_set<std::string> active_usernames;
+    for (const auto& active : active_sessions) {
+        active_usernames.insert(active.username);
+    }
+
+    // Connected usernames that are not currently Active (playing).
+    std::unordered_set<std::string> connected_usernames;
+    std::unordered_map<std::string, ConnectedClientPresence> connected_by_user;
+    for (const auto& client : connected_clients) {
+        if (active_usernames.contains(client.username)) {
+            continue;
+        }
+        connected_usernames.insert(client.username);
+        connected_by_user.emplace(client.username, client);
+    }
+
     // Key by user+game — title-id / file keys are shared across profiles.
     std::unordered_set<std::string> active_user_games;
+    std::unordered_map<std::string, ActiveSaveSession> active_by_user_game;
+    std::vector<ActiveSaveSession> unmatched_actives;
     for (const auto& active : active_sessions) {
         if (const auto key = best_active_game_key(games, active); key.has_value()) {
-            active_user_games.insert(active.username + '\n' + *key);
+            const auto map_key = active.username + '\n' + *key;
+            active_user_games.insert(map_key);
+            active_by_user_game[map_key] = active;
+        } else {
+            unmatched_actives.push_back(active);
         }
     }
 
-    saves_tree_->setSortingEnabled(false);
-    saves_tree_->clear();
-    int shown = 0;
-    int active_shown = 0;
+    auto passes_filter = [&](const QString& username,
+                             const QString& system_label,
+                             const QString& game_name) {
+        if (filter.isEmpty()) {
+            return true;
+        }
+        return username.toLower().contains(filter) || system_label.toLower().contains(filter)
+            || game_name.toLower().contains(filter);
+    };
+
+    struct PendingGameRow {
+        QString username;
+        QString system_key;
+        QString system_label;
+        QString game_key;
+        QString display_name;
+        QString size_text;
+        std::uint64_t bytes = 0;
+        QString path_tip;
+        bool active = false;
+        bool synthetic = false;
+        int slot = -1;
+        QString status_tip;
+    };
+
+    std::vector<PendingGameRow> pending;
+    pending.reserve(games.size() + unmatched_actives.size());
+
     for (const auto& game : games) {
+        const auto username_q = QString::fromStdString(game.username);
+        const auto system_label_q = QString::fromStdString(game.system_label);
         const auto name = QString::fromStdString(game.display_name);
-        if (!filter.isEmpty() && !name.toLower().contains(filter)
-            && !QString::fromStdString(game.username).toLower().contains(filter)
-            && !QString::fromStdString(game.system_label).toLower().contains(filter)) {
+        if (!passes_filter(username_q, system_label_q, name)) {
             continue;
         }
-        const bool active = active_user_games.contains(game.username + '\n' + game.game_key);
-        auto* item = new QTreeWidgetItem(saves_tree_);
-        item->setText(0, QString::fromStdString(game.username));
-        item->setText(1, QString::fromStdString(game.system_label));
-        item->setText(2, name);
-        item->setText(3, format_bytes(game.bytes));
-        item->setText(4, active ? QStringLiteral("Active") : QString());
-        item->setData(0, Qt::UserRole, QString::fromStdString(game.username));
-        item->setData(1, Qt::UserRole, QString::fromStdString(game.system_key));
-        item->setData(2, Qt::UserRole, QString::fromStdString(game.game_key));
-        item->setToolTip(2, QString::fromStdString(game.primary_path.string()));
-        if (active) {
-            item->setToolTip(4, QStringLiteral("This user is in a live host session on this game."));
+        PendingGameRow row;
+        row.username = username_q;
+        row.system_key = QString::fromStdString(game.system_key);
+        row.system_label = system_label_q;
+        row.game_key = QString::fromStdString(game.game_key);
+        row.display_name = name;
+        row.size_text = format_bytes(game.bytes);
+        row.bytes = game.bytes;
+        row.path_tip = QString::fromStdString(game.primary_path.string());
+        const auto map_key = game.username + '\n' + game.game_key;
+        if (active_user_games.contains(map_key)) {
+            row.active = true;
+            if (const auto it = active_by_user_game.find(map_key); it != active_by_user_game.end()) {
+                row.slot = it->second.slot_index;
+                row.status_tip = QStringLiteral("Live session (slot %1): %2")
+                    .arg(it->second.slot_index)
+                    .arg(resolve_active_display_name(it->second, saves_hints_));
+            } else {
+                row.status_tip = QStringLiteral("Live host session on this save.");
+            }
+        }
+        pending.push_back(std::move(row));
+    }
+
+    for (const auto& active : unmatched_actives) {
+        if (!user.empty() && active.username != user) {
+            continue;
+        }
+        if (!system.empty() && !active.system_key.empty() && active.system_key != system) {
+            continue;
+        }
+        const auto username_q = QString::fromStdString(active.username);
+        const auto system_label_q = QString::fromStdString(
+            active.system_key.empty() ? "Unknown" : save_system_label(active.system_key));
+        const auto display = resolve_active_display_name(active, saves_hints_);
+        const auto game_label = QStringLiteral("Playing: %1").arg(display);
+        if (!passes_filter(username_q, system_label_q, game_label)) {
+            continue;
+        }
+        PendingGameRow row;
+        row.username = username_q;
+        row.system_key = QString::fromStdString(active.system_key);
+        row.system_label = system_label_q;
+        row.display_name = game_label;
+        row.size_text = QStringLiteral("—");
+        row.path_tip = QStringLiteral(
+            "Live session with no matching save row (common for PS2 memcards). "
+            "Slot %1 · cadence game %2")
+            .arg(active.slot_index)
+            .arg(QString::fromStdString(active.game_id));
+        row.active = true;
+        row.synthetic = true;
+        row.slot = active.slot_index;
+        row.status_tip = QStringLiteral("Live host session (slot %1).").arg(active.slot_index);
+        pending.push_back(std::move(row));
+    }
+
+    // Ensure Connected users appear even with no matching save rows.
+    std::unordered_set<std::string> users_in_pending;
+    for (const auto& row : pending) {
+        users_in_pending.insert(row.username.toStdString());
+    }
+    for (const auto& client : connected_clients) {
+        if (active_usernames.contains(client.username)) {
+            continue;
+        }
+        if (!user.empty() && client.username != user) {
+            continue;
+        }
+        if (users_in_pending.contains(client.username)) {
+            continue;
+        }
+        const auto username_q = QString::fromStdString(client.username);
+        if (!filter.isEmpty() && !username_q.toLower().contains(filter)) {
+            continue;
+        }
+        // Placeholder so the user node is created; no game children.
+        PendingGameRow row;
+        row.username = username_q;
+        pending.push_back(std::move(row));
+        users_in_pending.insert(client.username);
+    }
+
+    // Group by user/system for tree construction; header sort reorders siblings after.
+    std::sort(pending.begin(), pending.end(), [](const PendingGameRow& a, const PendingGameRow& b) {
+        if (a.username != b.username) {
+            return a.username.toLower() < b.username.toLower();
+        }
+        if (a.system_label != b.system_label) {
+            return a.system_label.toLower() < b.system_label.toLower();
+        }
+        return a.display_name.toLower() < b.display_name.toLower();
+    });
+
+    const int sort_column = saves_tree_->sortColumn();
+    const auto sort_order = saves_tree_->header()->sortIndicatorOrder();
+    saves_tree_->setSortingEnabled(false);
+    saves_tree_->clear();
+    int game_shown = 0;
+    int active_shown = 0;
+    int connected_shown = 0;
+
+    SavesTreeItem* user_item = nullptr;
+    SavesTreeItem* system_item = nullptr;
+    QString current_user;
+    QString current_system_key;
+    std::unordered_set<std::string> users_marked_connected;
+
+    auto ensure_user = [&](const QString& username) -> SavesTreeItem* {
+        if (user_item != nullptr && current_user == username) {
+            return user_item;
+        }
+        user_item = new SavesTreeItem(saves_tree_);
+        user_item->setText(0, username);
+        apply_saves_node_roles(user_item, SavesNodeKind::User, username);
+        auto font = user_item->font(0);
+        font.setBold(true);
+        user_item->setFont(0, font);
+
+        if (connected_usernames.contains(username.toStdString())
+            && !users_marked_connected.contains(username.toStdString())) {
+            user_item->setText(2, QStringLiteral("Connected"));
+            QString tip = QStringLiteral("Authenticated control connection (not playing).");
+            if (const auto it = connected_by_user.find(username.toStdString());
+                it != connected_by_user.end()) {
+                user_item->setData(0, kUserRoleSlot, it->second.slot_index);
+                tip = QStringLiteral("Connected as client %1 (%2)")
+                    .arg(it->second.client_id)
+                    .arg(QString::fromStdString(
+                        it->second.phase.empty() ? "session" : it->second.phase));
+            }
+            user_item->setToolTip(2, tip);
+            users_marked_connected.insert(username.toStdString());
+            ++connected_shown;
+        }
+
+        const bool expand_user = previously_expanded.contains(username)
+            || connected_usernames.contains(username.toStdString())
+            || active_usernames.contains(username.toStdString())
+            || !filter.isEmpty();
+        user_item->setExpanded(expand_user);
+        current_user = username;
+        current_system_key.clear();
+        system_item = nullptr;
+        return user_item;
+    };
+
+    auto ensure_system = [&](const QString& username,
+                             const QString& system_key,
+                             const QString& system_label) -> SavesTreeItem* {
+        auto* parent = ensure_user(username);
+        if (system_item != nullptr && current_system_key == system_key && !system_key.isEmpty()) {
+            return system_item;
+        }
+        // Empty system_key + empty label means "user only" placeholder — no system node.
+        if (system_key.isEmpty() && system_label.isEmpty()) {
+            system_item = nullptr;
+            current_system_key.clear();
+            return nullptr;
+        }
+        system_item = new SavesTreeItem(parent);
+        system_item->setText(0, system_label.isEmpty() ? QStringLiteral("Unknown") : system_label);
+        apply_saves_node_roles(system_item, SavesNodeKind::System, username, system_key);
+        const auto expand_key = username + QLatin1Char('\n') + system_key;
+        system_item->setExpanded(
+            previously_expanded.contains(expand_key) || !filter.isEmpty()
+            || active_usernames.contains(username.toStdString()));
+        current_system_key = system_key;
+        return system_item;
+    };
+
+    for (const auto& row : pending) {
+        // Connected-only placeholder: user node, no children.
+        if (row.display_name.isEmpty() && row.system_key.isEmpty() && !row.active) {
+            ensure_user(row.username);
+            continue;
+        }
+
+        auto* parent = ensure_system(row.username, row.system_key, row.system_label);
+        if (parent == nullptr) {
+            continue;
+        }
+        auto* game_item = new SavesTreeItem(parent);
+        game_item->setText(0, row.display_name);
+        game_item->setText(1, row.size_text);
+        game_item->setData(1, kUserRoleSortBytes, QVariant::fromValue(row.bytes));
+        apply_saves_node_roles(
+            game_item,
+            SavesNodeKind::Game,
+            row.username,
+            row.system_key,
+            row.game_key,
+            row.synthetic,
+            row.slot);
+        if (!row.path_tip.isEmpty()) {
+            game_item->setToolTip(0, row.path_tip);
+        }
+        if (row.active) {
+            game_item->setText(2, QStringLiteral("Active"));
+            game_item->setToolTip(2, row.status_tip);
             ++active_shown;
         }
-        ++shown;
+        ++game_shown;
     }
+
+    saves_tree_->sortByColumn(sort_column, sort_order);
     saves_tree_->setSortingEnabled(true);
-    saves_tree_->resizeColumnToContents(0);
-    saves_tree_->resizeColumnToContents(1);
-    saves_tree_->resizeColumnToContents(3);
-    saves_tree_->resizeColumnToContents(4);
-    QString status = QStringLiteral("%1 save(s) shown under %2")
-        .arg(shown)
+    QString status = QStringLiteral("%1 user(s), %2 game(s) under %3")
+        .arg(saves_tree_->topLevelItemCount())
+        .arg(game_shown)
         .arg(QString::fromStdString(root.string()));
-    if (active_shown > 0) {
-        status += QStringLiteral(" — %1 active").arg(active_shown);
+    if (active_shown > 0 || connected_shown > 0) {
+        status += QStringLiteral(" — %1 active, %2 connected")
+            .arg(active_shown)
+            .arg(connected_shown);
     }
     saves_status_->setText(status);
     update_saves_action_enabled();
@@ -299,17 +885,32 @@ void MainWindow::refresh_saves_browser_list() {
 void MainWindow::update_saves_action_enabled() {
     const auto* item = saves_tree_ != nullptr ? saves_tree_->currentItem() : nullptr;
     const bool has_row = item != nullptr;
+    const int kind = has_row ? item->data(0, kUserRoleNodeKind).toInt() : -1;
+    const bool synthetic = has_row && item->data(0, kUserRoleSynthetic).toBool();
     const bool has_user_filter = saves_user_ != nullptr && !saves_user_->currentData().toString().isEmpty();
     const bool has_system_filter =
         saves_system_ != nullptr && !saves_system_->currentData().toString().isEmpty();
-    if (saves_remove_game_ != nullptr) {
-        saves_remove_game_->setEnabled(has_row);
+    const bool has_user = has_row || has_user_filter;
+    const bool has_system =
+        (has_row
+         && (kind == static_cast<int>(SavesNodeKind::System)
+             || kind == static_cast<int>(SavesNodeKind::Game))
+         && !item->data(0, kUserRoleSystemKey).toString().isEmpty())
+        || (has_user_filter && has_system_filter);
+    const bool has_game = has_row && kind == static_cast<int>(SavesNodeKind::Game) && !synthetic
+        && !item->data(0, kUserRoleGameKey).toString().isEmpty();
+
+    if (saves_remove_user_action_ != nullptr) {
+        saves_remove_user_action_->setEnabled(has_user);
     }
-    if (saves_remove_user_ != nullptr) {
-        saves_remove_user_->setEnabled(has_row || has_user_filter);
+    if (saves_remove_system_action_ != nullptr) {
+        saves_remove_system_action_->setEnabled(has_system);
     }
-    if (saves_remove_system_ != nullptr) {
-        saves_remove_system_->setEnabled(has_row || (has_user_filter && has_system_filter));
+    if (saves_remove_game_action_ != nullptr) {
+        saves_remove_game_action_->setEnabled(has_game);
+    }
+    if (saves_kick_ != nullptr) {
+        saves_kick_->setEnabled(true);
     }
 }
 
@@ -320,7 +921,8 @@ bool MainWindow::confirm_saves_destructive(const QString& title, const QString& 
             title,
             detail
                 + "\n\nHost Runner is currently running. Deleting saves for an active "
-                  "player can corrupt that session. Stop Host first unless you are sure.",
+                  "player can corrupt that session. Prefer Kick for live players, "
+                  "or Stop Host first unless you are sure.",
             QMessageBox::Ok | QMessageBox::Cancel,
             QMessageBox::Cancel);
         return answer == QMessageBox::Ok;
@@ -347,7 +949,7 @@ void MainWindow::saves_add_user() {
         saves_status_->setText(
             QStringLiteral("Created user “%1” (default password archstreamer, must change).")
                 .arg(name));
-        append_log(host_log_, QStringLiteral("[saves] created user %1").arg(name));
+        append_log(host_log_, QStringLiteral("[users] created %1").arg(name));
         refresh_saves_browser();
         const int idx = saves_user_->findData(name);
         if (idx >= 0) {
@@ -361,7 +963,7 @@ void MainWindow::saves_add_user() {
 void MainWindow::saves_remove_user() {
     QString username;
     if (const auto* item = saves_tree_->currentItem()) {
-        username = item->data(0, Qt::UserRole).toString();
+        username = item->data(0, kUserRoleUsername).toString();
     }
     if (username.isEmpty()) {
         username = saves_user_->currentData().toString();
@@ -372,16 +974,13 @@ void MainWindow::saves_remove_user() {
     }
     if (!confirm_saves_destructive(
             "Remove User",
-            QStringLiteral(
-                "Permanently delete all save data for user “%1”?\n\n"
-                "This removes the entire profile directory under the save root.")
-                .arg(username))) {
+            QStringLiteral("Permanently delete all save data for “%1”?").arg(username))) {
         return;
     }
     try {
         delete_save_user(save_root_path(), username.toStdString());
         saves_status_->setText(QStringLiteral("Deleted user “%1”.").arg(username));
-        append_log(host_log_, QStringLiteral("[saves] deleted user %1").arg(username));
+        append_log(host_log_, QStringLiteral("[users] deleted user %1").arg(username));
         refresh_saves_browser();
     } catch (const std::exception& error) {
         QMessageBox::warning(this, "Remove User", error.what());
@@ -393,8 +992,8 @@ void MainWindow::saves_remove_system() {
     QString system_key;
     QString system_label;
     if (const auto* item = saves_tree_->currentItem()) {
-        username = item->data(0, Qt::UserRole).toString();
-        system_key = item->data(1, Qt::UserRole).toString();
+        username = item->data(0, kUserRoleUsername).toString();
+        system_key = item->data(0, kUserRoleSystemKey).toString();
         system_label = item->text(1);
     }
     if (username.isEmpty()) {
@@ -408,32 +1007,30 @@ void MainWindow::saves_remove_system() {
         QMessageBox::information(
             this,
             "Remove System",
-            "Select a save row, or set both User and System filters.");
+            "Select a row (or user + system filters) first.");
         return;
     }
     if (!confirm_saves_destructive(
             "Remove System",
-            QStringLiteral(
-                "Delete all “%1” saves for user “%2”?\n\n"
-                "Switch removals also clear Ryujinx/Yuzu mirrors for those titles.")
+            QStringLiteral("Delete all “%1” saves for “%2”?")
                 .arg(system_label, username))) {
         return;
     }
     try {
-        const auto count = delete_save_system(
+        const auto removed = delete_save_system(
             save_root_path(),
             username.toStdString(),
             system_key.toStdString(),
             saves_hints_);
         saves_status_->setText(
             QStringLiteral("Removed %1 “%2” save(s) for %3.")
-                .arg(count)
+                .arg(removed)
                 .arg(system_label, username));
         append_log(
             host_log_,
-            QStringLiteral("[saves] deleted system %1 for %2 (%3 entries)")
+            QStringLiteral("[users] removed system %1 for %2 (%3)")
                 .arg(system_key, username)
-                .arg(count));
+                .arg(removed));
         refresh_saves_browser();
     } catch (const std::exception& error) {
         QMessageBox::warning(this, "Remove System", error.what());
@@ -442,16 +1039,20 @@ void MainWindow::saves_remove_system() {
 
 void MainWindow::saves_remove_game() {
     const auto* item = saves_tree_->currentItem();
-    if (item == nullptr) {
-        QMessageBox::information(this, "Remove Game", "Select a game row first.");
+    if (item == nullptr || item->data(0, kUserRoleSynthetic).toBool()) {
+        QMessageBox::information(this, "Remove Game", "Select a saved game row first.");
         return;
     }
-    const auto username = item->data(0, Qt::UserRole).toString();
-    const auto game_key = item->data(2, Qt::UserRole).toString();
+    const auto username = item->data(0, kUserRoleUsername).toString();
+    const auto game_key = item->data(0, kUserRoleGameKey).toString();
     const auto label = item->text(2);
+    if (username.isEmpty() || game_key.isEmpty()) {
+        QMessageBox::information(this, "Remove Game", "Select a saved game row first.");
+        return;
+    }
     if (!confirm_saves_destructive(
             "Remove Game",
-            QStringLiteral("Delete save “%1” for user “%2”?").arg(label, username))) {
+            QStringLiteral("Delete “%1” for “%2”?").arg(label, username))) {
         return;
     }
     try {
@@ -459,11 +1060,152 @@ void MainWindow::saves_remove_game() {
         saves_status_->setText(QStringLiteral("Deleted “%1” for %2.").arg(label, username));
         append_log(
             host_log_,
-            QStringLiteral("[saves] deleted game %1 for %2").arg(game_key, username));
+            QStringLiteral("[users] deleted %1 for %2").arg(game_key, username));
         refresh_saves_browser();
     } catch (const std::exception& error) {
         QMessageBox::warning(this, "Remove Game", error.what());
     }
+}
+
+void MainWindow::saves_kick_user() {
+    const auto root = save_root_path();
+    const auto actives = load_users_active_sessions(root);
+    const auto connected = list_connected_clients(root);
+
+    enum class KickKind { ActiveSlot, ConnectedClient };
+    struct KickTarget {
+        KickKind kind = KickKind::ActiveSlot;
+        ActiveSaveSession active;
+        ConnectedClientPresence client;
+        QString label;
+    };
+    std::vector<KickTarget> targets;
+    QStringList labels;
+
+    for (const auto& active : actives) {
+        KickTarget target;
+        target.kind = KickKind::ActiveSlot;
+        target.active = active;
+        const auto display = resolve_active_display_name(active, saves_hints_);
+        target.label = QStringLiteral("Active — %1 — %2 (slot %3)")
+            .arg(QString::fromStdString(active.username), display)
+            .arg(active.slot_index);
+        labels << target.label;
+        targets.push_back(std::move(target));
+    }
+
+    for (const auto& client : connected) {
+        // Seated save-owner of an Active slot is kicked via Active (ends the slot).
+        bool covered_by_active = false;
+        for (const auto& active : actives) {
+            if (active.slot_index == client.slot_index
+                && active.username == client.username
+                && client.seated) {
+                covered_by_active = true;
+                break;
+            }
+        }
+        if (covered_by_active) {
+            continue;
+        }
+        KickTarget target;
+        target.kind = KickKind::ConnectedClient;
+        target.client = client;
+        const auto phase = client.phase.empty()
+            ? (client.slot_index < 0 ? QStringLiteral("lobby") : QStringLiteral("session"))
+            : QString::fromStdString(client.phase);
+        target.label = QStringLiteral("Connected — %1 (client %2, %3)")
+            .arg(QString::fromStdString(client.username))
+            .arg(client.client_id)
+            .arg(phase);
+        labels << target.label;
+        targets.push_back(std::move(target));
+    }
+
+    if (targets.empty()) {
+        QMessageBox::information(
+            this,
+            "Kick",
+            "No Active sessions or Connected clients to kick.");
+        return;
+    }
+
+    bool ok = false;
+    const auto chosen = QInputDialog::getItem(
+        this,
+        "Kick",
+        "Select an Active session or Connected client:",
+        labels,
+        0,
+        false,
+        &ok);
+    if (!ok || chosen.isEmpty()) {
+        return;
+    }
+    const int index = labels.indexOf(chosen);
+    if (index < 0 || index >= static_cast<int>(targets.size())) {
+        return;
+    }
+    const auto& target = targets[static_cast<std::size_t>(index)];
+
+    if (target.kind == KickKind::ActiveSlot) {
+        if (target.active.slot_index < 0) {
+            QMessageBox::warning(this, "Kick", "Selected session has no slot index.");
+            return;
+        }
+        if (QMessageBox::question(
+                this,
+                "Kick",
+                QStringLiteral("Kick Active session for “%1” (slot %2)?\n\n"
+                               "This requests normal session teardown for that slot.")
+                    .arg(QString::fromStdString(target.active.username))
+                    .arg(target.active.slot_index),
+                QMessageBox::Yes | QMessageBox::No,
+                QMessageBox::No)
+            != QMessageBox::Yes) {
+            return;
+        }
+        request_active_session_stop(root, target.active.slot_index, "kicked");
+        saves_status_->setText(
+            QStringLiteral("Kick requested for Active %1 (slot %2).")
+                .arg(QString::fromStdString(target.active.username))
+                .arg(target.active.slot_index));
+        append_log(
+            host_log_,
+            QStringLiteral("[users] kick active %1 slot %2")
+                .arg(QString::fromStdString(target.active.username))
+                .arg(target.active.slot_index));
+    } else {
+        if (QMessageBox::question(
+                this,
+                "Kick",
+                QStringLiteral("Disconnect “%1” (client %2)?\n\n"
+                               "This closes their control connection only — not a blacklist. "
+                               "If they are a seated primary, existing host rules may end "
+                               "the shared session.")
+                    .arg(QString::fromStdString(target.client.username))
+                    .arg(target.client.client_id),
+                QMessageBox::Yes | QMessageBox::No,
+                QMessageBox::No)
+            != QMessageBox::Yes) {
+            return;
+        }
+        request_connected_client_disconnect(
+            root,
+            target.client.client_id,
+            target.client.slot_index,
+            "kicked");
+        saves_status_->setText(
+            QStringLiteral("Disconnect requested for %1 (client %2).")
+                .arg(QString::fromStdString(target.client.username))
+                .arg(target.client.client_id));
+        append_log(
+            host_log_,
+            QStringLiteral("[users] disconnect connected %1 client %2")
+                .arg(QString::fromStdString(target.client.username))
+                .arg(target.client.client_id));
+    }
+    QTimer::singleShot(800, this, [this] { refresh_saves_browser_list(); });
 }
 
 #endif // ARCHSTREAMER_HAS_HOST

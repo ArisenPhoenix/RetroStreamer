@@ -34,6 +34,10 @@ std::filesystem::path FileRuntimeStore::users_path() const {
     return root_ / "users.json";
 }
 
+std::filesystem::path FileRuntimeStore::controls_path() const {
+    return root_ / "controls.json";
+}
+
 std::filesystem::path FileRuntimeStore::sessions_path() const {
     return root_ / "sessions.json";
 }
@@ -211,6 +215,59 @@ std::vector<UserRecord> FileRuntimeStore::list_users() {
     } catch (const nlohmann::json::exception&) {
         return {};
     }
+}
+
+bool FileRuntimeStore::upsert_controls(const ControlsRecord& controls) {
+    if (controls.username.empty() || controls.document_json.empty()) {
+        return false;
+    }
+    std::lock_guard lock(mutex_);
+    if (!ensure_ready_unlocked()) {
+        return false;
+    }
+    auto root = load_object_file(controls_path());
+    ControlsRecord stored = controls;
+    if (stored.kind.empty()) {
+        stored.kind = std::string(kControlsKindButtonMap);
+    }
+    if (stored.updated_at <= 0) {
+        stored.updated_at = now_epoch_seconds();
+    }
+    const auto key = stored.username + "\n" + stored.kind;
+    root[key] = controls_to_json(stored);
+    return save_object_file(controls_path(), root);
+}
+
+std::optional<ControlsRecord> FileRuntimeStore::find_controls(
+    const std::string& username,
+    const std::string& kind) {
+    if (username.empty()) {
+        return std::nullopt;
+    }
+    const auto use_kind = kind.empty() ? std::string(kControlsKindButtonMap) : kind;
+    std::lock_guard lock(mutex_);
+    const auto root = load_object_file(controls_path());
+    const auto key = username + "\n" + use_kind;
+    if (!root.contains(key)) {
+        return std::nullopt;
+    }
+    return controls_from_json(root.at(key));
+}
+
+std::vector<ControlsRecord> FileRuntimeStore::list_controls() {
+    std::lock_guard lock(mutex_);
+    const auto root = load_object_file(controls_path());
+    std::vector<ControlsRecord> out;
+    for (auto it = root.begin(); it != root.end(); ++it) {
+        out.push_back(controls_from_json(it.value()));
+    }
+    std::sort(out.begin(), out.end(), [](const ControlsRecord& a, const ControlsRecord& b) {
+        if (a.username != b.username) {
+            return a.username < b.username;
+        }
+        return a.kind < b.kind;
+    });
+    return out;
 }
 
 bool FileRuntimeStore::upsert_session(const SessionRecord& session) {

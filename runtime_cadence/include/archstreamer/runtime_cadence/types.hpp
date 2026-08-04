@@ -21,11 +21,29 @@ struct UserRecord {
      */
     std::string password_hash;
     bool must_change = false;
+    /** Absolute save profile directory: <save_root>/<username>. */
+    std::string profile_path;
+    /** Host save-root used when the row was written. */
+    std::string save_root;
     /** Unix epoch seconds when the row was first created; 0 = unknown. */
     std::int64_t created_at = 0;
     /** Unix epoch seconds when last upserted. */
     std::int64_t updated_at = 0;
 };
+
+/** Portable controls document (button_map JSON, future overlay kinds). */
+struct ControlsRecord {
+    std::string username;
+    /** e.g. "button_map". */
+    std::string kind = "button_map";
+    /** Full ControllerMapDocument JSON (or future schema). */
+    std::string document_json;
+    int version = 1;
+    std::int64_t updated_at = 0;
+};
+
+inline constexpr std::string_view kControlsKindButtonMap = "button_map";
+inline constexpr std::string_view kControlsDefaultUsername = "_default";
 
 /**
  * One live (or recently ended) play session. Resource claims hang off session_id.

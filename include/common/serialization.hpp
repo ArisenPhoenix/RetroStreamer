@@ -87,6 +87,8 @@ ByteBuffer serialize_payload(const EmulatorControl& payload);
 ByteBuffer serialize_payload(const ClientLogBundle& payload);
 ByteBuffer serialize_payload(const PasswordChangeRequired& payload);
 ByteBuffer serialize_payload(const PasswordChange& payload);
+ByteBuffer serialize_payload(const LobbyPresence& payload);
+ByteBuffer serialize_payload(const LobbyPresenceAck& payload);
 
 PacketType packet_type_for(const ClientHello& payload);
 PacketType packet_type_for(const HostWelcome& payload);
@@ -121,6 +123,8 @@ PacketType packet_type_for(const EmulatorControl& payload);
 PacketType packet_type_for(const ClientLogBundle& payload);
 PacketType packet_type_for(const PasswordChangeRequired& payload);
 PacketType packet_type_for(const PasswordChange& payload);
+PacketType packet_type_for(const LobbyPresence& payload);
+PacketType packet_type_for(const LobbyPresenceAck& payload);
 
 ByteBuffer serialize_packet(const ClientHello& payload);
 ByteBuffer serialize_packet(const HostWelcome& payload);
@@ -155,6 +159,8 @@ ByteBuffer serialize_packet(const EmulatorControl& payload);
 ByteBuffer serialize_packet(const ClientLogBundle& payload);
 ByteBuffer serialize_packet(const PasswordChangeRequired& payload);
 ByteBuffer serialize_packet(const PasswordChange& payload);
+ByteBuffer serialize_packet(const LobbyPresence& payload);
+ByteBuffer serialize_packet(const LobbyPresenceAck& payload);
 
 PacketPayload deserialize_packet(std::span<const std::uint8_t> packet);
 

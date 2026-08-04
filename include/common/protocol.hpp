@@ -15,7 +15,7 @@
 namespace archstreamer {
 
 constexpr std::uint32_t ProtocolMagic = 0x41525354; // "ARST"
-constexpr std::uint16_t ProtocolVersion = 21;
+constexpr std::uint16_t ProtocolVersion = 22;
 constexpr std::uint8_t MaxRemoteClients = 2;
 constexpr std::uint8_t MaxPlayersPerClient = 2;
 constexpr std::uint8_t MaxRetroArchPorts = 5; // Ports 0-3 plus a host player if desired.
@@ -71,6 +71,10 @@ enum class PacketType : std::uint8_t {
     TouchInput = 32,
     // Host → client: melonDS top/bottom screen AABBs in window pixels (follows swap).
     DsScreenLayout = 33,
+    // Client → host: stay on the control socket after catalog (Users-tab Connected).
+    LobbyPresence = 34,
+    // Host → client: presence accepted (client keeps the TCP open until leave/play).
+    LobbyPresenceAck = 35,
 };
 
 enum class ClientRole : std::uint8_t {
@@ -615,6 +619,8 @@ struct ErrorPacket {
 struct ArtAssetRequest {
     std::string asset_key;
     std::string role; // boxart, grid, hero, logo, icon, screenshot
+    // Trailing — older peers omit. Client's cached content hash (sha256:…); empty = unknown.
+    std::string cached_sha256;
 };
 
 struct ArtAssetResponse {
@@ -623,6 +629,8 @@ struct ArtAssetResponse {
     bool found = false;
     std::string extension; // e.g. ".png"
     std::vector<std::uint8_t> data;
+    // Trailing — older peers omit. Host file hash; when found and data empty, cache is current.
+    std::string content_sha256;
 };
 
 enum class DiscControlAction : std::uint8_t {
@@ -715,6 +723,20 @@ struct PasswordChange {
     std::string new_password;
 };
 
+/**
+ * Client → host after GameList: announce catalog presence and keep the TCP open.
+ * Host shows Users-tab Status=Connected; Kick closes this socket (not a blacklist).
+ */
+struct LobbyPresence {
+    std::string username;
+    std::string password;
+};
+
+/** Host → client: presence registered; keep the control connection open. */
+struct LobbyPresenceAck {
+    ClientId client_id = 0;
+};
+
 using PacketPayload = std::variant<
     ClientHello,
     HostWelcome,
@@ -748,7 +770,9 @@ using PacketPayload = std::variant<
     EmulatorControl,
     ClientLogBundle,
     PasswordChangeRequired,
-    PasswordChange>;
+    PasswordChange,
+    LobbyPresence,
+    LobbyPresenceAck>;
 
 ClientRole role_for_player_count(std::uint8_t requested_players);
 bool valid_player_count(std::uint8_t requested_players);

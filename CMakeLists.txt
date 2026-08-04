@@ -278,6 +278,7 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/save_profile.cpp
         src/host/save_manager.cpp
         src/host/save_active_sessions.cpp
+        src/host/game_meta_store.cpp
         src/host/user_credentials.cpp
         src/host/standalone_emulator.cpp
         src/host/switch/switch_fs.cpp
@@ -362,6 +363,7 @@ if(ARCHSTREAMER_BUILD_HOST)
             ${ARCHSTREAMER_CADENCE_LINK_TARGET}
         PRIVATE
             archstreamer_controller
+            ${ARCHSTREAMER_SQLITE_TARGET}
     )
     if(NOT WIN32)
         find_package(X11 REQUIRED)
@@ -516,6 +518,7 @@ if(Qt6Widgets_FOUND)
     target_link_libraries(archstreamer_gui
         PRIVATE
             archstreamer_client
+            ${ARCHSTREAMER_CADENCE_LINK_TARGET}
             Qt6::Widgets
     )
     if(ARCHSTREAMER_BUILD_HOST)

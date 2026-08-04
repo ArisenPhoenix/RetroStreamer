@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace archstreamer {
@@ -40,7 +41,9 @@ void apply_capture_and_launch_environment(
 void sync_and_log_post_exit_switch_saves(
     const SaveProfile& profile,
     std::optional<int> slot_index = std::nullopt,
-    const SwitchBackend* backend = nullptr);
+    const SwitchBackend* backend = nullptr,
+    std::string_view content_stem = {},
+    std::string_view title_id = {});
 
 /** Replace an existing RetroArch -c path, or append -c <path> if missing. */
 void rewrite_retroarch_config_arg(

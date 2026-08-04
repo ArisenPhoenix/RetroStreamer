@@ -30,10 +30,13 @@ void poll_active_session_joins(
 /**
  * Accept one control connection (non-blocking). Handles ActiveSessionInfo / art / catalog.
  * On ClientHello, returns the hello + stream for the caller to route (new SP / multi / late join).
+ * On LobbyPresence, returns presence credentials + stream for the catalog Connected hold.
  */
 struct AcceptedControlHello {
     bool have_hello = false;
+    bool have_presence = false;
     ClientHello hello;
+    LobbyPresence presence;
     TcpStream stream;
 };
 

@@ -253,6 +253,63 @@ std::vector<UserRecord> DbRuntimeStore::list_users() {
     }
 }
 
+bool DbRuntimeStore::upsert_controls(const ControlsRecord& controls) {
+    std::lock_guard lock(mutex_);
+    std::string resp;
+    if (!request("upsert_controls", controls_to_json(controls).dump(), resp)) {
+        return false;
+    }
+    try {
+        return nlohmann::json::parse(resp).value("ok", false);
+    } catch (const nlohmann::json::exception&) {
+        return false;
+    }
+}
+
+std::optional<ControlsRecord> DbRuntimeStore::find_controls(
+    const std::string& username,
+    const std::string& kind) {
+    std::lock_guard lock(mutex_);
+    nlohmann::json body{
+        {"username", username},
+        {"kind", kind.empty() ? std::string(kControlsKindButtonMap) : kind},
+    };
+    std::string resp;
+    if (!request("find_controls", body.dump(), resp)) {
+        return std::nullopt;
+    }
+    try {
+        const auto j = nlohmann::json::parse(resp);
+        if (!j.value("ok", false) || !j.contains("controls") || j["controls"].is_null()) {
+            return std::nullopt;
+        }
+        return controls_from_json(j["controls"]);
+    } catch (const nlohmann::json::exception&) {
+        return std::nullopt;
+    }
+}
+
+std::vector<ControlsRecord> DbRuntimeStore::list_controls() {
+    std::lock_guard lock(mutex_);
+    std::string resp;
+    if (!request("list_controls", "{}", resp)) {
+        return {};
+    }
+    try {
+        const auto j = nlohmann::json::parse(resp);
+        if (!j.value("ok", false) || !j.contains("controls")) {
+            return {};
+        }
+        std::vector<ControlsRecord> out;
+        for (const auto& item : j["controls"]) {
+            out.push_back(controls_from_json(item));
+        }
+        return out;
+    } catch (const nlohmann::json::exception&) {
+        return {};
+    }
+}
+
 bool DbRuntimeStore::upsert_session(const SessionRecord& session) {
     std::lock_guard lock(mutex_);
     std::string resp;

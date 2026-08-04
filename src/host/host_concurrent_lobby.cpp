@@ -14,6 +14,7 @@
 #include "host/save_active_sessions.hpp"
 #include "host/session_lobby.hpp"
 #include "host/streaming_audio_sink.hpp"
+#include "host/user_credentials.hpp"
 #include "common/platform/default_platform.hpp"
 #include "common/serialization.hpp"
 
@@ -53,7 +54,7 @@ int run_concurrent_session_host(
         // Concurrent sessions use archstreamer-0..N only — drop the legacy
         // "archstreamer" sink and any higher slot leftovers from older runs.
         streaming_audio.prune_unused(static_cast<int>(max_slots), /*keep_legacy=*/false);
-        // Drop stale Saves-tab "Active" markers from a previous host crash.
+        // Drop stale Users-tab "Active" markers from a previous host crash.
         {
             std::error_code ec;
             const auto active_dir = active_save_sessions_directory(config.save_root);
@@ -77,6 +78,79 @@ int run_concurrent_session_host(
 
         TcpListener listener(*config.control_port);
         std::vector<std::unique_ptr<ActiveSessionSlot>> slots;
+
+        struct LobbyPresenceClient {
+            ClientId client_id = 0;
+            std::string username;
+            TcpStream stream;
+        };
+        std::vector<LobbyPresenceClient> presence_clients;
+
+        const auto publish_lobby_presence = [&](const LobbyPresenceClient& client) {
+            ConnectedClientPresence presence;
+            presence.username = client.username;
+            presence.client_id = client.client_id;
+            presence.slot_index = -1;
+            presence.phase = "catalog";
+            presence.seated = false;
+            publish_connected_client(config.save_root, presence);
+        };
+
+        const auto erase_presence_at = [&](std::size_t index) {
+            if (index >= presence_clients.size()) {
+                return;
+            }
+            clear_connected_client(
+                config.save_root,
+                presence_clients[index].client_id,
+                -1);
+            presence_clients.erase(
+                presence_clients.begin() + static_cast<std::ptrdiff_t>(index));
+        };
+
+        const auto poll_lobby_presence = [&] {
+            for (std::size_t i = 0; i < presence_clients.size();) {
+                auto& client = presence_clients[i];
+                if (auto reason = take_connected_client_disconnect_request(
+                        config.save_root, client.client_id, -1);
+                    reason.has_value()) {
+                    std::cerr
+                        << "Lobby presence " << static_cast<int>(client.client_id)
+                        << " (" << client.username << ") kicked: " << *reason << '\n';
+                    try {
+                        client.stream = TcpStream{};
+                    } catch (const std::exception&) {
+                    }
+                    erase_presence_at(i);
+                    continue;
+                }
+                if (!client.stream.open() || client.stream.peer_closed()) {
+                    std::cout
+                        << "Lobby presence " << static_cast<int>(client.client_id)
+                        << " (" << client.username << ") disconnected.\n";
+                    erase_presence_at(i);
+                    continue;
+                }
+                // Drain keepalives / stray packets so the socket stays healthy.
+                try {
+                    while (client.stream.readable()) {
+                        const auto packet = client.stream.receive_packet();
+                        if (!packet.has_value()) {
+                            erase_presence_at(i);
+                            goto next_presence;
+                        }
+                        // Ignore payload; presence is the open TCP itself.
+                        (void)deserialize_packet(*packet);
+                    }
+                } catch (const std::exception&) {
+                    erase_presence_at(i);
+                    continue;
+                }
+                ++i;
+            next_presence:
+                continue;
+            }
+        };
 
         const auto art_root = config.art_root.empty()
             ? (config.rom_root.parent_path() / "Art")
@@ -166,6 +240,7 @@ int run_concurrent_session_host(
         while (!should_stop()) {
             try {
                 erase_finished();
+                poll_lobby_presence();
 
                 auto accepted = try_accept_control_hello(
                     listener,
@@ -196,9 +271,46 @@ int run_concurrent_session_host(
                     config.save_root,
                     config.allow_new_users);
 
+                if (accepted.has_value() && accepted->have_presence) {
+                    // Replace any prior catalog presence for this username.
+                    for (std::size_t i = 0; i < presence_clients.size();) {
+                        if (presence_clients[i].username == accepted->presence.username) {
+                            erase_presence_at(i);
+                            continue;
+                        }
+                        ++i;
+                    }
+                    LobbyPresenceClient held;
+                    held.client_id = hub.allocate_client_id();
+                    held.username = accepted->presence.username;
+                    held.stream = std::move(accepted->stream);
+                    try {
+                        held.stream.send_packet(serialize_packet(LobbyPresenceAck{held.client_id}));
+                    } catch (const std::exception& error) {
+                        std::cerr
+                            << "Failed to ack lobby presence for " << held.username
+                            << ": " << error.what() << '\n';
+                        continue;
+                    }
+                    std::cout
+                        << "Lobby presence " << static_cast<int>(held.client_id)
+                        << " username=" << held.username << " (catalog Connected)\n";
+                    publish_lobby_presence(held);
+                    presence_clients.push_back(std::move(held));
+                    continue;
+                }
+
                 if (accepted.has_value() && accepted->have_hello) {
                     auto hello = std::move(accepted->hello);
                     auto stream = std::move(accepted->stream);
+                    // Drop catalog presence when the same user starts playing.
+                    for (std::size_t i = 0; i < presence_clients.size();) {
+                        if (presence_clients[i].username == hello.username) {
+                            erase_presence_at(i);
+                            continue;
+                        }
+                        ++i;
+                    }
                     bool handed_off = false;
                     try {
                         // Reconnect to an existing seat.

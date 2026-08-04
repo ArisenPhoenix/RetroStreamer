@@ -9,13 +9,18 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -152,6 +157,9 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
                 state.section == NavSection.Settings)
         ) {
             Scaffold(
+                // System bars via Scaffold; IME via imePadding on content so focused
+                // fields can scroll above the keyboard (edge-to-edge ignores adjustResize).
+                contentWindowInsets = WindowInsets.systemBars.union(WindowInsets.displayCutout),
                 topBar = {
                     TopAppBar(
                         title = { Text(state.section.title) },
@@ -166,6 +174,7 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
                 Box(
                     modifier = Modifier
                         .padding(padding)
+                        .imePadding()
                         .fillMaxSize(),
                 ) {
                     when (state.section) {
@@ -184,6 +193,7 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
             )
         } else {
             Scaffold(
+                contentWindowInsets = WindowInsets.systemBars.union(WindowInsets.displayCutout),
                 topBar = {
                     TopAppBar(
                         title = { Text(state.section.title) },
@@ -198,6 +208,7 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
                 Box(
                     modifier = Modifier
                         .padding(padding)
+                        .imePadding()
                         .fillMaxSize(),
                 ) {
                     when (state.section) {
@@ -556,7 +567,8 @@ private fun RemoteSection(state: UiState, viewModel: ClientViewModel) {
     ) {
         Text("Remote host (SSH)", style = MaterialTheme.typography.titleMedium)
         Text(
-            "Ensure Host probes the base control port, reuses a free lobby, or SSH-starts host_runner. " +
+            "Ensure Host probes the base control port, reuses a free lobby, or SSH-starts " +
+                "host_runner (or an optional start script with ports + GPU). " +
                 "Optional GPU fuzzy-matches remote GPUs (host_runner --list-gpus). " +
                 "Successful ensure writes IP/ports onto the Client tab.",
             style = MaterialTheme.typography.bodyMedium,
@@ -613,7 +625,24 @@ private fun RemoteSection(state: UiState, viewModel: ClientViewModel) {
             modifier = Modifier.fillMaxWidth(),
             placeholder = { Text("./host_runner or …/build/host_runner") },
             supportingText = {
-                Text("If you paste the build directory, /host_runner is appended automatically.")
+                Text(
+                    "Path A, or GPU listing. If you paste the build directory, " +
+                        "/host_runner is appended. With a start script, only used for --list-gpus.",
+                )
+            },
+        )
+        OutlinedTextField(
+            value = state.remoteStartScript,
+            onValueChange = viewModel::onRemoteStartScriptChange,
+            label = { Text("Start script (optional)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("/home/user/bin/archstreamer-start") },
+            supportingText = {
+                Text(
+                    "Path B: blank = start host_runner with full args. Set = run this script " +
+                        "with ports + GPU only (script owns ROM root / host_runner).",
+                )
             },
         )
         OutlinedTextField(

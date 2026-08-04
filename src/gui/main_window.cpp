@@ -23,6 +23,7 @@
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -32,6 +33,7 @@
 #include <QPixmapCache>
 #include <QProcess>
 #include <QPushButton>
+#include <QScreen>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSizePolicy>
@@ -45,6 +47,7 @@
 #include <QDir>
 #include <QCoreApplication>
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <iostream>
@@ -76,6 +79,7 @@ MainWindow::MainWindow() {
     tabs_->addTab(build_remote_tab(), "Remote");
 #ifdef ARCHSTREAMER_HAS_HOST
     tabs_->addTab(build_host_tab(), "Host");
+    tabs_->addTab(build_saves_tab(), "Saves");
 #endif
     tabs_->addTab(build_stream_tab(), "Stream");
     tabs_->addTab(build_game_options_tab(), "Game Options");
@@ -634,9 +638,11 @@ QWidget* MainWindow::build_game_options_tab() {
     game_options_pad_osk_->setCheckable(true);
     game_options_pad_osk_->setToolTip(
         QStringLiteral(
-            "Opens a controller-friendly letter keyboard.\n"
+            "Opens a controller-friendly letter keyboard over the game video.\n"
             "During a Switch session, Done sends the text to the host so it can fill "
             "any open software-keyboard dialog (escape hatch if auto-prompt misses).\n"
+            "Fullscreen video briefly goes windowed so the keyboard stays visible, "
+            "then returns to fullscreen when you close it.\n"
             "Cancel closes without sending; click this button again to close."));
     connect(game_options_pad_osk_, &QPushButton::toggled, this, [this](bool checked) {
         toggle_pad_on_screen_keyboard(checked);
@@ -1257,6 +1263,7 @@ QWidget* MainWindow::build_settings_tab() {
         "Log level Verbose includes extra client diagnostics.",
 #endif
         page));
+    left->addWidget(build_updates_group(page));
     left->addStretch();
 
     settings_log_ = new QPlainTextEdit(page);
@@ -1272,7 +1279,10 @@ void MainWindow::toggle_pad_on_screen_keyboard(bool open) {
         return;
     }
 
+    prepare_video_for_pad_osk();
+
     if (pad_osk_ != nullptr) {
+        place_pad_osk_over_video();
         pad_osk_->raise();
         pad_osk_->activateWindow();
         if (game_options_pad_osk_ != nullptr) {
@@ -1289,8 +1299,7 @@ void MainWindow::toggle_pad_on_screen_keyboard(bool open) {
         ? QStringLiteral("Type text for the host to inject into any open dialog.")
         : QStringLiteral("Test the controller letter keyboard.");
     options.max_length = 12;
-    pad_osk_ = new PadOnScreenKeyboard(std::move(options), this);
-    pad_osk_->setAttribute(Qt::WA_DeleteOnClose);
+    pad_osk_ = make_pad_osk(std::move(options));
     connect(pad_osk_, &QDialog::finished, this, [this](int result) {
         const QString text = pad_osk_ != nullptr ? pad_osk_->text() : QString{};
         pad_osk_ = nullptr;
@@ -1308,9 +1317,10 @@ void MainWindow::toggle_pad_on_screen_keyboard(bool open) {
             append_log(
                 client_log_,
                 QStringLiteral("Sent manual pad keyboard text to host."));
-            restore_video_window_focus();
         }
+        restore_video_window_focus();
     });
+    place_pad_osk_over_video();
     pad_osk_->show();
     pad_osk_->raise();
     pad_osk_->activateWindow();
@@ -1321,9 +1331,12 @@ void MainWindow::toggle_pad_on_screen_keyboard(bool open) {
 }
 
 void MainWindow::open_soft_keyboard_from_host(const SoftKeyboardRequest& request) {
+    prepare_video_for_pad_osk();
+
     // A repeat of the id we are already showing must not rebuild the dialog — that
     // would discard what the player has typed so far.
     if (pad_osk_ != nullptr && soft_keyboard_request_id_ == request.request_id) {
+        place_pad_osk_over_video();
         pad_osk_->raise();
         pad_osk_->activateWindow();
         return;
@@ -1345,8 +1358,7 @@ void MainWindow::open_soft_keyboard_from_host(const SoftKeyboardRequest& request
     options.prompt = prompt;
     options.initial_text = QString::fromStdString(request.initial_text);
     options.max_length = request.max_length == 0 ? 12 : static_cast<int>(request.max_length);
-    pad_osk_ = new PadOnScreenKeyboard(std::move(options), this);
-    pad_osk_->setAttribute(Qt::WA_DeleteOnClose);
+    pad_osk_ = make_pad_osk(std::move(options));
     connect(pad_osk_, &QDialog::finished, this, [this](int result) {
         const QString text = pad_osk_ != nullptr ? pad_osk_->text() : QString{};
         const auto request_id = soft_keyboard_request_id_;
@@ -1368,9 +1380,9 @@ void MainWindow::open_soft_keyboard_from_host(const SoftKeyboardRequest& request
                     ? QStringLiteral("Sent pad keyboard text to host.")
                     : QStringLiteral("Cancelled pad keyboard."));
         }
-        // This dialog appeared over the game unprompted, so hand the screen back.
         restore_video_window_focus();
     });
+    place_pad_osk_over_video();
     pad_osk_->show();
     pad_osk_->raise();
     pad_osk_->activateWindow();
@@ -1381,7 +1393,77 @@ void MainWindow::open_soft_keyboard_from_host(const SoftKeyboardRequest& request
     append_log(client_log_, QStringLiteral("Pad keyboard opened: %1").arg(prompt));
 }
 
+PadOnScreenKeyboard* MainWindow::make_pad_osk(PadOnScreenKeyboard::Options options) {
+    // Top-level (no MainWindow parent) so it appears over the video surface, not
+    // buried with the settings UI on another monitor.
+    auto* osk = new PadOnScreenKeyboard(std::move(options), /*parent=*/nullptr);
+    osk->setAttribute(Qt::WA_DeleteOnClose);
+    osk->setWindowFlags(Qt::Dialog | Qt::WindowStaysOnTopHint);
+    return osk;
+}
+
+void MainWindow::place_pad_osk_over_video() {
+    if (pad_osk_ == nullptr) {
+        return;
+    }
+
+    QWidget* video = nullptr;
+    if (client_video_controller_ != nullptr) {
+        video = client_video_controller_->surface();
+    }
+#ifdef ARCHSTREAMER_HAS_HOST
+    if (video == nullptr && host_local_video_controller_ != nullptr) {
+        video = host_local_video_controller_->surface();
+    }
+#endif
+
+    QRect anchor;
+    if (video != nullptr && video->isVisible()) {
+        anchor = QRect(video->mapToGlobal(QPoint(0, 0)), video->size());
+    } else {
+        anchor = frameGeometry();
+    }
+
+    pad_osk_->adjustSize();
+    QRect geo = pad_osk_->frameGeometry();
+    geo.moveCenter(anchor.center());
+
+    QScreen* screen = QGuiApplication::screenAt(anchor.center());
+    if (screen == nullptr) {
+        screen = QGuiApplication::primaryScreen();
+    }
+    if (screen != nullptr) {
+        const QRect avail = screen->availableGeometry();
+        if (!avail.intersects(geo)) {
+            geo.moveCenter(avail.center());
+        } else {
+            geo.moveLeft(std::clamp(geo.left(), avail.left(), avail.right() - geo.width() + 1));
+            geo.moveTop(std::clamp(geo.top(), avail.top(), avail.bottom() - geo.height() + 1));
+        }
+    }
+    pad_osk_->move(geo.topLeft());
+}
+
+void MainWindow::prepare_video_for_pad_osk() {
+    if (client_video_controller_) {
+        client_video_controller_->suspendFullScreenForOverlay();
+    }
+#ifdef ARCHSTREAMER_HAS_HOST
+    if (host_local_video_controller_) {
+        host_local_video_controller_->suspendFullScreenForOverlay();
+    }
+#endif
+}
+
 void MainWindow::restore_video_window_focus() {
+    if (client_video_controller_) {
+        client_video_controller_->resumeFullScreenAfterOverlay();
+    }
+#ifdef ARCHSTREAMER_HAS_HOST
+    if (host_local_video_controller_) {
+        host_local_video_controller_->resumeFullScreenAfterOverlay();
+    }
+#endif
     // Deferred: Qt is still tearing the dialog down and will hand focus back to this
     // window, which would land on top of whatever we raise right now.
     QTimer::singleShot(150, this, [this] {
@@ -1408,6 +1490,7 @@ void MainWindow::close_pad_on_screen_keyboard() {
         const QSignalBlocker blocker(game_options_pad_osk_);
         game_options_pad_osk_->setChecked(false);
     }
+    restore_video_window_focus();
 }
 
 } // namespace archstreamer::gui

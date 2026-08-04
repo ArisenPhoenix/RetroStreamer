@@ -1,8 +1,12 @@
 #pragma once
 
+#include <cctype>
 #include <cstdint>
 #include <optional>
+#include <sstream>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace archstreamer {
 
@@ -151,7 +155,8 @@ inline std::string remote_host_start_shell(
     const std::string& directory,
     const std::string& binary,
     const std::string& rom_root,
-    const RemoteHostPortBlock& ports) {
+    const RemoteHostPortBlock& ports,
+    const std::string& encode_gpu = {}) {
     const auto resolved = remote_host_resolve_binary(directory, binary);
     const auto qbin = remote_shell_single_quote(resolved);
     const auto qrom = remote_shell_single_quote(rom_root);
@@ -164,6 +169,10 @@ inline std::string remote_host_start_shell(
     }());
     const auto qlog = remote_shell_single_quote(remote_host_log_path(directory, ports.control_port));
     const auto qpid = remote_shell_single_quote(remote_host_pid_path(directory, ports.control_port));
+    std::string gpu_args;
+    if (!encode_gpu.empty()) {
+        gpu_args = " --gpu " + remote_shell_single_quote(encode_gpu);
+    }
     return std::string("set -e; ")
         + "mkdir -p "
         + qdir
@@ -189,6 +198,7 @@ inline std::string remote_host_start_shell(
         + " --virtual-display :"
         + std::to_string(ports.virtual_display)
         + " --clients 2 --allow-new-users"
+        + gpu_args
         + " > "
         + qlog
         + " 2>&1 & "
@@ -251,6 +261,135 @@ inline bool remote_host_lobby_full(const std::optional<std::uint8_t>& active_slo
         return false;
     }
     return *active_slots >= *max_slots;
+}
+
+/**
+ * Fuzzy GPU preference match for Remote Ensure Host.
+ * Compares the user-typed preference (e.g. "3060", "nvidia 3060", "nvidia:1") against
+ * the remote process --gpu value. Empty want = any. Empty reported with non-empty want
+ * = no match (instance was started without a GPU pin / unknown).
+ */
+inline bool remote_host_gpu_preference_matches(
+    const std::string& want,
+    const std::string& reported) {
+    if (want.empty()) {
+        return true;
+    }
+    auto normalize = [](std::string s) {
+        std::string out;
+        out.reserve(s.size());
+        for (char c : s) {
+            if (c == ' ' || c == '\t' || c == '_' || c == '-' || c == ':') {
+                continue;
+            }
+            out.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        }
+        return out;
+    };
+    const auto needle = normalize(want);
+    const auto hay = normalize(reported);
+    if (needle.empty()) {
+        return true;
+    }
+    if (hay.empty() || hay == "auto") {
+        return false;
+    }
+    return hay == needle || hay.find(needle) != std::string::npos
+        || needle.find(hay) != std::string::npos;
+}
+
+/**
+ * Fuzzy match a remoting preference against a GPU option list (same rules as
+ * resolve_render_gpu / the Settings GPU combo). Empty want → nullopt (caller uses default).
+ */
+inline std::optional<std::pair<std::string, std::string>> remote_host_match_gpu_option(
+    const std::vector<std::pair<std::string, std::string>>& options, // id, name
+    const std::string& want) {
+    if (want.empty() || want == "auto") {
+        return std::nullopt;
+    }
+    auto normalize = [](std::string value) {
+        for (char& c : value) {
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (c == ':' || c == '_' || c == '-' || c == '/') {
+                c = ' ';
+            }
+        }
+        return value;
+    };
+    auto matches = [&](const std::string& id, const std::string& name) {
+        if (id == want) {
+            return true;
+        }
+        const auto needle = normalize(want);
+        const auto hay = normalize(id + " " + name);
+        if (hay.find(needle) != std::string::npos) {
+            return true;
+        }
+        std::string token;
+        std::istringstream tokens(needle);
+        bool any = false;
+        while (tokens >> token) {
+            if (token.empty()) {
+                continue;
+            }
+            any = true;
+            if (hay.find(token) == std::string::npos) {
+                return false;
+            }
+        }
+        return any;
+    };
+    for (const auto& [id, name] : options) {
+        if (id == want) {
+            return std::pair{id, name};
+        }
+    }
+    for (const auto& [id, name] : options) {
+        if (matches(id, name)) {
+            return std::pair{id, name};
+        }
+    }
+    return std::nullopt;
+}
+
+/**
+ * Print encode/render GPUs via the remote host_runner binary (same list as the GUI).
+ * Output lines: id<TAB>name…
+ */
+inline std::string remote_host_list_gpus_shell(
+    const std::string& directory,
+    const std::string& binary) {
+    const auto resolved = remote_host_resolve_binary(directory, binary);
+    const auto qbin = remote_shell_single_quote(resolved);
+    return std::string("set -e; ")
+        + "if [ ! -x "
+        + qbin
+        + " ]; then "
+        + "echo \"host_runner not found or not executable: \" "
+        + qbin
+        + " >&2; exit 127; fi; "
+        + qbin
+        + " --list-gpus";
+}
+
+/**
+ * Print the --gpu value from the host_runner argv for this control port (or empty).
+ */
+inline std::string remote_host_encode_gpu_query_shell(std::uint16_t control_port) {
+    const auto port = std::to_string(control_port);
+    return std::string(
+               "found=\"\"; "
+               "for f in /proc/[0-9]*/cmdline; do "
+               "cmd=$(tr '\\0' ' ' < \"$f\" 2>/dev/null) || continue; "
+               "case \"$cmd\" in *host_runner*) ;; *) continue ;; esac; "
+               "echo \"$cmd\" | grep -Eq -- '--control-port[= ]*")
+        + port
+        + "([[:space:]]|$)' || continue; "
+               "found=$(echo \"$cmd\" | sed -n 's/.*--gpu[= ]\\([^[:space:]]*\\).*/\\1/p'); "
+               "break; "
+               "done; "
+               "printf '%s\\n' \"$found\"";
 }
 
 } // namespace archstreamer

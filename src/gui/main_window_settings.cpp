@@ -403,8 +403,14 @@ void MainWindow::load_persisted_settings() {
         remote_base_input_port_->setValue(
             qBound(settings.value("remote/baseInputPort", DefaultInputPort).toInt(), 1, 65535));
     }
+    if (remote_gpu_ != nullptr) {
+        remote_gpu_->setText(settings.value("remote/gpu").toString());
+    }
     remote_tracked_control_port_ =
         qBound(settings.value("remote/trackedControlPort", 0).toInt(), 0, 65535);
+    if (settings_update_repo_ != nullptr) {
+        settings_update_repo_->setText(settings.value("update/repoRoot").toString());
+    }
     if (client_role_ != nullptr) {
         const auto role = settings.value("client/role", "Player").toString();
         const auto index = client_role_->findText(role);
@@ -631,7 +637,13 @@ void MainWindow::save_persisted_settings() {
     if (remote_base_input_port_ != nullptr) {
         settings.setValue("remote/baseInputPort", remote_base_input_port_->value());
     }
+    if (remote_gpu_ != nullptr) {
+        settings.setValue("remote/gpu", remote_gpu_->text().trimmed());
+    }
     settings.setValue("remote/trackedControlPort", remote_tracked_control_port_);
+    if (settings_update_repo_ != nullptr) {
+        settings.setValue("update/repoRoot", settings_update_repo_->text().trimmed());
+    }
     if (client_role_ != nullptr) {
         settings.setValue("client/role", client_role_->currentText());
     }

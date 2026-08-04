@@ -5,6 +5,8 @@
 #include "common/participant_role.hpp"
 #include "common/serialization.hpp"
 #include "client/controller_backend.hpp"
+#include "host/cadence_session_events.hpp"
+#include "host/cadence_session_tracker.hpp"
 #include "host/capture_platform.hpp"
 #include "host/game_catalog.hpp"
 #include "host/gpu_select.hpp"
@@ -16,12 +18,14 @@
 #include "host/retroarch_config_writer.hpp"
 #include "host/retroarch_netcmd.hpp"
 #include "host/retroarch_resolve.hpp"
+#include "host/save_active_sessions.hpp"
 #include "host/session_lobby.hpp"
 #include "host/session_launch_assemble.hpp"
 #include "host/session_run_helpers.hpp"
 #include "host/session_audio_channel.hpp"
 #include "host/standalone_emulator.hpp"
 #include "host/switch/switch_backend.hpp"
+#include "host/switch/ryujinx_controls.hpp"
 #include "host/nds/melonds_backend.hpp"
 #include "host/virtual_joypad_resolve.hpp"
 #include "host/pad_plan.hpp"
@@ -323,6 +327,24 @@ void ActiveSessionSlot::thread_main() {
             send_error_to_session_clients(config_.plan, error.what());
         } catch (const std::exception&) {
         }
+        // Always kill the emulator tree on failure. Media-only shutdown left
+        // orphan RetroArch/Ryujinx processes holding the next session's pad.
+        try {
+            if (input_router_ != nullptr) {
+                unregister_input_clients();
+                input_router_->set_touch_handler({});
+                input_router_.reset();
+            }
+            unplug_session_keyboard(keyboard_.get());
+            keyboard_.reset();
+            stop_session_runtime(session_runtime_, /*reset=*/true);
+            gamepads_.reset();
+            audio_channel_.reset();
+        } catch (const std::exception& cleanup_error) {
+            std::cerr
+                << "session slot " << config_.slot_index
+                << ": cleanup after error failed: " << cleanup_error.what() << '\n';
+        }
         shutdown_media_and_clients("session error");
     }
 
@@ -366,6 +388,16 @@ void ActiveSessionSlot::unregister_input_clients() {
 }
 
 void ActiveSessionSlot::shutdown_media_and_clients(const std::string& end_reason) {
+    if (cadence_session_live_) {
+        record_session_ended(
+            config_.slot_index,
+            config_.plan.save_username,
+            config_.plan.selected_game_id,
+            end_reason,
+            cadence_tracker_.session_id());
+        cadence_session_live_ = false;
+    }
+    cadence_tracker_.end(end_reason);
     stop_session_media(media_server_);
     send_session_ended_to_clients(config_.plan, end_reason);
 }
@@ -463,6 +495,12 @@ void ActiveSessionSlot::drain_pending_joins() {
                     << "session slot " << config_.slot_index << ": player "
                     << static_cast<int>(client_id)
                     << " reconnected username=" << pending.hello.username << ".\n";
+                record_client_joined(
+                    config_.slot_index,
+                    pending.hello.username,
+                    plan.selected_game_id,
+                    "reconnect",
+                    cadence_tracker_.session_id());
             } else {
                 plan.clients.push_back(SessionClientConnection{
                     client_id,
@@ -473,6 +511,12 @@ void ActiveSessionSlot::drain_pending_joins() {
                     << "session slot " << config_.slot_index << ": late viewer "
                     << static_cast<int>(client_id)
                     << " joined username=" << pending.hello.username << ".\n";
+                record_client_joined(
+                    config_.slot_index,
+                    pending.hello.username,
+                    plan.selected_game_id,
+                    pending.hello.requested_players > 0 ? "player" : "viewer",
+                    cadence_tracker_.session_id());
             }
 
             if (config_.input_demux != nullptr && input_router_ != nullptr) {
@@ -550,6 +594,34 @@ void ActiveSessionSlot::run_session() {
         throw std::runtime_error(
             "save username must be 1-64 characters and contain only letters, numbers, underscores, or hyphens");
     }
+    if (plan.save_username.empty()) {
+        plan.save_username = launch_plan.save_username;
+    }
+
+    {
+        const std::uint16_t product_id_base =
+            static_cast<std::uint16_t>(0xa517 + slot * 8);
+        const std::string pulse_sink = audio_channel_
+            ? StreamingAudioSink::slot_sink_name(slot)
+            : std::string{};
+        const std::string pulse_app = audio_channel_
+            ? StreamingAudioSink::slot_application_id(slot)
+            : std::string{};
+        cadence_tracker_.begin(
+            slot,
+            plan.save_username,
+            plan.selected_game_id,
+            plan.system_key,
+            session_mode_name(plan.session_mode),
+            config.virtual_display,
+            config.video_port,
+            config.audio_port,
+            plan.retroarch_netcmd_port,
+            pulse_sink,
+            pulse_app,
+            product_id_base);
+    }
+
     if (launch_plan.virtual_identities.size() < launch_plan.players) {
         launch_plan.virtual_identities.resize(launch_plan.players);
     }
@@ -559,12 +631,39 @@ void ActiveSessionSlot::run_session() {
     auto launch_config = catalog.launch_config_for(launch_plan.game_id);
     const auto resolved_retroarch = resolve_retroarch();
     system_key_.clear();
+    std::string active_display_name;
     if (const auto hosted = catalog.find_hosted(launch_plan.game_id); hosted.has_value()) {
         system_key_ = hosted->get().info.system_key;
+        active_display_name = hosted->get().info.display_name;
+        if (active_display_name.empty()) {
+            active_display_name = hosted->get().content_path.stem().string();
+        }
     } else if (const auto info = catalog.find(launch_plan.game_id); info.has_value()) {
         system_key_ = info->system_key;
+        active_display_name = info->display_name;
     }
     plan.system_key = system_key_;
+
+    // Advertise this live save profile to the host Saves browser (cleared on exit).
+    struct ActiveSaveSessionGuard {
+        std::filesystem::path root;
+        int slot = -1;
+        ~ActiveSaveSessionGuard() {
+            if (slot >= 0 && !root.empty()) {
+                clear_active_save_session(root, slot);
+            }
+        }
+    } active_save_guard{config.save_root, slot};
+    {
+        ActiveSaveSession active;
+        active.username = launch_plan.save_username;
+        active.game_id = launch_plan.game_id;
+        active.system_key = system_key_;
+        active.display_name = active_display_name;
+        active.content_path = launch_config.content_path.string();
+        active.slot_index = slot;
+        publish_active_save_session(config.save_root, active);
+    }
 
     if (!launch_config.standalone && system_key_ == "ps2") {
         std::cout
@@ -759,17 +858,20 @@ void ActiveSessionSlot::run_session() {
     std::vector<std::size_t> resolved_indices;
     std::vector<ArchStreamerSdlPad> resolved_pads;
     const bool use_udev = config.retroarch_joypad_driver == "udev";
-    const auto shared_pad_plan = resolve_shared_pad_plan(
+    // Concurrent slots must not see each other's ArchStreamer uinput pads. Shared IGNORE
+    // only blacks out DualShock/Steam; sibling virtual pads stay visible to udev/SDL and
+    // RetroArch autodetect can rebind P1 to the other kid's pad.
+    const auto slot_pad_plan = resolve_retroarch_slot_pad_plan(
         launch_plan.players,
         config.ignore_controller.value_or(""),
         config.verbose,
         product_id_base,
         use_udev);
     if (use_udev) {
-        resolved_indices = shared_pad_plan.udev_indices;
-        resolved_pads = shared_pad_plan.pads;
+        resolved_indices = slot_pad_plan.udev_indices;
+        resolved_pads = slot_pad_plan.pads;
     } else {
-        resolved_pads = shared_pad_plan.pads;
+        resolved_pads = slot_pad_plan.pads;
         resolved_indices.reserve(resolved_pads.size());
         for (const auto& pad : resolved_pads) {
             resolved_indices.push_back(pad.sdl_index);
@@ -918,8 +1020,8 @@ void ActiveSessionSlot::run_session() {
                 resolve_display_layout_preference(plan.host_hello, hellos);
         }
         apply_retroarch_override(launch_config, override_params);
-        launch_env_request.pad_plan = shared_pad_plan;
-        log_pad_plan(shared_pad_plan, slot);
+        launch_env_request.pad_plan = slot_pad_plan;
+        log_pad_plan(slot_pad_plan, slot);
     }
 
     apply_capture_and_launch_environment(
@@ -1014,7 +1116,9 @@ void ActiveSessionSlot::run_session() {
             config_.hub,
             capture_w,
             capture_h,
-            config.save_root);
+            config.save_root,
+            slot,
+            cadence_tracker_.session_id());
     }
 
     auto local_bridge = std::optional<LocalControllerBridge>{};
@@ -1045,6 +1149,43 @@ void ActiveSessionSlot::run_session() {
         slot_prefix,
         audio_channel_.get());
 
+    {
+        std::ostringstream detail;
+        detail << session_mode_name(plan.session_mode);
+        if (!plan.system_key.empty()) {
+            detail << " system=" << plan.system_key;
+        }
+        record_session_started(
+            slot,
+            plan.save_username,
+            plan.selected_game_id,
+            detail.str(),
+            cadence_tracker_.session_id());
+        cadence_session_live_ = true;
+        if (const auto pid = session_runtime_->emulator().process_id(); pid.has_value()) {
+            cadence_tracker_.claim_emulator_pid(*pid);
+        }
+        for (const auto& client : plan.clients) {
+            if (client.hello.username.empty()) {
+                continue;
+            }
+            record_client_joined(
+                slot,
+                client.hello.username,
+                plan.selected_game_id,
+                client.hello.requested_players > 0 ? "player" : "viewer",
+                cadence_tracker_.session_id());
+        }
+        if (plan.host_hello.has_value() && !plan.host_hello->username.empty()) {
+            record_client_joined(
+                slot,
+                plan.host_hello->username,
+                plan.selected_game_id,
+                "host",
+                cadence_tracker_.session_id());
+        }
+    }
+
     if (arm_soft_keyboard && plan.soft_keyboard) {
         std::string display = capture_display;
         if (keyboard_ != nullptr && keyboard_->plugged()) {
@@ -1072,6 +1213,24 @@ void ActiveSessionSlot::run_session() {
         config.audio,
         audio_channel_.get());
 
+    // Ryujinx may rewrite Config.json to WindowKeyboard if the pad was missing
+    // or grabbed at first poll; re-assert GamepadSDL2 a few times early on.
+    std::optional<std::filesystem::path> ryujinx_control_root;
+    std::vector<ArchStreamerSdlPad> ryujinx_control_pads;
+    std::string ryujinx_control_filter;
+    int ryujinx_reassert_remaining = 0;
+    auto ryujinx_next_reassert = std::chrono::steady_clock::now();
+    if (launch_env_request.ryujinx_profile.has_value() && !resolved_pads.empty()) {
+        ryujinx_control_root = launch_env_request.ryujinx_profile->data_root;
+        ryujinx_control_pads = resolved_pads;
+        if (launch_env_request.pad_plan.has_value()) {
+            ryujinx_control_filter = launch_env_request.pad_plan->exclusive_filter;
+        }
+        ryujinx_reassert_remaining = 4;
+        ryujinx_next_reassert =
+            std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    }
+
     while (!should_stop() && session_runtime_->emulator_running()) {
         drain_pending_joins();
         if (const auto reason = poll_session_monitor_stop(); reason.has_value()) {
@@ -1089,6 +1248,18 @@ void ActiveSessionSlot::run_session() {
         if (const auto reason = handle_gba_netplay_relaunch(relaunch_ctx); reason.has_value()) {
             session_end_reason = reason;
             break;
+        }
+
+        if (ryujinx_reassert_remaining > 0 && ryujinx_control_root.has_value()) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= ryujinx_next_reassert) {
+                (void)RyujinxControls::reassert_archstreamer_controls_if_needed(
+                    *ryujinx_control_root,
+                    ryujinx_control_pads,
+                    ryujinx_control_filter);
+                --ryujinx_reassert_remaining;
+                ryujinx_next_reassert = now + std::chrono::seconds(5);
+            }
         }
 
         // Poll melonDS screen AABBs so client touch hit-target follows swap/emphasis.

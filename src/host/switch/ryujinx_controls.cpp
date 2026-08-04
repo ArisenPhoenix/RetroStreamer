@@ -157,4 +157,41 @@ void RyujinxControls::configure_archstreamer_controls(
               << '\n';
 }
 
+bool RyujinxControls::reassert_archstreamer_controls_if_needed(
+    const std::filesystem::path& data_root,
+    const std::vector<ArchStreamerSdlPad>& pads,
+    const std::string& sdl_device_filter) {
+    if (pads.empty() || data_root.empty()) {
+        return false;
+    }
+    const auto config_path = data_root / "Config.json";
+    if (!std::filesystem::is_regular_file(config_path)) {
+        return false;
+    }
+    try {
+        std::ifstream in(config_path);
+        const auto cfg = nlohmann::json::parse(in, nullptr, /*allow_exceptions=*/true);
+        if (cfg.is_object() && cfg.contains("input_config") && cfg["input_config"].is_array()) {
+            for (const auto& entry : cfg["input_config"]) {
+                if (!entry.is_object()) {
+                    continue;
+                }
+                if (entry.value("backend", std::string{}) == "GamepadSDL2") {
+                    return false;
+                }
+            }
+        }
+    } catch (const nlohmann::json::exception&) {
+        // Fall through and rewrite.
+    }
+
+    RyujinxUserProfile profile;
+    profile.data_root = data_root;
+    configure_archstreamer_controls(profile, pads, sdl_device_filter);
+    std::cerr
+        << "Ryujinx Controls: re-applied GamepadSDL2 after keyboard/empty fallback ("
+        << config_path.string() << ")\n";
+    return true;
+}
+
 } // namespace archstreamer

@@ -30,10 +30,10 @@ std::filesystem::path credentials_path(const std::filesystem::path& user_directo
 void ensure_default_credentials(const std::filesystem::path& user_directory);
 
 /**
- * If the user directory does not exist: create save profile + credentials from
+ * If the user is unknown: create save profile + cadence credentials from
  * the supplied password (must_change=false) when allow_new_users is true;
  * otherwise RejectedNewUser.
- * If it exists: ensure credentials, then verify the password.
+ * If known: verify against the cadence user store (credentials.json is a mirror).
  */
 UserAuthResult verify_or_create_on_hello(
     const std::filesystem::path& save_root,

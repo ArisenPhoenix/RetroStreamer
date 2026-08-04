@@ -25,7 +25,9 @@ public:
         HostSessionHub* host_hub = nullptr,
         std::uint16_t capture_width = 1920,
         std::uint16_t capture_height = 1080,
-        std::filesystem::path save_root = {});
+        std::filesystem::path save_root = {},
+        int slot_index = -1,
+        std::string session_id = {});
 
     std::optional<std::string> poll();
 
@@ -50,6 +52,8 @@ private:
     std::uint16_t capture_width_ = 1920;
     std::uint16_t capture_height_ = 1080;
     std::filesystem::path save_root_;
+    int slot_index_ = -1;
+    std::string session_id_;
 };
 
 } // namespace archstreamer

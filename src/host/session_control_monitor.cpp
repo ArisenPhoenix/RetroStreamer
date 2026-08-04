@@ -3,6 +3,7 @@
 #include "common/client_logs.hpp"
 #include "common/serialization.hpp"
 #include "host/active_session_slot.hpp"
+#include "host/cadence_session_events.hpp"
 #include "host/host_session_hub.hpp"
 #include "host/retroarch_config_writer.hpp"
 #include "host/retroarch_netcmd.hpp"
@@ -94,7 +95,9 @@ SessionControlMonitor::SessionControlMonitor(
     HostSessionHub* host_hub,
     std::uint16_t capture_width,
     std::uint16_t capture_height,
-    std::filesystem::path save_root)
+    std::filesystem::path save_root,
+    int slot_index,
+    std::string session_id)
     : plan_(plan),
       input_router_(input_router),
       media_server_(media_server),
@@ -104,7 +107,9 @@ SessionControlMonitor::SessionControlMonitor(
       host_hub_(host_hub),
       capture_width_(capture_width == 0 ? 1920 : capture_width),
       capture_height_(capture_height == 0 ? 1080 : capture_height),
-      save_root_(std::move(save_root)) {
+      save_root_(std::move(save_root)),
+      slot_index_(slot_index),
+      session_id_(std::move(session_id)) {
     const auto now = started_at_;
     for (auto& client : plan_.clients) {
         client.last_seen = now;
@@ -745,9 +750,10 @@ bool SessionControlMonitor::remove_viewer(std::size_t index, std::string_view re
         return false;
     }
 
+    const auto username = plan_.clients[index].hello.username;
     std::cerr
         << "Removing viewer " << static_cast<int>(plan_.clients[index].client_id)
-        << " (" << plan_.clients[index].hello.username << "): "
+        << " (" << username << "): "
         << reason << '\n';
     plan_.link_coordinator.clear_client(plan_.clients[index].client_id);
     if (host_hub_ != nullptr) {
@@ -759,6 +765,12 @@ bool SessionControlMonitor::remove_viewer(std::size_t index, std::string_view re
     }
     media_server_.remove_client(plan_.clients[index].client_id);
     plan_.clients.erase(plan_.clients.begin() + static_cast<std::ptrdiff_t>(index));
+    record_client_left(
+        slot_index_,
+        username,
+        plan_.selected_game_id,
+        std::string(reason),
+        session_id_);
     return true;
 }
 
@@ -790,6 +802,12 @@ void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& cl
     } else {
         std::cerr << "; reserving seats for " << grace.count() << "s\n";
     }
+    record_client_left(
+        slot_index_,
+        client.hello.username,
+        plan_.selected_game_id,
+        std::string(reason),
+        session_id_);
 }
 
 std::string SessionControlMonitor::client_label(const SessionClientConnection& client) {

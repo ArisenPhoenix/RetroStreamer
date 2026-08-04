@@ -53,6 +53,14 @@ public:
     std::uint64_t embedXid() const;
     void raiseVideo();
 
+    /**
+     * Leave exclusive fullscreen so a Qt overlay (pad OSK) can sit in front.
+     * No-op unless mode is FullScreen and the surface is currently fullscreen.
+     * Pair with resumeFullScreenAfterOverlay() when the overlay closes.
+     */
+    void suspendFullScreenForOverlay();
+    void resumeFullScreenAfterOverlay();
+
     ArchStreamerVideoSurface* surface() const { return surface_.get(); }
 
 signals:
@@ -70,6 +78,8 @@ private:
     std::shared_ptr<archstreamer::DsTouchBridge> ds_touch_;
     std::unique_ptr<ArchStreamerVideoSurface> surface_;
     QTimer* refresh_timer_ = nullptr;
+    /** True while an overlay (e.g. pad OSK) has forced us out of showFullScreen. */
+    bool fullscreen_suspended_for_overlay_ = false;
 };
 
 } // namespace archstreamer::gui

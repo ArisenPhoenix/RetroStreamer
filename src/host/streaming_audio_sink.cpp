@@ -228,8 +228,19 @@ std::string ensure_named_null_sink(const char* sink_name, const char* descriptio
         return false;
     }
     if (const auto app_pid = parse_prop_int(block, "application.process.id");
-        app_pid.has_value() && tree.contains(*app_pid)) {
-        return true;
+        app_pid.has_value() && *app_pid > 0) {
+        if (tree.contains(*app_pid)) {
+            return true;
+        }
+        // AppImage / firejail: Pulse may report the nested Ryujinx pid while we
+        // tracked gamescope — same process group still belongs to this slot.
+        if (const int app_pgid = ::getpgid(*app_pid); app_pgid > 0) {
+            for (const int pid : tree) {
+                if (::getpgid(pid) == app_pgid) {
+                    return true;
+                }
+            }
+        }
     }
     if (const auto client_id = parse_prop_int(block, "client.id"); client_id.has_value()) {
         if (const auto it = client_sec_pids.find(*client_id); it != client_sec_pids.end()) {
@@ -673,8 +684,37 @@ ProcessEnvironment SessionAudioChannel::launch_env() const {
 }
 
 int SessionAudioChannel::park() {
-    const auto matches = [this](const std::string& block) {
-        return block_has_application_id(block, application_id_);
+    // Recreate the null sink if prune/teardown of another host wiped it while
+    // this session is still live — otherwise Pulse falls back to HDMI speakers.
+    try {
+        const auto description = "ArchStreamer slot " + std::to_string(slot_index_);
+        ensure_named_null_sink(sink_name_.c_str(), description.c_str());
+        StreamingAudioSink{}.restore_default_sink();
+        sink_owned_ = true;
+    } catch (const std::exception& error) {
+        std::cerr
+            << "Warning: could not ensure null sink '" << sink_name_
+            << "' for slot " << slot_index_ << ": " << error.what() << '\n';
+        return 0;
+    }
+
+    const int root = emulator_pid_ > 0
+        ? emulator_pid_
+        : tracked_root_for_slot(slot_index_);
+    if (emulator_pid_ > 0) {
+        StreamingAudioSink{}.track_emulator_process(emulator_pid_, slot_index_);
+    }
+    const auto tree = descendant_pids(root);
+    const auto client_secs =
+        root > 0 ? pulse_client_sec_pids() : std::unordered_map<int, int>{};
+
+    const auto matches = [&](const std::string& block) {
+        if (block_has_application_id(block, application_id_)) {
+            return true;
+        }
+        // Ryujinx/Yuzu AppImages often ignore PULSE_PROP application.id — match
+        // by the gamescope/emulator process tree instead (same as park_game_audio_for_slot).
+        return block_belongs_to_process_tree(block, tree, client_secs);
     };
 
     int matched = 0;
@@ -709,9 +749,13 @@ int SessionAudioChannel::park() {
         if (warn_count < 3) {
             ++warn_count;
             std::cerr
-                << "Warning: no Pulse sink-input with application.id=\""
-                << application_id_ << "\" for slot " << slot_index_
-                << " — remotes may hear silence while speakers get the game\n";
+                << "Warning: no Pulse sink-input for slot " << slot_index_
+                << " (id=\"" << application_id_ << "\"";
+            if (root > 0) {
+                std::cerr << ", owner pid " << root << ", tree " << tree.size();
+            }
+            std::cerr
+                << ") — remotes may hear silence while speakers get the game\n";
         }
     }
     return moved;
@@ -719,9 +763,15 @@ int SessionAudioChannel::park() {
 
 void SessionAudioChannel::set_emulator_pid(int process_id) {
     emulator_pid_ = process_id > 0 ? process_id : 0;
+    if (emulator_pid_ > 0) {
+        StreamingAudioSink{}.track_emulator_process(emulator_pid_, slot_index_);
+    } else {
+        StreamingAudioSink{}.untrack_emulator_process(slot_index_);
+    }
 }
 
 void SessionAudioChannel::clear_emulator_pid() {
+    StreamingAudioSink{}.untrack_emulator_process(slot_index_);
     emulator_pid_ = 0;
 }
 

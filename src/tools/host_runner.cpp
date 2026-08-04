@@ -2,6 +2,7 @@
 #include "tools/host_runner_app.hpp"
 
 #include "common/cli_common.hpp"
+#include "host/gpu_select.hpp"
 #include "host/host_app.hpp"
 
 #include <csignal>
@@ -22,6 +23,17 @@ int archstreamer::run_host_runner(int argc, char** argv) {
     try {
         const HostRunnerCli cli(std::cout, std::cerr);
         auto config = cli.parse(argc, argv);
+
+        if (config.list_gpus) {
+            for (const auto& device : list_render_gpus()) {
+                std::cout << device.id << '\t' << device.name;
+                if (device.memory_mib > 0) {
+                    std::cout << " (" << device.memory_mib << " MiB)";
+                }
+                std::cout << '\n';
+            }
+            return 0;
+        }
 
         std::signal(SIGINT, handle_signal);
         std::signal(SIGTERM, handle_signal);

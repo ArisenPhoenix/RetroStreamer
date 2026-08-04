@@ -28,6 +28,9 @@ private:
     // Retained after the leader exits so stop() can still kill surviving
     // gamescope/Ryujinx grandchildren in the session created by setsid().
     mutable pid_t process_group_id_ = -1;
+    // Unique token injected into the child environ so stop() can find
+    // descendants that left the process group (flatpak / AppImage re-exec).
+    mutable std::string session_token_;
     mutable std::optional<int> last_exit_code_;
     mutable std::filesystem::path stderr_log_path_;
     mutable std::string last_stderr_tail_;

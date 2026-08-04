@@ -8,10 +8,12 @@
 #include "client_video_controller.hpp"
 #include "game_picker_widget.hpp"
 #include "gui_logging.hpp"
+#include "pad_on_screen_keyboard.hpp"
 
 #ifdef ARCHSTREAMER_HAS_HOST
 #include "client/client_media_playback.hpp"
 #include "host/media_capture.hpp"
+#include "host/save_manager.hpp"
 #endif
 
 #include <QMainWindow>
@@ -36,11 +38,10 @@ class QPushButton;
 class QSpinBox;
 class QTabWidget;
 class QTimer;
+class QTreeWidget;
 class QWidget;
 
 namespace archstreamer::gui {
-
-class PadOnScreenKeyboard;
 
 class MainWindow final : public QMainWindow {
 public:
@@ -48,6 +49,8 @@ public:
     ~MainWindow() override;
 
     void apply_debug_profile(const QString& profile);
+    /** Session-only update branch (CLI --branch). Not written to QSettings. */
+    void set_session_update_branch(const QString& branch);
 
 private:
     QWidget* build_client_tab();
@@ -56,6 +59,14 @@ private:
     QWidget* build_game_options_tab();
     QWidget* build_profile_tab();
     QWidget* build_settings_tab();
+    QWidget* build_updates_group(QWidget* parent);
+    void check_for_updates();
+    void apply_updates();
+    void set_update_status(const QString& text);
+    void apply_session_update_branch_to_ui();
+    QString update_repo_path() const;
+    QString update_branch_name() const;
+    QString self_update_script_path(const QString& repo) const;
     void ensure_remote_host();
     void stop_remote_host();
     void set_remote_status(const QString& text);
@@ -85,11 +96,23 @@ private:
 
 #ifdef ARCHSTREAMER_HAS_HOST
     QWidget* build_host_tab();
+    QWidget* build_saves_tab();
     void refresh_host_controllers();
     void sync_host_role_and_bridge();
     void sync_host_advertise(bool enabled);
     void advertise_host();
     void load_host_games();
+    void refresh_saves_browser();
+    void refresh_saves_system_combo();
+    void refresh_saves_browser_list();
+    void update_saves_action_enabled();
+    bool saves_host_busy() const;
+    bool confirm_saves_destructive(const QString& title, const QString& detail);
+    void saves_add_user();
+    void saves_remove_user();
+    void saves_remove_system();
+    void saves_remove_game();
+    SaveNameHints saves_name_hints() const;
 #endif
 
     void load_persisted_settings();
@@ -118,6 +141,11 @@ private:
     void toggle_pad_on_screen_keyboard(bool open);
     void open_soft_keyboard_from_host(const archstreamer::SoftKeyboardRequest& request);
     void close_pad_on_screen_keyboard();
+    /** Drop video out of fullscreen so the pad OSK can stay in front. */
+    void prepare_video_for_pad_osk();
+    /** Top-level OSK centered on the live video surface (not the main GUI). */
+    void place_pad_osk_over_video();
+    PadOnScreenKeyboard* make_pad_osk(PadOnScreenKeyboard::Options options);
     void restore_video_window_focus();
 
     GameFilter client_filter_from_fields() const;
@@ -192,6 +220,7 @@ private:
     QLineEdit* remote_binary_ = nullptr;
     QSpinBox* remote_base_control_port_ = nullptr;
     QSpinBox* remote_base_input_port_ = nullptr;
+    QLineEdit* remote_gpu_ = nullptr;
     QLabel* remote_status_ = nullptr;
     QPlainTextEdit* remote_log_ = nullptr;
     bool remote_busy_ = false;
@@ -267,6 +296,19 @@ private:
     QLabel* host_status_ = nullptr;
     GamePickerWidget* host_game_picker_ = nullptr;
     QPlainTextEdit* host_log_ = nullptr;
+
+    QLabel* saves_root_label_ = nullptr;
+    QComboBox* saves_user_ = nullptr;
+    QComboBox* saves_system_ = nullptr;
+    QLineEdit* saves_filter_ = nullptr;
+    QTreeWidget* saves_tree_ = nullptr;
+    QLabel* saves_status_ = nullptr;
+    QPushButton* saves_refresh_ = nullptr;
+    QPushButton* saves_add_user_ = nullptr;
+    QPushButton* saves_remove_user_ = nullptr;
+    QPushButton* saves_remove_system_ = nullptr;
+    QPushButton* saves_remove_game_ = nullptr;
+    SaveNameHints saves_hints_;
 #endif
 
     QLineEdit* profile_username_ = nullptr;
@@ -286,6 +328,13 @@ private:
     QSpinBox* settings_log_sessions_ = nullptr;
     QPushButton* settings_send_logs_ = nullptr;
     QCheckBox* settings_show_framecount_ = nullptr;
+    QLineEdit* settings_update_repo_ = nullptr;
+    QComboBox* settings_update_branch_ = nullptr;
+    QLabel* settings_update_status_ = nullptr;
+    QPushButton* settings_update_check_ = nullptr;
+    QPushButton* settings_update_apply_ = nullptr;
+    QString session_update_branch_;
+    bool update_busy_ = false;
 #ifdef ARCHSTREAMER_HAS_HOST
     QLineEdit* host_save_root_ = nullptr;
     QLabel* host_save_root_status_ = nullptr;

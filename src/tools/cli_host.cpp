@@ -74,6 +74,7 @@ void HostRunnerCli::print_usage() const {
         << "  --mode <mode>       singleplayer or multiplayer. Default: singleplayer\n"
         << "  --players <count>   Number of virtual pads to plug. Default: 1\n"
         << "  --list              List games and exit.\n"
+        << "  --list-gpus         List encode/render GPUs (id + name) and exit.\n"
         << "  --dry-run           Print selected launch config without launching.\n"
         << "  --pulse-input       Tap A on port 1 shortly after launch.\n"
         << "  --verbose           Pass --verbose to RetroArch.\n"
@@ -161,6 +162,8 @@ HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
         
         if (arg == "--list") {
             args.list = true;
+        } else if (arg == "--list-gpus") {
+            args.list_gpus = true;
         } else if (arg == "--dry-run") {
             args.dry_run = true;
         } else if (arg == "--pulse-input") {

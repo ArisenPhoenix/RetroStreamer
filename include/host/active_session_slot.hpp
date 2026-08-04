@@ -16,6 +16,7 @@
 #include "host/session_slot_lease.hpp"
 #include "host/streaming_audio_sink.hpp"
 #include "host/session_audio_channel.hpp"
+#include "host/cadence_session_tracker.hpp"
 #include "host/virtual_keyboard.hpp"
 #include "host/platform/default_host_platform.hpp"
 #include "client/controller_manager.hpp"
@@ -155,6 +156,9 @@ private:
     bool gamescope_capture_ = false;
     bool use_virtual_capture_ = false;
     HostAppConfig slot_config_;
+    /** True after cadence session_started until session_ended is recorded. */
+    bool cadence_session_live_ = false;
+    CadenceSessionTracker cadence_tracker_;
 };
 
 /** Clamp host max concurrent SP slots (also multi lobby size). */

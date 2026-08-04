@@ -50,6 +50,11 @@ def parse_args() -> argparse.Namespace:
         help="Start archstreamer_gui.exe when finished",
     )
     p.add_argument(
+        "--gui-branch",
+        default=None,
+        help="Pass --branch <name> to the GUI when launching (session-only)",
+    )
+    p.add_argument(
         "--shortcuts",
         action="store_true",
         help="Create Start Menu / Desktop .lnk shortcuts",
@@ -292,7 +297,10 @@ def main() -> int:
         else:
             print("Start Menu (this user): Programs\\ArchStreamer\\ArchStreamer")
     if args.launch:
-        subprocess.Popen([str(exe)], cwd=str(bin_dir))
+        cmd = [str(exe)]
+        if args.gui_branch:
+            cmd.extend(["--branch", str(args.gui_branch).strip()])
+        subprocess.Popen(cmd, cwd=str(bin_dir))
     return 0
 
 

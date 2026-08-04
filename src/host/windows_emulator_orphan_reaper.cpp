@@ -8,4 +8,12 @@ int reap_orphaned_emulator_processes() {
     return 0;
 }
 
+void register_emulator_session_token(const std::string&) {}
+
+void unregister_emulator_session_token(const std::string&) {}
+
+int reap_stale_emulator_session_tokens() {
+    return 0;
+}
+
 } // namespace archstreamer

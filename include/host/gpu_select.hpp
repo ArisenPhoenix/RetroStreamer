@@ -22,13 +22,22 @@ struct GpuDevice {
 };
 
 // Enumerate GPUs usable for RetroArch on the host (NVIDIA via nvidia-smi + PRIME,
-// plus the AMD/Mesa default path when present).
+// plus Mesa AMD/Intel including iGPUs when present).
 std::vector<GpuDevice> list_render_gpus();
 
 GpuDevice preferred_render_gpu(const std::vector<GpuDevice>& devices);
 
-// selection: "auto" or a GpuDevice::id. Returns nullopt if unknown and no fallback.
+/** True when selection (id or fuzzy name like "3060" / "amd") matches this device. */
+bool gpu_selection_matches_device(const std::string& selection, const GpuDevice& device);
+
+// selection: "auto" or a GpuDevice::id / fuzzy name. Returns nullopt if unknown
+// and selection was explicit (non-empty, not auto).
 std::optional<GpuDevice> resolve_render_gpu(const std::string& selection);
+
+/** Resolve against an already-fetched device list (Remote Ensure Host over SSH). */
+std::optional<GpuDevice> resolve_render_gpu_from(
+    const std::vector<GpuDevice>& devices,
+    const std::string& selection);
 
 // Environment entries for RetroArch child (PRIME offload when NVIDIA).
 std::vector<std::pair<std::string, std::string>> render_gpu_environment(const GpuDevice& gpu);

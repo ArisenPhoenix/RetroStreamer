@@ -60,6 +60,30 @@ PadPlan resolve_exclusive_pad_plan(
     return plan;
 }
 
+PadPlan resolve_retroarch_slot_pad_plan(
+    std::size_t players,
+    const std::string& ignore_devices,
+    bool verbose,
+    std::uint16_t product_id_base,
+    bool use_udev) {
+    // Start from the absolute-index scan RetroArch udev needs.
+    auto plan = resolve_shared_pad_plan(
+        players, ignore_devices, verbose, product_id_base, use_udev);
+
+    const auto filter = sdl_archstreamer_pad_whitelist(players, product_id_base);
+    if (filter.empty() || plan.pads.empty()) {
+        return plan;
+    }
+
+    // Hide sibling-session ArchStreamer pads (and physical pads) from SDL. RetroArch's
+    // udev driver still sees every /dev/input/js*, so joypad_index stays absolute —
+    // do not remap pads to 0..n-1 the way Ryujinx exclusive plans do.
+    plan.mode = PadPlanMode::Exclusive;
+    plan.exclusive_filter = filter;
+    plan.ignore_devices.clear();
+    return plan;
+}
+
 void apply_pad_plan(ProcessEnvironment& env, const PadPlan& plan) {
     if (plan.exclusive()) {
         env.clear_var("SDL_GAMECONTROLLER_IGNORE_DEVICES");
@@ -88,6 +112,9 @@ void log_pad_plan(const PadPlan& plan, std::optional<int> slot_index) {
         << " pads=" << plan.pads.size();
     if (plan.exclusive()) {
         out << " filter=" << (plan.exclusive_filter.empty() ? "(none)" : plan.exclusive_filter);
+        if (!plan.udev_indices.empty()) {
+            out << " udev-abs";
+        }
     } else {
         out << " ignore=" << (plan.ignore_devices.empty() ? "(none)" : plan.ignore_devices);
         if (!plan.udev_indices.empty()) {

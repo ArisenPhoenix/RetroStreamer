@@ -99,15 +99,24 @@ int main(int argc, char** argv) {
     window.setWindowIcon(app_icon);
     window.show();
 
-    for (int index = 1; index + 1 < argc; ++index) {
-        if (QString::fromLocal8Bit(argv[index]) == "--debug-profile") {
+    QString session_branch;
+    for (int index = 1; index < argc; ++index) {
+        const auto arg = QString::fromLocal8Bit(argv[index]);
+        if (arg == QLatin1String("--branch") && index + 1 < argc) {
+            session_branch = QString::fromLocal8Bit(argv[++index]).trimmed();
+            continue;
+        }
+        if (arg == QLatin1String("--debug-profile") && index + 1 < argc) {
             mirror_gui_logs_to_stdout = true;
-            const auto profile = QString::fromLocal8Bit(argv[index + 1]);
+            const auto profile = QString::fromLocal8Bit(argv[++index]);
             QTimer::singleShot(0, &window, [&window, profile] {
                 window.apply_debug_profile(profile);
             });
-            break;
+            continue;
         }
+    }
+    if (!session_branch.isEmpty()) {
+        window.set_session_update_branch(session_branch);
     }
 
     return app.exec();

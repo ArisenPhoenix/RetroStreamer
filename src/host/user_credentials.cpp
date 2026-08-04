@@ -1,43 +1,31 @@
 #include "host/user_credentials.hpp"
 
+#include "archstreamer/runtime_cadence/cadence.hpp"
 #include "common/serialization.hpp"
 #include "host/save_profile.hpp"
 
-#include <fstream>
-#include <nlohmann/json.hpp>
 #include <stdexcept>
 
 namespace archstreamer {
 namespace {
 
-UserCredentials read_credentials(const std::filesystem::path& path) {
-    std::ifstream in(path);
-    if (!in) {
-        throw std::runtime_error("unable to read credentials");
-    }
-    nlohmann::json json;
-    try {
-        json = nlohmann::json::parse(in);
-    } catch (const nlohmann::json::exception& error) {
-        throw std::runtime_error(std::string("invalid credentials.json: ") + error.what());
-    }
-    UserCredentials creds;
-    creds.password = json.value("password", "");
-    creds.must_change = json.value("must_change", false);
-    return creds;
+std::shared_ptr<cadence::RuntimeStore> cadence_store() {
+    return cadence::make_runtime_store();
 }
 
-void write_credentials(const std::filesystem::path& path, const UserCredentials& creds) {
-    nlohmann::json json{
-        {"password", creds.password},
-        {"must_change", creds.must_change},
-    };
-    std::filesystem::create_directories(path.parent_path());
-    std::ofstream out(path, std::ios::trunc);
-    if (!out) {
-        throw std::runtime_error("unable to write credentials");
+UserAuthResult to_host_result(cadence::UserAuthResult result) {
+    switch (result) {
+    case cadence::UserAuthResult::Ok:
+        return UserAuthResult::Ok;
+    case cadence::UserAuthResult::MustChange:
+        return UserAuthResult::MustChange;
+    case cadence::UserAuthResult::RejectedNewUser:
+        return UserAuthResult::RejectedNewUser;
+    case cadence::UserAuthResult::Unavailable:
+    case cadence::UserAuthResult::Rejected:
+    default:
+        return UserAuthResult::Rejected;
     }
-    out << json.dump(2) << '\n';
 }
 
 } // namespace
@@ -47,13 +35,16 @@ std::filesystem::path credentials_path(const std::filesystem::path& user_directo
 }
 
 void ensure_default_credentials(const std::filesystem::path& user_directory) {
-    const auto path = credentials_path(user_directory);
-    if (std::filesystem::exists(path)) {
-        return;
+    const auto username = user_directory.filename().string();
+    auto store = cadence_store();
+    (void)cadence::ensure_default_user(*store, username);
+    // Mirror only if missing so we never clobber a real password with the default.
+    if (!std::filesystem::exists(credentials_path(user_directory))) {
+        (void)cadence::write_credentials_mirror(
+            user_directory,
+            DefaultUserPassword,
+            true);
     }
-    write_credentials(
-        path,
-        UserCredentials{std::string(DefaultUserPassword), true});
 }
 
 UserAuthResult verify_or_create_on_hello(
@@ -61,69 +52,75 @@ UserAuthResult verify_or_create_on_hello(
     const std::string& username,
     const std::string& password,
     bool allow_new_users) {
-    if (!valid_username(username)) {
-        return UserAuthResult::Rejected;
-    }
-    if (password.empty()) {
+    if (!valid_username(username) || password.empty()) {
         return UserAuthResult::Rejected;
     }
 
     const auto root =
         save_root.empty() ? default_save_profile_root() : save_root;
-    const auto user_directory = root / username;
-    const bool existed = std::filesystem::exists(user_directory);
+    auto store = cadence_store();
+    if (!store->ensure_ready()) {
+        return UserAuthResult::Rejected;
+    }
+    (void)cadence::import_users_from_save_root(*store, root);
 
-    if (!existed) {
+    const auto user_directory = root / username;
+    const bool in_store = store->find_user(username).has_value();
+    const bool on_disk = std::filesystem::exists(user_directory);
+
+    if (!in_store && !on_disk) {
         if (!allow_new_users) {
             return UserAuthResult::RejectedNewUser;
         }
         prepare_save_profile(root, username);
-        write_credentials(
-            credentials_path(user_directory),
-            UserCredentials{password, false});
-        return UserAuthResult::Ok;
+    } else if (!on_disk) {
+        // Cadence knows the user; ensure the save profile tree exists for blobs.
+        prepare_save_profile(root, username);
+    } else if (!in_store) {
+        // Disk profile survived but cadence missed the import — seed defaults then re-import.
+        ensure_default_credentials(user_directory);
+        (void)cadence::import_users_from_save_root(*store, root);
     }
 
-    ensure_default_credentials(user_directory);
-    const auto creds = read_credentials(credentials_path(user_directory));
-    if (creds.password != password) {
-        return UserAuthResult::Rejected;
+    const auto cadence_result = cadence::verify_or_create_user(
+        *store,
+        username,
+        password,
+        username,
+        allow_new_users);
+    if (cadence_result == cadence::UserAuthResult::Ok ||
+        cadence_result == cadence::UserAuthResult::MustChange) {
+        const bool must_change = cadence_result == cadence::UserAuthResult::MustChange;
+        (void)cadence::write_credentials_mirror(user_directory, password, must_change);
     }
-    if (creds.must_change) {
-        return UserAuthResult::MustChange;
-    }
-    return UserAuthResult::Ok;
+    return to_host_result(cadence_result);
 }
 
 ErrorPacket apply_password_change(
     const std::filesystem::path& save_root,
     const PasswordChange& change) {
-    if (!valid_username(change.username)) {
-        return ErrorPacket{"invalid username"};
-    }
-    if (change.new_password.empty()) {
-        return ErrorPacket{"new password must not be empty"};
-    }
-    if (change.new_password == change.current_password) {
-        return ErrorPacket{"new password must differ from the current password"};
-    }
-
     const auto root =
         save_root.empty() ? default_save_profile_root() : save_root;
-    const auto user_directory = root / change.username;
-    if (!std::filesystem::exists(user_directory)) {
-        return ErrorPacket{"unknown user"};
+    auto store = cadence_store();
+    (void)cadence::import_users_from_save_root(*store, root);
+
+    const auto error = cadence::change_user_password(
+        *store,
+        change.username,
+        change.current_password,
+        change.new_password);
+    if (!error.empty()) {
+        return ErrorPacket{error};
     }
 
-    ensure_default_credentials(user_directory);
-    const auto path = credentials_path(user_directory);
-    auto creds = read_credentials(path);
-    if (creds.password != change.current_password) {
-        return ErrorPacket{"incorrect password"};
+    const auto user_directory = root / change.username;
+    if (!std::filesystem::exists(user_directory)) {
+        prepare_save_profile(root, change.username);
     }
-    creds.password = change.new_password;
-    creds.must_change = false;
-    write_credentials(path, creds);
+    (void)cadence::write_credentials_mirror(
+        user_directory,
+        change.new_password,
+        false);
     return ErrorPacket{"password updated"};
 }
 

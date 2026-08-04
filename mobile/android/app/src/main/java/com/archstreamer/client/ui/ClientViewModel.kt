@@ -18,6 +18,7 @@ import com.archstreamer.client.net.DiscoveredHost
 import com.archstreamer.client.net.HostDiscovery
 import com.archstreamer.client.net.JoinedPlaySession
 import com.archstreamer.client.net.RemoteHost
+import com.archstreamer.client.net.RemoteHostPortBlock
 import com.archstreamer.client.net.SessionJoiner
 import com.archstreamer.client.protocol.IncomingPacket
 import com.archstreamer.client.protocol.PacketCodec
@@ -175,6 +176,8 @@ data class UiState(
     val remoteDirectory: String = "",
     val remoteRomRoot: String = "",
     val remoteBinary: String = "./host_runner",
+    /** Optional GPU preference for Ensure Host (fuzzy match); blank = host default. */
+    val remoteGpu: String = "",
     val remoteBaseControlPort: String = Protocol.DEFAULT_CONTROL_PORT.toString(),
     val remoteBaseInputPort: String = Protocol.DEFAULT_INPUT_PORT.toString(),
     val remoteStatus: String = "Ensure Host probes the base port, reuses a free lobby, or SSH-starts host_runner.",
@@ -222,6 +225,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             remoteRomRoot = prefs.getString(KEY_REMOTE_ROM_ROOT, "").orEmpty(),
             remoteBinary = prefs.getString(KEY_REMOTE_BINARY, "./host_runner").orEmpty()
                 .ifBlank { "./host_runner" },
+            remoteGpu = prefs.getString(KEY_REMOTE_GPU, "").orEmpty(),
             remoteBaseControlPort = prefs.getString(
                 KEY_REMOTE_BASE_CONTROL,
                 Protocol.DEFAULT_CONTROL_PORT.toString(),
@@ -1048,6 +1052,11 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         prefs.edit().putString(KEY_REMOTE_BINARY, value.trim()).apply()
     }
 
+    fun onRemoteGpuChange(value: String) {
+        _state.update { it.copy(remoteGpu = value) }
+        prefs.edit().putString(KEY_REMOTE_GPU, value.trim()).apply()
+    }
+
     fun onRemoteBaseControlPortChange(value: String) {
         _state.update { it.copy(remoteBaseControlPort = value) }
         prefs.edit().putString(KEY_REMOTE_BASE_CONTROL, value.trim()).apply()
@@ -1075,6 +1084,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         val directory = snap.remoteDirectory.trim()
         val romRoot = snap.remoteRomRoot.trim()
         val binary = snap.remoteBinary.trim().ifBlank { "./host_runner" }
+        val wantGpu = snap.remoteGpu.trim()
         val sshPort = snap.remoteSshPort.trim().toIntOrNull() ?: RemoteHost.DEFAULT_SSH_PORT
         val baseControl = snap.remoteBaseControlPort.trim().toIntOrNull()
             ?: Protocol.DEFAULT_CONTROL_PORT
@@ -1089,6 +1099,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             .putString(KEY_REMOTE_DIRECTORY, directory)
             .putString(KEY_REMOTE_ROM_ROOT, romRoot)
             .putString(KEY_REMOTE_BINARY, binary)
+            .putString(KEY_REMOTE_GPU, wantGpu)
             .putString(KEY_REMOTE_BASE_CONTROL, baseControl.toString())
             .putString(KEY_REMOTE_BASE_INPUT, baseInput.toString())
             .apply()
@@ -1102,7 +1113,11 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
-        setRemoteStatus("Probing $host:$baseControl…", busy = true)
+        if (wantGpu.isEmpty()) {
+            setRemoteStatus("Probing $host:$baseControl…", busy = true)
+        } else {
+            setRemoteStatus("Probing $host for a free lobby on GPU “$wantGpu”…", busy = true)
+        }
 
         viewModelScope.launch(Dispatchers.IO) {
             fun applyPorts(control: Int, input: Int, status: String) {
@@ -1132,93 +1147,119 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
             val resolvedBinary = RemoteHost.resolveBinary(directory, binary)
             ClientFileLog.append(
-                "[remote] ensure host=$host user=$user dir=$directory rom=$romRoot binary=$resolvedBinary ports=$baseControl/$baseInput",
+                "[remote] ensure host=$host user=$user dir=$directory rom=$romRoot " +
+                    "binary=$resolvedBinary ports=$baseControl/$baseInput gpu=${wantGpu.ifEmpty { "(default)" }}",
             )
 
-            val baseInfo = RemoteHost.probeActiveSession(host, baseControl)
-            if (baseInfo != null && !RemoteHost.lobbyFull(baseInfo)) {
-                val slotText = if (baseInfo.activeSlots != null && baseInfo.maxSlots != null) {
-                    " (slots ${baseInfo.activeSlots}/${baseInfo.maxSlots})"
-                } else {
-                    ""
+            var gpuOptions = emptyList<RemoteHost.GpuOption>()
+            var resolvedGpuId = ""
+            var resolvedGpuLabel = ""
+
+            if (wantGpu.isNotEmpty()) {
+                setRemoteStatus("Listing remote GPUs (host_runner --list-gpus)…")
+                val listCmd = RemoteHost.listGpusShell(directory, binary)
+                ClientFileLog.append("[remote] ssh list-gpus cmd: $listCmd")
+                val listed = RemoteHost.runSshCommand(host, sshPort, user, password, listCmd)
+                if (!listed.ok) {
+                    fail("Remote GPU list failed: ${listed.error}")
+                    return@launch
                 }
-                applyPorts(
-                    baseControl,
-                    baseInput,
-                    "Reusing existing host on $host:$baseControl$slotText",
-                )
-                return@launch
+                gpuOptions = RemoteHost.parseListGpusOutput(listed.output)
+                val matched = RemoteHost.matchGpuOption(gpuOptions, wantGpu)
+                if (matched == null) {
+                    val available = gpuOptions.joinToString(", ") { "${it.name} [${it.id}]" }
+                        .ifEmpty { "(none)" }
+                    fail("No remote GPU matched “$wantGpu”. Available: $available")
+                    return@launch
+                }
+                resolvedGpuId = matched.id
+                resolvedGpuLabel = "${matched.name} [${matched.id}]"
+                setRemoteStatus("Matched remote GPU $resolvedGpuLabel — probing lobbies…")
             }
 
-            if (baseInfo != null && RemoteHost.lobbyFull(baseInfo)) {
-                for (n in 1..8) {
-                    val ports = RemoteHost.portBlock(n, baseControl, baseInput)
-                    val overflow = RemoteHost.probeActiveSession(host, ports.controlPort)
-                    if (overflow != null && !RemoteHost.lobbyFull(overflow)) {
+            suspend fun queryProcessGpu(controlPort: Int): String {
+                if (resolvedGpuId.isEmpty()) return ""
+                val cmd = RemoteHost.encodeGpuQueryShell(controlPort)
+                val ssh = RemoteHost.runSshCommand(host, sshPort, user, password, cmd, timeoutSec = 15)
+                if (!ssh.ok) return ""
+                return ssh.output.trim()
+            }
+
+            suspend fun startInstance(instanceIndex: Int, ports: RemoteHostPortBlock): Boolean {
+                val cmd = RemoteHost.startShell(
+                    directory,
+                    binary,
+                    romRoot,
+                    ports,
+                    encodeGpu = resolvedGpuId,
+                )
+                var msg = "SSH-starting host instance $instanceIndex on port ${ports.controlPort}"
+                if (resolvedGpuLabel.isNotEmpty()) {
+                    msg += " ($resolvedGpuLabel)"
+                }
+                msg += "…"
+                setRemoteStatus(msg)
+                ClientFileLog.append("[remote] ssh start cmd: $cmd")
+                val ssh = RemoteHost.runSshCommand(host, sshPort, user, password, cmd)
+                if (!ssh.ok) {
+                    fail("SSH start failed: ${ssh.error}")
+                    return false
+                }
+                if (ssh.output.isNotBlank()) {
+                    ClientFileLog.append("[remote] ssh stdout: ${ssh.output}")
+                }
+                repeat(20) {
+                    delay(500)
+                    if (RemoteHost.probeActiveSession(host, ports.controlPort) != null) {
+                        val gpuNote = if (resolvedGpuLabel.isNotEmpty()) " $resolvedGpuLabel" else ""
                         applyPorts(
                             ports.controlPort,
                             ports.inputPort,
-                            "Reusing overflow host on $host:${ports.controlPort}",
+                            "Started host on $host:${ports.controlPort}$gpuNote",
                         )
-                        return@launch
-                    }
-                    if (overflow == null) {
-                        setRemoteStatus(
-                            "Base lobby full — SSH-starting overflow instance $n on port ${ports.controlPort}…",
-                        )
-                        val cmd = RemoteHost.startShell(directory, binary, romRoot, ports)
-                        ClientFileLog.append("[remote] ssh start cmd: $cmd")
-                        val ssh = RemoteHost.runSshCommand(host, sshPort, user, password, cmd)
-                        if (!ssh.ok) {
-                            fail("SSH start failed: ${ssh.error}")
-                            return@launch
-                        }
-                        if (ssh.output.isNotBlank()) {
-                            ClientFileLog.append("[remote] ssh stdout: ${ssh.output}")
-                        }
-                        repeat(20) {
-                            delay(500)
-                            if (RemoteHost.probeActiveSession(host, ports.controlPort) != null) {
-                                applyPorts(
-                                    ports.controlPort,
-                                    ports.inputPort,
-                                    "Started overflow host on $host:${ports.controlPort}",
-                                )
-                                return@launch
-                            }
-                        }
-                        fail("SSH start reported success but control port ${ports.controlPort} never answered")
-                        return@launch
+                        return true
                     }
                 }
-                fail("All probed overflow instances are full.")
+                fail("SSH start reported success but control port ${ports.controlPort} never answered")
+                return false
+            }
+
+            for (n in 0..8) {
+                val ports = RemoteHost.portBlock(n, baseControl, baseInput)
+                val info = RemoteHost.probeActiveSession(host, ports.controlPort)
+                if (info != null) {
+                    val processGpu = queryProcessGpu(ports.controlPort)
+                    if (RemoteHost.lobbyUsableForGpu(info, resolvedGpuId, processGpu, gpuOptions)) {
+                        val slotText = if (info.activeSlots != null && info.maxSlots != null) {
+                            " (slots ${info.activeSlots}/${info.maxSlots})"
+                        } else {
+                            ""
+                        }
+                        val gpuText = if (resolvedGpuLabel.isNotEmpty()) " $resolvedGpuLabel" else ""
+                        applyPorts(
+                            ports.controlPort,
+                            ports.inputPort,
+                            "Reusing host on $host:${ports.controlPort}$slotText$gpuText",
+                        )
+                        return@launch
+                    }
+                    continue
+                }
+                if (n == 0) {
+                    setRemoteStatus("No host on base port — will SSH-start…")
+                }
+                startInstance(n, ports)
                 return@launch
             }
 
-            val ports = RemoteHost.portBlock(0, baseControl, baseInput)
-            setRemoteStatus("No host on base port — SSH-starting host_runner…")
-            val cmd = RemoteHost.startShell(directory, binary, romRoot, ports)
-            ClientFileLog.append("[remote] ssh start cmd: $cmd")
-            val ssh = RemoteHost.runSshCommand(host, sshPort, user, password, cmd)
-            if (!ssh.ok) {
-                fail("SSH start failed: ${ssh.error}")
-                return@launch
-            }
-            if (ssh.output.isNotBlank()) {
-                ClientFileLog.append("[remote] ssh stdout: ${ssh.output}")
-            }
-            repeat(20) {
-                delay(500)
-                if (RemoteHost.probeActiveSession(host, ports.controlPort) != null) {
-                    applyPorts(
-                        ports.controlPort,
-                        ports.inputPort,
-                        "Started host on $host:${ports.controlPort}",
-                    )
-                    return@launch
-                }
-            }
-            fail("SSH start reported success but control port ${ports.controlPort} never answered")
+            fail(
+                if (wantGpu.isEmpty()) {
+                    "All probed host instances are full."
+                } else {
+                    val label = resolvedGpuLabel.ifEmpty { wantGpu }
+                    "No free lobby on GPU “$label” (existing instances full or different GPU)."
+                },
+            )
         }
     }
 
@@ -2385,6 +2426,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         private const val KEY_REMOTE_DIRECTORY = "remote_directory"
         private const val KEY_REMOTE_ROM_ROOT = "remote_rom_root"
         private const val KEY_REMOTE_BINARY = "remote_binary"
+        private const val KEY_REMOTE_GPU = "remote_gpu"
         private const val KEY_REMOTE_BASE_CONTROL = "remote_base_control"
         private const val KEY_REMOTE_BASE_INPUT = "remote_base_input"
         private const val KEY_REMOTE_TRACKED_CONTROL = "remote_tracked_control"

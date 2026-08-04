@@ -113,11 +113,91 @@ object RemoteHost {
         return active >= max
     }
 
+    data class GpuOption(val id: String, val name: String)
+
+    /**
+     * Fuzzy match remoting preference against host_runner --list-gpus options
+     * (same rules as desktop Settings / resolve_render_gpu).
+     */
+    fun matchGpuOption(options: List<GpuOption>, want: String): GpuOption? {
+        val trimmed = want.trim()
+        if (trimmed.isEmpty() || trimmed.equals("auto", ignoreCase = true)) return null
+        options.firstOrNull { it.id == trimmed }?.let { return it }
+        fun normalize(value: String): String =
+            value.lowercase().map { ch ->
+                when (ch) {
+                    ':', '_', '-', '/' -> ' '
+                    else -> ch
+                }
+            }.joinToString("")
+        val needle = normalize(trimmed)
+        options.firstOrNull { option ->
+            val hay = normalize("${option.id} ${option.name}")
+            if (hay.contains(needle)) return@firstOrNull true
+            val tokens = needle.split(Regex("\\s+")).filter { it.isNotEmpty() }
+            tokens.isNotEmpty() && tokens.all { hay.contains(it) }
+        }?.let { return it }
+        return null
+    }
+
+    fun parseListGpusOutput(stdout: String): List<GpuOption> =
+        stdout.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .mapNotNull { line ->
+                val tab = line.indexOf('\t')
+                if (tab <= 0) return@mapNotNull null
+                GpuOption(
+                    id = line.substring(0, tab).trim(),
+                    name = line.substring(tab + 1).trim(),
+                )
+            }
+            .toList()
+
+    fun listGpusShell(directory: String, binary: String): String {
+        val qbin = shellSingleQuote(resolveBinary(directory, binary))
+        return "set -e; " +
+            "if [ ! -x $qbin ]; then echo \"host_runner not found or not executable: \" $qbin >&2; exit 127; fi; " +
+            "$qbin --list-gpus"
+    }
+
+    /** Print --gpu from host_runner argv for this control port (or empty). */
+    fun encodeGpuQueryShell(controlPort: Int): String =
+        "found=\"\"; " +
+            "for f in /proc/[0-9]*/cmdline; do " +
+            "cmd=\$(tr '\\0' ' ' < \"\$f\" 2>/dev/null) || continue; " +
+            "case \"\$cmd\" in *host_runner*) ;; *) continue ;; esac; " +
+            "echo \"\$cmd\" | grep -Eq -- '--control-port[= ]*$controlPort([[:space:]]|\$)' || continue; " +
+            "found=\$(echo \"\$cmd\" | sed -n 's/.*--gpu[= ]\\([^[:space:]]*\\).*/\\1/p'); " +
+            "break; " +
+            "done; " +
+            "printf '%s\\n' \"\$found\""
+
+    /**
+     * Whether a free lobby may be reused for [wantResolvedId].
+     * Blank want → any free lobby. Process without --gpu → host default (first list entry).
+     */
+    fun lobbyUsableForGpu(
+        info: ActiveSessionInfo,
+        wantResolvedId: String,
+        processGpuArg: String,
+        gpuOptions: List<GpuOption>,
+    ): Boolean {
+        if (lobbyFull(info)) return false
+        if (wantResolvedId.isEmpty()) return true
+        if (processGpuArg.isBlank() || processGpuArg.equals("auto", ignoreCase = true)) {
+            return gpuOptions.isNotEmpty() && gpuOptions.first().id == wantResolvedId
+        }
+        val processMatch = matchGpuOption(gpuOptions, processGpuArg) ?: return false
+        return processMatch.id == wantResolvedId
+    }
+
     fun startShell(
         directory: String,
         binary: String,
         romRoot: String,
         ports: RemoteHostPortBlock,
+        encodeGpu: String = "",
     ): String {
         val resolved = resolveBinary(directory, binary)
         val qbin = shellSingleQuote(resolved)
@@ -126,6 +206,11 @@ object RemoteHost {
         val qdir = shellSingleQuote(dir)
         val qlog = shellSingleQuote(logPath(directory, ports.controlPort))
         val qpid = shellSingleQuote(pidPath(directory, ports.controlPort))
+        val gpuArgs = if (encodeGpu.isNotBlank()) {
+            " --gpu ${shellSingleQuote(encodeGpu.trim())}"
+        } else {
+            ""
+        }
         return "set -e; " +
             "mkdir -p $qdir; " +
             "if [ ! -x $qbin ]; then echo \"host_runner not found or not executable: \" $qbin >&2; exit 127; fi; " +
@@ -137,6 +222,7 @@ object RemoteHost {
             " --audio-port ${ports.audioPort}" +
             " --virtual-display :${ports.virtualDisplay}" +
             " --clients 2 --allow-new-users" +
+            gpuArgs +
             " > $qlog 2>&1 & " +
             "pid=\$!; echo \"\$pid\" > $qpid; " +
             "sleep 0.7; " +

@@ -1,6 +1,7 @@
 #include "host/host_concurrent_lobby.hpp"
 
 #include "host/active_session_slot.hpp"
+#include "host/emulator_orphan_reaper.hpp"
 #include "host/game_catalog.hpp"
 #include "host/host_app_config.hpp"
 #include "host/host_launch_planner.hpp"
@@ -10,6 +11,7 @@
 #include "host/launch_environment.hpp"
 #include "host/local_controller_bridge.hpp"
 #include "host/network_input_receiver.hpp"
+#include "host/save_active_sessions.hpp"
 #include "host/session_lobby.hpp"
 #include "host/streaming_audio_sink.hpp"
 #include "common/platform/default_platform.hpp"
@@ -17,8 +19,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <iostream>
 #include <memory>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -49,6 +53,16 @@ int run_concurrent_session_host(
         // Concurrent sessions use archstreamer-0..N only — drop the legacy
         // "archstreamer" sink and any higher slot leftovers from older runs.
         streaming_audio.prune_unused(static_cast<int>(max_slots), /*keep_legacy=*/false);
+        // Drop stale Saves-tab "Active" markers from a previous host crash.
+        {
+            std::error_code ec;
+            const auto active_dir = active_save_sessions_directory(config.save_root);
+            if (std::filesystem::is_directory(active_dir, ec)) {
+                for (const auto& entry : std::filesystem::directory_iterator(active_dir, ec)) {
+                    std::filesystem::remove(entry.path(), ec);
+                }
+            }
+        }
         std::cout
             << "Concurrent session host on TCP " << *config.control_port
             << " (max slots " << static_cast<int>(max_slots)
@@ -69,6 +83,7 @@ int run_concurrent_session_host(
             : config.art_root;
 
         auto erase_finished = [&] {
+            const auto before = slots.size();
             slots.erase(
                 std::remove_if(
                     slots.begin(),
@@ -85,6 +100,11 @@ int run_concurrent_session_host(
                         return true;
                     }),
                 slots.end());
+            if (slots.size() != before) {
+                // Catch AppImage/flatpak stragglers whose session token was
+                // unregistered after a failed group kill.
+                (void)reap_stale_emulator_session_tokens();
+            }
         };
 
         auto live_count = [&] {

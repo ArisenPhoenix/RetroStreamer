@@ -32,6 +32,7 @@ struct HostAppConfig {
     GameSessionMode session_mode = GameSessionMode::SinglePlayer;
     std::uint8_t players = 1;
     bool list = false;
+    bool list_gpus = false;
     bool dry_run = false;
     bool pulse_input = false;
     bool verbose = false;

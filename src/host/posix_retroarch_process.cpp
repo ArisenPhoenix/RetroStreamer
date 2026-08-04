@@ -1,12 +1,18 @@
 #include "host/posix_retroarch_process.hpp"
 
 #include "common/platform/paths.hpp"
+#include "host/emulator_orphan_reaper.hpp"
 
+#include <algorithm>
+#include <atomic>
+#include <cctype>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -52,12 +58,22 @@ bool path_is_executable(const std::string& path_or_name) {
 namespace archstreamer {
 namespace {
 
+constexpr const char* kSessionTokenEnv = "ARCHSTREAMER_SLOT_TOKEN";
+
 std::string path_string(const std::filesystem::path& path, const char* label) {
     if (path.empty()) {
         throw std::runtime_error(std::string(label) + " path is empty");
     }
 
     return path.string();
+}
+
+std::string make_session_token() {
+    static std::atomic<std::uint64_t> counter{0};
+    std::ostringstream out;
+    out << "as-" << getpid() << '-' << counter.fetch_add(1) << '-'
+        << std::chrono::steady_clock::now().time_since_epoch().count();
+    return out.str();
 }
 
 void close_inherited_fds() {
@@ -70,6 +86,83 @@ void close_inherited_fds() {
     }
     for (int fd = 3; fd < max_fd; ++fd) {
         close(fd);
+    }
+}
+
+bool environ_contains_token(const std::filesystem::path& environ_path, const std::string& token) {
+    if (token.empty()) {
+        return false;
+    }
+    std::ifstream in(environ_path, std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const std::string needle = std::string(kSessionTokenEnv) + "=" + token;
+    return raw.find(needle) != std::string::npos;
+}
+
+std::set<pid_t> collect_pids_for_session(pid_t group, const std::string& token) {
+    std::set<pid_t> pids;
+    std::error_code ec;
+    for (const auto& dir : std::filesystem::directory_iterator("/proc", ec)) {
+        if (ec) {
+            break;
+        }
+        const auto name = dir.path().filename().string();
+        if (name.empty() || !std::all_of(name.begin(), name.end(), ::isdigit)) {
+            continue;
+        }
+        const pid_t pid = static_cast<pid_t>(std::stol(name));
+        if (pid <= 1) {
+            continue;
+        }
+        bool match = false;
+        if (group > 0) {
+            const pid_t pgid = getpgid(pid);
+            if (pgid == group) {
+                match = true;
+            }
+        }
+        if (!match && !token.empty()
+            && environ_contains_token(dir.path() / "environ", token)) {
+            match = true;
+        }
+        if (match) {
+            pids.insert(pid);
+        }
+    }
+    return pids;
+}
+
+bool any_pid_alive(const std::set<pid_t>& pids) {
+    return std::any_of(pids.begin(), pids.end(), [](pid_t pid) {
+        return kill(pid, 0) == 0;
+    });
+}
+
+void signal_pids(const std::set<pid_t>& pids, int sig) {
+    for (const pid_t pid : pids) {
+        kill(pid, sig);
+    }
+}
+
+/** flatpak run drops unknown env; pass the session token explicitly. */
+void inject_flatpak_session_token(std::vector<std::string>& args, const std::string& token) {
+    if (token.empty() || args.empty()) {
+        return;
+    }
+    const std::string env_arg = std::string("--env=") + kSessionTokenEnv + "=" + token;
+    for (std::size_t i = 0; i + 1 < args.size(); ++i) {
+        if (args[i] != "run") {
+            continue;
+        }
+        // `flatpak run …` or `flatpak-spawn --host flatpak run …`
+        if (i == 0 || (args[i - 1] != "flatpak" && args[i - 1].find("flatpak") == std::string::npos)) {
+            continue;
+        }
+        args.insert(args.begin() + static_cast<std::ptrdiff_t>(i) + 1, env_arg);
+        return;
     }
 }
 
@@ -261,47 +354,53 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
     last_exit_code_.reset();
     last_stderr_tail_.clear();
     clear_stderr_log();
+    session_token_ = make_session_token();
+
+    // Copy so we can inject the session token without mutating the caller's config.
+    RetroArchLaunchConfig launch = config;
+    launch.environment.emplace_back(kSessionTokenEnv, session_token_);
 
     std::vector<std::string> args;
-    if (config.standalone) {
+    if (launch.standalone) {
         // Standalone emulator binary lives in core_path (same field catalog uses for display).
         // Optional command_prefix wraps the binary (e.g. vglrun for VirtualGL OpenGL).
-        if (!config.command_prefix.empty()) {
-            args = config.command_prefix;
+        if (!launch.command_prefix.empty()) {
+            args = launch.command_prefix;
         }
-        args.push_back(path_string(config.core_path, "standalone emulator"));
+        args.push_back(path_string(launch.core_path, "standalone emulator"));
         args.insert(
             args.end(),
-            config.standalone_args_before_content.begin(),
-            config.standalone_args_before_content.end());
-        args.insert(args.end(), config.extra_args.begin(), config.extra_args.end());
-        args.push_back(path_string(config.content_path, "content"));
+            launch.standalone_args_before_content.begin(),
+            launch.standalone_args_before_content.end());
+        args.insert(args.end(), launch.extra_args.begin(), launch.extra_args.end());
+        args.push_back(path_string(launch.content_path, "content"));
     } else {
-        if (!config.command_prefix.empty()) {
-            args = config.command_prefix;
+        if (!launch.command_prefix.empty()) {
+            args = launch.command_prefix;
         } else {
-            args.push_back(path_string(config.retroarch_path, "RetroArch executable"));
+            args.push_back(path_string(launch.retroarch_path, "RetroArch executable"));
         }
-        args.insert(args.end(), config.extra_args.begin(), config.extra_args.end());
+        args.insert(args.end(), launch.extra_args.begin(), launch.extra_args.end());
         args.push_back("-L");
-        args.push_back(path_string(config.core_path, "RetroArch core"));
-        args.push_back(path_string(config.content_path, "RetroArch content"));
+        args.push_back(path_string(launch.core_path, "RetroArch core"));
+        args.push_back(path_string(launch.content_path, "RetroArch content"));
     }
 
-    expand_host_exec_retroarch_shim(args, config);
+    expand_host_exec_retroarch_shim(args, launch);
+    inject_flatpak_session_token(args, session_token_);
 
-    if (!config.network_namespace_prefix.empty()) {
-        std::vector<std::string> wrapped = config.network_namespace_prefix;
+    if (!launch.network_namespace_prefix.empty()) {
+        std::vector<std::string> wrapped = launch.network_namespace_prefix;
         wrapped.insert(wrapped.end(), args.begin(), args.end());
         args = std::move(wrapped);
     }
 
-    const auto binary = config.standalone
-        ? path_string(config.core_path, "standalone emulator")
-        : path_string(config.retroarch_path, "RetroArch executable");
+    const auto binary = launch.standalone
+        ? path_string(launch.core_path, "standalone emulator")
+        : path_string(launch.retroarch_path, "RetroArch executable");
     if (access(binary.c_str(), X_OK) != 0) {
         throw std::runtime_error(
-            std::string(config.standalone ? "Emulator" : "RetroArch") +
+            std::string(launch.standalone ? "Emulator" : "RetroArch") +
             " executable is missing or not executable: " + binary);
     }
     if (!args.empty() && !path_is_executable(args.front())) {
@@ -312,7 +411,7 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
     // Quiet mode: redirect stdout+stderr into a temp log so mid-session deaths
     // (gamescope/Ryujinx) leave a diagnosable tail instead of vanishing into /dev/null.
     std::string stderr_path;
-    if (config.quiet_stdio) {
+    if (launch.quiet_stdio) {
         char tmpl[] = "/tmp/archstreamer-emu-XXXXXX";
         const int fd = mkstemp(tmpl);
         if (fd >= 0) {
@@ -325,6 +424,7 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
 
     pid_t child = fork();
     if (child < 0) {
+        session_token_.clear();
         clear_stderr_log();
         throw std::runtime_error(std::string("fork failed: ") + std::strerror(errno));
     }
@@ -338,7 +438,7 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
             _exit(127);
         }
         close_inherited_fds();
-        if (config.quiet_stdio) {
+        if (launch.quiet_stdio) {
             const int null_fd = open("/dev/null", O_RDWR);
             int err_fd = -1;
             if (!stderr_path.empty()) {
@@ -359,10 +459,10 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
                 close(null_fd);
             }
         }
-        for (const auto& key : config.unset_environment) {
+        for (const auto& key : launch.unset_environment) {
             unsetenv(key.c_str());
         }
-        for (const auto& [key, value] : config.environment) {
+        for (const auto& [key, value] : launch.environment) {
             setenv(key.c_str(), value.c_str(), 1);
         }
 
@@ -381,22 +481,28 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
     // The child calls setsid(), making its pid the process-group id. Keep this
     // separately because the leader may exit before its descendants.
     process_group_id_ = child;
+    register_emulator_session_token(session_token_);
 }
 
 void PosixRetroArchProcess::stop() {
     const pid_t group = process_group_id_;
-    if (group <= 0) {
-        // Reap/update a leader if one exists, then there is nothing else owned.
+    const std::string token = session_token_;
+    if (group <= 0 && token.empty()) {
         (void)running();
         return;
     }
 
-    // Negative pid targets the whole setsid-created group. Crucially, this still
-    // runs when running() has already reaped the gamescope leader: nested
-    // Ryujinx/AppImage descendants can remain alive in that same group.
-    if (kill(-group, SIGTERM) != 0 && pid_ > 0) {
-        kill(pid_, SIGTERM);
+    // Snapshot by process group and ARCHSTREAMER_SLOT_TOKEN so AppImage/flatpak
+    // re-execs that leave the original setsid group are still terminated.
+    auto targets = collect_pids_for_session(group, token);
+    if (pid_ > 0) {
+        targets.insert(pid_);
     }
+    if (group > 0) {
+        kill(-group, SIGTERM);
+    }
+    signal_pids(targets, SIGTERM);
+
     for (int i = 0; i < 40; ++i) {
         if (pid_ > 0) {
             int status = 0;
@@ -408,53 +514,97 @@ void PosixRetroArchProcess::stop() {
                 pid_ = -1;
             }
         }
-        if (kill(-group, 0) != 0 && errno == ESRCH) {
+        targets = collect_pids_for_session(group, token);
+        if (pid_ > 0) {
+            targets.insert(pid_);
+        }
+        if (!any_pid_alive(targets)
+            && (group <= 0 || (kill(-group, 0) != 0 && errno == ESRCH))) {
+            pid_ = -1;
             process_group_id_ = -1;
+            unregister_emulator_session_token(session_token_);
+            session_token_.clear();
             return;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
-    if (kill(-group, SIGKILL) != 0 && pid_ > 0) {
-        kill(pid_, SIGKILL);
+    targets = collect_pids_for_session(group, token);
+    if (pid_ > 0) {
+        targets.insert(pid_);
     }
+    if (group > 0) {
+        kill(-group, SIGKILL);
+    }
+    signal_pids(targets, SIGKILL);
     if (pid_ > 0) {
         int status = 0;
         if (waitpid(pid_, &status, 0) == pid_) {
             record_status(status);
         }
     }
+    // Final sweep for stragglers that reparented during the kill window.
+    targets = collect_pids_for_session(group, token);
+    signal_pids(targets, SIGKILL);
+    if (any_pid_alive(targets)) {
+        std::cerr
+            << "Warning: emulator session tree still alive after SIGKILL"
+            << (token.empty() ? "" : (" token=" + token))
+            << "; will retry on next stop/destructor\n";
+        pid_ = -1;
+        // Keep process_group_id_ / session_token_ so a later stop() can find them.
+        // Unregister so mid-lobby stale reap can also clean them up.
+        unregister_emulator_session_token(token);
+        return;
+    }
     pid_ = -1;
     process_group_id_ = -1;
+    unregister_emulator_session_token(session_token_);
+    session_token_.clear();
 }
 
 bool PosixRetroArchProcess::running() const {
-    if (pid_ <= 0) {
-        return false;
+    if (pid_ > 0) {
+        int status = 0;
+        const pid_t result = waitpid(pid_, &status, WNOHANG);
+        if (result == 0) {
+            return true;
+        }
+
+        if (result == pid_) {
+            record_status(status);
+            pid_ = -1;
+        } else if (errno == ECHILD) {
+            pid_ = -1;
+            if (!last_exit_code_.has_value()) {
+                last_exit_code_ = -1;
+            }
+            capture_stderr_tail();
+        } else if (result < 0) {
+            return true;
+        }
     }
 
-    int status = 0;
-    const pid_t result = waitpid(pid_, &status, WNOHANG);
-    if (result == 0) {
+    // Leader may have exited while gamescope/AppImage grandchildren remain.
+    if (process_group_id_ > 0 && kill(-process_group_id_, 0) == 0) {
         return true;
     }
-
-    if (result == pid_) {
-        record_status(status);
-        pid_ = -1;
-        return false;
+    if (!session_token_.empty()) {
+        const auto leftovers = collect_pids_for_session(process_group_id_, session_token_);
+        if (any_pid_alive(leftovers)) {
+            return true;
+        }
     }
 
-    if (errno == ECHILD) {
-        pid_ = -1;
-        if (!last_exit_code_.has_value()) {
+    if (process_group_id_ > 0 || !session_token_.empty()) {
+        process_group_id_ = -1;
+        unregister_emulator_session_token(session_token_);
+        session_token_.clear();
+        if (pid_ <= 0 && !last_exit_code_.has_value()) {
             last_exit_code_ = -1;
         }
-        // Still pull whatever stdio we have even if another waiter reaped the pid.
         capture_stderr_tail();
-        return false;
     }
-
     return false;
 }
 

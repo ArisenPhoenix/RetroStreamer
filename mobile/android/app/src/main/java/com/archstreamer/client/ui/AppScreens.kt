@@ -557,6 +557,7 @@ private fun RemoteSection(state: UiState, viewModel: ClientViewModel) {
         Text("Remote host (SSH)", style = MaterialTheme.typography.titleMedium)
         Text(
             "Ensure Host probes the base control port, reuses a free lobby, or SSH-starts host_runner. " +
+                "Optional GPU fuzzy-matches remote GPUs (host_runner --list-gpus). " +
                 "Successful ensure writes IP/ports onto the Client tab.",
             style = MaterialTheme.typography.bodyMedium,
         )
@@ -613,6 +614,17 @@ private fun RemoteSection(state: UiState, viewModel: ClientViewModel) {
             placeholder = { Text("./host_runner or …/build/host_runner") },
             supportingText = {
                 Text("If you paste the build directory, /host_runner is appended automatically.")
+            },
+        )
+        OutlinedTextField(
+            value = state.remoteGpu,
+            onValueChange = viewModel::onRemoteGpuChange,
+            label = { Text("GPU (optional)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("e.g. 3060, amd, nvidia:1") },
+            supportingText = {
+                Text("Blank = host default. Set to reuse/start on a matched remote GPU.")
             },
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

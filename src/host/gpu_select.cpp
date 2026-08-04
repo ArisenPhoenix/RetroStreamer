@@ -255,20 +255,29 @@ std::vector<GpuDevice> list_render_gpus() {
         devices.push_back(std::move(gpu));
     }
 
-    // Offer the default Mesa/AMD path when Vulkan sees a non-NVIDIA, non-llvmpipe device.
+    // Offer Mesa/AMD/Intel paths (including iGPUs) for every non-NVIDIA Vulkan device.
     for (const auto& [device_name, index] : vulkan_devices) {
         const auto lower = to_lower(device_name);
         if (lower.find("nvidia") != std::string::npos ||
-            lower.find("llvmpipe") != std::string::npos) {
+            lower.find("llvmpipe") != std::string::npos ||
+            lower.find("softpipe") != std::string::npos ||
+            lower.find("swiftshader") != std::string::npos) {
             continue;
         }
         GpuDevice gpu;
-        gpu.id = "mesa:" + std::to_string(index);
+        if (lower.find("amd") != std::string::npos ||
+            lower.find("radeon") != std::string::npos ||
+            lower.find("radv") != std::string::npos) {
+            gpu.id = "mesa:amd:" + std::to_string(index);
+        } else if (lower.find("intel") != std::string::npos) {
+            gpu.id = "mesa:intel:" + std::to_string(index);
+        } else {
+            gpu.id = "mesa:" + std::to_string(index);
+        }
         gpu.name = device_name;
         gpu.vulkan_index = index;
         gpu.score = score_gpu(gpu);
         devices.push_back(std::move(gpu));
-        break;
     }
 
     std::sort(devices.begin(), devices.end(), [](const GpuDevice& left, const GpuDevice& right) {
@@ -287,8 +296,46 @@ GpuDevice preferred_render_gpu(const std::vector<GpuDevice>& devices) {
     return devices.front();
 }
 
-std::optional<GpuDevice> resolve_render_gpu(const std::string& selection) {
-    const auto devices = list_render_gpus();
+bool gpu_selection_matches_device(const std::string& selection, const GpuDevice& device) {
+    if (selection.empty()) {
+        return false;
+    }
+    if (device.id == selection) {
+        return true;
+    }
+    auto normalize = [](std::string value) {
+        for (char& c : value) {
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (c == ':' || c == '_' || c == '-' || c == '/') {
+                c = ' ';
+            }
+        }
+        return value;
+    };
+    const auto needle = normalize(selection);
+    const auto hay = normalize(device.id + " " + device.name);
+    if (hay.find(needle) != std::string::npos) {
+        return true;
+    }
+    // Token match: "nvidia 3060" / "amd" → every non-empty token must appear.
+    std::string token;
+    std::stringstream tokens(needle);
+    bool any = false;
+    while (tokens >> token) {
+        if (token.empty()) {
+            continue;
+        }
+        any = true;
+        if (hay.find(token) == std::string::npos) {
+            return false;
+        }
+    }
+    return any;
+}
+
+std::optional<GpuDevice> resolve_render_gpu_from(
+    const std::vector<GpuDevice>& devices,
+    const std::string& selection) {
     if (selection.empty() || selection == "auto") {
         return preferred_render_gpu(devices);
     }
@@ -297,17 +344,16 @@ std::optional<GpuDevice> resolve_render_gpu(const std::string& selection) {
             return device;
         }
     }
-    // Allow matching by substring of the marketing name.
-    const auto needle = to_lower(selection);
     for (const auto& device : devices) {
-        if (to_lower(device.name).find(needle) != std::string::npos) {
+        if (gpu_selection_matches_device(selection, device)) {
             return device;
         }
     }
-    if (!devices.empty()) {
-        return preferred_render_gpu(devices);
-    }
     return std::nullopt;
+}
+
+std::optional<GpuDevice> resolve_render_gpu(const std::string& selection) {
+    return resolve_render_gpu_from(list_render_gpus(), selection);
 }
 
 std::vector<std::pair<std::string, std::string>> render_gpu_environment(const GpuDevice& gpu) {

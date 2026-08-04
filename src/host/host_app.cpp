@@ -9,6 +9,9 @@
 #include "host/capture_platform.hpp"
 #include "host/emulator_orphan_reaper.hpp"
 #include "host/game_catalog.hpp"
+#include "archstreamer/runtime_cadence/cadence.hpp"
+#include "host/cadence_session_events.hpp"
+#include "host/cadence_session_tracker.hpp"
 #include "host/game_catalog_scanner.hpp"
 #include "host/gpu_select.hpp"
 #include "host/host_app.hpp"
@@ -47,6 +50,12 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace archstreamer {
 
@@ -733,6 +742,35 @@ int HostApp::run_direct_session(
         gamescope_capture,
         capture_display);
 
+    CadenceSessionTracker cadence_tracker;
+    {
+        std::ostringstream detail;
+        detail << session_mode_name(launch_plan.session_mode) << " direct";
+        const std::string sink = StreamingAudioSink::kName;
+        cadence_tracker.begin(
+            0,
+            launch_plan.save_username,
+            launch_plan.game_id,
+            {},
+            detail.str(),
+            config.virtual_display,
+            config.video_port,
+            config.audio_port,
+            DefaultRetroArchNetcmdPort,
+            sink,
+            sink,
+            0xa517);
+        if (const auto pid = session_runtime->emulator().process_id(); pid.has_value()) {
+            cadence_tracker.claim_emulator_pid(*pid);
+        }
+        record_session_started(
+            0,
+            launch_plan.save_username,
+            launch_plan.game_id,
+            detail.str(),
+            cadence_tracker.session_id());
+    }
+
     if (arm_soft_keyboard && standalone_soft_keyboard) {
         std::string display = capture_display;
         if (keyboard.plugged()) {
@@ -805,6 +843,18 @@ int HostApp::run_direct_session(
     if (melonds_backend) {
         (void)melonds_backend->post_exit_sync(save_profile);
     }
+    {
+        const std::string end_reason = should_stop()
+            ? "host stopped"
+            : session_end_reason.value_or("session ended");
+        record_session_ended(
+            0,
+            launch_plan.save_username,
+            launch_plan.game_id,
+            end_reason,
+            cadence_tracker.session_id());
+        cadence_tracker.end(end_reason);
+    }
     stop_session_media(media_server);
     if (config.audio) {
         streaming_audio.restore_default_sink();
@@ -823,6 +873,59 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         // This reaps leftovers from a prior host that never got to run destructors.
         reap_orphaned_emulator_processes();
 
+        {
+            auto cadence = archstreamer::cadence::make_runtime_store();
+            if (cadence->ensure_ready()) {
+                archstreamer::cadence::RuntimeEvent started;
+                started.kind = "host_started";
+                started.host_id = cadence_host_id();
+                started.detail = "host_runner";
+                (void)cadence->record_event(started);
+
+                const auto reaped = archstreamer::cadence::reap_stale_instance_state(
+                    *cadence,
+                    started.host_id);
+                if (reaped.sessions_ended > 0 || reaped.claims_released > 0) {
+                    std::cout
+                        << "cadence: reaped stale state ("
+                        << reaped.sessions_ended << " session(s), "
+                        << reaped.claims_released << " claim(s))\n";
+                }
+
+                const auto save_root = config_.save_root.empty()
+                    ? default_save_profile_root()
+                    : config_.save_root;
+                const auto imported =
+                    archstreamer::cadence::import_users_from_save_root(*cadence, save_root);
+                if (imported > 0) {
+                    std::cout
+                        << "cadence: imported " << imported
+                        << " user(s) from save profiles\n";
+                }
+            }
+        }
+
+        const auto host_id_for_shutdown = cadence_host_id();
+        auto release_this_host = [&](std::string_view reason) {
+            try {
+                auto cadence = archstreamer::cadence::make_runtime_store();
+                if (!cadence->ensure_ready()) {
+                    return;
+                }
+                const auto released = archstreamer::cadence::release_host_instance_state(
+                    *cadence,
+                    host_id_for_shutdown,
+                    reason);
+                if (released.sessions_ended > 0 || released.claims_released > 0) {
+                    std::cout
+                        << "cadence: host shutdown released "
+                        << released.sessions_ended << " session(s), "
+                        << released.claims_released << " claim(s)\n";
+                }
+            } catch (...) {
+            }
+        };
+
         auto config = config_;
         auto catalog = scan_game_catalog(config.rom_root, LibretroCoreRegistry::ubuntu_defaults(), config.meta_root);
         const auto list = catalog.list();
@@ -837,12 +940,14 @@ int HostApp::run(const std::function<bool()>& should_stop) {
 
         if (list.games.empty()) {
             std::cerr << "No supported games found under " << config.rom_root << '\n';
+            release_this_host("host exit");
             return 1;
         }
 
         if (config.list || (!config.selector.has_value() && !config.control_port.has_value())) {
             std::cout << "Found " << list.games.size() << " supported games under " << config.rom_root << ".\n";
             print_game_catalog(std::cout, list);
+            release_this_host("host exit");
             return config.list ? 0 : 2;
         }
 
@@ -852,25 +957,39 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             bridge_identity = host_player_controller_identity(*bridge_device);
         }
 
+        int result = 0;
         if (config.control_port.has_value()) {
             if (should_stop()) {
+                release_this_host("host stopped");
                 return 0;
             }
-            return run_lobby_sessions(config, catalog, list, streaming_audio, bridge_device, should_stop);
+            result = run_lobby_sessions(config, catalog, list, streaming_audio, bridge_device, should_stop);
+        } else {
+            result = run_direct_session(
+                config,
+                catalog,
+                list,
+                streaming_audio,
+                bridge_device,
+                bridge_identity,
+                host_plays_locally,
+                should_stop);
         }
-
-        return run_direct_session(
-            config,
-            catalog,
-            list,
-            streaming_audio,
-            bridge_device,
-            bridge_identity,
-            host_plays_locally,
-            should_stop);
+        release_this_host(should_stop() ? "host stopped" : "host exit");
+        return result;
     } catch (const std::exception& error) {
         StreamingAudioSink{}.restore_default_sink();
         cleanup_x11_capture_runtime_dir();
+        try {
+            auto cadence = archstreamer::cadence::make_runtime_store();
+            if (cadence->ensure_ready()) {
+                (void)archstreamer::cadence::release_host_instance_state(
+                    *cadence,
+                    cadence_host_id(),
+                    should_stop() ? "host stopped" : "host error");
+            }
+        } catch (...) {
+        }
         if (should_stop()) {
             std::cout << "Host stopped.\n";
             return 0;

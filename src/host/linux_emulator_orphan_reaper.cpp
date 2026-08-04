@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <mutex>
 #include <set>
 #include <string>
 #include <string_view>
@@ -20,6 +21,11 @@
 
 namespace archstreamer {
 namespace {
+
+constexpr const char* kSessionTokenEnv = "ARCHSTREAMER_SLOT_TOKEN";
+
+std::mutex g_live_tokens_mutex;
+std::set<std::string> g_live_tokens;
 
 struct ProcEntry {
     pid_t pid = 0;
@@ -199,6 +205,28 @@ bool any_alive(const std::set<pid_t>& pids) {
     });
 }
 
+std::string read_environ_token(const std::filesystem::path& environ_path) {
+    std::ifstream in(environ_path, std::ios::binary);
+    if (!in) {
+        return {};
+    }
+    std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const std::string prefix = std::string(kSessionTokenEnv) + "=";
+    std::size_t pos = 0;
+    while (pos < raw.size()) {
+        const auto end = raw.find('\0', pos);
+        const auto entry = raw.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
+        if (entry.size() > prefix.size() && entry.compare(0, prefix.size(), prefix) == 0) {
+            return entry.substr(prefix.size());
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        pos = end + 1;
+    }
+    return {};
+}
+
 } // namespace
 
 int reap_orphaned_emulator_processes() {
@@ -301,6 +329,80 @@ int reap_orphaned_emulator_processes() {
     }
 
     return static_cast<int>(orphan_roots.size());
+}
+
+void register_emulator_session_token(const std::string& token) {
+    if (token.empty()) {
+        return;
+    }
+    std::lock_guard lock(g_live_tokens_mutex);
+    g_live_tokens.insert(token);
+}
+
+void unregister_emulator_session_token(const std::string& token) {
+    if (token.empty()) {
+        return;
+    }
+    std::lock_guard lock(g_live_tokens_mutex);
+    g_live_tokens.erase(token);
+}
+
+int reap_stale_emulator_session_tokens() {
+    std::set<std::string> live;
+    {
+        std::lock_guard lock(g_live_tokens_mutex);
+        live = g_live_tokens;
+    }
+
+    const auto entries = snapshot_processes();
+    const pid_t self = getpid();
+    std::map<pid_t, const ProcEntry*> by_pid;
+    std::map<pid_t, std::vector<pid_t>> children;
+    for (const auto& entry : entries) {
+        by_pid.emplace(entry.pid, &entry);
+        children[entry.ppid].push_back(entry.pid);
+    }
+
+    std::set<pid_t> doomed;
+    std::set<std::string> stale_tokens;
+    for (const auto& entry : entries) {
+        if (entry.pid <= 1 || entry.pid == self) {
+            continue;
+        }
+        const auto token = read_environ_token(
+            std::filesystem::path("/proc") / std::to_string(entry.pid) / "environ");
+        if (token.empty() || live.count(token) != 0) {
+            continue;
+        }
+        // Still attached to a live host owner? Leave it (registration race).
+        if (has_live_owner_ancestor(entry.ppid, by_pid) || is_owner_process(entry)) {
+            continue;
+        }
+        stale_tokens.insert(token);
+        collect_descendants(entry.pid, children, doomed);
+    }
+    doomed.erase(self);
+    doomed.erase(0);
+    doomed.erase(1);
+    if (doomed.empty()) {
+        return 0;
+    }
+
+    for (const auto& token : stale_tokens) {
+        std::cout << "Reaping stale emulator session token=" << token << '\n';
+    }
+    for (const pid_t pid : doomed) {
+        kill(pid, SIGTERM);
+    }
+    for (int i = 0; i < 40 && any_alive(doomed); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    if (any_alive(doomed)) {
+        for (const pid_t pid : doomed) {
+            kill(pid, SIGKILL);
+        }
+    }
+    return static_cast<int>(stale_tokens.size());
 }
 
 } // namespace archstreamer

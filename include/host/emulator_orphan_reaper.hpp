@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 namespace archstreamer {
 
 /**
@@ -21,5 +23,19 @@ namespace archstreamer {
  * Returns the number of orphan roots that were terminated.
  */
 int reap_orphaned_emulator_processes();
+
+/**
+ * Track tokens injected as ARCHSTREAMER_SLOT_TOKEN by PosixRetroArchProcess.
+ * Used so mid-lobby cleanup can kill abandoned trees without touching live slots.
+ */
+void register_emulator_session_token(const std::string& token);
+void unregister_emulator_session_token(const std::string& token);
+
+/**
+ * Kill processes whose environ still carries ARCHSTREAMER_SLOT_TOKEN but the
+ * token is no longer registered (failed stop / AppImage re-exec leftovers).
+ * Safe while this host_runner has live sessions. Returns roots terminated.
+ */
+int reap_stale_emulator_session_tokens();
 
 } // namespace archstreamer

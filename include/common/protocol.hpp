@@ -184,7 +184,7 @@ struct ClientHello {
     bool wants_audio = true;
     // Trailing — older peers omit it (Auto).
     DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto;
-    // Required at protocol v18 — host verifies / creates credentials.json.
+    // Required at protocol v18 — host verifies / creates cadence user credentials.
     std::string password;
 };
 

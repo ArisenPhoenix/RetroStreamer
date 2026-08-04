@@ -109,6 +109,7 @@ void ClientVideoController::endSession() {
     if (refresh_timer_ != nullptr) {
         refresh_timer_->stop();
     }
+    fullscreen_suspended_for_overlay_ = false;
     // Never call GStreamer from here — this runs on the GUI/X11 thread.
     // Media is already stopped on the session worker before endSession is queued.
     if (embed_bridge_) {
@@ -132,11 +133,37 @@ void ClientVideoController::raiseVideo() {
     if (!surface_) {
         return;
     }
-    if (mode_ == ClientVideoMode::FullScreen) {
+    if (mode_ == ClientVideoMode::FullScreen && !fullscreen_suspended_for_overlay_) {
         surface_->showFullScreen();
     } else {
         surface_->show();
     }
+    surface_->raise();
+    surface_->activateWindow();
+}
+
+void ClientVideoController::suspendFullScreenForOverlay() {
+    if (!surface_ || mode_ != ClientVideoMode::FullScreen) {
+        return;
+    }
+    if (!surface_->isFullScreen() && !fullscreen_suspended_for_overlay_) {
+        return;
+    }
+    fullscreen_suspended_for_overlay_ = true;
+    // Windowed so sibling Qt dialogs (pad OSK) can stack above the video surface.
+    surface_->showNormal();
+    surface_->show();
+}
+
+void ClientVideoController::resumeFullScreenAfterOverlay() {
+    if (!fullscreen_suspended_for_overlay_) {
+        return;
+    }
+    fullscreen_suspended_for_overlay_ = false;
+    if (!surface_ || mode_ != ClientVideoMode::FullScreen) {
+        return;
+    }
+    surface_->showFullScreen();
     surface_->raise();
     surface_->activateWindow();
 }

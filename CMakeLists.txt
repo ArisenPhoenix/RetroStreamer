@@ -145,6 +145,11 @@ if(WIN32)
     target_link_libraries(archstreamer_core PUBLIC ws2_32 iphlpapi)
 endif()
 
+# Control-plane user/event store (file JSONL default, optional SQLite sidecar).
+set(ARCHSTREAMER_RUNTIME_CADENCE "file" CACHE STRING "Runtime cadence backend (file|db)")
+set_property(CACHE ARCHSTREAMER_RUNTIME_CADENCE PROPERTY STRINGS file db)
+add_subdirectory(runtime_cadence)
+
 set(ARCHSTREAMER_CONTROLLER_BACKEND "sdl2" CACHE STRING "Controller backend implementation")
 set_property(CACHE ARCHSTREAMER_CONTROLLER_BACKEND PROPERTY STRINGS sdl2)
 
@@ -271,6 +276,8 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/retroarch_config_writer.cpp
         src/host/retroarch_netcmd.cpp
         src/host/save_profile.cpp
+        src/host/save_manager.cpp
+        src/host/save_active_sessions.cpp
         src/host/user_credentials.cpp
         src/host/standalone_emulator.cpp
         src/host/switch/switch_fs.cpp
@@ -296,6 +303,8 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/link_cable_backend.cpp
         src/host/seat_manager.cpp
         src/host/session_control_monitor.cpp
+        src/host/cadence_session_events.cpp
+        src/host/cadence_session_tracker.cpp
         src/host/session_launch_assemble.cpp
         src/host/session_run_helpers.cpp
         src/host/session_lobby.cpp
@@ -350,6 +359,7 @@ if(ARCHSTREAMER_BUILD_HOST)
     target_link_libraries(archstreamer_host
         PUBLIC
             archstreamer_core
+            ${ARCHSTREAMER_CADENCE_LINK_TARGET}
         PRIVATE
             archstreamer_controller
     )
@@ -410,6 +420,9 @@ if(ARCHSTREAMER_BUILD_HOST)
         steam_art_import
         host_runner
     )
+    if(ARCHSTREAMER_CADENCE_SIDECAR_TARGET)
+        list(APPEND ARCHSTREAMER_INSTALL_TARGETS archstreamer_cadence)
+    endif()
 endif()
 
 if(ARCHSTREAMER_BUILD_CONTROLLER_PROBE)
@@ -472,6 +485,7 @@ if(Qt6Widgets_FOUND)
         src/gui/main_window_remote.cpp
         src/gui/main_window_settings.cpp
         src/gui/main_window_game_options.cpp
+        src/gui/main_window_update.cpp
         src/gui/remote_ssh.cpp
         src/gui/remote_ssh.hpp
         src/tools/archstreamer_gui.cpp
@@ -481,6 +495,7 @@ if(Qt6Widgets_FOUND)
             src/gui/gui_host_runner.cpp
             src/gui/gui_host_runner.hpp
             src/gui/main_window_host.cpp
+            src/gui/main_window_saves.cpp
         )
     endif()
     list(APPEND ARCHSTREAMER_GUI_SOURCES branding/archstreamer.qrc)
@@ -566,6 +581,7 @@ message(STATUS "")
 message(STATUS "ArchStreamer dependency summary")
 message(STATUS "  C++ standard:     ${CMAKE_CXX_STANDARD}")
 message(STATUS "  Build host:       ${ARCHSTREAMER_BUILD_HOST}")
+message(STATUS "  Runtime cadence:  ${ARCHSTREAMER_RUNTIME_CADENCE}")
 message(STATUS "  Debug GB link:    ${ARCHSTREAMER_DEBUG_GB_LINK}")
 message(STATUS "  Controller:       ${ARCHSTREAMER_CONTROLLER_BACKEND}")
 if(DEFINED SDL2_VERSION)

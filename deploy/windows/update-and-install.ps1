@@ -44,8 +44,12 @@ $ErrorActionPreference = "Stop"
 
 # This file lives at <repo>\deploy\windows\update-and-install.ps1
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-if (-not (Test-Path (Join-Path $RepoRoot "build_windows.ps1"))) {
-    throw "Could not find build_windows.ps1 at repo root: $RepoRoot"
+$BuildPs1 = Join-Path $RepoRoot "deploy\windows\build_windows.ps1"
+if (-not (Test-Path $BuildPs1)) {
+    $BuildPs1 = Join-Path $RepoRoot "build_windows.ps1"
+}
+if (-not (Test-Path $BuildPs1)) {
+    throw "Could not find build_windows.ps1 under deploy\windows or repo root: $RepoRoot"
 }
 
 if ([string]::IsNullOrWhiteSpace($VcpkgRoot)) {
@@ -118,7 +122,7 @@ $buildArgs = @{
 if ($BuildHost) { $buildArgs["BuildHost"] = $true }
 if ($Reconfigure) { $buildArgs["Reconfigure"] = $true }
 if ($Clean) { $buildArgs["Clean"] = $true }
-& (Join-Path $RepoRoot "build_windows.ps1") @buildArgs
+& $BuildPs1 @buildArgs
 
 if ($SkipInstall) {
     Write-Host "Skipping install. Binary under build\ or build\Release\"

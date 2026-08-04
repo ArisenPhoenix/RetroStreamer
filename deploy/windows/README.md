@@ -3,7 +3,7 @@
 **Python front-ends** (preferred; leave the `.ps1` files as references):
 
 ```powershell
-python build_windows.py
+python deploy\build_windows.py
 python deploy\update_and_install.py --reset-hard
 python deploy\install_deps.py
 python deploy\finish_install.py --shortcuts

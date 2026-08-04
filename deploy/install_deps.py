@@ -347,7 +347,7 @@ def main() -> int:
 
     print("")
     print("Done. Build with:")
-    print("  python build_windows.py --reconfigure")
+    print("  python deploy/build_windows.py --reconfigure")
     print("  # host-capable:")
     print(
         f'  cmake -S . -B build -DARCHSTREAMER_BUILD_HOST=ON '

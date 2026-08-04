@@ -107,9 +107,14 @@ def main() -> int:
     args = parse_args()
     require_windows()
     root = repo_root(Path(__file__))
-    build_py = root / "build_windows.py"
+    # Prefer deploy/ (current layout); fall back to repo-root copies from older trees.
+    build_py = root / "deploy" / "build_windows.py"
     if not build_py.is_file():
-        raise SystemExit(f"Could not find build_windows.py at repo root: {root}")
+        build_py = root / "build_windows.py"
+    if not build_py.is_file():
+        raise SystemExit(
+            f"Could not find build_windows.py under deploy/ or repo root: {root}"
+        )
 
     vcpkg_root = Path(args.vcpkg_root) if args.vcpkg_root else default_vcpkg_root()
     prefix = Path(args.prefix)

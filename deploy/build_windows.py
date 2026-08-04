@@ -14,8 +14,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Allow `python build_windows.py` from repo root without installing a package.
-_SCRIPTS = Path(__file__).resolve().parent / "scripts"
+# Allow running from repo root or deploy/ without installing a package.
+# scriptutil lives at <repo>/scripts/scriptutil.py (not deploy/scripts).
+_ROOT = Path(__file__).resolve().parent.parent
+_SCRIPTS = _ROOT / "scripts"
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 

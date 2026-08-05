@@ -61,6 +61,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // Play keyboard/UI first so BT keyboards mislabeled as joysticks still work.
+        if (viewModel.onPlayKeyEvent(event)) return true
         if (viewModel.onGamepadKeyEvent(event)) return true
         return super.dispatchKeyEvent(event)
     }

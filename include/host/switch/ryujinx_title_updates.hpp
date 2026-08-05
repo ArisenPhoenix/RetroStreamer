@@ -9,14 +9,18 @@
 
 namespace archstreamer {
 
-/** Shared folder of update/DLC NSPs (Sword/Shield 1.3.2, etc.). */
+/**
+ * Global Switch DLC system folder: <DLC>/Switch/
+ * (NSPs live under per-game subdirs; this is the system parent.)
+ */
 std::filesystem::path switch_title_updates_directory();
 
 /**
- * Ensure per-catalog addon registered/ contents and point Ryujinx at them:
- * - seeds switch/addons/<stem>/manifest.json once (base=empty, versioned=matching NSPs)
- * - unpacks listed NSPs into addons/<stem>/registered/
+ * Ensure global catalog DLC for a Switch stem and point Ryujinx at it:
+ * - <DLC>/Switch/<content_stem>/manifest.json (+ NSPs nested in that folder)
+ * - unpacks listed NSPs into …/registered/
  * - replaces bis/user/Contents/registered with a symlink to that directory
+ * - migrates once from legacy per-user switch/addons/<stem> and flat SwitchUpdates
  */
 void ensure_ryujinx_catalog_addons(
     const SaveProfile& save_profile,
@@ -25,8 +29,8 @@ void ensure_ryujinx_catalog_addons(
     std::string_view title_id = {});
 
 /**
- * Legacy: unpack every NSP into the profile registered/ folder.
- * Prefer ensure_ryujinx_catalog_addons for catalog launches.
+ * Legacy: unpack every NSP under DLC/Switch (and nested game dirs) into the
+ * profile registered/ folder. Prefer ensure_ryujinx_catalog_addons for catalog launches.
  */
 void ensure_ryujinx_title_updates(const std::filesystem::path& ryujinx_data_root);
 

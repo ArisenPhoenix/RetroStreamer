@@ -38,6 +38,8 @@ class QProcess;
 class QPushButton;
 class QSpinBox;
 class QTabWidget;
+class QTableWidget;
+class QTabWidget;
 class QTimer;
 class QTreeWidget;
 class QWidget;
@@ -53,10 +55,19 @@ public:
     /** Session-only update branch (CLI --branch). Not written to QSettings. */
     void set_session_update_branch(const QString& branch);
 
+#ifdef ARCHSTREAMER_HAS_HOST
+    /** For Catalog ops (filesystem renames). */
+    std::filesystem::path save_root_path_for_catalog() const;
+    std::filesystem::path art_root_path_for_catalog() const;
+    std::filesystem::path rom_root_path_for_catalog() const;
+    std::filesystem::path dlc_root_path_for_catalog() const;
+#endif
+
 private:
     QWidget* build_client_tab();
     QWidget* build_remote_tab();
     QWidget* build_stream_tab();
+    QWidget* build_controls_tab();
     QWidget* build_game_options_tab();
     QWidget* build_profile_tab();
     QWidget* build_settings_tab();
@@ -98,6 +109,7 @@ private:
 #ifdef ARCHSTREAMER_HAS_HOST
     QWidget* build_host_tab();
     QWidget* build_saves_tab();
+    QWidget* build_catalog_tab();
     void refresh_host_controllers();
     void sync_host_role_and_bridge();
     void sync_host_advertise(bool enabled);
@@ -117,6 +129,7 @@ private:
     void saves_remove_game();
     void saves_kick_user();
     SaveNameHints saves_name_hints() const;
+    void refresh_catalog_browser();
 #endif
 
     void load_persisted_settings();
@@ -317,8 +330,19 @@ private:
     QAction* saves_remove_game_action_ = nullptr;
     SaveNameHints saves_hints_;
     QTimer* saves_refresh_timer_ = nullptr;
-#endif
+    /** Skip tree rebuilds while the Users context menu is open (shared actions gray out otherwise). */
+    bool saves_context_menu_open_ = false;
 
+    QLabel* catalog_db_path_ = nullptr;
+    QLabel* catalog_status_ = nullptr;
+    QLineEdit* catalog_filter_ = nullptr;
+    QPushButton* catalog_refresh_ = nullptr;
+    QTableWidget* catalog_meta_table_ = nullptr;
+    QTableWidget* catalog_aliases_table_ = nullptr;
+    QTableWidget* catalog_user_games_table_ = nullptr;
+    QTableWidget* catalog_edits_table_ = nullptr;
+    QTableWidget* catalog_play_modes_table_ = nullptr;
+#endif
     QLineEdit* profile_username_ = nullptr;
     QLineEdit* profile_host_name_ = nullptr;
     QLineEdit* profile_steam_account_ = nullptr;

@@ -60,7 +60,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -87,6 +90,8 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
     val state by viewModel.state.collectAsState()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    var playMenuFocus by remember { mutableStateOf(PlayMenuFocusItem.Controls) }
+    val playMenuItems = remember { PlayMenuFocusItem.entries }
 
     fun openDrawer() {
         scope.launch { drawerState.open() }
@@ -94,6 +99,46 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
 
     fun closeDrawer() {
         scope.launch { drawerState.close() }
+    }
+
+    fun activatePlayMenuItem(item: PlayMenuFocusItem) {
+        when (item) {
+            PlayMenuFocusItem.Controls -> {
+                viewModel.selectSection(NavSection.Controls)
+                closeDrawer()
+            }
+            PlayMenuFocusItem.GameOptions -> {
+                viewModel.selectSection(NavSection.GameOptions)
+                closeDrawer()
+            }
+            PlayMenuFocusItem.Stream -> {
+                viewModel.selectSection(NavSection.Stream)
+                closeDrawer()
+            }
+            PlayMenuFocusItem.Settings -> {
+                viewModel.selectSection(NavSection.Settings)
+                closeDrawer()
+            }
+            PlayMenuFocusItem.Pause -> viewModel.setPaused(!state.paused)
+            PlayMenuFocusItem.FastForward -> viewModel.setFastForward(!state.fastForward)
+            PlayMenuFocusItem.EditControls -> {
+                viewModel.beginOverlayEdit()
+                closeDrawer()
+            }
+            PlayMenuFocusItem.SoftKeyboard -> {
+                viewModel.openManualSoftKeyboard()
+                closeDrawer()
+            }
+            PlayMenuFocusItem.ResyncAv -> viewModel.resyncAv()
+            PlayMenuFocusItem.Leave -> {
+                viewModel.leavePlay()
+                closeDrawer()
+            }
+            PlayMenuFocusItem.Disconnect -> {
+                viewModel.disconnect()
+                closeDrawer()
+            }
+        }
     }
 
     // Scrim tap / swipe close bypasses closeDrawer(). Use settled currentValue — not
@@ -106,7 +151,10 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
             .distinctUntilChanged()
             .collect { value ->
                 when (value) {
-                    DrawerValue.Open -> viewModel.onPlayMenuOpened()
+                    DrawerValue.Open -> {
+                        playMenuFocus = PlayMenuFocusItem.Controls
+                        viewModel.onPlayMenuOpened()
+                    }
                     DrawerValue.Closed -> viewModel.onPlayMenuClosed()
                 }
             }
@@ -118,12 +166,30 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
         }
     }
 
+    LaunchedEffect(viewModel) {
+        viewModel.playMenuCommands.collect { cmd ->
+            when (cmd) {
+                PlayMenuCommand.MoveUp -> {
+                    val i = playMenuItems.indexOf(playMenuFocus)
+                    playMenuFocus = playMenuItems[(i - 1 + playMenuItems.size) % playMenuItems.size]
+                }
+                PlayMenuCommand.MoveDown -> {
+                    val i = playMenuItems.indexOf(playMenuFocus)
+                    playMenuFocus = playMenuItems[(i + 1) % playMenuItems.size]
+                }
+                PlayMenuCommand.Activate -> activatePlayMenuItem(playMenuFocus)
+                PlayMenuCommand.Close -> closeDrawer()
+            }
+        }
+    }
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         gesturesEnabled = (!state.playing || drawerState.isOpen) && !state.overlayEditing,
         drawerContent = {
             AppDrawer(
                 state = state,
+                focusedItem = if (state.playing && drawerState.isOpen) playMenuFocus else null,
                 onSelect = { section ->
                     viewModel.selectSection(section)
                     closeDrawer()
@@ -141,6 +207,9 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
                     viewModel.beginOverlayEdit()
                     closeDrawer()
                 },
+                onResyncAv = {
+                    viewModel.resyncAv()
+                },
                 onPausedChange = viewModel::setPaused,
                 onFastForwardChange = viewModel::setFastForward,
                 onDisconnect = {
@@ -152,7 +221,8 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
         },
     ) {
         if (state.playing &&
-            (state.section == NavSection.GameOptions ||
+            (state.section == NavSection.Controls ||
+                state.section == NavSection.GameOptions ||
                 state.section == NavSection.Stream ||
                 state.section == NavSection.Settings)
         ) {
@@ -178,6 +248,7 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
                         .fillMaxSize(),
                 ) {
                     when (state.section) {
+                        NavSection.Controls -> ControlsSection(state, viewModel)
                         NavSection.GameOptions -> GameOptionsSection(state, viewModel)
                         NavSection.Stream -> StreamSection(state, viewModel)
                         NavSection.Settings -> SettingsSection(state, viewModel)
@@ -216,6 +287,7 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
                         NavSection.Remote -> RemoteSection(state, viewModel)
                         NavSection.Games -> GamesSection(state, viewModel)
                         NavSection.Stream -> StreamSection(state, viewModel)
+                        NavSection.Controls -> ControlsSection(state, viewModel)
                         NavSection.GameOptions -> GameOptionsSection(state, viewModel)
                         NavSection.Profile -> ProfileSection(state, viewModel)
                         NavSection.Settings -> SettingsSection(state, viewModel)
@@ -225,7 +297,7 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
         }
         }
 
-        // Offline layout editor (Game Options -> Customize). While playing, PlayScreen hosts it.
+        // Offline layout editor (Controls → Customize). While playing, PlayScreen hosts it.
         if (state.overlayEditing && !state.playing) {
             Dialog(
                 onDismissRequest = viewModel::cancelOverlayEdit,
@@ -329,10 +401,12 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
 @Composable
 private fun AppDrawer(
     state: UiState,
+    focusedItem: PlayMenuFocusItem? = null,
     onSelect: (NavSection) -> Unit,
     onLeavePlay: () -> Unit,
     onOpenSoftKeyboard: () -> Unit,
     onEditControls: () -> Unit,
+    onResyncAv: () -> Unit,
     onPausedChange: (Boolean) -> Unit,
     onFastForwardChange: (Boolean) -> Unit,
     onDisconnect: () -> Unit,
@@ -402,20 +476,26 @@ private fun AppDrawer(
                 }
             } else {
                 NavigationDrawerItem(
+                    label = { Text(NavSection.Controls.title) },
+                    selected = focusedItem == PlayMenuFocusItem.Controls,
+                    onClick = { onSelect(NavSection.Controls) },
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                )
+                NavigationDrawerItem(
                     label = { Text(NavSection.GameOptions.title) },
-                    selected = false,
+                    selected = focusedItem == PlayMenuFocusItem.GameOptions,
                     onClick = { onSelect(NavSection.GameOptions) },
                     modifier = Modifier.padding(horizontal = 12.dp),
                 )
                 NavigationDrawerItem(
                     label = { Text(NavSection.Stream.title) },
-                    selected = false,
+                    selected = focusedItem == PlayMenuFocusItem.Stream,
                     onClick = { onSelect(NavSection.Stream) },
                     modifier = Modifier.padding(horizontal = 12.dp),
                 )
                 NavigationDrawerItem(
                     label = { Text(NavSection.Settings.title) },
-                    selected = false,
+                    selected = focusedItem == PlayMenuFocusItem.Settings,
                     onClick = { onSelect(NavSection.Settings) },
                     modifier = Modifier.padding(horizontal = 12.dp),
                 )
@@ -428,7 +508,17 @@ private fun AppDrawer(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                        .then(
+                            if (focusedItem == PlayMenuFocusItem.Pause) {
+                                Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.secondaryContainer)
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            } else {
+                                Modifier
+                            },
+                        ),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -441,7 +531,17 @@ private fun AppDrawer(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                        .then(
+                            if (focusedItem == PlayMenuFocusItem.FastForward) {
+                                Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.secondaryContainer)
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            } else {
+                                Modifier
+                            },
+                        ),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -455,7 +555,17 @@ private fun AppDrawer(
                     onClick = onEditControls,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp),
+                        .padding(horizontal = 12.dp)
+                        .then(
+                            if (focusedItem == PlayMenuFocusItem.EditControls) {
+                                Modifier.background(
+                                    MaterialTheme.colorScheme.secondaryContainer,
+                                    RoundedCornerShape(12.dp),
+                                )
+                            } else {
+                                Modifier
+                            },
+                        ),
                 ) {
                     Text("Edit controls")
                 }
@@ -463,15 +573,63 @@ private fun AppDrawer(
                     onClick = onOpenSoftKeyboard,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp),
+                        .padding(horizontal = 12.dp)
+                        .then(
+                            if (focusedItem == PlayMenuFocusItem.SoftKeyboard) {
+                                Modifier.background(
+                                    MaterialTheme.colorScheme.secondaryContainer,
+                                    RoundedCornerShape(12.dp),
+                                )
+                            } else {
+                                Modifier
+                            },
+                        ),
                 ) {
                     Text("Software keyboard (failsafe)")
+                }
+                TextButton(
+                    onClick = onResyncAv,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp)
+                        .then(
+                            if (focusedItem == PlayMenuFocusItem.ResyncAv) {
+                                Modifier.background(
+                                    MaterialTheme.colorScheme.secondaryContainer,
+                                    RoundedCornerShape(12.dp),
+                                )
+                            } else {
+                                Modifier
+                            },
+                        ),
+                ) {
+                    Text("Resync A/V")
+                }
+                if (state.status.contains("audio", ignoreCase = true) ||
+                    state.status.contains("A/V", ignoreCase = true)
+                ) {
+                    Text(
+                        state.status,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
                 TextButton(
                     onClick = onLeavePlay,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp),
+                        .padding(horizontal = 12.dp)
+                        .then(
+                            if (focusedItem == PlayMenuFocusItem.Leave) {
+                                Modifier.background(
+                                    MaterialTheme.colorScheme.secondaryContainer,
+                                    RoundedCornerShape(12.dp),
+                                )
+                            } else {
+                                Modifier
+                            },
+                        ),
                 ) {
                     Text("Leave session")
                 }
@@ -481,7 +639,17 @@ private fun AppDrawer(
                     onClick = onDisconnect,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp),
+                        .padding(horizontal = 12.dp)
+                        .then(
+                            if (focusedItem == PlayMenuFocusItem.Disconnect) {
+                                Modifier.background(
+                                    MaterialTheme.colorScheme.secondaryContainer,
+                                    RoundedCornerShape(12.dp),
+                                )
+                            } else {
+                                Modifier
+                            },
+                        ),
                 ) {
                     Text("Disconnect")
                 }
@@ -962,7 +1130,7 @@ private fun StreamSection(state: UiState, viewModel: ClientViewModel) {
 }
 
 @Composable
-private fun GameOptionsSection(state: UiState, viewModel: ClientViewModel) {
+private fun ControlsSection(state: UiState, viewModel: ClientViewModel) {
     val profile = state.editingOverlayProfile
     Column(
         modifier = Modifier
@@ -1115,10 +1283,20 @@ private fun GameOptionsSection(state: UiState, viewModel: ClientViewModel) {
         TextButton(onClick = viewModel::resetOverlayProfile) {
             Text("Reset ${state.editingOverlayFamily.title} to defaults")
         }
+    }
+}
 
+@Composable
+private fun GameOptionsSection(state: UiState, viewModel: ClientViewModel) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Disc control", style = MaterialTheme.typography.titleMedium)
         if (state.playing && state.playlistDiscs.size >= 2) {
-            HorizontalDivider()
-            Text("Disc control", style = MaterialTheme.typography.titleMedium)
             Text(
                 state.discStatus.ifBlank {
                     "Disc ${state.discIndex + 1} / ${state.playlistDiscs.size}"
@@ -1167,11 +1345,16 @@ private fun GameOptionsSection(state: UiState, viewModel: ClientViewModel) {
                     Text("Next")
                 }
             }
+        } else {
+            Text(
+                "Join a multi-disc session (.m3u) to swap discs here.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
         }
 
+        HorizontalDivider()
+        Text("Link with player", style = MaterialTheme.typography.titleMedium)
         if (state.playing && state.linkCapable) {
-            HorizontalDivider()
-            Text("Link with player", style = MaterialTheme.typography.titleMedium)
             Text(
                 "Both players type each other's username and tap Request. " +
                     "The host matches when the requests are mutual.",
@@ -1209,6 +1392,15 @@ private fun GameOptionsSection(state: UiState, viewModel: ClientViewModel) {
                     Text("Cancel")
                 }
             }
+        } else {
+            Text(
+                if (state.playing) {
+                    "This session is not link-capable."
+                } else {
+                    "Join a link-capable session (GBA / DS / Switch) to request a peer."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+            )
         }
 
         HorizontalDivider()

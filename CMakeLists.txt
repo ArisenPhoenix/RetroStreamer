@@ -108,6 +108,7 @@ set(ARCHSTREAMER_CORE_SOURCES
     src/common/controller_button_map.cpp
     src/common/controller_normalization.cpp
     src/common/discovery.cpp
+    src/common/dlc_paths.cpp
     src/common/game_assets.cpp
     src/common/steam_art_import.cpp
     src/common/participant_role.cpp
@@ -279,6 +280,8 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/save_manager.cpp
         src/host/save_active_sessions.cpp
         src/host/game_meta_store.cpp
+        src/host/game_meta_edit_log.cpp
+        src/host/catalog_ops.cpp
         src/host/user_credentials.cpp
         src/host/standalone_emulator.cpp
         src/host/switch/switch_fs.cpp
@@ -498,6 +501,7 @@ if(Qt6Widgets_FOUND)
             src/gui/gui_host_runner.hpp
             src/gui/main_window_host.cpp
             src/gui/main_window_saves.cpp
+            src/gui/main_window_catalog.cpp
         )
     endif()
     list(APPEND ARCHSTREAMER_GUI_SOURCES branding/archstreamer.qrc)

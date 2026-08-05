@@ -12,9 +12,12 @@ cadence (auth / sessions / events).
 
 ## Authority
 
-- **Ingest source:** catalog scan (`scan_game_catalog`) + optional `ROMS/Meta/*.json`
-- **Lookup index:** this database (`game_meta` + `game_aliases`)
-- Wire `GameInfo` is unchanged; clients still receive titles on `GameList`
+- **Identity owner:** this database (`game_meta` + `game_aliases`). Catalog edits update
+  the DB first, then rewrite `ROMS/Meta/*.json` so path scans cannot resurrect stale ids.
+- **Directory consumer:** catalog scan discovers ROMs and new titles only. For known
+  files it binds by `content_path` / scanned id / stem aliases and refreshes
+  `content_path` (and launch metadata) without changing edited identity fields.
+- Wire `GameInfo` is unchanged; clients still receive titles on `GameList`.
 
 ## Schema
 
@@ -24,7 +27,8 @@ Primary key `game_id` (= catalog `GameInfo.id`).
 
 Columns: `system_key`, `system_name`, `display_name`, `canonical_name`, `core_name`,
 `asset_key`, `identity_key`, `version`, `language`, `region`, `content_stem`,
-`updated_at`, `source` (`catalog` / `meta_json` / future `ps2_memcard`).
+`content_path` (absolute ROM path last seen by scan), `updated_at`,
+`source` (`catalog` / `meta_json` / `edit` / future `ps2_memcard`).
 
 ### `game_aliases`
 
@@ -70,10 +74,13 @@ if (store->ready()) {
 |------|------|
 | `upsert` / `upsert_alias` | Write one row / alias |
 | `find_by_id` | Exact catalog id |
+| `find_by_content_path` | Exact ROM path |
 | `resolve(key, system_key?)` | Id or any alias (scoped then global) |
-| `sync_from_catalog` | Upsert all hosted games + standard aliases |
+| `bind_scanned_game` | Path/id/stem bind; keep DB identity; fold stale clones |
+| `write_meta_sidecar` | Persist DB identity into `ROMS/Meta/*.json` |
+| `sync_from_catalog` | Prefer `bind_scanned_game` for each hosted path |
 | `save_name_hints` | Flatten aliases into `SaveNameHints` |
-| `sync_game_meta_from_catalog` | Soft-fail helper (used at end of catalog scan) |
+| `sync_game_meta_from_catalog` | Soft-fail helper (optional / legacy callers) |
 | `record_user_game` / `list_user_games` | Per-user catalog game associations |
 | `record_user_game_played` | Soft-fail helper (session start) |
 
@@ -81,8 +88,10 @@ Soft-fail: open/write failures must not break play or the Users tab.
 
 ## Sync trigger
 
-`scan_game_catalog` calls `sync_game_meta_from_catalog` before returning.
-Users tab Refresh (which rescans) therefore refreshes the meta DB.
+`scan_game_catalog` calls `bind_scanned_game` per ROM before `add_game`, so the
+in-memory catalog already carries DB-owned ids. Users tab Refresh (rescans)
+therefore refreshes paths without recreating edited identities. Catalog edits
+call `write_meta_sidecar` after filesystem renames.
 
 `list_save_games` also merges meta hints so Switch title-id leaves and file stems
 resolve even without a fresh in-memory catalog map.

@@ -14,6 +14,7 @@ from typing import Sequence
 REL_ROM_ROOT = "ROMS/Games"
 REL_META_ROOT = "ROMS/Meta"
 REL_ART_ROOT = "ROMS/Art"
+REL_DLC_ROOT = "ROMS/DLC"
 REL_BIOS_ROOT = "BIOS FILES"
 REL_SRM_DIR = "tools/srm"
 REL_SRM_APPIMAGE = "tools/srm/Steam-ROM-Manager.AppImage"

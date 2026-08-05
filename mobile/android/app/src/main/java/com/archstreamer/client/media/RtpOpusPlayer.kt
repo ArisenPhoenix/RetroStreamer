@@ -119,6 +119,17 @@ class RtpOpusPlayer(
         }
     }
 
+    /**
+     * Drop buffered audio and rebind the Opus path so playback meets the current
+     * video edge again (desktop "Resync A/V" fallback — audio-only restart).
+     */
+    @Synchronized
+    fun restart(): Boolean {
+        close()
+        start()
+        return running.get()
+    }
+
     private fun queueOpus(decoder: MediaCodec, opus: ByteArray) {
         val inIndex = decoder.dequeueInputBuffer(2_000)
         if (inIndex < 0) return

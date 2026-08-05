@@ -52,19 +52,28 @@ That keeps dual-OS bugs localized (Windows Job Objects vs `PR_SET_PDEATHSIG`, X1
 
 ## Game Metadata
 
+`games.sqlite` (`game_meta`) owns catalog identity. Directory scan discovers ROMs and
+new titles, then binds known files by path / id / stem and only refreshes
+`content_path` (and launch metadata). Catalog edits update the DB and rewrite
+`ROMS/Meta/*.json` so rescans cannot resurrect path-derived duplicate ids.
+
 The scanner looks for metadata in a parallel tree next to the ROM tree. With ROM root
 `<Gaming>/ROMS/Games` (set in Settings / `--rom-root`; no built-in machine path),
-metadata defaults to `<Gaming>/ROMS/Meta`.
+metadata defaults to `<Gaming>/ROMS/Meta`. Updates/DLC packs (and unpacked Switch
+NCAs) live under the sibling `<Gaming>/ROMS/DLC/<System>/<content_stem>/`, keyed to
+`game_meta.content_stem` so Catalog renames stay consistent with saves and art.
 
 Metadata mirrors the ROM's relative path and replaces the ROM extension with `.json`:
 
 ```text
 Games/SNES/Super Bomberman.sfc
 Meta/SNES/Super Bomberman.json
+DLC/Switch/Pokemon Sword 1.3.2/   # UPD/DLC NSPs + registered/ NCAs (global)
 ```
 
-Metadata can override the catalog display fields and declares the modes and local
-player counts supported by one emulated game instance:
+Metadata can override provisional scan fields for *new* titles and declares the modes
+and local player counts supported by one emulated game instance. Those mode fields are
+also persisted in `games.sqlite` as `game_play_modes` (Catalog tab → play_modes):
 
 ```json
 {
@@ -80,6 +89,7 @@ player counts supported by one emulated game instance:
 ```
 
 If metadata is missing, the scanner uses `single=true`, `multi=true`, `min_players=1`, and `max_players=2`.
+Catalog sync writes the same defaults into `game_play_modes`.
 
 ## Game Selection
 

@@ -214,35 +214,80 @@ std::string infer_system_from_extension(std::string_view ext) {
     return "other";
 }
 
+/** Users-tab grouping key: catalog keeps gb vs gbc, browser shows one "Game Boy / Color". */
+std::string normalize_browser_system_key(std::string_view system_key) {
+    return normalize_save_browser_system_key(system_key);
+}
+
 std::pair<std::string, std::string> resolve_file_labels(
     const std::filesystem::path& relative,
     const SaveNameHints& hints,
     GameMetaStore* meta) {
-    const auto stem = to_lower(relative.stem().string());
-    if (const auto it = hints.by_stem.find(stem); it != hints.by_stem.end()) {
-        return it->second;
-    }
-    if (meta != nullptr && meta->ready()) {
-        if (auto row = meta->resolve(stem, {})) {
-            return {row->system_key, row->display_name};
+    const auto raw_stem = relative.stem().string();
+    const auto stem = to_lower(raw_stem);
+    const auto folded = to_lower(fold_common_latin_accents(raw_stem));
+    const auto base = save_match_base_name(raw_stem);
+
+    auto from_hints = [&](const std::string& key) -> std::optional<std::pair<std::string, std::string>> {
+        if (key.empty()) {
+            return std::nullopt;
         }
-        const auto folded = to_lower(fold_common_latin_accents(relative.stem().string()));
-        if (folded != stem) {
-            if (auto row = meta->resolve(folded, {})) {
-                return {row->system_key, row->display_name};
+        if (const auto it = hints.by_stem.find(key); it != hints.by_stem.end()) {
+            return it->second;
+        }
+        return std::nullopt;
+    };
+    auto from_meta = [&](const std::string& key) -> std::optional<std::pair<std::string, std::string>> {
+        if (key.empty() || meta == nullptr || !meta->ready()) {
+            return std::nullopt;
+        }
+        if (auto row = meta->resolve(key, {})) {
+            return std::pair{row->system_key, row->display_name};
+        }
+        return std::nullopt;
+    };
+    auto try_key = [&](const std::string& key) -> std::optional<std::pair<std::string, std::string>> {
+        if (auto hit = from_hints(key)) {
+            return hit;
+        }
+        return from_meta(key);
+    };
+
+    if (auto hit = try_key(stem)) {
+        return *hit;
+    }
+    if (folded != stem) {
+        if (auto hit = try_key(folded)) {
+            return *hit;
+        }
+    }
+    if (!base.empty() && base != stem && base != folded) {
+        if (auto hit = try_key(base)) {
+            return *hit;
+        }
+    }
+
+    // Prefix fallback: "pokemon ruby" → "pokemon ruby (usa, europe) (rev 2)".
+    if (!base.empty()) {
+        const auto paren = base + " (";
+        const auto version = base + " version";
+        for (const auto& [key, value] : hints.by_stem) {
+            if (key == base || key.rfind(paren, 0) == 0 || key.rfind(version, 0) == 0) {
+                return value;
             }
         }
     }
+
     // Last resort: layout/extension heuristics (not title inventing from aliases).
     const auto parent = relative.parent_path().filename().string();
     if (auto from_parent = infer_system_from_parent(parent); !from_parent.empty()) {
-        return {from_parent, relative.stem().string()};
+        return {from_parent, sanitize_game_display_name(raw_stem)};
     }
     auto ext = relative.extension().string();
     if (!ext.empty() && ext.front() == '.') {
         ext.erase(ext.begin());
     }
-    return {infer_system_from_extension(to_lower(ext)), relative.stem().string()};
+    return {infer_system_from_extension(to_lower(ext)), sanitize_game_display_name(raw_stem)};
 }
 
 void append_switch_entries(
@@ -403,7 +448,7 @@ void append_file_entries(
         if (group.primary.empty() || ext_l == "srm" || ext_l == "sav" || ext_l == "dsv") {
             group.primary = entry.path();
             group.relative_key = rel.generic_string();
-            group.system_key = labels.first;
+            group.system_key = normalize_browser_system_key(labels.first);
             group.display = labels.second;
         }
     }
@@ -616,6 +661,13 @@ std::string save_system_label(std::string_view system_key) {
     return std::string(system_key);
 }
 
+std::string normalize_save_browser_system_key(std::string_view system_key) {
+    if (system_key == "gb" || system_key == "gbc" || system_key == "gb-gbc") {
+        return "gb-gbc";
+    }
+    return std::string(system_key);
+}
+
 std::vector<std::string> list_save_users(const std::filesystem::path& save_root) {
     std::vector<std::string> users;
     std::error_code ec;
@@ -674,8 +726,11 @@ std::vector<SaveGameEntry> list_save_games(
             continue;
         }
         auto games = list_user_games(save_root, user, merged_hints, meta_ptr);
+        const auto want = normalize_browser_system_key(system_filter);
         for (auto& game : games) {
-            if (!system_filter.empty() && game.system_key != system_filter) {
+            game.system_key = normalize_browser_system_key(game.system_key);
+            game.system_label = save_system_label(game.system_key);
+            if (!want.empty() && game.system_key != want) {
                 continue;
             }
             out.push_back(std::move(game));

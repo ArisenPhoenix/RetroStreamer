@@ -38,6 +38,12 @@ struct SaveGameEntry {
 
 std::string save_system_label(std::string_view system_key);
 
+/**
+ * Collapse catalog gb / gbc into gb-gbc for Users-tab grouping (one
+ * "Game Boy / Color" section). Other keys pass through unchanged.
+ */
+std::string normalize_save_browser_system_key(std::string_view system_key);
+
 /** Usernames with a directory under save_root (excludes template). */
 std::vector<std::string> list_save_users(const std::filesystem::path& save_root);
 

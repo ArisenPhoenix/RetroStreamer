@@ -48,6 +48,8 @@ struct GameMetaRecord {
     std::string version;
     std::string language;
     std::string region;
+    /** Absolute ROM/content path last seen for this game (empty until first scan). */
+    std::string content_path;
     /** Lowercased ROM/content basename for save matching. */
     std::string content_stem;
     std::int64_t updated_at = 0;
@@ -60,6 +62,25 @@ struct UserGameRecord {
     std::string game_id;
     std::string system_key;
     std::int64_t last_played_at = 0;
+};
+
+/** Play modes / player limits from Meta JSON (modes.single/multi, min/max_players). */
+struct GamePlayModesRecord {
+    std::string game_id;
+    bool supports_singleplayer = true;
+    bool supports_multiplayer = true;
+    std::uint8_t min_players = 1;
+    std::uint8_t max_players = 2;
+    std::int64_t updated_at = 0;
+    std::string source = std::string(game_meta_source::kCatalog);
+};
+
+/** One row from game_aliases (for Catalog tab / identity debugging). */
+struct GameMetaAliasRecord {
+    std::string alias_kind;
+    std::string alias_value;
+    std::string system_key;
+    std::string game_id;
 };
 
 /** Save-browser key for a meta-backed PS2 title: ps2:id:<catalog_game_id>. */
@@ -105,6 +126,7 @@ public:
         std::string_view game_id);
 
     std::optional<GameMetaRecord> find_by_id(std::string_view game_id) const;
+    std::optional<GameMetaRecord> find_by_content_path(std::string_view content_path) const;
     /**
      * Resolve a catalog id or any alias value.
      * When system_key is set, prefer aliases scoped to that system, then global.
@@ -113,7 +135,25 @@ public:
         std::string_view key,
         std::string_view system_key = {}) const;
 
-    /** Upsert every hosted game + standard aliases (soft-fail). */
+    /**
+     * Directory scan ingest (DB is authoritative for identity):
+     * - Match existing row by content_path, then scanned id, then stem aliases.
+     * - If matched: keep DB identity fields; refresh content_path / core;
+     *   fold colliding provisional / stem-claiming primaries into catalog_id aliases.
+     * - If new: insert from the scanned GameInfo + path.
+     * Mutates [info] in place to the surviving DB identity so the live catalog matches.
+     */
+    void bind_scanned_game(
+        GameInfo& info,
+        const std::filesystem::path& content_path);
+
+    /**
+     * Write/update the Meta JSON sidecar for this row (name, canonical, region, …)
+     * so filesystem metadata matches the DB. Soft-fail.
+     */
+    bool write_meta_sidecar(const GameMetaRecord& row) const;
+
+    /** Upsert every hosted game + standard aliases (soft-fail). Prefers bind_scanned_game. */
     void sync_from_catalog(const GameCatalog& catalog);
 
     /**
@@ -125,6 +165,12 @@ public:
     /** Flatten aliases into SaveNameHints for the Users/saves browser. */
     SaveNameHints save_name_hints() const;
 
+    /** All game_meta rows (Catalog tab / debugging). Ordered by system, display. */
+    std::vector<GameMetaRecord> list_games() const;
+
+    /** All game_aliases rows, optionally filtered to one game_id. */
+    std::vector<GameMetaAliasRecord> list_aliases(std::string_view game_id = {}) const;
+
     /** Record that username played catalog game_id (upserts last_played_at). */
     bool record_user_game(
         std::string_view username,
@@ -135,10 +181,46 @@ public:
     std::size_t remove_user_games_for_system(
         std::string_view username,
         std::string_view system_key);
+    /** Rewrite every user_games.game_id from old → new (Catalog id migrate). */
+    std::size_t migrate_user_games_game_id(
+        std::string_view old_game_id,
+        std::string_view new_game_id);
+    /** Delete every user_games row for this catalog id. */
+    std::size_t remove_user_games_for_game_id(std::string_view game_id);
+
+    /** Delete game_meta row (does not touch aliases / user_games). */
+    bool delete_game(std::string_view game_id);
+    /** Delete all aliases pointing at game_id. */
+    std::size_t delete_aliases_for_game(std::string_view game_id);
+    /** Delete one alias by primary key. */
+    bool delete_alias(
+        std::string_view alias_kind,
+        std::string_view alias_value,
+        std::string_view system_key);
+    /** Point every alias currently on old_game_id at new_game_id. */
+    std::size_t reassign_aliases_game_id(
+        std::string_view old_game_id,
+        std::string_view new_game_id);
+
+    /**
+     * Drop aliases for game_id then write the standard catalog set
+     * (catalog_id, canonical, content_stem, display_name, match bases).
+     */
+    void rebuild_standard_aliases(const GameMetaRecord& row);
 
     std::vector<UserGameRecord> list_user_games(
         std::string_view username = {},
         std::string_view system_key = {}) const;
+
+    /** Upsert Meta JSON / catalog play-mode fields for a game_id. */
+    bool upsert_play_modes(const GamePlayModesRecord& row);
+    std::optional<GamePlayModesRecord> find_play_modes(std::string_view game_id) const;
+    std::vector<GamePlayModesRecord> list_play_modes() const;
+    /** Rewrite play_modes.game_id on Catalog id migrate. */
+    bool migrate_play_modes_game_id(
+        std::string_view old_game_id,
+        std::string_view new_game_id);
+    bool delete_play_modes(std::string_view game_id);
 
 private:
     bool open();

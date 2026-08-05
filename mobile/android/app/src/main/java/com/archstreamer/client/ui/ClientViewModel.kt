@@ -52,6 +52,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Mirrors the desktop GUI top-level tabs (client-only subset). */
 enum class NavSection(val title: String) {
@@ -59,6 +60,7 @@ enum class NavSection(val title: String) {
     Remote("Remote"),
     Games("Games"),
     Stream("Stream"),
+    Controls("Controls"),
     GameOptions("Game Options"),
     Profile("Profile"),
     Settings("Settings"),
@@ -117,7 +119,7 @@ data class UiState(
     /** Draft custom being edited (both orientations). */
     val overlayEditLandscape: List<OverlayItem> = emptyList(),
     val overlayEditPortrait: List<OverlayItem> = emptyList(),
-    /** Family currently edited in Game Options. */
+    /** Family currently edited in Controls. */
     val editingOverlayFamily: OverlaySystemFamily = OverlaySystemFamily.Standard,
     /** Snapshot of the profile under edit (mirrors prefs). */
     val editingOverlayProfile: OverlayProfile = OverlayProfile.DEFAULT,
@@ -258,6 +260,11 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     /** Home / Guide on a physical pad → open the play drawer. */
     val playMenuRequests: SharedFlow<Unit> = _playMenuRequests.asSharedFlow()
 
+    private val _playMenuCommands =
+        MutableSharedFlow<PlayMenuCommand>(extraBufferCapacity = 8)
+    /** D-pad / Enter / Esc while the play drawer is open. */
+    val playMenuCommands: SharedFlow<PlayMenuCommand> = _playMenuCommands.asSharedFlow()
+
     private var session: JoinedPlaySession? = null
     /** Open control TCP after Connect (Users-tab Connected) until play/disconnect. */
     private var lobbyPresence: ControlConnection? = null
@@ -273,14 +280,27 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private var lastFfSendAtMs: Long = 0L
     /** Latest user/overlay intent while [ffJob] coalesces + rate-limits. */
     private var ffWanted: Boolean? = null
+    private var lastAvResyncAtMs: Long = 0L
     private var latestPad = ControllerState()
+    /** Held RemotedKey bits (desktop remoted keyboard subset). */
+    private val remotedKeysHeld = AtomicInteger(0)
+    /** Keyboard arrow keys merged into the pad as D-pad while playing. */
+    private val keyboardDpadBits = AtomicInteger(0)
+    private var menuHatUp = false
+    private var menuHatDown = false
     /** Stylus samples from the UI thread; drained on the input IO loop (avoid NetworkOnMainThread). */
     private val pendingDsTouches =
         java.util.concurrent.ConcurrentLinkedQueue<Triple<Int, Int, Boolean>>()
     private val gamepadTracker = PhysicalGamepadTracker(
         actionFor = { kind -> overlayActionFor(kind) },
         onState = { pad -> onPhysicalPadState(pad) },
-        onMenuClick = { requestPlayMenu() },
+        onMenuClick = {
+            if (menuDrawerOpen) {
+                _playMenuCommands.tryEmit(PlayMenuCommand.Close)
+            } else {
+                requestPlayMenu()
+            }
+        },
         onFastForward = { held -> setFastForward(held) },
     )
     private val inputManager = application.getSystemService(InputManager::class.java)
@@ -596,7 +616,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    /** Enter layout editor (play drawer or Game Options). Edits the active family. */
+    /** Enter layout editor (play drawer or Controls). Edits the active family. */
     fun beginOverlayEdit() {
         val snap = _state.value
         val family = if (snap.playing) sessionFamily else snap.editingOverlayFamily
@@ -781,18 +801,188 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     /** @return true if consumed as physical play input. */
     fun onGamepadKeyEvent(event: KeyEvent): Boolean {
+        if (menuDrawerOpen && _state.value.playing) {
+            return handlePlayMenuGamepadKey(event)
+        }
         if (!_state.value.physicalInputActive) return false
         return gamepadTracker.handleKeyEvent(event)
     }
 
     /** @return true if consumed as physical play input. */
     fun onGamepadMotionEvent(event: MotionEvent): Boolean {
+        if (menuDrawerOpen && _state.value.playing) {
+            return handlePlayMenuGamepadMotion(event)
+        }
         if (!_state.value.physicalInputActive) return false
         return gamepadTracker.handleMotionEvent(event)
     }
 
+    /**
+     * Hardware keyboard while playing.
+     *
+     * Priority:
+     * 1. Soft keyboard dialog up → leave keys alone (Enter/Backspace type in the OSK).
+     * 2. Play menu open → keys navigate/select/close the drawer only.
+     * 3. Otherwise → Backspace opens menu; arrows = joypad D-pad; P/Space/Enter/… remoted.
+     */
+    fun onPlayKeyEvent(event: KeyEvent): Boolean {
+        val snap = _state.value
+        if (!snap.playing) return false
+        // OSK owns Enter/Backspace/letters while its dialog is showing.
+        if (snap.softKeyboard != null) return false
+        if (snap.section == NavSection.Controls ||
+            snap.section == NavSection.GameOptions ||
+            snap.section == NavSection.Stream ||
+            snap.section == NavSection.Settings
+        ) {
+            return false
+        }
+        if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_UP) {
+            return false
+        }
+        val down = event.action == KeyEvent.ACTION_DOWN
+        val edge = down && event.repeatCount == 0
+        val keyCode = event.keyCode
+
+        if (menuDrawerOpen) {
+            return handlePlayMenuKey(keyCode, edge)
+        }
+
+        // Backspace → play menu (never remoted on mobile while playing).
+        if (keyCode == KeyEvent.KEYCODE_DEL) {
+            if (edge) requestPlayMenu()
+            return true
+        }
+
+        // Arrows → joypad D-pad for the game.
+        keyboardDpadMask(keyCode)?.let { mask ->
+            setKeyboardDpad(mask, down)
+            return true
+        }
+
+        val bit = remotedKeyBitFromAndroidKeyCode(keyCode) ?: return false
+        setRemotedKey(bit, down)
+        return true
+    }
+
+    private fun handlePlayMenuKey(keyCode: Int, edge: Boolean): Boolean {
+        if (isPlayMenuCloseKey(keyCode)) {
+            if (edge) _playMenuCommands.tryEmit(PlayMenuCommand.Close)
+            return true
+        }
+        if (isPlayMenuActivateKey(keyCode)) {
+            if (edge) _playMenuCommands.tryEmit(PlayMenuCommand.Activate)
+            return true
+        }
+        when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_UP -> {
+                if (edge) _playMenuCommands.tryEmit(PlayMenuCommand.MoveUp)
+                return true
+            }
+            KeyEvent.KEYCODE_DPAD_DOWN -> {
+                if (edge) _playMenuCommands.tryEmit(PlayMenuCommand.MoveDown)
+                return true
+            }
+            else -> Unit
+        }
+        // Consume other remoted keys so they do not hit the host while the menu owns input.
+        if (remotedKeyBitFromAndroidKeyCode(keyCode) != null) {
+            return true
+        }
+        return false
+    }
+
+    private fun handlePlayMenuGamepadKey(event: KeyEvent): Boolean {
+        if (!PhysicalGamepad.isGameControllerDeviceId(event.deviceId)) return false
+        if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_UP) {
+            return true
+        }
+        val edge = event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0
+        val keyCode = event.keyCode
+        // Keyboard-like keys on hybrid devices: let [onPlayKeyEvent] own them (already ran).
+        if (keyCode == KeyEvent.KEYCODE_DEL ||
+            keyCode == KeyEvent.KEYCODE_ENTER ||
+            keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER ||
+            keyCode == KeyEvent.KEYCODE_ESCAPE ||
+            keyCode == KeyEvent.KEYCODE_SPACE ||
+            keyCode == KeyEvent.KEYCODE_P ||
+            keyCode == KeyEvent.KEYCODE_TAB ||
+            keyCode == KeyEvent.KEYCODE_F1 ||
+            keyCode == KeyEvent.KEYCODE_F8
+        ) {
+            return false
+        }
+        when (keyCode) {
+            KeyEvent.KEYCODE_BUTTON_MODE, KeyEvent.KEYCODE_HOME -> {
+                if (edge) _playMenuCommands.tryEmit(PlayMenuCommand.Close)
+            }
+            KeyEvent.KEYCODE_DPAD_UP -> {
+                if (edge) _playMenuCommands.tryEmit(PlayMenuCommand.MoveUp)
+            }
+            KeyEvent.KEYCODE_DPAD_DOWN -> {
+                if (edge) _playMenuCommands.tryEmit(PlayMenuCommand.MoveDown)
+            }
+            KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_CENTER -> {
+                if (edge) _playMenuCommands.tryEmit(PlayMenuCommand.Activate)
+            }
+            KeyEvent.KEYCODE_BUTTON_B -> {
+                if (edge) _playMenuCommands.tryEmit(PlayMenuCommand.Close)
+            }
+            else -> Unit
+        }
+        // Swallow remaining pad buttons while the menu owns controls.
+        return true
+    }
+
+    private fun handlePlayMenuGamepadMotion(event: MotionEvent): Boolean {
+        if (!PhysicalGamepad.isGameControllerDeviceId(event.deviceId)) return false
+        val sources = event.source
+        val fromStick =
+            sources and android.view.InputDevice.SOURCE_JOYSTICK ==
+                android.view.InputDevice.SOURCE_JOYSTICK ||
+                sources and android.view.InputDevice.SOURCE_GAMEPAD ==
+                android.view.InputDevice.SOURCE_GAMEPAD
+        if (!fromStick) return false
+        val hatY = event.getAxisValue(MotionEvent.AXIS_HAT_Y)
+        val up = hatY < -0.5f
+        val down = hatY > 0.5f
+        if (up && !menuHatUp) _playMenuCommands.tryEmit(PlayMenuCommand.MoveUp)
+        if (down && !menuHatDown) _playMenuCommands.tryEmit(PlayMenuCommand.MoveDown)
+        menuHatUp = up
+        menuHatDown = down
+        return true
+    }
+
+    private fun setRemotedKey(bit: Int, down: Boolean) {
+        remotedKeysHeld.updateAndGet { cur ->
+            if (down) cur or bit else cur and bit.inv()
+        }
+    }
+
+    private fun setKeyboardDpad(mask: Int, down: Boolean) {
+        keyboardDpadBits.updateAndGet { cur ->
+            if (down) cur or mask else cur and mask.inv()
+        }
+    }
+
+    private fun clearRemotedKeys() {
+        remotedKeysHeld.set(0)
+    }
+
+    private fun clearKeyboardDpad() {
+        keyboardDpadBits.set(0)
+    }
+
+    private fun padForSend(): ControllerState {
+        if (menuDrawerOpen) return ControllerState()
+        val kb = keyboardDpadBits.get()
+        if (kb == 0) return latestPad
+        return latestPad.copy(buttons = latestPad.buttons or kb)
+    }
+
     private fun onPhysicalPadState(state: ControllerState) {
         if (!_state.value.physicalInputActive) return
+        if (menuDrawerOpen) return
         // Remaps come from the overlay Action editor; face swaps from the shared map profile.
         val map = mapProfileFor(sessionFamily)
         latestPad = ControllerState.applyFaceButtonSwaps(state, map.swapNw, map.swapSe)
@@ -844,11 +1034,12 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     fun selectSection(section: NavSection) {
         if (_state.value.playing) {
             // Stay in the session — open overlay/stream/settings over the play surface.
-            if (section == NavSection.GameOptions ||
+            if (section == NavSection.Controls ||
+                section == NavSection.GameOptions ||
                 section == NavSection.Stream ||
                 section == NavSection.Settings
             ) {
-                if (section == NavSection.GameOptions) {
+                if (section == NavSection.Controls) {
                     publishEditing(sessionFamily)
                 }
                 _state.update { it.copy(section = section) }
@@ -1603,12 +1794,22 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     /** Drawer open during play → pause (unless control editing relaxed it). */
     fun onPlayMenuOpened() {
         menuDrawerOpen = true
+        clearRemotedKeys()
+        clearKeyboardDpad()
+        menuHatUp = false
+        menuHatDown = false
+        gamepadTracker.reset()
+        latestPad = ControllerState()
         syncMenuPause()
     }
 
     /** Drawer closed → unpause (unless drawer re-opens before this applies). */
     fun onPlayMenuClosed() {
         menuDrawerOpen = false
+        menuHatUp = false
+        menuHatDown = false
+        clearRemotedKeys()
+        clearKeyboardDpad()
         syncMenuPause()
     }
 
@@ -1712,6 +1913,34 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         _state.update { it.copy(fastForward = enabled) }
         ffWanted = enabled
         scheduleFastForwardSend()
+    }
+
+    /**
+     * Desktop "Resync A/V" fallback: restart Opus so audio meets the live video edge.
+     * Rate-limited to once per 15s (same as desktop client).
+     */
+    fun resyncAv() {
+        if (!_state.value.playing) {
+            _state.update { it.copy(status = "Join a session before resyncing A/V.") }
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (lastAvResyncAtMs > 0L && now - lastAvResyncAtMs < AV_RESYNC_MIN_INTERVAL_MS) {
+            _state.update { it.copy(status = "A/V resync cooling down… try again shortly.") }
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val ok = runCatching { session?.resyncAudio() == true }.getOrDefault(false)
+            if (ok) {
+                lastAvResyncAtMs = System.currentTimeMillis()
+                ClientFileLog.append("A/V resync: audio restarted")
+                _state.update { it.copy(status = "Realigned audio to video.") }
+            } else {
+                _state.update {
+                    it.copy(status = "A/V resync failed (no audio stream?).")
+                }
+            }
+        }
     }
 
     private fun scheduleFastForwardSend() {
@@ -2033,7 +2262,10 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     fun leavePlay() {
         menuDrawerOpen = false
         lastSentMenuPause = null
+        lastAvResyncAtMs = 0L
         pendingDsTouches.clear()
+        clearRemotedKeys()
+        clearKeyboardDpad()
         latestPad = ControllerState()
         endSession()
         _state.update {
@@ -2147,7 +2379,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    /** Manual escape hatch (request_id=0) — same as desktop Game Options pad OSK. */
+    /** Manual escape hatch (request_id=0) — same as desktop Controls pad OSK. */
     fun openManualSoftKeyboard() {
         if (session == null || !_state.value.playing) {
             _state.update { it.copy(status = "Start a session before opening the soft keyboard.") }
@@ -2216,6 +2448,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
         ensureUnpausedForKeyboard()
+        clearRemotedKeys()
+        clearKeyboardDpad()
         _state.update {
             it.copy(
                 softKeyboard = request,
@@ -2231,14 +2465,13 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private fun startInputLoop() {
         inputJob?.cancel()
         inputJob = viewModelScope.launch(Dispatchers.IO) {
-            // Poll often so short taps are not missed; only spam UDP on change.
-            // Idle keepalive ~25 Hz (desktop keeps ~250 Hz — fine on LAN PC, wasteful on phone).
+            // Match desktop: ~250 Hz keepalive so Wi‑Fi loss recovers within one tick.
+            // Triple-send on edges for lossy links.
             val pollMs = 4L
-            val keepaliveMs = 40L
             val changeCopies = 3
             var lastSent = ControllerState()
             var haveLast = false
-            var lastSendAtMs = 0L
+            var lastSentKeys = -1
             while (isActive) {
                 val active = session ?: break
                 // Drain stylus first so press+release in one poll both go out.
@@ -2252,22 +2485,43 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                         )
                     }
                 }
-                val pad = latestPad
-                val now = System.currentTimeMillis()
+                val pad = padForSend()
                 val changed = !haveLast || !pad.sameControlsAs(lastSent)
-                val dueKeepalive = haveLast && (now - lastSendAtMs) >= keepaliveMs
-                if (changed || dueKeepalive || !haveLast) {
-                    val copies = if (changed || !haveLast) changeCopies else 1
-                    runCatching {
-                        active.sendControllerCopies(localPlayer = 0, state = pad, copies = copies)
-                    }.onFailure { err ->
-                        ClientFileLog.append(
-                            "Input send failed: ${err.javaClass.simpleName}: ${err.message}",
-                        )
-                    }
+                // Always send each tick so a dropped button-down edge recovers quickly.
+                val copies = if (changed || !haveLast) changeCopies else 1
+                val sentOk = runCatching {
+                    active.sendControllerCopies(localPlayer = 0, state = pad, copies = copies)
+                }.onFailure { err ->
+                    ClientFileLog.append(
+                        "Input send failed: ${err.javaClass.simpleName}: ${err.message}",
+                    )
+                }.isSuccess
+                if (sentOk) {
                     lastSent = pad
                     haveLast = true
-                    lastSendAtMs = now
+                }
+                val keys =
+                    if (menuDrawerOpen || _state.value.softKeyboard != null) {
+                        0
+                    } else {
+                        remotedKeysHeld.get()
+                    }
+                val keysChanged = keys != lastSentKeys
+                val keysCopies = if (keysChanged || lastSentKeys < 0) changeCopies else 1
+                // Always refresh keys each tick (same recovery model as pads).
+                var keysOk = true
+                repeat(keysCopies) {
+                    val ok = runCatching {
+                        active.sendKeyboard(keys)
+                    }.onFailure { err ->
+                        ClientFileLog.append(
+                            "Keyboard send failed: ${err.javaClass.simpleName}: ${err.message}",
+                        )
+                    }.isSuccess
+                    keysOk = keysOk && ok
+                }
+                if (keysOk) {
+                    lastSentKeys = keys
                 }
                 delay(pollMs)
             }
@@ -2451,6 +2705,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private fun endSession(sendLeave: Boolean = true) {
         menuDrawerOpen = false
         lastSentMenuPause = null
+        lastAvResyncAtMs = 0L
+        clearRemotedKeys()
         resetFastForwardSendState()
         val active = session
         session = null
@@ -2536,6 +2792,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         private const val FF_COALESCE_MS = 80L
         /** Max one FF EmulatorControl per second (Ryujinx F1 cycle desyncs if spammed). */
         private const val FF_MIN_INTERVAL_MS = 1_000L
+        /** Match desktop client_app A/V resync cooldown. */
+        private const val AV_RESYNC_MIN_INTERVAL_MS = 15_000L
     }
 
     private fun recentPrefsKey(host: String, controlPort: String): String {

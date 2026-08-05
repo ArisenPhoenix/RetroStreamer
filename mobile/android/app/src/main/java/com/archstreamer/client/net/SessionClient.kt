@@ -226,6 +226,15 @@ data class JoinedPlaySession(
         )
     }
 
+    /**
+     * Restart Opus so audio meets the live video edge again (desktop Resync A/V).
+     * Video keeps playing; host audio encode is untouched.
+     */
+    fun resyncAudio(): Boolean {
+        val player = audioPlayer ?: return false
+        return runCatching { player.restart() }.getOrDefault(false)
+    }
+
     fun sendSoftKeyboardResponse(response: SoftKeyboardResponse) {
         control.send(
             PacketCodec.softKeyboardResponse(

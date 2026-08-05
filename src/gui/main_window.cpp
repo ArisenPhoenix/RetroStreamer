@@ -82,8 +82,10 @@ MainWindow::MainWindow() {
 #ifdef ARCHSTREAMER_HAS_HOST
     tabs_->addTab(build_host_tab(), "Host");
     tabs_->addTab(build_saves_tab(), "Users");
+    tabs_->addTab(build_catalog_tab(), "Catalog");
 #endif
     tabs_->addTab(build_stream_tab(), "Stream");
+    tabs_->addTab(build_controls_tab(), "Controls");
     tabs_->addTab(build_game_options_tab(), "Game Options");
     tabs_->addTab(build_profile_tab(), "Profile");
     tabs_->addTab(build_settings_tab(), "Settings");
@@ -514,7 +516,7 @@ QWidget* MainWindow::build_stream_tab() {
     return page;
 }
 
-QWidget* MainWindow::build_game_options_tab() {
+QWidget* MainWindow::build_controls_tab() {
     auto* page = new QWidget(this);
     auto* root = new QVBoxLayout(page);
 
@@ -650,6 +652,20 @@ QWidget* MainWindow::build_game_options_tab() {
         toggle_pad_on_screen_keyboard(checked);
     });
     root->addWidget(game_options_pad_osk_);
+    root->addStretch();
+    sync_controller_map_editor_ui();
+    return page;
+}
+
+QWidget* MainWindow::build_game_options_tab() {
+    auto* page = new QWidget(this);
+    auto* root = new QVBoxLayout(page);
+
+    // Emulator control bridge is owned by Controls; create a fallback if Controls
+    // was not built (should not happen with current tab order).
+    if (!emulator_control_) {
+        emulator_control_ = std::make_shared<archstreamer::EmulatorControlBridge>();
+    }
 
     auto* form_box = new QGroupBox("Disc control", page);
     auto* form = new QFormLayout(form_box);
@@ -796,7 +812,6 @@ QWidget* MainWindow::build_game_options_tab() {
 
     root->addWidget(link_box);
     root->addStretch();
-    sync_controller_map_editor_ui();
     return page;
 }
 

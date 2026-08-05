@@ -40,6 +40,15 @@ std::string asset_key_for(
  * Does not strip dotted build numbers (e.g. "Sword 1.3.2") or other numeric noise.
  */
 std::string sanitize_game_display_name(std::string name);
+/**
+ * Strip trailing region/revision tags: "Pokemon Ruby (USA, Europe) (Rev 2)" → "Pokemon Ruby".
+ */
+std::string strip_trailing_parenthetical_tags(std::string name);
+/**
+ * Fold accents, strip "Version", strip region tags, lower-case — for matching save stems
+ * like "Pokémon Ruby Version.srm" to catalog "Pokemon Ruby (USA, Europe) (Rev 2)".
+ */
+std::string save_match_base_name(std::string name);
 std::filesystem::path default_metadata_root_for(const std::filesystem::path& content_root);
 std::filesystem::path metadata_path_for(
     const std::filesystem::path& content_root,

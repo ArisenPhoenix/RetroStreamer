@@ -11,6 +11,13 @@ void GameCatalog::set_games(std::vector<HostedGame> games) {
 }
 
 void GameCatalog::add_game(HostedGame game) {
+    const auto it = std::find_if(games_.begin(), games_.end(), [&](const HostedGame& existing) {
+        return existing.info.id == game.info.id;
+    });
+    if (it != games_.end()) {
+        *it = std::move(game);
+        return;
+    }
     games_.push_back(std::move(game));
 }
 

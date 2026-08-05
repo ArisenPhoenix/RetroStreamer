@@ -17,8 +17,12 @@
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <regex>
 #include <string>
 #include <string_view>
+#include <sys/stat.h>
+#include <tuple>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -89,6 +93,82 @@ bool path_contains_component(const std::filesystem::path& path, std::initializer
 
 bool extension_in(std::string_view extension, std::initializer_list<std::string_view> allowed) {
     return std::find(allowed.begin(), allowed.end(), extension) != allowed.end();
+}
+
+bool stem_looks_versioned_for_catalog(std::string_view stem) {
+    static const std::regex version_token(
+        R"((?:^|[\s_-])v?\d+\.\d+(?:\.\d+)?(?:$|[\s_-]))", std::regex::icase);
+    return std::regex_search(std::string(stem), version_token);
+}
+
+struct InodeKey {
+    std::uint64_t dev = 0;
+    std::uint64_t ino = 0;
+    bool operator==(const InodeKey& other) const {
+        return dev == other.dev && ino == other.ino;
+    }
+};
+
+struct InodeKeyHash {
+    std::size_t operator()(const InodeKey& key) const {
+        return (static_cast<std::size_t>(key.dev) * 1315423911u)
+            ^ static_cast<std::size_t>(key.ino);
+    }
+};
+
+std::optional<InodeKey> inode_key_for(const std::filesystem::path& path) {
+    struct stat st {};
+    if (::stat(path.c_str(), &st) != 0) {
+        return std::nullopt;
+    }
+    if (st.st_nlink <= 1) {
+        return std::nullopt;
+    }
+    return InodeKey{
+        static_cast<std::uint64_t>(st.st_dev),
+        static_cast<std::uint64_t>(st.st_ino),
+    };
+}
+
+/** Prefer cleaner catalog labels when hardlinks share one ROM payload. */
+bool prefer_catalog_path(
+    const std::filesystem::path& candidate,
+    const std::filesystem::path& incumbent) {
+    const auto cand_stem = candidate.stem().string();
+    const auto inc_stem = incumbent.stem().string();
+    const bool cand_ver = stem_looks_versioned_for_catalog(cand_stem);
+    const bool inc_ver = stem_looks_versioned_for_catalog(inc_stem);
+    if (cand_ver != inc_ver) {
+        return !cand_ver; // non-versioned wins
+    }
+    if (cand_stem.size() != inc_stem.size()) {
+        return cand_stem.size() < inc_stem.size();
+    }
+    return candidate.string() < incumbent.string();
+}
+
+std::vector<std::filesystem::path> dedupe_hardlinked_paths(
+    std::vector<std::filesystem::path> paths) {
+    std::vector<std::filesystem::path> out;
+    std::unordered_map<InodeKey, std::size_t, InodeKeyHash> by_inode;
+    out.reserve(paths.size());
+    for (auto& path : paths) {
+        const auto key = inode_key_for(path);
+        if (!key) {
+            out.push_back(std::move(path));
+            continue;
+        }
+        const auto it = by_inode.find(*key);
+        if (it == by_inode.end()) {
+            by_inode.emplace(*key, out.size());
+            out.push_back(std::move(path));
+            continue;
+        }
+        if (prefer_catalog_path(path, out[it->second])) {
+            out[it->second] = std::move(path);
+        }
+    }
+    return out;
 }
 
 std::optional<std::string> infer_system_key_from_path(const std::filesystem::path& content_path) {
@@ -252,6 +332,30 @@ std::string sanitize_game_display_name(std::string name) {
     return name;
 }
 
+std::string strip_trailing_parenthetical_tags(std::string name) {
+    for (;;) {
+        while (!name.empty() && (name.back() == ' ' || name.back() == '\t')) {
+            name.pop_back();
+        }
+        if (name.size() < 3 || name.back() != ')') {
+            break;
+        }
+        const auto open = name.rfind(" (");
+        if (open == std::string::npos) {
+            break;
+        }
+        name.resize(open);
+    }
+    return name;
+}
+
+std::string save_match_base_name(std::string name) {
+    name = fold_common_latin_accents(std::move(name));
+    name = sanitize_game_display_name(std::move(name));
+    name = strip_trailing_parenthetical_tags(std::move(name));
+    return lower_string(std::move(name));
+}
+
 std::string identity_key_for(
     std::string_view system_key,
     std::string_view canonical_name,
@@ -330,6 +434,10 @@ void apply_game_metadata(GameInfo& info, const std::filesystem::path& metadata_p
             auto name = metadata.at("name").get<std::string>();
             if (!name.empty()) {
                 info.display_name = std::move(name);
+                // Prefer Meta display name for identity unless canonical_name is explicit.
+                if (!metadata.contains("canonical_name")) {
+                    info.canonical_name = canonical_token(info.display_name);
+                }
             }
         }
         if (metadata.contains("system_name")) {
@@ -433,6 +541,7 @@ GameCatalog scan_game_catalog(
     const LibretroCoreRegistry& core_registry,
     std::filesystem::path metadata_root) {
     GameCatalog catalog;
+    GameMetaStore meta_store;
     if (!std::filesystem::exists(content_root)) {
         return catalog;
     }
@@ -459,34 +568,22 @@ GameCatalog scan_game_catalog(
     const auto resolved_switch = resolve_switch_runtime();
     const auto resolved_melonds = resolve_melonds_runtime();
 
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(content_root)) {
-        if (!entry.is_regular_file()) {
-            continue;
-        }
-
-        const auto basename_lower = lower_string(entry.path().filename().string());
-        if (playlist_member_basenames.count(basename_lower) > 0) {
-            continue;
-        }
-
-        auto core = std::optional<CoreChoice>{};
-        auto system_key = infer_system_key_from_path(entry.path());
-        // Extension-only Switch dumps (no Switch/ folder in the path).
+    auto resolve_core_for_path =
+        [&](const std::filesystem::path& path)
+        -> std::optional<std::tuple<CoreChoice, std::string, bool, std::vector<std::string>>> {
+        auto system_key = infer_system_key_from_path(path);
         if (!system_key.has_value() &&
-            extension_in(normalized_extension(entry.path()), {"xci", "nsp", "nsz"})) {
+            extension_in(normalized_extension(path), {"xci", "nsp", "nsz"})) {
             system_key = "switch";
         }
 
         auto standalone = false;
         std::vector<std::string> standalone_args;
+        std::optional<CoreChoice> core;
 
-        // Switch streaming is standalone Ryujinx (preferred) or Yuzu. Never advertise
-        // libretro yuzu/ryujinx/suyu cores — they would list titles when the real
-        // runtime is missing and then fail at launch.
         if (system_key.has_value() && *system_key == "switch") {
             if (!resolved_switch.has_value()) {
-                ++skipped_switch_missing_runtime;
-                continue;
+                return std::nullopt;
             }
             core = CoreChoice{
                 "Nintendo Switch",
@@ -504,33 +601,68 @@ GameCatalog scan_game_catalog(
         } else if (system_key.has_value()) {
             core = core_registry.system_core(*system_key);
         } else {
-            core = core_registry.find_for_content(entry.path());
+            core = core_registry.find_for_content(path);
         }
-
         if (!core.has_value()) {
+            return std::nullopt;
+        }
+        return std::make_tuple(
+            std::move(*core),
+            system_key.value_or(canonical_token(core->system_name)),
+            standalone,
+            std::move(standalone_args));
+    };
+
+    std::vector<std::filesystem::path> candidate_paths;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(content_root)) {
+        if (!entry.is_regular_file()) {
             continue;
         }
+        const auto basename_lower = lower_string(entry.path().filename().string());
+        if (playlist_member_basenames.count(basename_lower) > 0) {
+            continue;
+        }
+        auto system_key = infer_system_key_from_path(entry.path());
+        if (system_key.has_value() && *system_key == "switch" && !resolved_switch.has_value()) {
+            ++skipped_switch_missing_runtime;
+            continue;
+        }
+        if (!resolve_core_for_path(entry.path()).has_value()) {
+            continue;
+        }
+        candidate_paths.push_back(entry.path());
+    }
 
-        const auto metadata_path = metadata_path_for(content_root, metadata_root, entry.path());
+    // One catalog row per ROM payload (hardlinks like Shield.xci ↔ Shield 1.3.2.xci).
+    candidate_paths = dedupe_hardlinked_paths(std::move(candidate_paths));
+
+    for (const auto& content_path : candidate_paths) {
+        const auto resolved = resolve_core_for_path(content_path);
+        if (!resolved.has_value()) {
+            continue;
+        }
+        auto [core, system_key, standalone, standalone_args] = *resolved;
+
+        const auto metadata_path = metadata_path_for(content_root, metadata_root, content_path);
         GameInfo info{
             {},
             {},
             {},
-            display_name_from_path(entry.path()),
-            core->system_name,
-            system_key.value_or(canonical_token(core->system_name)),
-            core->core_name,
-            canonical_token(display_name_from_path(entry.path())),
+            display_name_from_path(content_path),
+            core.system_name,
+            system_key,
+            core.core_name,
+            canonical_token(display_name_from_path(content_path)),
         };
-        info.updated_at = game_update_time(entry.path(), metadata_path);
+        info.updated_at = game_update_time(content_path, metadata_path);
         apply_game_metadata(info, metadata_path);
         finalize_game_identity(info);
         // Keep identity stable from the full ROM/meta name; only tidy the label.
         info.display_name = sanitize_game_display_name(std::move(info.display_name));
 
         std::vector<std::string> playlist_members;
-        if (normalized_extension(entry.path()) == "m3u") {
-            playlist_members = parse_m3u_member_basenames(entry.path());
+        if (normalized_extension(content_path) == "m3u") {
+            playlist_members = parse_m3u_member_basenames(content_path);
             for (const auto& member : playlist_members) {
                 info.playlist_discs.push_back(std::filesystem::path(member).stem().string());
             }
@@ -546,10 +678,15 @@ GameCatalog scan_game_catalog(
             }
         }
 
+        // DB owns identity for known titles; scan only discovers paths / new games.
+        if (meta_store.ready()) {
+            meta_store.bind_scanned_game(info, content_path);
+        }
+
         catalog.add_game(HostedGame{
             std::move(info),
-            core->core_path,
-            entry.path(),
+            core.core_path,
+            content_path,
             {},
             std::move(playlist_members),
             standalone,
@@ -563,7 +700,6 @@ GameCatalog scan_game_catalog(
             << " Nintendo Switch title(s): " << switch_runtime_unavailable_message() << '\n';
     }
 
-    sync_game_meta_from_catalog(catalog);
     return catalog;
 }
 

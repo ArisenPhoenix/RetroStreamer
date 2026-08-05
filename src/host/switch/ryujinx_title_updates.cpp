@@ -1,14 +1,13 @@
 #include "host/switch/ryujinx_title_updates.hpp"
 
+#include "common/dlc_paths.hpp"
 #include "host/switch_save_share.hpp"
-#include "host/switch/switch_system_defaults.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -118,13 +117,15 @@ std::string to_lower_copy(std::string_view value) {
 }
 
 bool stem_looks_versioned(std::string_view content_stem) {
-    static const std::regex version_token(R"((?:^|[\s_-])v?\d+\.\d+(?:\.\d+)?(?:$|[\s_-]))", std::regex::icase);
+    static const std::regex version_token(
+        R"((?:^|[\s_-])v?\d+\.\d+(?:\.\d+)?(?:$|[\s_-]))", std::regex::icase);
     return std::regex_search(std::string(content_stem), version_token);
 }
 
 std::string base_name_for_matching(std::string_view content_stem) {
     std::string base = to_lower_copy(content_stem);
-    static const std::regex version_suffix(R"((?:\s+|[_-])v?\d+(?:\.\d+){1,3}\s*$)", std::regex::icase);
+    static const std::regex version_suffix(
+        R"((?:\s+|[_-])v?\d+(?:\.\d+){1,3}\s*$)", std::regex::icase);
     base = std::regex_replace(base, version_suffix, "");
     while (!base.empty() && base.back() == ' ') {
         base.pop_back();
@@ -132,18 +133,39 @@ std::string base_name_for_matching(std::string_view content_stem) {
     return base.empty() ? to_lower_copy(content_stem) : base;
 }
 
-std::vector<std::string> seed_nsp_names_for_stem(std::string_view content_stem) {
-    if (!stem_looks_versioned(content_stem)) {
-        return {};
+bool filename_is_upd_or_dlc(std::string_view filename_lower) {
+    return filename_lower.find("[upd]") != std::string::npos ||
+        filename_lower.find("[dlc]") != std::string::npos ||
+        filename_lower.find("upd]") != std::string::npos ||
+        filename_lower.find("dlc]") != std::string::npos;
+}
+
+bool directory_has_nca_payload(const std::filesystem::path& registered) {
+    std::error_code ec;
+    if (!std::filesystem::is_directory(registered, ec)) {
+        return false;
     }
-    const auto base = base_name_for_matching(content_stem);
-    const auto updates_dir = switch_title_updates_directory();
+    for (const auto& entry : std::filesystem::directory_iterator(registered, ec)) {
+        if (!entry.is_regular_file(ec)) {
+            continue;
+        }
+        const auto ext = to_lower_copy(entry.path().extension().string());
+        if (ext == ".nca" || ext.find(".nca") != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::vector<std::string> list_nsp_basenames_in_dir(
+    const std::filesystem::path& dir,
+    std::string_view base_filter) {
     std::vector<std::string> names;
     std::error_code ec;
-    if (!std::filesystem::is_directory(updates_dir, ec)) {
+    if (!std::filesystem::is_directory(dir, ec)) {
         return names;
     }
-    for (const auto& entry : std::filesystem::directory_iterator(updates_dir, ec)) {
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
         if (!entry.is_regular_file()) {
             continue;
         }
@@ -153,14 +175,10 @@ std::vector<std::string> seed_nsp_names_for_stem(std::string_view content_stem) 
         }
         const auto filename = entry.path().filename().string();
         const auto lower = to_lower_copy(filename);
-        if (lower.find(base) == std::string::npos) {
+        if (!base_filter.empty() && lower.find(base_filter) == std::string::npos) {
             continue;
         }
-        // UPD or DLC packs for this title.
-        if (lower.find("[upd]") == std::string::npos &&
-            lower.find("[dlc]") == std::string::npos &&
-            lower.find("upd]") == std::string::npos &&
-            lower.find("dlc]") == std::string::npos) {
+        if (!filename_is_upd_or_dlc(lower)) {
             continue;
         }
         names.push_back(filename);
@@ -169,22 +187,191 @@ std::vector<std::string> seed_nsp_names_for_stem(std::string_view content_stem) 
     return names;
 }
 
+std::vector<std::string> seed_nsp_names_for_stem(
+    const std::filesystem::path& addon_dir,
+    std::string_view content_stem) {
+    const auto base = base_name_for_matching(content_stem);
+    if (base.empty()) {
+        return {};
+    }
+    auto names = list_nsp_basenames_in_dir(addon_dir, base);
+    if (!names.empty()) {
+        return names;
+    }
+    // Fall back to legacy flat SwitchUpdates pack folder.
+    return list_nsp_basenames_in_dir(legacy_switch_updates_directory(), base);
+}
+
+void migrate_nsps_into_addon_dir(
+    const std::filesystem::path& addon_dir,
+    const std::vector<std::string>& nsp_names) {
+    const auto legacy = legacy_switch_updates_directory();
+    std::error_code ec;
+    std::filesystem::create_directories(addon_dir, ec);
+    for (const auto& name : nsp_names) {
+        const auto dest = addon_dir / name;
+        if (std::filesystem::is_regular_file(dest, ec)) {
+            continue;
+        }
+        const auto src = legacy / name;
+        if (!std::filesystem::is_regular_file(src, ec)) {
+            continue;
+        }
+        std::filesystem::rename(src, dest, ec);
+        if (ec) {
+            ec.clear();
+            std::filesystem::copy_file(src, dest, std::filesystem::copy_options::skip_existing, ec);
+            if (!ec) {
+                std::filesystem::remove(src, ec);
+            }
+        }
+        if (!ec) {
+            std::cout << "switch DLC: migrated NSP → " << dest << '\n';
+        }
+    }
+}
+
+void migrate_registered_from_legacy_user_addons(
+    const SaveProfile& save_profile,
+    std::string_view content_stem,
+    const std::filesystem::path& addon_registered) {
+    if (directory_has_nca_payload(addon_registered)) {
+        return;
+    }
+    std::error_code ec;
+    std::vector<std::filesystem::path> candidates;
+    const auto base = base_name_for_matching(content_stem);
+
+    auto consider_registered = [&](const std::filesystem::path& cand) {
+        if (cand == addon_registered) {
+            return;
+        }
+        if (directory_has_nca_payload(cand)) {
+            candidates.push_back(cand);
+        }
+    };
+
+    const auto own =
+        save_profile.user_directory / "switch" / "addons" / std::string(content_stem) / "registered";
+    consider_registered(own);
+
+    auto scan_addons_root = [&](const std::filesystem::path& addons_root) {
+        if (!std::filesystem::is_directory(addons_root, ec)) {
+            return;
+        }
+        for (const auto& stem_entry : std::filesystem::directory_iterator(addons_root, ec)) {
+            if (!stem_entry.is_directory(ec)) {
+                continue;
+            }
+            const auto stem_name = stem_entry.path().filename().string();
+            if (stem_name.empty()) {
+                continue;
+            }
+            // Exact stem or same base (Pokemon Shield ← Pokemon Shield 1.3.2).
+            if (stem_name != content_stem
+                && (base.empty() || base_name_for_matching(stem_name) != base)) {
+                continue;
+            }
+            consider_registered(stem_entry.path() / "registered");
+        }
+    };
+
+    scan_addons_root(save_profile.user_directory / "switch" / "addons");
+
+    const auto save_root = save_profile.root_directory;
+    if (std::filesystem::is_directory(save_root, ec)) {
+        for (const auto& user_entry : std::filesystem::directory_iterator(save_root, ec)) {
+            if (!user_entry.is_directory(ec)) {
+                continue;
+            }
+            const auto username = user_entry.path().filename().string();
+            if (username.empty() || username == "template" || username.front() == '.') {
+                continue;
+            }
+            scan_addons_root(user_entry.path() / "switch" / "addons");
+        }
+    }
+
+    // Global DLC/Switch/<stem>/registered siblings.
+    scan_addons_root(switch_title_updates_directory());
+
+    if (candidates.empty()) {
+        return;
+    }
+
+    // Prefer the largest tree (most complete unpack).
+    auto count_files = [](const std::filesystem::path& dir) {
+        std::error_code iec;
+        std::size_t n = 0;
+        for (const auto& e : std::filesystem::directory_iterator(dir, iec)) {
+            if (e.is_regular_file(iec)) {
+                ++n;
+            }
+        }
+        return n;
+    };
+    std::sort(candidates.begin(), candidates.end(), [&](const auto& a, const auto& b) {
+        return count_files(a) > count_files(b);
+    });
+
+    const auto& source = candidates.front();
+    std::filesystem::create_directories(addon_registered.parent_path(), ec);
+    if (std::filesystem::exists(addon_registered, ec)) {
+        std::filesystem::remove_all(addon_registered, ec);
+    }
+    std::filesystem::rename(source, addon_registered, ec);
+    if (ec) {
+        ec.clear();
+        std::filesystem::copy(
+            source,
+            addon_registered,
+            std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing,
+            ec);
+        if (!ec) {
+            std::filesystem::remove_all(source, ec);
+        }
+    }
+    if (!ec) {
+        std::cout
+            << "switch DLC: migrated registered NCAs from " << source << " → " << addon_registered
+            << '\n';
+        // Drop empty leftover per-user addon dirs (best effort).
+        for (const auto& cand : candidates) {
+            if (cand == addon_registered) {
+                continue;
+            }
+            const auto parent = cand.parent_path();
+            std::filesystem::remove(cand, ec);
+            std::filesystem::remove(parent / "manifest.json", ec);
+            std::filesystem::remove(parent, ec);
+        }
+    }
+}
+
 void ensure_manifest(const std::filesystem::path& addon_dir, std::string_view content_stem) {
     const auto manifest_path = addon_dir / "manifest.json";
     std::error_code ec;
     if (std::filesystem::is_regular_file(manifest_path, ec)) {
         return;
     }
+    auto names = seed_nsp_names_for_stem(addon_dir, content_stem);
+    migrate_nsps_into_addon_dir(addon_dir, names);
+    // Re-list after migration so manifest only stores basenames in the game folder.
+    names = list_nsp_basenames_in_dir(addon_dir, base_name_for_matching(content_stem));
+    if (names.empty()) {
+        names = seed_nsp_names_for_stem(addon_dir, content_stem);
+    }
+
     nlohmann::json doc;
     doc["content_stem"] = std::string(content_stem);
-    doc["nsps"] = seed_nsp_names_for_stem(content_stem);
+    doc["nsps"] = names;
     doc["seeded"] = true;
     std::filesystem::create_directories(addon_dir, ec);
     std::ofstream out(manifest_path, std::ios::trunc);
     out << doc.dump(2) << '\n';
     std::cout
-        << "switch addons: seeded manifest for \"" << content_stem << "\" with "
-        << doc["nsps"].size() << " NSP(s)\n";
+        << "switch DLC: seeded manifest for \"" << content_stem << "\" with " << names.size()
+        << " NSP(s) at " << addon_dir << '\n';
 }
 
 std::vector<std::filesystem::path> nsp_paths_from_manifest(const std::filesystem::path& addon_dir) {
@@ -199,7 +386,7 @@ std::vector<std::filesystem::path> nsp_paths_from_manifest(const std::filesystem
     } catch (...) {
         return {};
     }
-    const auto updates_dir = switch_title_updates_directory();
+    const auto legacy = legacy_switch_updates_directory();
     std::vector<std::filesystem::path> paths;
     if (!doc.contains("nsps") || !doc["nsps"].is_array()) {
         return paths;
@@ -214,12 +401,23 @@ std::vector<std::filesystem::path> nsp_paths_from_manifest(const std::filesystem
         }
         std::filesystem::path candidate(name);
         if (!candidate.is_absolute()) {
-            candidate = updates_dir / name;
+            candidate = addon_dir / name;
+            if (!std::filesystem::is_regular_file(candidate)) {
+                candidate = legacy / name;
+            }
         }
         if (std::filesystem::is_regular_file(candidate)) {
+            // Keep packs nested with the game when resolved from legacy.
+            if (candidate.parent_path() != addon_dir) {
+                migrate_nsps_into_addon_dir(addon_dir, {name});
+                const auto nested = addon_dir / name;
+                if (std::filesystem::is_regular_file(nested)) {
+                    candidate = nested;
+                }
+            }
             paths.push_back(candidate);
         } else {
-            std::cerr << "switch addons: missing NSP " << candidate << '\n';
+            std::cerr << "switch DLC: missing NSP " << name << " under " << addon_dir << '\n';
         }
     }
     return paths;
@@ -245,7 +443,6 @@ bool replace_registered_with_symlink(
         }
         std::filesystem::remove(ryujinx_registered, ec);
     } else if (std::filesystem::exists(ryujinx_registered, ec)) {
-        // Preserve previous real registered tree once as backup, then replace.
         const auto backup = ryujinx_registered.parent_path() / "registered.archstreamer-bak";
         if (!std::filesystem::exists(backup, ec)) {
             std::filesystem::rename(ryujinx_registered, backup, ec);
@@ -259,25 +456,36 @@ bool replace_registered_with_symlink(
     std::filesystem::create_directory_symlink(addon_registered, ryujinx_registered, ec);
     if (ec) {
         std::cerr
-            << "switch addons: failed to link registered -> " << addon_registered
-            << ": " << ec.message() << '\n';
+            << "switch DLC: failed to link registered -> " << addon_registered << ": "
+            << ec.message() << '\n';
         return false;
     }
     return true;
 }
 
+void collect_nsp_files_recursive(
+    const std::filesystem::path& root,
+    std::vector<std::filesystem::path>& out) {
+    std::error_code ec;
+    if (!std::filesystem::is_directory(root, ec)) {
+        return;
+    }
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(root, ec)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        const auto ext = entry.path().extension().string();
+        if (ext == ".nsp" || ext == ".NSP") {
+            out.push_back(entry.path());
+        }
+    }
+}
+
 } // namespace
 
 std::filesystem::path switch_title_updates_directory() {
-    if (const char* env = std::getenv("ARCHSTREAMER_SWITCH_UPDATES");
-        env != nullptr && *env != '\0') {
-        return env;
-    }
-    const std::filesystem::path gaming{"/mnt/Internal_SSD/Gaming/ROMS/SwitchUpdates"};
-    if (std::filesystem::is_directory(gaming)) {
-        return gaming;
-    }
-    return SwitchSystemDefaults::system_root() / "updates";
+    // System folder under global DLC (per-game packs nest underneath).
+    return resolve_dlc_root() / dlc_system_folder_name("switch");
 }
 
 void ensure_ryujinx_catalog_addons(
@@ -289,9 +497,13 @@ void ensure_ryujinx_catalog_addons(
     if (content_stem.empty()) {
         return;
     }
-    const auto addon_dir = catalog_switch_addon_directory(save_profile, content_stem);
+    const auto addon_dir = switch_dlc_game_directory(content_stem);
+    if (addon_dir.empty()) {
+        return;
+    }
     const auto registered = addon_dir / "registered";
     ensure_manifest(addon_dir, content_stem);
+    migrate_registered_from_legacy_user_addons(save_profile, content_stem, registered);
     std::filesystem::create_directories(registered);
 
     int unpacked = 0;
@@ -305,45 +517,41 @@ void ensure_ryujinx_catalog_addons(
     const auto ryu_registered = ryujinx_data_root / "bis" / "user" / "Contents" / "registered";
     if (replace_registered_with_symlink(ryu_registered, registered)) {
         std::cout
-            << "Ryujinx catalog addons: \"" << content_stem << "\" → " << registered
-            << " (" << nsps.size() << " NSP(s), " << unpacked << " extracted)\n";
+            << "Ryujinx catalog DLC: \"" << content_stem << "\" → " << registered << " ("
+            << nsps.size() << " NSP(s), " << unpacked << " extracted)\n";
     }
 }
 
 void ensure_ryujinx_title_updates(const std::filesystem::path& ryujinx_data_root) {
     // Kept for tooling/back-compat; catalog launches use ensure_ryujinx_catalog_addons.
-    const auto updates_dir = switch_title_updates_directory();
-    if (!std::filesystem::is_directory(updates_dir)) {
-        return;
+    std::vector<std::filesystem::path> nsp_roots;
+    nsp_roots.push_back(switch_title_updates_directory());
+    const auto legacy = legacy_switch_updates_directory();
+    if (legacy != nsp_roots.front()) {
+        nsp_roots.push_back(legacy);
     }
 
     const auto registered = ryujinx_data_root / "bis" / "user" / "Contents" / "registered";
     std::error_code ec;
     if (std::filesystem::is_symlink(registered, ec)) {
-        // Do not dump every NSP into a catalog-specific registered symlink.
         return;
     }
     std::filesystem::create_directories(registered);
 
-    int nsp_count = 0;
+    std::vector<std::filesystem::path> nsps;
+    for (const auto& root : nsp_roots) {
+        collect_nsp_files_recursive(root, nsps);
+    }
     int unpacked = 0;
-    for (const auto& entry : std::filesystem::directory_iterator(updates_dir)) {
-        if (!entry.is_regular_file()) {
-            continue;
-        }
-        const auto ext = entry.path().extension().string();
-        if (ext != ".nsp" && ext != ".NSP") {
-            continue;
-        }
-        ++nsp_count;
-        if (extract_pfs0_nsp(entry.path(), registered)) {
+    for (const auto& nsp : nsps) {
+        if (extract_pfs0_nsp(nsp, registered)) {
             ++unpacked;
         }
     }
-    if (nsp_count > 0) {
+    if (!nsps.empty()) {
         std::cout
-            << "Ryujinx title updates: scanned " << nsp_count << " NSP(s) from " << updates_dir
-            << " → " << registered << " (" << unpacked << " unpacked/linked)\n";
+            << "Ryujinx title updates: scanned " << nsps.size() << " NSP(s) → " << registered
+            << " (" << unpacked << " unpacked/linked)\n";
     }
 }
 

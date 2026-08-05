@@ -1,9 +1,12 @@
 #include "host/switch_save_share.hpp"
 
+#include "common/dlc_paths.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <regex>
@@ -568,9 +571,9 @@ std::string title_id_from_update_nsps_for_stem(std::string_view content_stem) {
         base_name = stem_l;
     }
 
-    const auto updates = std::filesystem::path{"/mnt/Internal_SSD/Gaming/ROMS/SwitchUpdates"};
-    // Also try env via a lightweight reimplementation to avoid circular deps — caller may pass later.
-    std::vector<std::filesystem::path> roots{updates};
+    const auto updates = legacy_switch_updates_directory();
+    const auto dlc_switch = resolve_dlc_root() / dlc_system_folder_name("switch");
+    std::vector<std::filesystem::path> roots{dlc_switch, updates};
     if (const char* env = std::getenv("ARCHSTREAMER_SWITCH_UPDATES");
         env != nullptr && *env != '\0') {
         roots.insert(roots.begin(), std::filesystem::path(env));
@@ -582,42 +585,56 @@ std::string title_id_from_update_nsps_for_stem(std::string_view content_stem) {
         if (!std::filesystem::is_directory(root, ec)) {
             continue;
         }
-        for (const auto& entry : std::filesystem::directory_iterator(root, ec)) {
-            if (!entry.is_regular_file()) {
-                continue;
-            }
-            const auto name = entry.path().filename().string();
-            const auto name_l = to_lower_copy(name);
-            if (name_l.find("[upd]") == std::string::npos &&
-                name_l.find("][upd]") == std::string::npos) {
-                // Accept either [UPD] tag.
-                if (name_l.find("upd]") == std::string::npos) {
+        // Flat legacy folder + nested DLC/Switch/<stem>/*.nsp
+        const auto scan = [&](const std::filesystem::path& dir) {
+            for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+                if (!entry.is_regular_file()) {
                     continue;
                 }
-            }
-            if (name_l.find(base_name) == std::string::npos) {
-                continue;
-            }
-            std::smatch match;
-            if (!std::regex_search(name, match, tid_re) || match.size() < 2) {
-                continue;
-            }
-            auto patch = normalize_switch_title_id(match[1].str());
-            if (!looks_like_title_id(patch)) {
-                continue;
-            }
-            // Patch title ids typically set 0x800 in the low nibble of the last byte group.
-            std::uint64_t value = 0;
-            for (char ch : patch) {
-                value <<= 4;
-                if (ch >= '0' && ch <= '9') {
-                    value |= static_cast<std::uint64_t>(ch - '0');
-                } else {
-                    value |= static_cast<std::uint64_t>(10 + ch - 'a');
+                const auto name = entry.path().filename().string();
+                const auto name_l = to_lower_copy(name);
+                if (name_l.find("[upd]") == std::string::npos &&
+                    name_l.find("][upd]") == std::string::npos) {
+                    if (name_l.find("upd]") == std::string::npos) {
+                        continue;
+                    }
                 }
+                if (name_l.find(base_name) == std::string::npos) {
+                    continue;
+                }
+                std::smatch match;
+                if (!std::regex_search(name, match, tid_re) || match.size() < 2) {
+                    continue;
+                }
+                auto patch = normalize_switch_title_id(match[1].str());
+                if (!looks_like_title_id(patch)) {
+                    continue;
+                }
+                std::uint64_t value = 0;
+                for (char ch : patch) {
+                    value <<= 4;
+                    if (ch >= '0' && ch <= '9') {
+                        value |= static_cast<std::uint64_t>(ch - '0');
+                    } else {
+                        value |= static_cast<std::uint64_t>(10 + ch - 'a');
+                    }
+                }
+                value &= ~0x800ull;
+                return title_id_from_u64(value);
             }
-            value &= ~0x800ull;
-            return title_id_from_u64(value);
+            return std::string{};
+        };
+
+        if (auto tid = scan(root); !tid.empty()) {
+            return tid;
+        }
+        for (const auto& entry : std::filesystem::directory_iterator(root, ec)) {
+            if (!entry.is_directory()) {
+                continue;
+            }
+            if (auto tid = scan(entry.path()); !tid.empty()) {
+                return tid;
+            }
         }
     }
     return {};
@@ -682,9 +699,9 @@ std::filesystem::path legacy_title_id_switch_save_directory(
 }
 
 std::filesystem::path catalog_switch_addon_directory(
-    const SaveProfile& profile,
+    const SaveProfile& /*profile*/,
     std::string_view content_stem) {
-    return profile.user_directory / "switch" / "addons" / std::string(content_stem);
+    return switch_dlc_game_directory(content_stem);
 }
 
 std::filesystem::path ensure_catalog_switch_save(

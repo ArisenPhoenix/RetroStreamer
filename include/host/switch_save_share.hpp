@@ -31,7 +31,10 @@ std::filesystem::path legacy_title_id_switch_save_directory(
     const SaveProfile& profile,
     std::string_view title_id);
 
-/** Per-catalog addon root: <user>/switch/addons/<content_stem>/. */
+/**
+ * Global Switch DLC game dir: <DLC>/Switch/<content_stem>/
+ * (profile unused; kept for call-site compatibility).
+ */
 std::filesystem::path catalog_switch_addon_directory(
     const SaveProfile& profile,
     std::string_view content_stem);

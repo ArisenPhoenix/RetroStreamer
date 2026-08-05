@@ -46,6 +46,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace archstreamer::gui {
 
@@ -116,6 +117,61 @@ QSet<QString> collect_expanded_saves_keys(QTreeWidget* tree) {
         }
     }
     return keys;
+}
+
+/** Stable identity for restoring selection after a Users tree rebuild. */
+QString saves_item_identity(const QTreeWidgetItem* item) {
+    if (item == nullptr) {
+        return {};
+    }
+    const int kind = item->data(0, kUserRoleNodeKind).toInt();
+    const auto username = item->data(0, kUserRoleUsername).toString();
+    const auto system_key = item->data(0, kUserRoleSystemKey).toString();
+    const auto game_key = item->data(0, kUserRoleGameKey).toString();
+    const bool synthetic = item->data(0, kUserRoleSynthetic).toBool();
+    const int slot = item->data(0, kUserRoleSlot).isValid() ? item->data(0, kUserRoleSlot).toInt() : -1;
+    QString id = QString::number(kind) + QLatin1Char('\n') + username + QLatin1Char('\n') + system_key
+        + QLatin1Char('\n') + game_key + QLatin1Char('\n')
+        + (synthetic ? QLatin1Char('1') : QLatin1Char('0')) + QLatin1Char('\n')
+        + QString::number(slot);
+    // Synthetic "Playing:" rows often lack a game_key — keep display text for match.
+    if (synthetic && game_key.isEmpty()) {
+        id += QLatin1Char('\n') + item->text(0);
+    }
+    return id;
+}
+
+QString collect_selected_saves_identity(QTreeWidget* tree) {
+    if (tree == nullptr) {
+        return {};
+    }
+    return saves_item_identity(tree->currentItem());
+}
+
+void restore_selected_saves_identity(QTreeWidget* tree, const QString& identity) {
+    if (tree == nullptr || identity.isEmpty()) {
+        return;
+    }
+    std::vector<QTreeWidgetItem*> stack;
+    stack.reserve(static_cast<std::size_t>(tree->topLevelItemCount()));
+    for (int u = 0; u < tree->topLevelItemCount(); ++u) {
+        stack.push_back(tree->topLevelItem(u));
+    }
+    while (!stack.empty()) {
+        auto* item = stack.back();
+        stack.pop_back();
+        if (item == nullptr) {
+            continue;
+        }
+        if (saves_item_identity(item) == identity) {
+            tree->setCurrentItem(item);
+            item->setSelected(true);
+            return;
+        }
+        for (int i = item->childCount() - 1; i >= 0; --i) {
+            stack.push_back(item->child(i));
+        }
+    }
 }
 
 QString expand_user_path_local(QString path) {
@@ -413,6 +469,9 @@ QWidget* MainWindow::build_saves_tab() {
         if (tabs_ == nullptr || saves_tree_ == nullptr) {
             return;
         }
+        if (saves_context_menu_open_) {
+            return;
+        }
         if (tabs_->tabText(tabs_->currentIndex()) != QLatin1String("Users")) {
             return;
         }
@@ -436,9 +495,19 @@ void MainWindow::saves_show_context_menu(const QPoint& pos) {
     if (saves_tree_ == nullptr) {
         return;
     }
+    // Right-click should target the row under the cursor (and keep it selected).
+    if (auto* under = saves_tree_->itemAt(pos)) {
+        saves_tree_->setCurrentItem(under);
+        if (!under->isSelected()) {
+            saves_tree_->clearSelection();
+            under->setSelected(true);
+        }
+    }
     update_saves_action_enabled();
 
+    saves_context_menu_open_ = true;
     QMenu menu(saves_tree_);
+    connect(&menu, &QMenu::aboutToHide, this, [this] { saves_context_menu_open_ = false; });
     auto* copy_action = menu.addAction("Copy");
     copy_action->setShortcut(QKeySequence::Copy);
     copy_action->setEnabled(!saves_tree_->selectedItems().isEmpty());
@@ -451,6 +520,7 @@ void MainWindow::saves_show_context_menu(const QPoint& pos) {
     remove_menu->addAction(saves_remove_system_action_);
     remove_menu->addAction(saves_remove_game_action_);
     menu.exec(saves_tree_->viewport()->mapToGlobal(pos));
+    saves_context_menu_open_ = false;
 }
 
 void MainWindow::saves_copy_selection() {
@@ -587,11 +657,16 @@ void MainWindow::refresh_saves_browser_list() {
     if (saves_tree_ == nullptr) {
         return;
     }
+    // Rebuilding the tree clears selection and disables shared context-menu actions.
+    if (saves_context_menu_open_) {
+        return;
+    }
     const auto root = save_root_path();
     const auto user = saves_user_->currentData().toString().toStdString();
     const auto system = saves_system_->currentData().toString().toStdString();
     const auto filter = saves_filter_->text().trimmed().toLower();
     const auto previously_expanded = collect_expanded_saves_keys(saves_tree_);
+    const auto previously_selected = collect_selected_saves_identity(saves_tree_);
 
     const auto games = list_save_games(root, user, system, saves_hints_);
     const auto active_sessions = load_users_active_sessions(root);
@@ -690,12 +765,15 @@ void MainWindow::refresh_saves_browser_list() {
         if (!user.empty() && active.username != user) {
             continue;
         }
-        if (!system.empty() && !active.system_key.empty() && active.system_key != system) {
+        if (!system.empty() && !active.system_key.empty()
+            && normalize_save_browser_system_key(active.system_key)
+                != normalize_save_browser_system_key(system)) {
             continue;
         }
         const auto username_q = QString::fromStdString(active.username);
+        const auto system_key_norm = normalize_save_browser_system_key(active.system_key);
         const auto system_label_q = QString::fromStdString(
-            active.system_key.empty() ? "Unknown" : save_system_label(active.system_key));
+            system_key_norm.empty() ? "Unknown" : save_system_label(system_key_norm));
         const auto display = resolve_active_display_name(active, saves_hints_);
         const auto game_label = QStringLiteral("Playing: %1").arg(display);
         if (!passes_filter(username_q, system_label_q, game_label)) {
@@ -703,7 +781,7 @@ void MainWindow::refresh_saves_browser_list() {
         }
         PendingGameRow row;
         row.username = username_q;
-        row.system_key = QString::fromStdString(active.system_key);
+        row.system_key = QString::fromStdString(system_key_norm);
         row.system_label = system_label_q;
         row.display_name = game_label;
         row.size_text = QStringLiteral("—");
@@ -869,6 +947,7 @@ void MainWindow::refresh_saves_browser_list() {
 
     saves_tree_->sortByColumn(sort_column, sort_order);
     saves_tree_->setSortingEnabled(true);
+    restore_selected_saves_identity(saves_tree_, previously_selected);
     QString status = QStringLiteral("%1 user(s), %2 game(s) under %3")
         .arg(saves_tree_->topLevelItemCount())
         .arg(game_shown)

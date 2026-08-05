@@ -371,19 +371,20 @@ void MainWindow::apply_updates() {
         return;
     }
 
+    QString prompt = QStringLiteral(
+        "This will:\n"
+        "• reset the repo to origin/%1 (discards local edits in that checkout)\n"
+        "• rebuild ArchStreamer\n");
+#ifdef Q_OS_WIN
+    prompt += QStringLiteral("• reinstall into Program Files (may need Admin)\n");
+#endif
+    prompt += QStringLiteral(
+        "• quit this app and relaunch when finished\n\n"
+        "Continue?");
     const auto reply = QMessageBox::question(
         this,
         QStringLiteral("Update ArchStreamer"),
-        QStringLiteral(
-            "This will:\n"
-            "• reset the repo to origin/%1 (discards local edits in that checkout)\n"
-            "• rebuild ArchStreamer\n"
-#ifdef Q_OS_WIN
-            "• reinstall into Program Files (may need Admin)\n"
-#endif
-            "• quit this app and relaunch when finished\n\n"
-            "Continue?")
-            .arg(update_branch_name()),
+        prompt.arg(update_branch_name()),
         QMessageBox::Yes | QMessageBox::No,
         QMessageBox::No);
     if (reply != QMessageBox::Yes) {

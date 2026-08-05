@@ -369,10 +369,12 @@ void MainWindow::load_host_games() {
                 GuiLogLevel::Quiet);
             return;
         }
+        std::vector<archstreamer::CatalogScanIssue> scan_issues;
         const auto catalog = archstreamer::scan_game_catalog(
             rom_root,
             archstreamer::LibretroCoreRegistry::ubuntu_defaults(),
-            meta_root);
+            meta_root,
+            &scan_issues);
         const auto list = catalog.list();
         host_game_picker_->setCatalog(list);
         if (!list.games.empty()) {
@@ -385,14 +387,56 @@ void MainWindow::load_host_games() {
                     QString::fromStdString(list.games.front().id);
             }
         }
-        host_status_->setText(QString("Host stopped; %1 game(s) loaded").arg(list.games.size()));
+        if (scan_issues.empty()) {
+            host_status_->setText(QString("Host stopped; %1 game(s) loaded").arg(list.games.size()));
+        } else {
+            host_status_->setText(
+                QString("Host stopped; %1 game(s) loaded, %2 locked")
+                    .arg(list.games.size())
+                    .arg(scan_issues.size()));
+        }
         append_log(host_log_, QString("Loaded %1 host game(s).").arg(list.games.size()));
+        for (const auto& issue : scan_issues) {
+            QString prefix;
+            switch (issue.kind) {
+            case archstreamer::CatalogScanIssueKind::MissingMeta:
+                prefix = QStringLiteral("[catalog] locked (missing Meta)");
+                break;
+            case archstreamer::CatalogScanIssueKind::StemMismatch:
+                prefix = QStringLiteral("[catalog] locked (stem mismatch)");
+                break;
+            case archstreamer::CatalogScanIssueKind::InvalidM3m:
+                prefix = QStringLiteral("[catalog] locked (invalid .m3m)");
+                break;
+            }
+            append_log(
+                host_log_,
+                QString("%1: %2\n  %3")
+                    .arg(prefix)
+                    .arg(QString::fromStdString(issue.message))
+                    .arg(QString::fromStdString(issue.content_path.string())),
+                GuiLogLevel::Quiet);
+        }
+        if (!scan_issues.empty()) {
+            append_log(
+                host_log_,
+                QString("%1 title(s) locked until Meta exists, ROM stem matches "
+                        "display_name / version (bare title, or \"Title (1.1)\" for labeled builds), "
+                        "and any .m3m has TITLE_ID / ROM / PATCH_TITLE_ID / BASE.")
+                    .arg(scan_issues.size()),
+                GuiLogLevel::Quiet);
+        }
         if (list.games.empty()) {
             append_log(
                 host_log_,
                 QString("No playable titles under %1 (need matching libretro cores "
-                        "visible to this app, or Ryujinx/Yuzu for Switch).")
-                    .arg(QString::fromStdString(rom_root.string())),
+                        "visible to this app, or Ryujinx/Yuzu for Switch"
+                        "%2).")
+                    .arg(QString::fromStdString(rom_root.string()))
+                    .arg(scan_issues.empty()
+                             ? QString()
+                             : QStringLiteral("; %1 locked by Meta/stem policy")
+                                   .arg(scan_issues.size())),
                 GuiLogLevel::Quiet);
         }
         if (archstreamer::ryujinx_runtime_available()) {

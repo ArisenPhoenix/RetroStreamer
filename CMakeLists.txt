@@ -110,6 +110,8 @@ set(ARCHSTREAMER_CORE_SOURCES
     src/common/discovery.cpp
     src/common/dlc_paths.cpp
     src/common/game_assets.cpp
+    src/common/game_identity.cpp
+    src/common/m3m_playlist.cpp
     src/common/steam_art_import.cpp
     src/common/participant_role.cpp
     src/common/protocol.cpp
@@ -282,6 +284,7 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/game_meta_store.cpp
         src/host/game_meta_edit_log.cpp
         src/host/catalog_ops.cpp
+        src/host/catalog_repair.cpp
         src/host/user_credentials.cpp
         src/host/standalone_emulator.cpp
         src/host/switch/switch_fs.cpp
@@ -404,6 +407,11 @@ if(ARCHSTREAMER_BUILD_HOST)
     )
     target_link_libraries(steam_art_import PRIVATE archstreamer_host)
 
+    add_executable(catalog_repair
+        src/tools/catalog_repair_tool.cpp
+    )
+    target_link_libraries(catalog_repair PRIVATE archstreamer_host)
+
     if(NOT WIN32)
         add_executable(uinput_probe
             src/tools/uinput_probe.cpp
@@ -423,6 +431,7 @@ if(ARCHSTREAMER_BUILD_HOST)
         game_catalog_probe
         asset_probe
         steam_art_import
+        catalog_repair
         host_runner
     )
     if(ARCHSTREAMER_CADENCE_SIDECAR_TARGET)

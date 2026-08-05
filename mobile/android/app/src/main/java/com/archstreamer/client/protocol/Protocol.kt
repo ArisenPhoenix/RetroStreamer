@@ -75,6 +75,7 @@ data class GameInfo(
     val systemKey: String,
     val coreName: String,
     val canonicalName: String,
+    /** Host sends a real version token, or "" when unlabeled — just append if non-blank. */
     val version: String,
     val language: String,
     val region: String,
@@ -84,7 +85,11 @@ data class GameInfo(
     val maxPlayers: Int,
     val updatedAt: Long,
     val playlistDiscs: List<String>,
-)
+) {
+    /** displayName, plus " (version)" when the host sent a non-empty version. */
+    fun title(): String =
+        if (version.isBlank()) displayName else "$displayName ($version)"
+}
 
 data class GameList(
     val catalogRevision: Long,

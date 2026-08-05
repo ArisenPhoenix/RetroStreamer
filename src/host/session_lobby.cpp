@@ -3,6 +3,7 @@
 #include "common/art_transfer.hpp"
 #include "common/catalog_paths.hpp"
 #include "common/client_logs.hpp"
+#include "common/game_identity.hpp"
 #include "host/save_active_sessions.hpp"
 #include "host/user_credentials.hpp"
 
@@ -59,6 +60,12 @@ GameList catalog_delta_for_request(const GameList& full_list, const GameListRequ
     auto response = full_list;
     response.full = true;
     response.deleted_game_ids.clear();
+    // Presentation edge for clients: keep display_name as the clean base title, and
+    // put either a real version token or "" in version. Clients only concatenate —
+    // they must not re-interpret 0/1/unknown/rev bookkeeping.
+    for (auto& game : response.games) {
+        game.version = catalog_version_display_token(game.version);
+    }
     return response;
 }
 

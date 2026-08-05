@@ -1,6 +1,7 @@
 #include "host/catalog_ops.hpp"
 
 #include "common/dlc_paths.hpp"
+#include "common/game_identity.hpp"
 #include "common/sha256.hpp"
 #include "host/game_catalog_scanner.hpp"
 #include "host/game_meta_edit_log.hpp"
@@ -126,18 +127,47 @@ void rename_dlc_game_directory(
     const std::filesystem::path& dlc_root,
     std::string_view old_system_key,
     std::string_view new_system_key,
-    std::string_view old_stem,
-    std::string_view new_stem,
+    std::string_view old_game_id,
+    std::string_view new_game_id,
     std::vector<std::string>& effects) {
-    if (dlc_root.empty() || old_stem.empty() || new_stem.empty()) {
+    if (dlc_root.empty() || old_game_id.empty() || new_game_id.empty()) {
         return;
     }
-    const auto from = catalog_dlc_game_directory(dlc_root, old_system_key, old_stem);
-    const auto to = catalog_dlc_game_directory(dlc_root, new_system_key, new_stem);
+    const auto from = catalog_dlc_game_directory(dlc_root, old_system_key, old_game_id);
+    const auto to = catalog_dlc_game_directory(dlc_root, new_system_key, new_game_id);
     if (from.empty() || to.empty() || from == to) {
         return;
     }
     (void)rename_path_best_effort(from, to, effects);
+}
+
+/** Move legacy DLC/<System>/<content_stem>/ into DLC/<System>/<game_id>/ when needed. */
+void migrate_legacy_stem_dlc_to_game_id(
+    const std::filesystem::path& dlc_root,
+    std::string_view system_key,
+    std::string_view content_stem,
+    std::string_view game_id,
+    std::vector<std::string>& effects) {
+    if (dlc_root.empty() || content_stem.empty() || game_id.empty()) {
+        return;
+    }
+    const auto legacy = catalog_dlc_legacy_stem_directory(dlc_root, system_key, content_stem);
+    const auto modern = catalog_dlc_game_directory(dlc_root, system_key, game_id);
+    if (legacy.empty() || modern.empty() || legacy == modern) {
+        return;
+    }
+    std::error_code ec;
+    if (!std::filesystem::is_directory(legacy, ec) || ec) {
+        return;
+    }
+    if (std::filesystem::exists(modern, ec) && !ec) {
+        effects.push_back(
+            "skip DLC stem migrate (target exists): " + legacy.string() + " → " + modern.string());
+        return;
+    }
+    if (rename_path_best_effort(legacy, modern, effects)) {
+        effects.push_back("migrated legacy DLC stem folder → game_id leaf");
+    }
 }
 
 void rename_art_asset_key(
@@ -152,6 +182,101 @@ void rename_art_asset_key(
         art_root / std::filesystem::path{std::string(old_key)},
         art_root / std::filesystem::path{std::string(new_key)},
         effects);
+}
+
+/** Basename safe for ROM / Meta filenames (no path separators). */
+std::string sanitize_rom_basename(std::string name) {
+    name = sanitize_game_display_name(std::move(name));
+    for (char& ch : name) {
+        if (ch == '/' || ch == '\\' || ch == '\0') {
+            ch = ' ';
+        }
+    }
+    while (!name.empty() && (name.back() == ' ' || name.back() == '.')) {
+        name.pop_back();
+    }
+    return name;
+}
+
+/**
+ * ROM / Meta stem from display_name + version (edge policy).
+ * Unlabeled → bare display_name; labeled → "Title (1.1)".
+ */
+std::string rom_basename_for_record(const GameMetaRecord& row) {
+    auto name = sanitize_rom_basename(row.display_name);
+    if (name.empty()) {
+        return {};
+    }
+    return catalog_rom_stem_for(name, row.version);
+}
+
+std::filesystem::path planned_rom_path_for_record(const GameMetaRecord& row) {
+    if (row.content_path.empty()) {
+        return {};
+    }
+    const auto stem = rom_basename_for_record(row);
+    if (stem.empty()) {
+        return {};
+    }
+    const auto content = std::filesystem::path{row.content_path};
+    return content.parent_path() / (stem + content.extension().string());
+}
+
+/**
+ * Rename the ROM so its stem matches display_name (+ version when set), and move
+ * any Meta sidecar (beside the ROM or under the Games→Meta mirror) with it.
+ * Updates row.content_path on success. Plain rename — no backup copy.
+ */
+bool rename_content_rom_and_meta(GameMetaRecord& row, std::vector<std::string>& effects) {
+    if (row.content_path.empty() || row.display_name.empty()) {
+        return false;
+    }
+    const auto new_stem = rom_basename_for_record(row);
+    if (new_stem.empty()) {
+        effects.push_back("skip ROM rename (empty display_name basename)");
+        return false;
+    }
+
+    std::error_code ec;
+    const auto content = std::filesystem::path{row.content_path};
+    if (!std::filesystem::is_regular_file(content, ec) || ec) {
+        effects.push_back("skip ROM rename (missing file): " + content.string());
+        return false;
+    }
+
+    const auto old_stem = content.stem().string();
+    if (old_stem == new_stem) {
+        return false;
+    }
+
+    const auto new_path = content.parent_path() / (new_stem + content.extension().string());
+    if (content == new_path) {
+        return false;
+    }
+
+    // Locate Meta before the ROM moves (the guess uses the current path).
+    const auto meta_old = guess_rom_meta_json(content);
+    auto beside_old = content;
+    beside_old.replace_extension(".json");
+
+    if (!rename_path_best_effort(content, new_path, effects)) {
+        return false;
+    }
+    row.content_path = new_path.lexically_normal().string();
+
+    if (!meta_old.empty()) {
+        std::filesystem::path meta_new;
+        if (meta_old == beside_old) {
+            meta_new = new_path;
+            meta_new.replace_extension(".json");
+        } else {
+            meta_new = meta_old.parent_path() / (new_stem + ".json");
+        }
+        if (meta_old != meta_new) {
+            (void)rename_path_best_effort(meta_old, meta_new, effects);
+        }
+    }
+    return true;
 }
 
 /** Strip one trailing "(…)" group if it looks like region/revision noise. */
@@ -193,26 +318,28 @@ bool looks_like_revision_tag(std::string_view tag) {
 
 } // namespace
 
+std::filesystem::path planned_rom_rename_target(const GameMetaRecord& row) {
+    return planned_rom_path_for_record(row);
+}
+
 GameMetaRecord recompute_game_meta_identity(GameMetaRecord row) {
     row.system_key = canonical_token(row.system_key);
     row.canonical_name = canonical_token(
         row.canonical_name.empty() ? row.display_name : row.canonical_name);
-    row.version = canonical_token(row.version.empty() ? "unknown" : row.version);
-    row.language = canonical_token(row.language.empty() ? "en" : row.language);
-    row.region = canonical_token(row.region.empty() ? "unknown" : row.region);
-    row.identity_key = identity_key_for(
+    const auto composed = compose_catalog_identity(
         row.system_key,
         row.canonical_name,
-        row.version,
-        row.language,
-        row.region);
-    row.game_id = sha256_hex(row.identity_key);
-    row.asset_key = asset_key_for(
-        row.system_key,
-        row.canonical_name,
-        row.language,
-        row.region,
-        row.version);
+        canonical_token(row.version),
+        canonical_token(row.language),
+        canonical_token(row.region));
+    row.version = composed.version;
+    row.language = composed.language;
+    row.region = composed.region;
+    row.identity_key = composed.identity_key;
+    row.game_id = composed.game_id;
+    row.asset_key = composed.asset_key;
+    // content_stem is always derived from the edge ROM stem — never hand-authored.
+    row.content_stem = catalog_content_stem_for(row.display_name, row.version);
     row.updated_at = std::chrono::duration_cast<std::chrono::seconds>(
                          std::chrono::system_clock::now().time_since_epoch())
                          .count();
@@ -243,12 +370,17 @@ CatalogOpResult apply_game_meta_edit(
     next.system_key = edited.system_key;
     next.system_name = edited.system_name;
     next.display_name = edited.display_name;
+    while (!next.display_name.empty()
+           && (next.display_name.back() == ' ' || next.display_name.back() == '\t')) {
+        next.display_name.pop_back();
+    }
     next.canonical_name = edited.canonical_name;
     next.core_name = edited.core_name;
     next.version = edited.version;
     next.language = edited.language;
     next.region = edited.region;
-    next.content_stem = edited.content_stem;
+    // content_stem is derived in recompute_game_meta_identity — ignore edited.value.
+    strip_matching_version_label(next.display_name, next.version);
     if (!edited.content_path.empty()) {
         next.content_path = edited.content_path;
     }
@@ -264,6 +396,7 @@ CatalogOpResult apply_game_meta_edit(
     const auto new_asset = next.asset_key;
     const auto old_system = existing->system_key;
     const auto new_system = next.system_key;
+    const auto old_game_id = existing->game_id;
     const bool id_changed = next.game_id != existing->game_id;
 
     if (id_changed) {
@@ -343,15 +476,33 @@ CatalogOpResult apply_game_meta_edit(
         if (dlc.empty()) {
             dlc = resolve_dlc_root();
         }
-        if (old_stem != new_stem || old_system != new_system) {
+        // DLC leaf is catalog game_id; rename when id or system folder changes.
+        if (old_game_id != next.game_id || old_system != new_system) {
             rename_dlc_game_directory(
-                dlc, old_system, new_system, old_stem, new_stem, result.effects);
+                dlc, old_system, new_system, old_game_id, next.game_id, result.effects);
+        }
+        // One-shot: pull pre–game_id stem folders into the modern leaf.
+        migrate_legacy_stem_dlc_to_game_id(
+            dlc, new_system, new_stem.empty() ? old_stem : new_stem, next.game_id, result.effects);
+        if (!old_stem.empty() && old_stem != new_stem) {
+            migrate_legacy_stem_dlc_to_game_id(
+                dlc, new_system, old_stem, next.game_id, result.effects);
         }
     }
 
     // Keep Meta JSON in sync so directory scans cannot resurrect stale identities.
     if (next.content_path.empty()) {
         next.content_path = existing->content_path;
+    }
+    if (fs.apply_filesystem && fs.rename_rom) {
+        // Align ROM basename (+ Meta sidecar) with display_name so rescans stay clean.
+        if (rename_content_rom_and_meta(next, result.effects)) {
+            if (!store.upsert(next)) {
+                result.message = "renamed ROM but failed to update content_path in game_meta";
+                return result;
+            }
+            result.effects.push_back("updated content_path after ROM rename");
+        }
     }
     if (store.write_meta_sidecar(next)) {
         result.effects.push_back("wrote Meta sidecar for " + next.display_name);
@@ -369,6 +520,37 @@ CatalogOpResult apply_game_meta_edit(
             "recorded edit #" + std::to_string(result.edit_id) + " → "
             + edit_log.path().string());
     }
+    return result;
+}
+
+CatalogOpResult align_game_files_to_identity(
+    GameMetaStore& store,
+    std::string_view game_id,
+    const CatalogFsOptions& fs) {
+    CatalogOpResult result;
+    result.old_game_id = std::string(game_id);
+    result.new_game_id = result.old_game_id;
+    if (!store.ready()) {
+        result.message = "game_meta DB is not open";
+        return result;
+    }
+    auto row = store.find_by_id(game_id);
+    if (!row) {
+        result.message = "game_id not found";
+        return result;
+    }
+    if (fs.apply_filesystem && fs.rename_rom && rename_content_rom_and_meta(*row, result.effects)) {
+        if (!store.upsert(*row)) {
+            result.message = "renamed ROM but failed to update content_path in game_meta";
+            return result;
+        }
+        result.effects.push_back("updated content_path after ROM rename");
+    }
+    if (store.write_meta_sidecar(*row)) {
+        result.effects.push_back("wrote Meta sidecar for " + row->display_name);
+    }
+    result.ok = true;
+    result.message = result.effects.empty() ? "already aligned" : "aligned files to identity";
     return result;
 }
 
@@ -470,22 +652,38 @@ CatalogOpResult delete_game_meta_entry(
         result.message = "game_meta DB is not open";
         return result;
     }
-    if (!store.find_by_id(game_id)) {
+    auto existing = store.find_by_id(game_id);
+    if (!existing) {
         result.message = "game_id not found";
         return result;
     }
+    const GameMetaRecord before = *existing;
     const auto aliases = store.delete_aliases_for_game(game_id);
     result.effects.push_back("deleted " + std::to_string(aliases) + " alias row(s)");
     if (remove_user_games) {
         const auto users = store.remove_user_games_for_game_id(game_id);
         result.effects.push_back("deleted " + std::to_string(users) + " user_games row(s)");
     }
+    if (store.delete_play_modes(game_id)) {
+        result.effects.push_back("deleted game_play_modes row");
+    }
     if (!store.delete_game(game_id)) {
         result.message = "failed to delete game_meta row";
         return result;
     }
     result.ok = true;
-    result.message = "game_meta entry deleted (saves/art left on disk)";
+    result.message = "game_meta entry deleted (saves/art/DLC left on disk)";
+    result.new_game_id.clear();
+
+    GameMetaEditLog edit_log;
+    GameMetaRecord after;
+    result.edit_id = edit_log.record(
+        "delete", before, after, result.effects, "catalog delete");
+    if (result.edit_id > 0) {
+        result.effects.push_back(
+            "recorded edit #" + std::to_string(result.edit_id) + " → "
+            + edit_log.path().string());
+    }
     return result;
 }
 
@@ -508,7 +706,6 @@ CatalogOpResult normalize_game_meta_names(
 
     GameMetaRecord edited = *existing;
     std::string display = edited.display_name;
-    std::string stem = edited.content_stem;
     std::vector<std::string> region_parts;
     std::string revision;
 
@@ -536,12 +733,6 @@ CatalogOpResult normalize_game_meta_names(
     };
 
     consume_tags(display);
-    // content_stem is often already lowercased; still strip paren tags / Version.
-    {
-        std::string stem_work = stem;
-        consume_tags(stem_work);
-        stem = to_lower_copy(std::move(stem_work));
-    }
 
     if (!region_parts.empty()) {
         std::string joined;
@@ -554,8 +745,7 @@ CatalogOpResult normalize_game_meta_names(
         edited.region = joined;
         result.effects.push_back("region ← " + joined);
     }
-    if (!revision.empty()
-        && (edited.version.empty() || edited.version == "unknown")) {
+    if (!revision.empty() && catalog_version_is_base(edited.version)) {
         edited.version = revision;
         result.effects.push_back("version ← " + revision);
     }
@@ -570,7 +760,6 @@ CatalogOpResult normalize_game_meta_names(
     }
 
     edited.display_name = display;
-    edited.content_stem = stem;
     if (rederive_canonical_from_display) {
         edited.canonical_name = display;
         result.effects.push_back("canonical_name rederived from cleaned display");

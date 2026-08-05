@@ -60,15 +60,17 @@ new titles, then binds known files by path / id / stem and only refreshes
 The scanner looks for metadata in a parallel tree next to the ROM tree. With ROM root
 `<Gaming>/ROMS/Games` (set in Settings / `--rom-root`; no built-in machine path),
 metadata defaults to `<Gaming>/ROMS/Meta`. Updates/DLC packs (and unpacked Switch
-NCAs) live under the sibling `<Gaming>/ROMS/DLC/<System>/<content_stem>/`, keyed to
-`game_meta.content_stem` so Catalog renames stay consistent with saves and art.
+NCAs) live under the sibling `<Gaming>/ROMS/DLC/<System>/<game_id>/`, keyed to
+`game_meta.game_id` (filesystem-safe leaf; `:` → `_`). Catalog renames of
+`game_id` rename that directory. `content_stem` still keys per-user Switch saves
+and is used only to match/migrate legacy stem-named DLC folders and NSP names.
 
 Metadata mirrors the ROM's relative path and replaces the ROM extension with `.json`:
 
 ```text
 Games/SNES/Super Bomberman.sfc
 Meta/SNES/Super Bomberman.json
-DLC/Switch/Pokemon Sword 1.3.2/   # UPD/DLC NSPs + registered/ NCAs (global)
+DLC/Switch/sha256_ab12…/   # UPD/DLC NSPs + registered/ NCAs (global, game_id leaf)
 ```
 
 Metadata can override provisional scan fields for *new* titles and declares the modes

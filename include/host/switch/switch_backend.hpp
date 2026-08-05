@@ -34,7 +34,9 @@ struct SwitchBackendPrepContext {
     std::vector<ArchStreamerSdlPad> resolved_pads;
     /** Concurrent session slot (0/1/…) for LDN netns IP assignment. */
     std::size_t slot_index = 0;
-    /** Catalog ROM stem (e.g. "Pokemon Shield 1.3.2") — keys save + addon dirs. */
+    /** Catalog game_id — keys DLC/<System>/<game_id_leaf>/ for Switch addons. */
+    std::string game_id;
+    /** Catalog ROM stem (e.g. "Pokemon Shield") — keys save leaf; NSP matching. */
     std::string content_stem;
     /** Nintendo application title id when known (0100…). */
     std::string title_id;

@@ -15,7 +15,7 @@ namespace archstreamer {
 struct GameMetaEditRecord {
     std::int64_t edit_id = 0;
     std::int64_t edited_at = 0;
-    /** "edit", "normalize", or "rollback". */
+    /** "edit", "normalize", "repair", "rollback", or "delete". */
     std::string op;
     std::string old_game_id;
     std::string new_game_id;

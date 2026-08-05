@@ -1,11 +1,13 @@
 #include "common/catalog_presenter.hpp"
 
+#include "common/game_identity.hpp"
+
 #include <ostream>
 
 namespace archstreamer {
 
 std::string format_game_summary(const GameInfo& game) {
-    std::string summary = game.display_name + " | " + game.system_name;
+    std::string summary = catalog_label_for(game.display_name, game.version) + " | " + game.system_name;
     summary
         += " | " + game.language + '/' + game.region + '/' + game.version
         + " | players " + std::to_string(static_cast<int>(game.min_players))
@@ -23,7 +25,7 @@ void print_game_catalog(std::ostream& out, const GameList& list) {
     for (std::size_t i = 0; i < list.games.size(); ++i) {
         const auto& game = list.games[i];
         out
-            << i << ": " << game.display_name
+            << i << ": " << catalog_label_for(game.display_name, game.version)
             << " | " << game.system_name
             << " [" << game.system_key << ']'
             << " | " << game.core_name

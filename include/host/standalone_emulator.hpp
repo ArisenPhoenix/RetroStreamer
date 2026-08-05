@@ -121,6 +121,7 @@ RyujinxUserProfile prepare_ryujinx_user_profile(
     int resolution_scale = 1,
     std::string_view profile_display_name = {},
     std::string_view lan_interface_id = {},
+    std::string_view game_id = {},
     std::string_view content_stem = {},
     std::string_view title_id = {});
 

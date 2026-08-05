@@ -4,6 +4,7 @@
 
 #include <cctype>
 #include <cstdlib>
+#include <system_error>
 
 namespace archstreamer {
 namespace {
@@ -32,6 +33,29 @@ std::filesystem::path archstreamer_data_root() {
     }
     return std::filesystem::path{".local/share/archstreamer"};
 #endif
+}
+
+std::filesystem::path resolve_leaf_under(
+    const std::filesystem::path& system_dir,
+    std::string_view leaf) {
+    const auto preferred = system_dir / std::string(leaf);
+    std::error_code ec;
+    if (std::filesystem::is_directory(preferred, ec)) {
+        return preferred;
+    }
+    if (!std::filesystem::is_directory(system_dir, ec)) {
+        return preferred;
+    }
+    const auto want = to_lower_copy(leaf);
+    for (const auto& entry : std::filesystem::directory_iterator(system_dir, ec)) {
+        if (!entry.is_directory(ec)) {
+            continue;
+        }
+        if (to_lower_copy(entry.path().filename().string()) == want) {
+            return entry.path();
+        }
+    }
+    return preferred;
 }
 
 } // namespace
@@ -118,18 +142,46 @@ std::string dlc_system_folder_name(std::string_view system_key) {
     return out;
 }
 
+std::string dlc_leaf_from_game_id(std::string_view game_id) {
+    std::string leaf(game_id);
+    for (char& ch : leaf) {
+        if (ch == '/' || ch == '\\' || ch == ':' || ch == '\0') {
+            ch = '_';
+        }
+    }
+    while (!leaf.empty() && (leaf.back() == ' ' || leaf.back() == '.')) {
+        leaf.pop_back();
+    }
+    return leaf;
+}
+
 std::filesystem::path catalog_dlc_game_directory(
+    const std::filesystem::path& dlc_root,
+    std::string_view system_key,
+    std::string_view game_id) {
+    if (dlc_root.empty() || game_id.empty()) {
+        return {};
+    }
+    const auto leaf = dlc_leaf_from_game_id(game_id);
+    if (leaf.empty()) {
+        return {};
+    }
+    return resolve_leaf_under(dlc_root / dlc_system_folder_name(system_key), leaf);
+}
+
+std::filesystem::path switch_dlc_game_directory(std::string_view game_id) {
+    return catalog_dlc_game_directory(resolve_dlc_root(), "switch", game_id);
+}
+
+std::filesystem::path catalog_dlc_legacy_stem_directory(
     const std::filesystem::path& dlc_root,
     std::string_view system_key,
     std::string_view content_stem) {
     if (dlc_root.empty() || content_stem.empty()) {
         return {};
     }
-    return dlc_root / dlc_system_folder_name(system_key) / std::string(content_stem);
-}
-
-std::filesystem::path switch_dlc_game_directory(std::string_view content_stem) {
-    return catalog_dlc_game_directory(resolve_dlc_root(), "switch", content_stem);
+    return resolve_leaf_under(
+        dlc_root / dlc_system_folder_name(system_key), content_stem);
 }
 
 std::filesystem::path legacy_switch_updates_directory() {

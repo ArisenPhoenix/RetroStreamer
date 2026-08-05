@@ -74,7 +74,7 @@ RetroArchLaunchConfig GameCatalog::launch_config_for(
     return RetroArchLaunchConfig{
         std::move(retroarch_path),
         game->get().core_path,
-        game->get().content_path,
+        game->get().m3m_rom_path.empty() ? game->get().content_path : game->get().m3m_rom_path,
         game->get().retroarch_args,
         {},
         {},

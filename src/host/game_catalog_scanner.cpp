@@ -1,5 +1,7 @@
 #include "host/game_catalog_scanner.hpp"
 
+#include "common/game_identity.hpp"
+#include "common/m3m_playlist.hpp"
 #include "common/sha256.hpp"
 #include "host/game_meta_store.hpp"
 #include "host/nds/melonds_backend.hpp"
@@ -13,14 +15,15 @@
 #include <climits>
 #include <cstdint>
 #include <cstring>
+#include <fcntl.h>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <optional>
-#include <regex>
 #include <string>
 #include <string_view>
 #include <sys/stat.h>
+#include <system_error>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -95,12 +98,6 @@ bool extension_in(std::string_view extension, std::initializer_list<std::string_
     return std::find(allowed.begin(), allowed.end(), extension) != allowed.end();
 }
 
-bool stem_looks_versioned_for_catalog(std::string_view stem) {
-    static const std::regex version_token(
-        R"((?:^|[\s_-])v?\d+\.\d+(?:\.\d+)?(?:$|[\s_-]))", std::regex::icase);
-    return std::regex_search(std::string(stem), version_token);
-}
-
 struct InodeKey {
     std::uint64_t dev = 0;
     std::uint64_t ino = 0;
@@ -130,27 +127,40 @@ std::optional<InodeKey> inode_key_for(const std::filesystem::path& path) {
     };
 }
 
-/** Prefer cleaner catalog labels when hardlinks share one ROM payload. */
+/** Tie-break when hardlinks share the same stem (prefer shorter path string). */
 bool prefer_catalog_path(
     const std::filesystem::path& candidate,
     const std::filesystem::path& incumbent) {
     const auto cand_stem = candidate.stem().string();
     const auto inc_stem = incumbent.stem().string();
-    const bool cand_ver = stem_looks_versioned_for_catalog(cand_stem);
-    const bool inc_ver = stem_looks_versioned_for_catalog(inc_stem);
-    if (cand_ver != inc_ver) {
-        return !cand_ver; // non-versioned wins
-    }
     if (cand_stem.size() != inc_stem.size()) {
         return cand_stem.size() < inc_stem.size();
     }
     return candidate.string() < incumbent.string();
 }
 
+bool stems_equal_ci(std::string_view a, std::string_view b) {
+    if (a.size() != b.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        const auto ca = static_cast<unsigned char>(a[i]);
+        const auto cb = static_cast<unsigned char>(b[i]);
+        if (std::tolower(ca) != std::tolower(cb)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * Collapse hardlinks that share the same stem (same catalog name).
+ * Different stems stay separate even on the same inode.
+ */
 std::vector<std::filesystem::path> dedupe_hardlinked_paths(
     std::vector<std::filesystem::path> paths) {
     std::vector<std::filesystem::path> out;
-    std::unordered_map<InodeKey, std::size_t, InodeKeyHash> by_inode;
+    std::unordered_map<InodeKey, std::vector<std::size_t>, InodeKeyHash> by_inode;
     out.reserve(paths.size());
     for (auto& path : paths) {
         const auto key = inode_key_for(path);
@@ -158,14 +168,22 @@ std::vector<std::filesystem::path> dedupe_hardlinked_paths(
             out.push_back(std::move(path));
             continue;
         }
-        const auto it = by_inode.find(*key);
-        if (it == by_inode.end()) {
-            by_inode.emplace(*key, out.size());
-            out.push_back(std::move(path));
-            continue;
+        auto& indices = by_inode[*key];
+        bool collapsed = false;
+        const auto stem = path.stem().string();
+        for (const auto idx : indices) {
+            if (!stems_equal_ci(stem, out[idx].stem().string())) {
+                continue;
+            }
+            if (prefer_catalog_path(path, out[idx])) {
+                out[idx] = std::move(path);
+            }
+            collapsed = true;
+            break;
         }
-        if (prefer_catalog_path(path, out[it->second])) {
-            out[it->second] = std::move(path);
+        if (!collapsed) {
+            indices.push_back(out.size());
+            out.push_back(std::move(path));
         }
     }
     return out;
@@ -213,7 +231,8 @@ std::optional<std::string> infer_system_key_from_path(const std::filesystem::pat
     if (path_contains_component(content_path, {"wii"}) && extension_in(extension, {"wbfs", "wad", "iso", "rvz"})) {
         return "wii";
     }
-    if (path_contains_component(content_path, {"switch", "nx"}) && extension_in(extension, {"xci", "nsp", "nsz"})) {
+    if (path_contains_component(content_path, {"switch", "nx"})
+        && extension_in(extension, {"xci", "nsp", "nsz", "m3m"})) {
         return "switch";
     }
     if (path_contains_component(content_path, {"pce", "pc engine", "turbografx", "turbografx-16"}) && extension == "pce") {
@@ -356,34 +375,6 @@ std::string save_match_base_name(std::string name) {
     return lower_string(std::move(name));
 }
 
-std::string identity_key_for(
-    std::string_view system_key,
-    std::string_view canonical_name,
-    std::string_view version,
-    std::string_view language,
-    std::string_view region) {
-    return
-        "system=" + std::string(system_key) +
-        "\nname=" + std::string(canonical_name) +
-        "\nversion=" + std::string(version) +
-        "\nlanguage=" + std::string(language) +
-        "\nregion=" + std::string(region);
-}
-
-std::string asset_key_for(
-    std::string_view system_key,
-    std::string_view canonical_name,
-    std::string_view language,
-    std::string_view region,
-    std::string_view version) {
-    return
-        std::string(system_key) + "/" +
-        std::string(canonical_name) + "/" +
-        std::string(language) + "/" +
-        std::string(region) + "/" +
-        std::string(version);
-}
-
 std::filesystem::path default_metadata_root_for(const std::filesystem::path& content_root) {
     return content_root.parent_path() / "Meta";
 }
@@ -395,6 +386,23 @@ std::filesystem::path metadata_path_for(
     auto relative = std::filesystem::relative(content_path, content_root);
     relative.replace_extension(".json");
     return metadata_root / relative;
+}
+
+std::filesystem::path resolve_existing_rom_meta(
+    const std::filesystem::path& content_root,
+    const std::filesystem::path& metadata_root,
+    const std::filesystem::path& content_path) {
+    std::error_code ec;
+    const auto mirror = metadata_path_for(content_root, metadata_root, content_path);
+    if (std::filesystem::is_regular_file(mirror, ec) && !ec) {
+        return mirror;
+    }
+    auto beside = content_path;
+    beside.replace_extension(".json");
+    if (std::filesystem::is_regular_file(beside, ec) && !ec) {
+        return beside;
+    }
+    return {};
 }
 
 std::uint64_t file_update_time(const std::filesystem::path& path) {
@@ -418,6 +426,43 @@ std::uint64_t game_update_time(
     return updated_at;
 }
 
+std::int64_t file_mtime_unix_seconds(const std::filesystem::path& path) {
+    std::error_code error;
+    const auto file_time = std::filesystem::last_write_time(path, error);
+    if (error) {
+        return 0;
+    }
+    const auto system_time = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+        file_time - std::filesystem::file_time_type::clock::now()
+            + std::chrono::system_clock::now());
+    return std::chrono::duration_cast<std::chrono::seconds>(system_time.time_since_epoch()).count();
+}
+
+std::int64_t game_mtime_unix_seconds(
+    const std::filesystem::path& content_path,
+    const std::filesystem::path& metadata_path) {
+    auto updated_at = file_mtime_unix_seconds(content_path);
+    if (!metadata_path.empty() && std::filesystem::exists(metadata_path)) {
+        updated_at = std::max(updated_at, file_mtime_unix_seconds(metadata_path));
+    }
+    return updated_at;
+}
+
+std::int64_t file_birth_or_mtime_unix_seconds(const std::filesystem::path& path) {
+#if defined(__linux__)
+    struct statx stx {};
+    if (::statx(AT_FDCWD, path.c_str(), AT_SYMLINK_NOFOLLOW, STATX_BTIME | STATX_MTIME, &stx) == 0) {
+        if ((stx.stx_mask & STATX_BTIME) != 0 && stx.stx_btime.tv_sec > 0) {
+            return static_cast<std::int64_t>(stx.stx_btime.tv_sec);
+        }
+        if ((stx.stx_mask & STATX_MTIME) != 0 && stx.stx_mtime.tv_sec > 0) {
+            return static_cast<std::int64_t>(stx.stx_mtime.tv_sec);
+        }
+    }
+#endif
+    return file_mtime_unix_seconds(path);
+}
+
 void apply_game_metadata(GameInfo& info, const std::filesystem::path& metadata_path) {
     std::ifstream file(metadata_path);
     if (!file) {
@@ -434,10 +479,6 @@ void apply_game_metadata(GameInfo& info, const std::filesystem::path& metadata_p
             auto name = metadata.at("name").get<std::string>();
             if (!name.empty()) {
                 info.display_name = std::move(name);
-                // Prefer Meta display name for identity unless canonical_name is explicit.
-                if (!metadata.contains("canonical_name")) {
-                    info.canonical_name = canonical_token(info.display_name);
-                }
             }
         }
         if (metadata.contains("system_name")) {
@@ -463,6 +504,11 @@ void apply_game_metadata(GameInfo& info, const std::filesystem::path& metadata_p
             if (!version.empty()) {
                 info.version = std::move(version);
             }
+        }
+        // Bookkeeping stores a clean title; version lives in its own field.
+        strip_matching_version_label(info.display_name, info.version);
+        if (!metadata.contains("canonical_name") && !info.display_name.empty()) {
+            info.canonical_name = canonical_token(info.display_name);
         }
         if (metadata.contains("language")) {
             auto language = canonical_token(metadata.at("language").get<std::string>());
@@ -518,28 +564,25 @@ void apply_game_metadata(GameInfo& info, const std::filesystem::path& metadata_p
 void finalize_game_identity(GameInfo& info) {
     info.system_key = canonical_token(info.system_key);
     info.canonical_name = canonical_token(info.canonical_name.empty() ? info.display_name : info.canonical_name);
-    info.version = canonical_token(info.version.empty() ? "unknown" : info.version);
-    info.language = canonical_token(info.language.empty() ? "en" : info.language);
-    info.region = canonical_token(info.region.empty() ? "unknown" : info.region);
-    info.identity_key = identity_key_for(
+    const auto composed = compose_catalog_identity(
         info.system_key,
         info.canonical_name,
-        info.version,
-        info.language,
-        info.region);
-    info.id = sha256_hex(info.identity_key);
-    info.asset_key = asset_key_for(
-        info.system_key,
-        info.canonical_name,
-        info.language,
-        info.region,
-        info.version);
+        canonical_token(info.version),
+        canonical_token(info.language),
+        canonical_token(info.region));
+    info.version = composed.version;
+    info.language = composed.language;
+    info.region = composed.region;
+    info.identity_key = composed.identity_key;
+    info.id = composed.game_id;
+    info.asset_key = composed.asset_key;
 }
 
 GameCatalog scan_game_catalog(
     const std::filesystem::path& content_root,
     const LibretroCoreRegistry& core_registry,
-    std::filesystem::path metadata_root) {
+    std::filesystem::path metadata_root,
+    std::vector<CatalogScanIssue>* issues_out) {
     GameCatalog catalog;
     GameMetaStore meta_store;
     if (!std::filesystem::exists(content_root)) {
@@ -549,18 +592,31 @@ GameCatalog scan_game_catalog(
         metadata_root = default_metadata_root_for(content_root);
     }
 
-    // Collect basenames referenced by any .m3u so those disc images are hidden from
-    // the catalog (the playlist entry is the playable game).
+    auto report_issue = [&](CatalogScanIssueKind kind,
+                            const std::filesystem::path& path,
+                            std::string message) {
+        std::cerr << "host: catalog locked: " << message << " — " << path << '\n';
+        if (issues_out != nullptr) {
+            issues_out->push_back(CatalogScanIssue{kind, path, std::move(message)});
+        }
+    };
+
+    // Collect basenames referenced by .m3u / .m3m so member ROMs are hidden from
+    // the catalog (the playlist / resolution map is the playable entry).
     std::unordered_set<std::string> playlist_member_basenames;
     for (const auto& entry : std::filesystem::recursive_directory_iterator(content_root)) {
         if (!entry.is_regular_file()) {
             continue;
         }
-        if (normalized_extension(entry.path()) != "m3u") {
-            continue;
-        }
-        for (const auto& member : parse_m3u_member_basenames(entry.path())) {
-            playlist_member_basenames.insert(lower_string(member));
+        const auto ext = normalized_extension(entry.path());
+        if (ext == "m3u") {
+            for (const auto& member : parse_m3u_member_basenames(entry.path())) {
+                playlist_member_basenames.insert(lower_string(member));
+            }
+        } else if (ext == "m3m") {
+            if (const auto member = parse_m3m_rom_basename(entry.path())) {
+                playlist_member_basenames.insert(lower_string(*member));
+            }
         }
     }
 
@@ -572,8 +628,8 @@ GameCatalog scan_game_catalog(
         [&](const std::filesystem::path& path)
         -> std::optional<std::tuple<CoreChoice, std::string, bool, std::vector<std::string>>> {
         auto system_key = infer_system_key_from_path(path);
-        if (!system_key.has_value() &&
-            extension_in(normalized_extension(path), {"xci", "nsp", "nsz"})) {
+        if (!system_key.has_value()
+            && extension_in(normalized_extension(path), {"xci", "nsp", "nsz", "m3m"})) {
             system_key = "switch";
         }
 
@@ -633,7 +689,8 @@ GameCatalog scan_game_catalog(
         candidate_paths.push_back(entry.path());
     }
 
-    // One catalog row per ROM payload (hardlinks like Shield.xci ↔ Shield 1.3.2.xci).
+    // Same-inode hardlinks collapse only when stems match; versioned names stay separate
+    // (Pokemon Sword.xci and Pokemon Sword (1.3.2).xci → two catalog rows).
     candidate_paths = dedupe_hardlinked_paths(std::move(candidate_paths));
 
     for (const auto& content_path : candidate_paths) {
@@ -643,39 +700,78 @@ GameCatalog scan_game_catalog(
         }
         auto [core, system_key, standalone, standalone_args] = *resolved;
 
-        const auto metadata_path = metadata_path_for(content_root, metadata_root, content_path);
+        const auto metadata_path =
+            resolve_existing_rom_meta(content_root, metadata_root, content_path);
+        if (metadata_path.empty()) {
+            report_issue(
+                CatalogScanIssueKind::MissingMeta,
+                content_path,
+                "missing Meta JSON (beside ROM or under Meta/)");
+            continue;
+        }
+
+        // Identity comes only from Meta — never invent a title from the ROM path.
         GameInfo info{
             {},
             {},
             {},
-            display_name_from_path(content_path),
+            {},
             core.system_name,
             system_key,
             core.core_name,
-            canonical_token(display_name_from_path(content_path)),
+            {},
         };
         info.updated_at = game_update_time(content_path, metadata_path);
         apply_game_metadata(info, metadata_path);
+        if (info.display_name.empty()) {
+            report_issue(
+                CatalogScanIssueKind::MissingMeta,
+                content_path,
+                "Meta JSON missing name");
+            continue;
+        }
+        if (info.canonical_name.empty()) {
+            info.canonical_name = canonical_token(info.display_name);
+        }
         finalize_game_identity(info);
-        // Keep identity stable from the full ROM/meta name; only tidy the label.
-        info.display_name = sanitize_game_display_name(std::move(info.display_name));
+
+        const auto want_stem = catalog_rom_stem_for(info.display_name, info.version);
+        const auto disk_stem = content_path.stem().string();
+        if (disk_stem != want_stem) {
+            report_issue(
+                CatalogScanIssueKind::StemMismatch,
+                content_path,
+                "ROM stem mismatch: disk=\"" + disk_stem + "\" want=\"" + want_stem + "\"");
+            continue;
+        }
 
         std::vector<std::string> playlist_members;
-        if (normalized_extension(content_path) == "m3u") {
+        std::filesystem::path m3m_rom_path;
+        std::string m3m_title_id;
+        std::string m3m_patch_title_id;
+        std::string m3m_base;
+        const auto content_ext = normalized_extension(content_path);
+        if (content_ext == "m3u") {
             playlist_members = parse_m3u_member_basenames(content_path);
             for (const auto& member : playlist_members) {
                 info.playlist_discs.push_back(std::filesystem::path(member).stem().string());
             }
-            // Prefer first disc art when the playlist itself has no imported assets.
-            if (!playlist_members.empty()) {
-                const auto member_stem = std::filesystem::path(playlist_members.front()).stem().string();
-                info.asset_key = asset_key_for(
-                    info.system_key,
-                    canonical_token(member_stem),
-                    info.language,
-                    info.region,
-                    info.version);
+        } else if (content_ext == "m3m") {
+            std::string m3m_error;
+            const auto m3m = parse_m3m_playlist(content_path, &m3m_error);
+            if (!m3m) {
+                report_issue(
+                    CatalogScanIssueKind::InvalidM3m,
+                    content_path,
+                    m3m_error.empty()
+                        ? "invalid .m3m (need TITLE_ID, ROM, PATCH_TITLE_ID, BASE)"
+                        : m3m_error);
+                continue;
             }
+            m3m_rom_path = m3m->rom_path;
+            m3m_title_id = m3m->title_id;
+            m3m_patch_title_id = m3m->patch_title_id;
+            m3m_base = m3m->base;
         }
 
         // DB owns identity for known titles; scan only discovers paths / new games.
@@ -691,6 +787,10 @@ GameCatalog scan_game_catalog(
             std::move(playlist_members),
             standalone,
             std::move(standalone_args),
+            std::move(m3m_rom_path),
+            std::move(m3m_title_id),
+            std::move(m3m_patch_title_id),
+            std::move(m3m_base),
         });
     }
 

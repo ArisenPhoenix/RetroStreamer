@@ -32,12 +32,12 @@ std::filesystem::path legacy_title_id_switch_save_directory(
     std::string_view title_id);
 
 /**
- * Global Switch DLC game dir: <DLC>/Switch/<content_stem>/
+ * Global Switch DLC game dir: <DLC>/Switch/<game_id_leaf>/
  * (profile unused; kept for call-site compatibility).
  */
 std::filesystem::path catalog_switch_addon_directory(
     const SaveProfile& profile,
-    std::string_view content_stem);
+    std::string_view game_id);
 
 /**
  * Ensure the catalog stem save dir exists. If empty, claim once from the legacy

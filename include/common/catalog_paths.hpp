@@ -6,7 +6,7 @@ namespace archstreamer {
 inline constexpr const char* RelRomRoot = "ROMS/Games";
 inline constexpr const char* RelMetaRoot = "ROMS/Meta";
 inline constexpr const char* RelArtRoot = "ROMS/Art";
-/** Global updates/DLC packs + unpacked Switch NCAs: ROMS/DLC/<System>/<content_stem>/. */
+/** Global updates/DLC packs + unpacked Switch NCAs: ROMS/DLC/<System>/<game_id>/. */
 inline constexpr const char* RelDlcRoot = "ROMS/DLC";
 inline constexpr const char* RelBiosRoot = "BIOS FILES";
 inline constexpr const char* RelSrmDir = "tools/srm";

@@ -38,6 +38,13 @@ std::optional<std::filesystem::path> find_asset_file(
     const std::filesystem::path& asset_directory,
     GameAssetKind kind);
 
+/**
+ * Lookup order for on-disk Art folders for an asset_key.
+ * Exact key first; then legacy leaves (0↔unknown) and pre-split version slugs
+ * (e.g. pokemon-sword-1-3-2/…/1-3-2).
+ */
+std::vector<std::string> asset_key_lookup_candidates(std::string_view asset_key);
+
 class LocalGameAssetProvider {
 public:
     LocalGameAssetProvider(std::filesystem::path content_root, std::filesystem::path assets_root = {});
@@ -46,7 +53,14 @@ public:
     const std::filesystem::path& assets_root() const;
 
     std::filesystem::path directory_for(const std::filesystem::path& content_path) const;
+    /** Exact asset_key path (writes / cache layout). */
     std::filesystem::path directory_for_asset_key(std::string_view asset_key) const;
+    /**
+     * First existing Art directory for @asset_key, including legacy fallbacks.
+     * Empty optional when none of the candidates exist as a directory.
+     */
+    std::optional<std::filesystem::path> resolve_directory_for_asset_key(
+        std::string_view asset_key) const;
     GameAssets assets_for(const std::filesystem::path& content_path) const;
     GameAssets assets_for_asset_key(std::string_view asset_key) const;
 

@@ -116,17 +116,11 @@ std::string to_lower_copy(std::string_view value) {
     return out;
 }
 
-bool stem_looks_versioned(std::string_view content_stem) {
-    static const std::regex version_token(
-        R"((?:^|[\s_-])v?\d+\.\d+(?:\.\d+)?(?:$|[\s_-]))", std::regex::icase);
-    return std::regex_search(std::string(content_stem), version_token);
-}
-
+/** Base title for NSP/addon matching: strip edge " (1.3.2)" suffix only. */
 std::string base_name_for_matching(std::string_view content_stem) {
     std::string base = to_lower_copy(content_stem);
-    static const std::regex version_suffix(
-        R"((?:\s+|[_-])v?\d+(?:\.\d+){1,3}\s*$)", std::regex::icase);
-    base = std::regex_replace(base, version_suffix, "");
+    static const std::regex paren_suffix(R"(\s+\([^)]*\)\s*$)");
+    base = std::regex_replace(base, paren_suffix, "");
     while (!base.empty() && base.back() == ' ') {
         base.pop_back();
     }
@@ -348,30 +342,62 @@ void migrate_registered_from_legacy_user_addons(
     }
 }
 
-void ensure_manifest(const std::filesystem::path& addon_dir, std::string_view content_stem) {
+void ensure_manifest(
+    const std::filesystem::path& addon_dir,
+    std::string_view game_id,
+    std::string_view content_stem) {
     const auto manifest_path = addon_dir / "manifest.json";
     std::error_code ec;
     if (std::filesystem::is_regular_file(manifest_path, ec)) {
         return;
     }
-    auto names = seed_nsp_names_for_stem(addon_dir, content_stem);
+    const auto match_key = !content_stem.empty() ? content_stem : game_id;
+    auto names = seed_nsp_names_for_stem(addon_dir, match_key);
     migrate_nsps_into_addon_dir(addon_dir, names);
     // Re-list after migration so manifest only stores basenames in the game folder.
-    names = list_nsp_basenames_in_dir(addon_dir, base_name_for_matching(content_stem));
+    names = list_nsp_basenames_in_dir(addon_dir, base_name_for_matching(match_key));
     if (names.empty()) {
-        names = seed_nsp_names_for_stem(addon_dir, content_stem);
+        names = seed_nsp_names_for_stem(addon_dir, match_key);
     }
 
     nlohmann::json doc;
-    doc["content_stem"] = std::string(content_stem);
+    doc["game_id"] = std::string(game_id);
+    if (!content_stem.empty()) {
+        doc["content_stem"] = std::string(content_stem);
+    }
     doc["nsps"] = names;
     doc["seeded"] = true;
     std::filesystem::create_directories(addon_dir, ec);
     std::ofstream out(manifest_path, std::ios::trunc);
     out << doc.dump(2) << '\n';
     std::cout
-        << "switch DLC: seeded manifest for \"" << content_stem << "\" with " << names.size()
+        << "switch DLC: seeded manifest for game_id \"" << game_id << "\" with " << names.size()
         << " NSP(s) at " << addon_dir << '\n';
+}
+
+void migrate_legacy_stem_folder_into_game_id(
+    std::string_view content_stem,
+    const std::filesystem::path& addon_dir) {
+    if (content_stem.empty() || addon_dir.empty()) {
+        return;
+    }
+    const auto legacy = catalog_dlc_legacy_stem_directory(resolve_dlc_root(), "switch", content_stem);
+    if (legacy.empty() || legacy == addon_dir) {
+        return;
+    }
+    std::error_code ec;
+    if (!std::filesystem::is_directory(legacy, ec) || ec) {
+        return;
+    }
+    if (std::filesystem::exists(addon_dir, ec) && !ec) {
+        // Prefer merging registered/NSPs via existing registered migrate + manifest seed.
+        return;
+    }
+    std::filesystem::create_directories(addon_dir.parent_path(), ec);
+    std::filesystem::rename(legacy, addon_dir, ec);
+    if (!ec) {
+        std::cout << "switch DLC: migrated stem folder " << legacy << " → " << addon_dir << '\n';
+    }
 }
 
 std::vector<std::filesystem::path> nsp_paths_from_manifest(const std::filesystem::path& addon_dir) {
@@ -491,19 +517,23 @@ std::filesystem::path switch_title_updates_directory() {
 void ensure_ryujinx_catalog_addons(
     const SaveProfile& save_profile,
     const std::filesystem::path& ryujinx_data_root,
+    std::string_view game_id,
     std::string_view content_stem,
     std::string_view title_id) {
     (void)title_id;
-    if (content_stem.empty()) {
+    if (game_id.empty()) {
         return;
     }
-    const auto addon_dir = switch_dlc_game_directory(content_stem);
+    const auto addon_dir = switch_dlc_game_directory(game_id);
     if (addon_dir.empty()) {
         return;
     }
+    migrate_legacy_stem_folder_into_game_id(content_stem, addon_dir);
     const auto registered = addon_dir / "registered";
-    ensure_manifest(addon_dir, content_stem);
-    migrate_registered_from_legacy_user_addons(save_profile, content_stem, registered);
+    ensure_manifest(addon_dir, game_id, content_stem);
+    if (!content_stem.empty()) {
+        migrate_registered_from_legacy_user_addons(save_profile, content_stem, registered);
+    }
     std::filesystem::create_directories(registered);
 
     int unpacked = 0;
@@ -517,7 +547,7 @@ void ensure_ryujinx_catalog_addons(
     const auto ryu_registered = ryujinx_data_root / "bis" / "user" / "Contents" / "registered";
     if (replace_registered_with_symlink(ryu_registered, registered)) {
         std::cout
-            << "Ryujinx catalog DLC: \"" << content_stem << "\" → " << registered << " ("
+            << "Ryujinx catalog DLC: game_id \"" << game_id << "\" → " << registered << " ("
             << nsps.size() << " NSP(s), " << unpacked << " extracted)\n";
     }
 }

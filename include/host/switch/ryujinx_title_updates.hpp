@@ -16,16 +16,18 @@ namespace archstreamer {
 std::filesystem::path switch_title_updates_directory();
 
 /**
- * Ensure global catalog DLC for a Switch stem and point Ryujinx at it:
- * - <DLC>/Switch/<content_stem>/manifest.json (+ NSPs nested in that folder)
+ * Ensure global catalog DLC for a Switch title and point Ryujinx at it:
+ * - <DLC>/Switch/<game_id_leaf>/manifest.json (+ NSPs nested in that folder)
  * - unpacks listed NSPs into …/registered/
  * - replaces bis/user/Contents/registered with a symlink to that directory
- * - migrates once from legacy per-user switch/addons/<stem> and flat SwitchUpdates
+ * - migrates once from legacy DLC/Switch/<content_stem>/, per-user
+ *   switch/addons/<stem>, and flat SwitchUpdates (NSP match uses content_stem)
  */
 void ensure_ryujinx_catalog_addons(
     const SaveProfile& save_profile,
     const std::filesystem::path& ryujinx_data_root,
-    std::string_view content_stem,
+    std::string_view game_id,
+    std::string_view content_stem = {},
     std::string_view title_id = {});
 
 /**

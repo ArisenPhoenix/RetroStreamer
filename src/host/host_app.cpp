@@ -201,8 +201,12 @@ int HostApp::run_direct_session(
     auto launch_config = catalog.launch_config_for(launch_plan.game_id);
     const auto resolved_retroarch = resolve_retroarch();
     std::string system_key;
+    std::filesystem::path catalog_content_path;
+    std::string m3m_title_id;
     if (const auto hosted = catalog.find_hosted(launch_plan.game_id); hosted.has_value()) {
         system_key = hosted->get().info.system_key;
+        catalog_content_path = hosted->get().content_path;
+        m3m_title_id = hosted->get().m3m_title_id;
     } else if (const auto info = catalog.find(launch_plan.game_id); info.has_value()) {
         system_key = info->system_key;
     }
@@ -512,9 +516,14 @@ int HostApp::run_direct_session(
         keyboard.set_switch_style_hotkeys(true);
         const auto profile_name =
             preferred_steam_or_username_display_name(save_profile.username);
-        const auto switch_content_stem = launch_config.content_path.stem().string();
-        const auto switch_title_id = resolve_switch_title_id_for_catalog(
-            save_profile, switch_content_stem, launch_config.content_path);
+        const auto switch_content_stem = !catalog_content_path.empty()
+            ? catalog_content_path.stem().string()
+            : launch_config.content_path.stem().string();
+        auto switch_title_id = m3m_title_id;
+        if (switch_title_id.empty()) {
+            switch_title_id = resolve_switch_title_id_for_catalog(
+                save_profile, switch_content_stem, launch_config.content_path);
+        }
         auto switch_prep = switch_backend->prepare(
             launch_config,
             SwitchBackendPrepContext{
@@ -531,6 +540,7 @@ int HostApp::run_direct_session(
                 profile_name,
                 std::move(resolved_pads),
                 /*slot_index=*/0,
+                launch_plan.game_id,
                 switch_content_stem,
                 switch_title_id,
             });
@@ -950,7 +960,22 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         };
 
         auto config = config_;
-        auto catalog = scan_game_catalog(config.rom_root, LibretroCoreRegistry::ubuntu_defaults(), config.meta_root);
+        std::vector<CatalogScanIssue> scan_issues;
+        auto catalog = scan_game_catalog(
+            config.rom_root,
+            LibretroCoreRegistry::ubuntu_defaults(),
+            config.meta_root,
+            &scan_issues);
+        for (const auto& issue : scan_issues) {
+            // Already printed to stderr inside scan; summarize count for operators.
+            (void)issue;
+        }
+        if (!scan_issues.empty()) {
+            std::cerr
+                << "host: " << scan_issues.size()
+                << " title(s) locked (missing Meta, ROM stem mismatch, or invalid .m3m); "
+                   "not hosted until fixed.\n";
+        }
         const auto list = catalog.list();
 
         const bool host_plays_locally =

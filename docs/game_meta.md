@@ -91,7 +91,8 @@ Soft-fail: open/write failures must not break play or the Users tab.
 `scan_game_catalog` calls `bind_scanned_game` per ROM before `add_game`, so the
 in-memory catalog already carries DB-owned ids. Users tab Refresh (rescans)
 therefore refreshes paths without recreating edited identities. Catalog edits
-call `write_meta_sidecar` after filesystem renames.
+call `write_meta_sidecar` after filesystem renames (saves, art, DLC, and ROM
+basename + Meta sidecar aligned to `display_name`).
 
 `list_save_games` also merges meta hints so Switch title-id leaves and file stems
 resolve even without a fresh in-memory catalog map.

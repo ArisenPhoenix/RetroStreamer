@@ -647,12 +647,13 @@ void ActiveSessionSlot::run_session() {
     const auto resolved_retroarch = resolve_retroarch();
     system_key_.clear();
     std::string active_display_name;
+    std::filesystem::path catalog_content_path;
+    std::string m3m_title_id;
     if (const auto hosted = catalog.find_hosted(launch_plan.game_id); hosted.has_value()) {
         system_key_ = hosted->get().info.system_key;
         active_display_name = hosted->get().info.display_name;
-        if (active_display_name.empty()) {
-            active_display_name = hosted->get().content_path.stem().string();
-        }
+        catalog_content_path = hosted->get().content_path;
+        m3m_title_id = hosted->get().m3m_title_id;
     } else if (const auto info = catalog.find(launch_plan.game_id); info.has_value()) {
         system_key_ = info->system_key;
         active_display_name = info->display_name;
@@ -675,7 +676,10 @@ void ActiveSessionSlot::run_session() {
         active.game_id = launch_plan.game_id;
         active.system_key = system_key_;
         active.display_name = active_display_name;
-        active.content_path = launch_config.content_path.string();
+        // Keep catalog path (.m3m when present) so save stem stays on the map entry.
+        active.content_path = catalog_content_path.empty()
+            ? launch_config.content_path.string()
+            : catalog_content_path.string();
         active.slot_index = slot;
         publish_active_save_session(config.save_root, active);
         record_user_game_played(active.username, active.game_id, active.system_key);
@@ -980,9 +984,15 @@ void ActiveSessionSlot::run_session() {
         }
         const auto profile_name = resolve_switch_profile_display_name(
             save_profile_.username, plan.host_hello, client_hellos);
-        const auto switch_content_stem = launch_config.content_path.stem().string();
-        const auto switch_title_id = resolve_switch_title_id_for_catalog(
-            save_profile_, switch_content_stem, launch_config.content_path);
+        // Save leaf = catalog content stem (.m3m when hosted as a map; not the ROM= target).
+        const auto switch_content_stem = !catalog_content_path.empty()
+            ? catalog_content_path.stem().string()
+            : launch_config.content_path.stem().string();
+        auto switch_title_id = m3m_title_id;
+        if (switch_title_id.empty()) {
+            switch_title_id = resolve_switch_title_id_for_catalog(
+                save_profile_, switch_content_stem, launch_config.content_path);
+        }
         auto switch_prep = switch_backend->prepare(
             launch_config,
             SwitchBackendPrepContext{
@@ -999,6 +1009,7 @@ void ActiveSessionSlot::run_session() {
                 profile_name,
                 std::move(resolved_pads),
                 static_cast<std::size_t>(std::max(0, slot)),
+                launch_plan.game_id,
                 switch_content_stem,
                 switch_title_id,
             });

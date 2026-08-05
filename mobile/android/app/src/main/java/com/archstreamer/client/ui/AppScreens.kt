@@ -432,7 +432,7 @@ private fun AppDrawer(
                 }
             }
             if (state.playing) {
-                val gameName = state.selectedGame?.displayName?.takeIf { it.isNotBlank() }
+                val gameName = state.selectedGame?.title()?.takeIf { it.isNotBlank() }
                     ?: state.selectedGame?.id
                     ?: "In session"
                 Text(
@@ -887,7 +887,8 @@ private fun GamesSection(state: UiState, viewModel: ClientViewModel) {
         state.games
     } else {
         state.games.filter {
-            it.displayName.lowercase().contains(filter) ||
+            it.title().lowercase().contains(filter) ||
+                it.version.lowercase().contains(filter) ||
                 it.systemName.lowercase().contains(filter) ||
                 it.systemKey.lowercase().contains(filter)
         }
@@ -1022,7 +1023,7 @@ private fun GameRow(
         },
         headlineContent = {
             Text(
-                if (highlight) "Reconnect · ${game.displayName}" else game.displayName,
+                if (highlight) "Reconnect · ${game.title()}" else game.title(),
                 color = if (highlight) {
                     MaterialTheme.colorScheme.primary
                 } else {

@@ -50,8 +50,14 @@ struct GameMetaRecord {
     std::string region;
     /** Absolute ROM/content path last seen for this game (empty until first scan). */
     std::string content_path;
-    /** Lowercased ROM/content basename for save matching. */
+    /**
+     * Lowercased edge ROM stem for save matching — derived from
+     * display_name + version via catalog_content_stem_for (not hand-edited).
+     */
     std::string content_stem;
+    /** Unix seconds — approximate add time from Meta directory birth/mtime. */
+    std::int64_t created_at = 0;
+    /** Unix seconds — last content/meta write or catalog edit. */
     std::int64_t updated_at = 0;
     std::string source = std::string(game_meta_source::kCatalog);
 };
@@ -98,6 +104,12 @@ inline std::string game_id_from_ps2_meta_key(std::string_view game_key) {
     }
     return std::string(game_key.substr(7));
 }
+
+/**
+ * Existing Meta sidecar for a ROM: adjacent `.json`, else Games→Meta mirror path
+ * when that file exists. Empty if neither is present.
+ */
+std::filesystem::path guess_rom_meta_json(const std::filesystem::path& content_path);
 
 /**
  * Host-side SQLite index for game titles and secondary ids (title-id, stem, …).

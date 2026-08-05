@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/game_identity.hpp"
 #include "host/game_catalog.hpp"
 #include "host/libretro_core_registry.hpp"
 
@@ -9,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace archstreamer {
 
@@ -21,24 +23,6 @@ std::optional<std::string> infer_system_key_from_path(const std::filesystem::pat
 void replace_all(std::string& value, std::string_view from, std::string_view to);
 std::string fold_common_latin_accents(std::string value);
 std::string canonical_token(std::string value);
-std::string identity_key_for(
-    std::string_view system_key,
-    std::string_view canonical_name,
-    std::string_view version,
-    std::string_view language,
-    std::string_view region);
-std::string asset_key_for(
-    std::string_view system_key,
-    std::string_view canonical_name,
-    std::string_view language,
-    std::string_view region,
-    std::string_view version);
-/**
- * Drop Nintendo-style trailing "Version" from display names:
- * "Pokemon Scarlet Version" → "Pokemon Scarlet",
- * "Pokemon Black Version 2" → "Pokemon Black 2".
- * Does not strip dotted build numbers (e.g. "Sword 1.3.2") or other numeric noise.
- */
 std::string sanitize_game_display_name(std::string name);
 /**
  * Strip trailing region/revision tags: "Pokemon Ruby (USA, Europe) (Rev 2)" → "Pokemon Ruby".
@@ -54,17 +38,55 @@ std::filesystem::path metadata_path_for(
     const std::filesystem::path& content_root,
     const std::filesystem::path& metadata_root,
     const std::filesystem::path& content_path);
+/**
+ * Existing Meta for a ROM: Games→Meta mirror when present, else adjacent `.json`.
+ * Empty if neither exists.
+ */
+std::filesystem::path resolve_existing_rom_meta(
+    const std::filesystem::path& content_root,
+    const std::filesystem::path& metadata_root,
+    const std::filesystem::path& content_path);
 std::uint64_t file_update_time(const std::filesystem::path& path);
 std::uint64_t game_update_time(
     const std::filesystem::path& content_path,
     const std::filesystem::path& metadata_path);
+/** Portable last-write time as unix epoch seconds (for game_meta.updated_at). */
+std::int64_t file_mtime_unix_seconds(const std::filesystem::path& path);
+std::int64_t game_mtime_unix_seconds(
+    const std::filesystem::path& content_path,
+    const std::filesystem::path& metadata_path = {});
+/**
+ * Birth time when the filesystem provides it; otherwise last-write time.
+ * Used for game_meta.created_at from the Meta directory.
+ */
+std::int64_t file_birth_or_mtime_unix_seconds(const std::filesystem::path& path);
 void apply_game_metadata(GameInfo& info, const std::filesystem::path& metadata_path);
 void finalize_game_identity(GameInfo& info);
 std::vector<std::string> parse_m3u_member_basenames(const std::filesystem::path& m3u_path);
 
+/** Why a ROM was locked out of the live catalog (not hosted / not playable). */
+enum class CatalogScanIssueKind {
+    MissingMeta,
+    StemMismatch,
+    InvalidM3m,
+};
+
+struct CatalogScanIssue {
+    CatalogScanIssueKind kind = CatalogScanIssueKind::MissingMeta;
+    std::filesystem::path content_path;
+    /** Short reason for host log / stderr. */
+    std::string message;
+};
+
+/**
+ * Scan ROMs under content_root. Titles without Meta, or whose filename stem does
+ * not match catalog_rom_stem_for(display_name, version) from that Meta, are
+ * skipped (locked) and reported in @issues_out when non-null.
+ */
 GameCatalog scan_game_catalog(
     const std::filesystem::path& content_root,
     const LibretroCoreRegistry& core_registry = LibretroCoreRegistry::ubuntu_defaults(),
-    std::filesystem::path metadata_root = {});
+    std::filesystem::path metadata_root = {},
+    std::vector<CatalogScanIssue>* issues_out = nullptr);
 
 } // namespace archstreamer

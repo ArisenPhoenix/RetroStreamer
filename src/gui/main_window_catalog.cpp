@@ -2,13 +2,17 @@
 
 #ifdef ARCHSTREAMER_HAS_HOST
 #include "common/dlc_paths.hpp"
+#include "common/game_identity.hpp"
 #include "host/catalog_ops.hpp"
 #include "host/game_meta_edit_log.hpp"
 #include "host/game_meta_store.hpp"
 #endif
 
 #include <QAbstractItemView>
+#include <QBrush>
 #include <QCheckBox>
+#include <QColor>
+#include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -61,6 +65,28 @@ bool row_matches_filter(const QStringList& cells, const QString& filter) {
 QTableWidgetItem* cell(const QString& text) {
     auto* item = new QTableWidgetItem(text);
     item->setToolTip(text);
+    return item;
+}
+
+QString format_epoch_local(std::int64_t epoch_secs) {
+    // Reasonable unix-second band (2001-03 … 2100). Outside this, values are
+    // legacy file-clock stamps and are not calendar times.
+    if (epoch_secs < 1'000'000'000LL || epoch_secs > 4'102'444'800LL) {
+        return QStringLiteral("—");
+    }
+    const auto dt = QDateTime::fromSecsSinceEpoch(epoch_secs);
+    if (!dt.isValid()) {
+        return QStringLiteral("—");
+    }
+    return dt.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+}
+
+QTableWidgetItem* epoch_cell(std::int64_t epoch_secs) {
+    auto* item = cell(format_epoch_local(epoch_secs));
+    item->setData(Qt::UserRole, static_cast<qint64>(epoch_secs));
+    if (epoch_secs > 0) {
+        item->setToolTip(QStringLiteral("%1\nunix: %2").arg(item->text()).arg(epoch_secs));
+    }
     return item;
 }
 
@@ -136,21 +162,37 @@ std::optional<GameMetaRecord> selected_meta_row(QTableWidget* table) {
         const auto* item = table->item(row, col);
         return item != nullptr ? item->text().toStdString() : std::string{};
     };
+    // Column order matches catalog_meta_table_ headers
+    // (…, created_at, updated_at, source, content_path, asset_key, identity_key, game_id).
     GameMetaRecord rec;
-    rec.game_id = text(0);
-    rec.system_key = text(1);
-    rec.system_name = text(2);
-    rec.display_name = text(3);
+    rec.system_key = text(0);
+    rec.system_name = text(1);
+    rec.display_name = text(2);
+    rec.version = text(3);
     rec.canonical_name = text(4);
     rec.core_name = text(5);
-    rec.asset_key = text(6);
-    rec.identity_key = text(7);
-    rec.version = text(8);
-    rec.language = text(9);
-    rec.region = text(10);
-    rec.content_stem = text(11);
-    rec.updated_at = QString::fromStdString(text(12)).toLongLong();
-    rec.source = text(13);
+    rec.language = text(6);
+    rec.region = text(7);
+    rec.content_stem = text(8);
+    {
+        const auto* created_item = table->item(row, 9);
+        if (created_item != nullptr) {
+            const auto role = created_item->data(Qt::UserRole);
+            rec.created_at =
+                role.isValid() ? role.toLongLong() : created_item->text().toLongLong();
+        }
+        const auto* updated_item = table->item(row, 10);
+        if (updated_item != nullptr) {
+            const auto role = updated_item->data(Qt::UserRole);
+            rec.updated_at =
+                role.isValid() ? role.toLongLong() : updated_item->text().toLongLong();
+        }
+    }
+    rec.source = text(11);
+    rec.content_path = text(12);
+    rec.asset_key = text(13);
+    rec.identity_key = text(14);
+    rec.game_id = text(15);
     if (rec.game_id.empty()) {
         return std::nullopt;
     }
@@ -172,6 +214,8 @@ bool edit_game_meta_dialog(QWidget* parent, GameMetaRecord& row, bool* apply_fs)
     auto* language = new QLineEdit(qstr(row.language), &dialog);
     auto* region = new QLineEdit(qstr(row.region), &dialog);
     auto* content_stem = new QLineEdit(qstr(row.content_stem), &dialog);
+    content_stem->setReadOnly(true);
+    content_stem->setFocusPolicy(Qt::NoFocus);
     auto* source = new QLineEdit(qstr(row.source), &dialog);
     auto* preview = new QLabel(&dialog);
     preview->setWordWrap(true);
@@ -187,12 +231,21 @@ bool edit_game_meta_dialog(QWidget* parent, GameMetaRecord& row, bool* apply_fs)
         draft.version = version->text().toStdString();
         draft.language = language->text().toStdString();
         draft.region = region->text().toStdString();
-        draft.content_stem = content_stem->text().toStdString();
         draft.source = source->text().toStdString();
         draft = recompute_game_meta_identity(std::move(draft));
+        content_stem->setText(qstr(draft.content_stem));
         preview->setText(
-            QStringLiteral("Derived preview:\ngame_id=%1\nasset_key=%2\nidentity_key=\n%3")
-                .arg(qstr(draft.game_id), qstr(draft.asset_key), qstr(draft.identity_key)));
+            QStringLiteral(
+                "Derived (not editable):\n"
+                "content_stem=%1\n"
+                "identity_key=\n%2\n\n"
+                "game_id=%3\n"
+                "asset_key=%4")
+                .arg(
+                    qstr(draft.content_stem),
+                    qstr(draft.identity_key),
+                    qstr(draft.game_id),
+                    qstr(draft.asset_key)));
     };
 
     for (auto* edit : {system_key,
@@ -203,7 +256,6 @@ bool edit_game_meta_dialog(QWidget* parent, GameMetaRecord& row, bool* apply_fs)
                        version,
                        language,
                        region,
-                       content_stem,
                        source}) {
         QObject::connect(edit, &QLineEdit::textChanged, &dialog, refresh_preview);
     }
@@ -216,20 +268,21 @@ bool edit_game_meta_dialog(QWidget* parent, GameMetaRecord& row, bool* apply_fs)
     form->addRow("version", version);
     form->addRow("language", language);
     form->addRow("region", region);
-    form->addRow("content_stem", content_stem);
+    form->addRow("content_stem (derived)", content_stem);
     form->addRow("source", source);
     form->addRow("Preview", preview);
 
     auto* fs_check = new QCheckBox(
-        "Also rename on-disk saves (content_stem), Art/<asset_key>/, and "
-        "DLC/<System>/<content_stem>/ when those change",
+        "Also rename on-disk ROM (+ Meta sidecar), saves (content_stem), "
+        "Art/<asset_key>/, and DLC/<System>/<game_id>/ when those change",
         &dialog);
     fs_check->setChecked(true);
     form->addRow("", fs_check);
 
     auto* note = new QLabel(
-        "game_id / identity_key / asset_key are always recomputed from "
-        "system_key + canonical_name + version + language + region. "
+        "identity_key is composed from system_key + canonical_name + version + "
+        "language + region; game_id is sha256(identity_key). "
+        "content_stem / asset_key are derived (ROM edge stem, lowercased for saves). "
         "If game_id changes, the old row is removed and the old id is kept as a catalog_id alias.",
         &dialog);
     note->setWordWrap(true);
@@ -252,8 +305,8 @@ bool edit_game_meta_dialog(QWidget* parent, GameMetaRecord& row, bool* apply_fs)
     row.version = version->text().toStdString();
     row.language = language->text().toStdString();
     row.region = region->text().toStdString();
-    row.content_stem = content_stem->text().toStdString();
     row.source = source->text().toStdString();
+    // content_stem is derived in apply_game_meta_edit / recompute_game_meta_identity.
     if (apply_fs != nullptr) {
         *apply_fs = fs_check->isChecked();
     }
@@ -341,22 +394,24 @@ QWidget* MainWindow::build_catalog_tab() {
     auto* tables = new QTabWidget(page);
 
     catalog_meta_table_ = new QTableWidget(page);
-    catalog_meta_table_->setColumnCount(14);
+    catalog_meta_table_->setColumnCount(16);
     catalog_meta_table_->setHorizontalHeaderLabels({
-        "game_id",
         "system_key",
         "system_name",
         "display_name",
+        "version",
         "canonical_name",
         "core_name",
-        "asset_key",
-        "identity_key",
-        "version",
         "language",
         "region",
         "content_stem",
+        "created_at",
         "updated_at",
         "source",
+        "content_path",
+        "asset_key",
+        "identity_key",
+        "game_id",
     });
     setup_flat_table(catalog_meta_table_);
     tables->addTab(catalog_meta_table_, "game_meta");
@@ -448,7 +503,8 @@ QWidget* MainWindow::build_catalog_tab() {
                 "Strip region/language parentheticals and trailing “Version” from "
                 "display_name / content_stem into region (and version when Rev…), "
                 "re-derive canonical_name, recompute game_id/asset_key, and rename "
-                "matching save stems + Art folders when those change?\n\n%1")
+                "the ROM (+ Meta sidecar), matching save stems, and Art/DLC folders "
+                "when those change?\n\n%1")
                 .arg(qstr(selected->display_name)),
             QMessageBox::Yes | QMessageBox::No,
             QMessageBox::No);
@@ -619,7 +675,7 @@ QWidget* MainWindow::build_catalog_tab() {
                 QStringLiteral(
                     "Restore the BEFORE snapshot from edit #%1?\n\n"
                     "%2 → %3\n\n"
-                    "This recomputes game_id/asset_key and can rename Art/saves/DLC.")
+                    "This recomputes game_id/asset_key and can rename the ROM, Art, saves, and DLC.")
                     .arg(*id)
                     .arg(qstr(entry->after.display_name))
                     .arg(qstr(entry->before.display_name)),
@@ -678,30 +734,83 @@ void MainWindow::refresh_catalog_browser() {
     catalog_meta_table_->setSortingEnabled(false);
     catalog_meta_table_->setRowCount(0);
     int meta_shown = 0;
+    int identity_mismatches = 0;
+    QStringList mismatch_samples;
     for (const auto& game : games) {
         const QStringList cells = {
-            qstr(game.game_id),
             qstr(game.system_key),
             qstr(game.system_name),
             qstr(game.display_name),
+            qstr(game.version),
             qstr(game.canonical_name),
             qstr(game.core_name),
-            qstr(game.asset_key),
-            qstr(game.identity_key),
-            qstr(game.version),
             qstr(game.language),
             qstr(game.region),
             qstr(game.content_stem),
-            QString::number(game.updated_at),
+            format_epoch_local(game.created_at),
+            format_epoch_local(game.updated_at),
             qstr(game.source),
+            qstr(game.content_path),
+            qstr(game.asset_key),
+            qstr(game.identity_key),
+            qstr(game.game_id),
         };
         if (!row_matches_filter(cells, filter)) {
             continue;
         }
+        GameIdentity identity = GameIdentity::from_parts(
+            game.system_key,
+            game.canonical_name,
+            game.version,
+            game.language,
+            game.region);
+        // Compare stored derived fields against parts → identity_key → game_id.
+        identity.identity_key = game.identity_key;
+        identity.game_id = game.game_id;
+        const bool id_ok = identity.matches();
+        if (!id_ok) {
+            ++identity_mismatches;
+            if (mismatch_samples.size() < 5) {
+                const auto expected = GameIdentity::from_parts(identity.parts);
+                mismatch_samples.push_back(
+                    QStringLiteral("%1 → expected game_id %2")
+                        .arg(qstr(game.display_name.empty() ? game.game_id : game.display_name),
+                             qstr(expected.game_id.empty() ? "(empty)" : expected.game_id)));
+            }
+        }
         const int row = catalog_meta_table_->rowCount();
         catalog_meta_table_->insertRow(row);
+        constexpr int kCreatedAtCol = 9;
+        constexpr int kUpdatedAtCol = 10;
+        constexpr int kIdentityKeyCol = 14;
+        constexpr int kGameIdCol = 15;
         for (int col = 0; col < cells.size(); ++col) {
-            catalog_meta_table_->setItem(row, col, cell(cells[col]));
+            QTableWidgetItem* item = nullptr;
+            if (col == kCreatedAtCol) {
+                item = epoch_cell(game.created_at);
+            } else if (col == kUpdatedAtCol) {
+                item = epoch_cell(game.updated_at);
+            } else {
+                item = cell(cells[col]);
+            }
+            if (!id_ok) {
+                item->setForeground(QBrush(QColor(0xB0, 0x00, 0x20)));
+                if (col == kIdentityKeyCol || col == kGameIdCol) {
+                    const auto expected = GameIdentity::from_parts(identity.parts);
+                    item->setToolTip(
+                        QStringLiteral(
+                            "Stored identity does not match parts → identity_key → game_id\n"
+                            "stored identity_key:\n%1\n\n"
+                            "expected identity_key:\n%2\n\n"
+                            "stored game_id:   %3\n"
+                            "expected game_id: %4")
+                            .arg(qstr(game.identity_key),
+                                 qstr(expected.identity_key),
+                                 qstr(game.game_id),
+                                 qstr(expected.game_id)));
+                }
+            }
+            catalog_meta_table_->setItem(row, col, item);
         }
         ++meta_shown;
     }
@@ -765,7 +874,7 @@ void MainWindow::refresh_catalog_browser() {
                                                     qstr(edit.before.region));
             const QStringList cells = {
                 QString::number(edit.edit_id),
-                QString::number(edit.edited_at),
+                format_epoch_local(edit.edited_at),
                 qstr(edit.op),
                 qstr(edit.after.display_name.empty() ? edit.before.display_name
                                                      : edit.after.display_name),
@@ -780,7 +889,8 @@ void MainWindow::refresh_catalog_browser() {
             const int row = catalog_edits_table_->rowCount();
             catalog_edits_table_->insertRow(row);
             for (int col = 0; col < cells.size(); ++col) {
-                catalog_edits_table_->setItem(row, col, cell(cells[col]));
+                auto* item = (col == 1) ? epoch_cell(edit.edited_at) : cell(cells[col]);
+                catalog_edits_table_->setItem(row, col, item);
             }
             ++edits_shown;
         }
@@ -799,7 +909,7 @@ void MainWindow::refresh_catalog_browser() {
                 modes.supports_multiplayer ? QStringLiteral("true") : QStringLiteral("false"),
                 QString::number(modes.min_players),
                 QString::number(modes.max_players),
-                QString::number(modes.updated_at),
+                format_epoch_local(modes.updated_at),
                 qstr(modes.source),
             };
             if (!row_matches_filter(cells, filter)) {
@@ -808,7 +918,8 @@ void MainWindow::refresh_catalog_browser() {
             const int row = catalog_play_modes_table_->rowCount();
             catalog_play_modes_table_->insertRow(row);
             for (int col = 0; col < cells.size(); ++col) {
-                catalog_play_modes_table_->setItem(row, col, cell(cells[col]));
+                auto* item = (col == 5) ? epoch_cell(modes.updated_at) : cell(cells[col]);
+                catalog_play_modes_table_->setItem(row, col, item);
             }
             ++modes_shown;
         }
@@ -816,19 +927,29 @@ void MainWindow::refresh_catalog_browser() {
         catalog_play_modes_table_->resizeColumnsToContents();
     }
 
-    catalog_status_->setText(
-        QStringLiteral(
-            "game_meta %1/%2 · aliases %3/%4 · user_games %5/%6 · play_modes %7/%8 · edits %9/%10")
-            .arg(meta_shown)
-            .arg(static_cast<int>(games.size()))
-            .arg(alias_shown)
-            .arg(static_cast<int>(aliases.size()))
-            .arg(user_shown)
-            .arg(static_cast<int>(user_games.size()))
-            .arg(modes_shown)
-            .arg(static_cast<int>(play_modes.size()))
-            .arg(edits_shown)
-            .arg(static_cast<int>(edit_rows.size())));
+    QString status = QStringLiteral(
+                         "game_meta %1/%2 · aliases %3/%4 · user_games %5/%6 · play_modes %7/%8 · edits %9/%10")
+                         .arg(meta_shown)
+                         .arg(static_cast<int>(games.size()))
+                         .arg(alias_shown)
+                         .arg(static_cast<int>(aliases.size()))
+                         .arg(user_shown)
+                         .arg(static_cast<int>(user_games.size()))
+                         .arg(modes_shown)
+                         .arg(static_cast<int>(play_modes.size()))
+                         .arg(edits_shown)
+                         .arg(static_cast<int>(edit_rows.size()));
+    if (identity_mismatches == 0) {
+        status += QStringLiteral(" · identity ok (%1 shown)").arg(meta_shown);
+    } else {
+        status += QStringLiteral(" · IDENTITY MISMATCH %1/%2 shown")
+                      .arg(identity_mismatches)
+                      .arg(meta_shown);
+        if (!mismatch_samples.isEmpty()) {
+            status += QStringLiteral(" — ") + mismatch_samples.join(QStringLiteral("; "));
+        }
+    }
+    catalog_status_->setText(status);
 }
 
 #endif // ARCHSTREAMER_HAS_HOST

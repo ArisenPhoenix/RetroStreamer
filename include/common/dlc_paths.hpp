@@ -29,22 +29,38 @@ std::filesystem::path resolve_dlc_root(const std::filesystem::path& rom_root = {
 std::string dlc_system_folder_name(std::string_view system_key);
 
 /**
- * Global per-game DLC directory:
- *   <dlc_root>/<System>/<content_stem>/
- * content_stem matches game_meta.content_stem / the catalog ROM stem.
+ * Filesystem-safe leaf for a catalog game_id (e.g. sha256:ab… → sha256_ab…).
+ * Colons are invalid on Windows paths.
+ */
+std::string dlc_leaf_from_game_id(std::string_view game_id);
+
+/**
+ * Global per-game DLC directory keyed by catalog game_id:
+ *   <dlc_root>/<System>/<game_id_leaf>/
+ * System folder comes from system_key. When game_id (or system_key) changes,
+ * Catalog ops rename this path. Ryujinx only consumes the nested registered/
+ * NCAs via symlink — it does not care about this leaf name.
+ *
+ * Resolves an existing directory case-insensitively when present.
  */
 std::filesystem::path catalog_dlc_game_directory(
     const std::filesystem::path& dlc_root,
     std::string_view system_key,
-    std::string_view content_stem);
+    std::string_view game_id);
 
-/** Convenience: resolve_dlc_root() / Switch / <content_stem>. */
-std::filesystem::path switch_dlc_game_directory(std::string_view content_stem);
+/** Convenience: resolve_dlc_root() / Switch / <game_id_leaf>. */
+std::filesystem::path switch_dlc_game_directory(std::string_view game_id);
 
 /**
- * Legacy flat Switch UPD/DLC NSP folder (ROMS/SwitchUpdates), if present.
- * Used only to seed/migrate into DLC/Switch/<stem>/.
+ * Legacy leaf under DLC/<System>/<content_stem>/ (pre–game_id layout).
+ * Used only to migrate packs into the game_id directory.
  */
+std::filesystem::path catalog_dlc_legacy_stem_directory(
+    const std::filesystem::path& dlc_root,
+    std::string_view system_key,
+    std::string_view content_stem);
+
+/** Legacy flat Switch UPD/DLC NSP folder (ROMS/SwitchUpdates), if present. */
 std::filesystem::path legacy_switch_updates_directory();
 
 } // namespace archstreamer

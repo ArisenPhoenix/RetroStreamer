@@ -1,6 +1,9 @@
 #include "common/game_assets.hpp"
 
+#include "common/game_identity.hpp"
+
 #include <array>
+#include <system_error>
 #include <utility>
 
 namespace archstreamer {
@@ -77,6 +80,64 @@ std::optional<std::filesystem::path> find_asset_file(
     return std::nullopt;
 }
 
+std::vector<std::string> asset_key_lookup_candidates(std::string_view asset_key) {
+    std::vector<std::string> out;
+    if (asset_key.empty()) {
+        return out;
+    }
+    out.emplace_back(asset_key);
+
+    std::vector<std::string> parts;
+    std::string current;
+    for (const char ch : asset_key) {
+        if (ch == '/') {
+            parts.push_back(std::move(current));
+            current.clear();
+        } else {
+            current.push_back(ch);
+        }
+    }
+    parts.push_back(std::move(current));
+    if (parts.size() != 5) {
+        return out;
+    }
+
+    auto join_with_version = [&](std::string_view version_leaf) {
+        return parts[0] + "/" + parts[1] + "/" + parts[2] + "/" + parts[3] + "/"
+            + std::string(version_leaf);
+    };
+
+    const auto& version = parts[4];
+    // Unlabeled versions (0 / 1 / unknown / rev*) share base art folders.
+    if (catalog_version_is_unlabeled(version)) {
+        for (const char* leaf : {"0", "1", "unknown"}) {
+            if (version != leaf) {
+                out.push_back(join_with_version(leaf));
+            }
+        }
+    } else {
+        // Legacy Steam ROM Manager / older catalog: version baked into the title slug.
+        // switch/pokemon-sword/en/unknown/1-3-2 → switch/pokemon-sword-1-3-2/en/unknown/1-3-2
+        out.push_back(
+            parts[0] + "/" + parts[1] + "-" + version + "/" + parts[2] + "/" + parts[3] + "/"
+            + version);
+        // Prefer base boxart when a versioned build has no dedicated art.
+        out.push_back(join_with_version("0"));
+        out.push_back(join_with_version("unknown"));
+        out.push_back(join_with_version("1"));
+    }
+
+    // Multi-disc SRM imports key art as title-disc-1 (playlist asset_key is bare title).
+    if (parts[1].find("-disc-") == std::string::npos) {
+        for (const char* leaf : {"0", "1", "unknown"}) {
+            out.push_back(
+                parts[0] + "/" + parts[1] + "-disc-1/" + parts[2] + "/" + parts[3] + "/" + leaf);
+        }
+    }
+
+    return out;
+}
+
 LocalGameAssetProvider::LocalGameAssetProvider(std::filesystem::path content_root, std::filesystem::path assets_root)
     : content_root_(std::move(content_root)),
       assets_root_(assets_root.empty() ? default_assets_root_for(content_root_) : std::move(assets_root)) {
@@ -98,12 +159,27 @@ std::filesystem::path LocalGameAssetProvider::directory_for_asset_key(std::strin
     return assets_root_ / std::filesystem::path{std::string(asset_key)};
 }
 
+std::optional<std::filesystem::path> LocalGameAssetProvider::resolve_directory_for_asset_key(
+    std::string_view asset_key) const {
+    for (const auto& candidate : asset_key_lookup_candidates(asset_key)) {
+        auto directory = assets_root_ / std::filesystem::path{candidate};
+        std::error_code ec;
+        if (std::filesystem::is_directory(directory, ec) && !ec) {
+            return directory;
+        }
+    }
+    return std::nullopt;
+}
+
 GameAssets LocalGameAssetProvider::assets_for(const std::filesystem::path& content_path) const {
     const auto directory = directory_for(content_path);
     return assets_in_directory(directory);
 }
 
 GameAssets LocalGameAssetProvider::assets_for_asset_key(std::string_view asset_key) const {
+    if (const auto directory = resolve_directory_for_asset_key(asset_key)) {
+        return assets_in_directory(*directory);
+    }
     return assets_in_directory(directory_for_asset_key(asset_key));
 }
 

@@ -10,6 +10,9 @@ scripts/.flatpak-builder/
 logs
 windows_log_ssh.sh
 
+# Local-only catalog/filesystem helpers (not pushed)
+scripts/local/
+
 # Android client (see also mobile/android/.gitignore)
 mobile/android/.gradle/
 mobile/android/**/build/

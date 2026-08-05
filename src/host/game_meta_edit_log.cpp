@@ -27,6 +27,8 @@ nlohmann::json record_to_json_obj(const GameMetaRecord& row) {
         {"language", row.language},
         {"region", row.region},
         {"content_stem", row.content_stem},
+        {"content_path", row.content_path},
+        {"created_at", row.created_at},
         {"updated_at", row.updated_at},
         {"source", row.source},
     };
@@ -46,6 +48,8 @@ GameMetaRecord record_from_json_obj(const nlohmann::json& j) {
     row.language = j.value("language", "");
     row.region = j.value("region", "");
     row.content_stem = j.value("content_stem", "");
+    row.content_path = j.value("content_path", "");
+    row.created_at = j.value("created_at", static_cast<std::int64_t>(0));
     row.updated_at = j.value("updated_at", static_cast<std::int64_t>(0));
     row.source = j.value("source", std::string(game_meta_source::kCatalog));
     return row;

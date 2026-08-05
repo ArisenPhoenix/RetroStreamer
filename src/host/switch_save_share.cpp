@@ -559,11 +559,11 @@ bool link_yuzu_to_canon(
 std::string title_id_from_update_nsps_for_stem(std::string_view content_stem) {
     // Match UPD NSP names like: Pokemon Shield [01008DB008C2C800][v1.3.2][UPD].nsp
     // Application id ≈ patch id with bit 0x800 cleared.
+    // Hosted stems are edge-clean: bare title or "Title (1.3.2)".
     const auto stem_l = to_lower_copy(content_stem);
-    // Strip trailing version tokens for matching ("pokemon shield 1.3.2" → "pokemon shield").
     std::string base_name = stem_l;
-    static const std::regex version_suffix(R"((?:\s+|[_-])v?\d+(?:\.\d+){1,3}\s*$)", std::regex::icase);
-    base_name = std::regex_replace(base_name, version_suffix, "");
+    static const std::regex paren_suffix(R"(\s+\([^)]*\)\s*$)");
+    base_name = std::regex_replace(base_name, paren_suffix, "");
     while (!base_name.empty() && base_name.back() == ' ') {
         base_name.pop_back();
     }
@@ -700,8 +700,8 @@ std::filesystem::path legacy_title_id_switch_save_directory(
 
 std::filesystem::path catalog_switch_addon_directory(
     const SaveProfile& /*profile*/,
-    std::string_view content_stem) {
-    return switch_dlc_game_directory(content_stem);
+    std::string_view game_id) {
+    return switch_dlc_game_directory(game_id);
 }
 
 std::filesystem::path ensure_catalog_switch_save(

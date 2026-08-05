@@ -346,7 +346,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 wasPlaying = snap.playing
                 val app = getApplication<Application>()
                 if (snap.playing) {
-                    val title = snap.selectedGame?.displayName
+                    val title = snap.selectedGame?.title()
                         ?: snap.status.removePrefix("Playing ").takeIf { it.isNotBlank() }
                     SessionKeepAliveService.start(app, title)
                 } else {
@@ -1821,7 +1821,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             } else {
                 // Auto-expand systems (and Recents) that still have matches under the filter.
                 val matched = state.games.filter {
-                    it.displayName.lowercase().contains(filter) ||
+                    it.title().lowercase().contains(filter) ||
+                        it.version.lowercase().contains(filter) ||
                         it.systemName.lowercase().contains(filter) ||
                         it.systemKey.lowercase().contains(filter)
                 }
@@ -2179,7 +2180,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             _state.update {
                 it.copy(
                     busy = true,
-                    status = "Starting ${game.displayName}…",
+                    status = "Starting ${game.title()}…",
                     selectedGame = game,
                     softKeyboard = null,
                 )
@@ -2274,7 +2275,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                         linkPeerDraft = "",
                         linkStatus = "",
                         linkStatusKind = null,
-                        status = "Playing ${game.displayName}",
+                        status = "Playing ${game.title()}",
                         mediaHint = run {
                             val video = joined.videoPlayer
                             val audio = joined.audioPlayer
@@ -2306,7 +2307,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                         padLayout = PadLayout.Standard,
                         reconnectHintGameId = if (canReconnect) game.id else null,
                         status = if (canReconnect) {
-                            "Host still has your seat for ~60s. Tap ${game.displayName} again to reconnect " +
+                            "Host still has your seat for ~60s. Tap ${game.title()} again to reconnect " +
                                 "(same username). Leave session ends it immediately."
                         } else {
                             "Start failed: $msg"

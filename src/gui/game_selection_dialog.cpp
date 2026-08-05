@@ -2,6 +2,7 @@
 
 #include "common/catalog_presenter.hpp"
 #include "common/game_assets.hpp"
+#include "common/game_identity.hpp"
 
 #include <QAbstractItemView>
 #include <QComboBox>
@@ -76,8 +77,8 @@ bool game_matches_needle(const GameInfo& game, const QString& needle) {
         return true;
     }
     const auto haystack = QString::fromStdString(
-        game.display_name + " " + format_game_summary(game) + " " + game.system_name + " " +
-        game.system_key)
+        catalog_label_for(game.display_name, game.version) + " " + format_game_summary(game) + " "
+        + game.system_name + " " + game.system_key)
                               .toLower();
     return haystack.contains(needle);
 }
@@ -232,7 +233,7 @@ QTreeWidgetItem* GameSelectionDialog::addGameLeaf(
     const GameInfo& game,
     QTreeWidgetItem*& selected_item) {
     auto* item = new QTreeWidgetItem(parent, kItemTypeGame);
-    item->setText(0, QString::fromStdString(game.display_name));
+    item->setText(0, QString::fromStdString(catalog_label_for(game.display_name, game.version)));
     item->setData(0, Qt::UserRole, QString::fromStdString(game.id));
     item->setToolTip(0, QString::fromStdString(format_game_summary(game)));
     item->setIcon(0, QIcon(load_game_art_pixmap(art_root_, game, QSize(kThumbW, kThumbH))));
@@ -284,8 +285,11 @@ void GameSelectionDialog::refreshFilteredList() {
     }
     for (auto& [system_name, games] : grouped) {
         std::sort(games.begin(), games.end(), [](const GameInfo* a, const GameInfo* b) {
-            return QString::fromStdString(a->display_name).compare(
-                       QString::fromStdString(b->display_name), Qt::CaseInsensitive) < 0;
+            return QString::fromStdString(catalog_label_for(a->display_name, a->version))
+                       .compare(
+                           QString::fromStdString(catalog_label_for(b->display_name, b->version)),
+                           Qt::CaseInsensitive)
+                < 0;
         });
         auto* group = new QTreeWidgetItem(tree_, kItemTypeGroup);
         group->setText(

@@ -29,6 +29,7 @@ SwitchBackendPrepResult RyujinxBackend::prepare(
         ctx.resolution_scale,
         ctx.profile_display_name,
         lan_iface,
+        ctx.game_id,
         ctx.content_stem,
         ctx.title_id);
     auto pad_plan = resolve_exclusive_pad_plan(

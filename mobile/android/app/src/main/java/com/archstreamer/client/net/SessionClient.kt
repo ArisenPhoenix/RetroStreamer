@@ -94,7 +94,11 @@ object CatalogFetcher {
         when (val packet = conn.receive()) {
             is IncomingPacket.Catalog -> {
                 val games = packet.value.games.sortedWith(
-                    compareBy({ it.systemName.lowercase() }, { it.displayName.lowercase() }),
+                    compareBy(
+                        { it.systemName.lowercase() },
+                        { it.title().lowercase() },
+                        { it.version.lowercase() },
+                    ),
                 )
                 return CatalogResult(host, controlPort, games, packet.value.catalogRevision)
             }

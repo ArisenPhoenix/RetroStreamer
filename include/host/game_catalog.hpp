@@ -21,6 +21,14 @@ struct HostedGame {
     // instead of RetroArch -L <core>.
     bool standalone_emulator = false;
     std::vector<std::string> standalone_args_before_content;
+    /**
+     * Optional .m3m resolution map (hosted content_path is the .m3m).
+     * When set, launch uses m3m_rom_path; Switch save linking uses m3m_title_id.
+     */
+    std::filesystem::path m3m_rom_path;
+    std::string m3m_title_id;
+    std::string m3m_patch_title_id;
+    std::string m3m_base;
 };
 
 class GameCatalog {

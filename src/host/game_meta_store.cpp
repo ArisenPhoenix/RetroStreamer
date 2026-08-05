@@ -16,7 +16,61 @@
 #include <vector>
 
 namespace archstreamer {
+
+std::filesystem::path guess_rom_meta_json(const std::filesystem::path& content_path) {
+    auto beside = content_path;
+    beside.replace_extension(".json");
+    std::error_code ec;
+    if (std::filesystem::is_regular_file(beside, ec)) {
+        return beside;
+    }
+    std::vector<std::filesystem::path> parts;
+    for (const auto& part : content_path) {
+        parts.push_back(part);
+    }
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        const auto token = [&] {
+            auto s = parts[i].string();
+            for (char& ch : s) {
+                ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            }
+            return s;
+        }();
+        if (token != "games") {
+            continue;
+        }
+        std::filesystem::path rebuilt;
+        for (std::size_t j = 0; j < parts.size(); ++j) {
+            rebuilt /= (j == i) ? "Meta" : parts[j];
+        }
+        rebuilt.replace_extension(".json");
+        if (std::filesystem::is_regular_file(rebuilt, ec)) {
+            return rebuilt;
+        }
+        break;
+    }
+    return {};
+}
+
 namespace {
+
+std::int64_t meta_created_unix_seconds(const std::filesystem::path& content_path) {
+    const auto meta_json = guess_rom_meta_json(content_path);
+    if (meta_json.empty()) {
+        return 0;
+    }
+    std::error_code ec;
+    const auto meta_dir = meta_json.parent_path();
+    if (std::filesystem::is_directory(meta_dir, ec)) {
+        if (const auto dir_t = file_birth_or_mtime_unix_seconds(meta_dir); dir_t > 0) {
+            return dir_t;
+        }
+    }
+    if (std::filesystem::is_regular_file(meta_json, ec)) {
+        return file_birth_or_mtime_unix_seconds(meta_json);
+    }
+    return 0;
+}
 
 std::string to_lower_copy(std::string value) {
     for (char& ch : value) {
@@ -88,41 +142,13 @@ GameMetaRecord row_from_stmt(sqlite3_stmt* stmt) {
     row.language = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 9));
     row.region = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 10));
     row.content_stem = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 11));
-    row.updated_at = sqlite3_column_int64(stmt, 12);
-    row.source = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 13));
-    if (sqlite3_column_count(stmt) > 14 && sqlite3_column_text(stmt, 14) != nullptr) {
-        row.content_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 14));
+    row.created_at = sqlite3_column_int64(stmt, 12);
+    row.updated_at = sqlite3_column_int64(stmt, 13);
+    row.source = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 14));
+    if (sqlite3_column_count(stmt) > 15 && sqlite3_column_text(stmt, 15) != nullptr) {
+        row.content_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 15));
     }
     return row;
-}
-
-std::filesystem::path guess_rom_meta_json(const std::filesystem::path& content_path) {
-    auto beside = content_path;
-    beside.replace_extension(".json");
-    std::error_code ec;
-    if (std::filesystem::is_regular_file(beside, ec)) {
-        return beside;
-    }
-    std::vector<std::filesystem::path> parts;
-    for (const auto& part : content_path) {
-        parts.push_back(part);
-    }
-    for (std::size_t i = 0; i < parts.size(); ++i) {
-        const auto token = to_lower_copy(parts[i].string());
-        if (token != "games") {
-            continue;
-        }
-        std::filesystem::path rebuilt;
-        for (std::size_t j = 0; j < parts.size(); ++j) {
-            rebuilt /= (j == i) ? "Meta" : parts[j];
-        }
-        rebuilt.replace_extension(".json");
-        if (std::filesystem::is_regular_file(rebuilt, ec)) {
-            return rebuilt;
-        }
-        break;
-    }
-    return {};
 }
 
 void read_optional_meta_aliases(
@@ -234,6 +260,7 @@ bool GameMetaStore::ensure_schema() {
             "  language TEXT NOT NULL DEFAULT '',"
             "  region TEXT NOT NULL DEFAULT '',"
             "  content_stem TEXT NOT NULL DEFAULT '',"
+            "  created_at INTEGER NOT NULL DEFAULT 0,"
             "  updated_at INTEGER NOT NULL DEFAULT 0,"
             "  source TEXT NOT NULL DEFAULT 'catalog'"
             ");")) {
@@ -277,6 +304,8 @@ bool GameMetaStore::ensure_schema() {
     }
     (void)exec_quiet(
         "ALTER TABLE game_meta ADD COLUMN content_path TEXT NOT NULL DEFAULT '';");
+    (void)exec_quiet(
+        "ALTER TABLE game_meta ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;");
     (void)exec_quiet(
         "CREATE INDEX IF NOT EXISTS idx_game_meta_content_path ON game_meta(content_path);");
     (void)exec_quiet(
@@ -324,9 +353,9 @@ bool GameMetaStore::upsert(const GameMetaRecord& row) {
     constexpr const char* kSql =
         "INSERT INTO game_meta ("
         "  game_id, system_key, system_name, display_name, canonical_name, core_name,"
-        "  asset_key, identity_key, version, language, region, content_stem, updated_at, source,"
-        "  content_path"
-        ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        "  asset_key, identity_key, version, language, region, content_stem,"
+        "  created_at, updated_at, source, content_path"
+        ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
         " ON CONFLICT(game_id) DO UPDATE SET"
         "  system_key=excluded.system_key,"
         "  system_name=excluded.system_name,"
@@ -339,6 +368,9 @@ bool GameMetaStore::upsert(const GameMetaRecord& row) {
         "  language=excluded.language,"
         "  region=excluded.region,"
         "  content_stem=excluded.content_stem,"
+        "  created_at=CASE"
+        "    WHEN game_meta.created_at > 0 THEN game_meta.created_at"
+        "    ELSE excluded.created_at END,"
         "  updated_at=excluded.updated_at,"
         "  source=excluded.source,"
         "  content_path=excluded.content_path;";
@@ -348,6 +380,8 @@ bool GameMetaStore::upsert(const GameMetaRecord& row) {
     }
     const auto updated =
         row.updated_at > 0 ? row.updated_at : now_epoch_seconds();
+    const auto created =
+        row.created_at > 0 ? row.created_at : updated;
     sqlite3_bind_text(stmt, 1, row.game_id.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 2, row.system_key.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 3, row.system_name.c_str(), -1, SQLITE_TRANSIENT);
@@ -360,9 +394,10 @@ bool GameMetaStore::upsert(const GameMetaRecord& row) {
     sqlite3_bind_text(stmt, 10, row.language.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 11, row.region.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 12, row.content_stem.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int64(stmt, 13, updated);
-    sqlite3_bind_text(stmt, 14, row.source.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 15, row.content_path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 13, created);
+    sqlite3_bind_int64(stmt, 14, updated);
+    sqlite3_bind_text(stmt, 15, row.source.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 16, row.content_path.c_str(), -1, SQLITE_TRANSIENT);
     const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
     sqlite3_finalize(stmt);
     return ok;
@@ -406,9 +441,10 @@ std::optional<GameMetaRecord> GameMetaStore::load_by_id_stmt(std::string_view ga
         return std::nullopt;
     }
     constexpr const char* kSql =
-        "SELECT game_id, system_key, system_name, display_name, canonical_name, core_name,"
-        " asset_key, identity_key, version, language, region, content_stem, updated_at, source,"
-        " content_path"
+        "SELECT "
+        "game_id, system_key, system_name, display_name, canonical_name, core_name,"
+        " asset_key, identity_key, version, language, region, content_stem,"
+        " created_at, updated_at, source, content_path"
         " FROM game_meta WHERE game_id=? LIMIT 1;";
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr) != SQLITE_OK) {
@@ -560,8 +596,8 @@ std::optional<GameMetaRecord> GameMetaStore::find_by_content_path(
     }
     constexpr const char* kSql =
         "SELECT game_id, system_key, system_name, display_name, canonical_name, core_name,"
-        " asset_key, identity_key, version, language, region, content_stem, updated_at, source,"
-        " content_path"
+        " asset_key, identity_key, version, language, region, content_stem,"
+        " created_at, updated_at, source, content_path"
         " FROM game_meta WHERE content_path=? LIMIT 1;";
     sqlite3_stmt* stmt = nullptr;
     if (sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr) != SQLITE_OK) {
@@ -612,8 +648,8 @@ void GameMetaStore::bind_scanned_game(
         }
         constexpr const char* kSql =
             "SELECT game_id, system_key, system_name, display_name, canonical_name, core_name,"
-            " asset_key, identity_key, version, language, region, content_stem, updated_at, source,"
-            " content_path"
+            " asset_key, identity_key, version, language, region, content_stem,"
+            " created_at, updated_at, source, content_path"
             " FROM game_meta WHERE content_stem=? AND (system_key=? OR ?='')"
             " ORDER BY"
             " CASE WHEN source='meta_json' THEN 0 ELSE 1 END,"
@@ -641,6 +677,10 @@ void GameMetaStore::bind_scanned_game(
             return;
         }
         if (auto stale = find_by_id(stale_id); stale && stale->game_id != survivor.game_id) {
+            // Different builds of the same title are intentional catalog rows.
+            if (!same_catalog_version(stale->version, survivor.version)) {
+                return;
+            }
             (void)migrate_user_games_game_id(stale_id, survivor.game_id);
             (void)migrate_play_modes_game_id(stale_id, survivor.game_id);
             (void)reassign_aliases_game_id(stale_id, survivor.game_id);
@@ -658,12 +698,39 @@ void GameMetaStore::bind_scanned_game(
         return info.system_key.empty() || row.system_key.empty()
             || row.system_key == info.system_key;
     };
+    auto accept_existing = [&](std::optional<GameMetaRecord>& row, bool require_same_version) {
+        if (!row) {
+            return;
+        }
+        if (!same_system(*row)) {
+            row = std::nullopt;
+            return;
+        }
+        if (require_same_version && !same_catalog_version(row->version, info.version)) {
+            row = std::nullopt;
+        }
+    };
 
     std::optional<GameMetaRecord> existing = find_by_content_path(path_s);
     if (!existing) {
         existing = find_by_id(provisional_id);
-        if (existing && !same_system(*existing)) {
-            existing = std::nullopt;
+        accept_existing(existing, /*require_same_version=*/true);
+    }
+    if (!existing) {
+        // An edit that changed identity deletes the old primary but keeps it as a
+        // catalog_id alias. Follow that alias or the scan re-seeds the pre-edit row.
+        for (const auto& scope : {info.system_key, std::string{}}) {
+            if (const auto game_id =
+                    lookup_alias_game_id(game_meta_alias::kCatalogId, provisional_id, scope)) {
+                if (*game_id != provisional_id) {
+                    existing = find_by_id(*game_id);
+                }
+            }
+            // catalog_id aliases intentionally cross version (edit history); keep them.
+            accept_existing(existing, /*require_same_version=*/false);
+            if (existing) {
+                break;
+            }
         }
     }
     if (!existing && !stem.empty() && !info.system_key.empty()) {
@@ -685,25 +752,23 @@ void GameMetaStore::bind_scanned_game(
                 existing = find_by_id(*game_id);
             }
         }
-        if (existing && !same_system(*existing)) {
-            existing = std::nullopt;
-        }
+        // Bare name/stem aliases are shared across builds — only accept same version.
+        accept_existing(existing, /*require_same_version=*/true);
     }
     if (!existing) {
         existing = find_by_content_stem_column(stem);
-        if (existing && !same_system(*existing)) {
-            existing = std::nullopt;
-        }
+        accept_existing(existing, /*require_same_version=*/true);
     }
 
     if (existing) {
         // Fold scanned provisional id + any other primary that claims this ROM stem
-        // on the same system.
+        // on the same system (same version only — see fold_stale_into).
         fold_stale_into(provisional_id, *existing);
         if (!stem.empty()) {
             if (auto stem_claim = find_by_content_stem_column(stem);
                 stem_claim && stem_claim->game_id != existing->game_id
-                && same_system(*stem_claim)) {
+                && same_system(*stem_claim)
+                && same_catalog_version(stem_claim->version, existing->version)) {
                 fold_stale_into(stem_claim->game_id, *existing);
             }
             // Also fold path-derived primaries that still use the raw filename stem
@@ -731,17 +796,26 @@ void GameMetaStore::bind_scanned_game(
 
         // Path / launch metadata refresh only — identity stays DB-owned.
         existing->content_path = path_s;
-        if (existing->content_stem.empty()) {
-            existing->content_stem = stem;
-        }
+        existing->content_stem =
+            catalog_content_stem_for(existing->display_name, existing->version);
         if (!info.core_name.empty()) {
             existing->core_name = info.core_name;
         }
         if (!info.system_name.empty() && existing->system_name.empty()) {
             existing->system_name = info.system_name;
         }
-        existing->updated_at = static_cast<std::int64_t>(info.updated_at);
+        // game_meta.updated_at is unix seconds (human/SQL-friendly). GameInfo.updated_at
+        // keeps the file-clock stamp for catalog revision.
+        {
+            const auto unix_mtime = file_mtime_unix_seconds(content_path);
+            existing->updated_at = unix_mtime > 0 ? unix_mtime : now_epoch_seconds();
+        }
+        if (existing->created_at <= 0) {
+            const auto created = meta_created_unix_seconds(content_path);
+            existing->created_at = created > 0 ? created : existing->updated_at;
+        }
         (void)upsert(*existing);
+        rebuild_standard_aliases(*existing);
         apply_record_identity_to_game_info(*existing, info);
 
         GamePlayModesRecord modes;
@@ -781,9 +855,14 @@ void GameMetaStore::bind_scanned_game(
     row.version = info.version;
     row.language = info.language;
     row.region = info.region;
-    row.content_stem = stem;
+    row.content_stem = catalog_content_stem_for(info.display_name, info.version);
     row.content_path = path_s;
-    row.updated_at = static_cast<std::int64_t>(info.updated_at);
+    {
+        const auto unix_mtime = file_mtime_unix_seconds(content_path);
+        row.updated_at = unix_mtime > 0 ? unix_mtime : now_epoch_seconds();
+        const auto created = meta_created_unix_seconds(content_path);
+        row.created_at = created > 0 ? created : row.updated_at;
+    }
     row.source = std::string(game_meta_source::kCatalog);
     std::vector<std::pair<std::string, std::string>> extras;
     read_optional_meta_aliases(content_path, row, extras);
@@ -855,8 +934,8 @@ bool GameMetaStore::write_meta_sidecar(const GameMetaRecord& row) const {
     if (!row.canonical_name.empty()) {
         doc["canonical_name"] = row.canonical_name;
     }
-    if (!row.version.empty() && row.version != "unknown") {
-        doc["version"] = row.version;
+    {
+        doc["version"] = catalog_version_normalize(row.version);
     }
     if (!row.language.empty()) {
         doc["language"] = row.language;
@@ -941,9 +1020,9 @@ bool GameMetaStore::learn_switch_title_id(std::string_view title_id, std::string
         return false;
     }
     // Prefer base (unversioned) catalog entry when both exist.
-    if (!row->version.empty() && row->version != "unknown") {
+    if (!catalog_version_is_base(row->version)) {
         if (auto base = match_hint(strip_trailing_version_label(row->display_name))) {
-            if (base->version.empty() || base->version == "unknown") {
+            if (catalog_version_is_base(base->version)) {
                 row = std::move(base);
             }
         }
@@ -1036,8 +1115,8 @@ std::vector<GameMetaRecord> GameMetaStore::list_games() const {
     }
     constexpr const char* kSql =
         "SELECT game_id, system_key, system_name, display_name, canonical_name, core_name,"
-        " asset_key, identity_key, version, language, region, content_stem, updated_at, source,"
-        " content_path"
+        " asset_key, identity_key, version, language, region, content_stem,"
+        " created_at, updated_at, source, content_path"
         " FROM game_meta"
         " ORDER BY system_key COLLATE NOCASE, display_name COLLATE NOCASE, game_id;";
     sqlite3_stmt* stmt = nullptr;
@@ -1307,7 +1386,10 @@ void GameMetaStore::rebuild_standard_aliases(const GameMetaRecord& row) {
     (void)upsert_alias(game_meta_alias::kCatalogId, row.game_id, sys, row.game_id);
     // Name/stem aliases stay system-scoped so identically named titles on different
     // systems (e.g. Final Fantasy III on GBA vs NDS) do not collapse.
-    if (!row.canonical_name.empty()) {
+    // Bare display/canonical aliases are base-only — versioned builds share those
+    // names and must stay distinct (matched via content_path / content_stem / id).
+    const bool base_version = catalog_version_is_base(row.version);
+    if (!row.canonical_name.empty() && base_version) {
         (void)upsert_alias(game_meta_alias::kCanonical, row.canonical_name, sys, row.game_id);
     }
     if (!row.content_stem.empty()) {
@@ -1317,11 +1399,11 @@ void GameMetaStore::rebuild_standard_aliases(const GameMetaRecord& row) {
             (void)upsert_alias(game_meta_alias::kTitleId, row.content_stem, {}, row.game_id);
         }
         const auto stem_base = save_match_base_name(row.content_stem);
-        if (!stem_base.empty() && stem_base != row.content_stem) {
+        if (base_version && !stem_base.empty() && stem_base != row.content_stem) {
             (void)upsert_alias(game_meta_alias::kContentStem, stem_base, sys, row.game_id);
         }
     }
-    if (!row.display_name.empty()) {
+    if (!row.display_name.empty() && base_version) {
         (void)upsert_alias(game_meta_alias::kDisplayName, row.display_name, sys, row.game_id);
         const auto display_base = save_match_base_name(row.display_name);
         if (!display_base.empty()

@@ -100,8 +100,11 @@ ArtAssetResponse load_art_asset_response(
     }
 
     LocalGameAssetProvider provider({}, art_root);
-    const auto directory = provider.directory_for_asset_key(asset_key);
-    const auto path = find_asset_file(directory, *kind);
+    const auto directory = provider.resolve_directory_for_asset_key(asset_key);
+    if (!directory.has_value()) {
+        return response;
+    }
+    const auto path = find_asset_file(*directory, *kind);
     if (!path.has_value()) {
         return response;
     }
@@ -131,7 +134,11 @@ bool art_asset_exists_locally(
         return false;
     }
     LocalGameAssetProvider provider({}, art_root);
-    return find_asset_file(provider.directory_for_asset_key(asset_key), *kind).has_value();
+    const auto directory = provider.resolve_directory_for_asset_key(asset_key);
+    if (!directory.has_value()) {
+        return false;
+    }
+    return find_asset_file(*directory, *kind).has_value();
 }
 
 std::string local_art_asset_sha256(
@@ -143,7 +150,11 @@ std::string local_art_asset_sha256(
         return {};
     }
     LocalGameAssetProvider provider({}, art_root);
-    const auto path = find_asset_file(provider.directory_for_asset_key(asset_key), *kind);
+    const auto directory = provider.resolve_directory_for_asset_key(asset_key);
+    if (!directory.has_value()) {
+        return {};
+    }
+    const auto path = find_asset_file(*directory, *kind);
     if (!path.has_value()) {
         return {};
     }

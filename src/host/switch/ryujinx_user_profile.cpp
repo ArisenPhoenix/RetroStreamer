@@ -259,6 +259,7 @@ RyujinxUserProfile RyujinxUserProfileService::prepare(
     int resolution_scale,
     std::string_view profile_display_name,
     std::string_view lan_interface_id,
+    std::string_view game_id,
     std::string_view content_stem,
     std::string_view title_id) {
     RyujinxUserProfile profile;
@@ -286,8 +287,9 @@ RyujinxUserProfile RyujinxUserProfileService::prepare(
     }
 
     SwitchSystemDefaults::ensure_ryujinx_firmware(profile.data_root);
-    if (!content_stem.empty()) {
-        ensure_ryujinx_catalog_addons(save_profile, profile.data_root, content_stem, title_id);
+    if (!game_id.empty()) {
+        ensure_ryujinx_catalog_addons(
+            save_profile, profile.data_root, game_id, content_stem, title_id);
     } else {
         ensure_ryujinx_title_updates(profile.data_root);
     }

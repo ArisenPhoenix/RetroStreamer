@@ -1523,6 +1523,33 @@ private fun SettingsSection(state: UiState, viewModel: ClientViewModel) {
         if (state.logSendStatus.isNotBlank()) {
             Text(state.logSendStatus, style = MaterialTheme.typography.bodySmall)
         }
+        HorizontalDivider()
+        Text("Debug", style = MaterialTheme.typography.titleMedium)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Log controls")
+                Text(
+                    if (state.logControls) {
+                        "On — overlay, physical pad, keyboard, and UDP pad/key changes " +
+                            "are written to the on-device log (lines prefixed ctrl:). " +
+                            "Use Send logs to host after a play session."
+                    } else {
+                        "Off — no per-control spam. Enable to diagnose dead buttons / " +
+                            "keyboard vs touch merge."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = state.logControls,
+                onCheckedChange = viewModel::setLogControls,
+            )
+        }
     }
 }
 

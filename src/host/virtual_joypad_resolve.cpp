@@ -199,8 +199,15 @@ std::vector<std::size_t> find_archstreamer_udev_joypad_indices(
     std::size_t players,
     bool verbose,
     std::uint16_t product_id_base) {
-    // RetroArch's udev joypad driver indexes joystick devices in the same order as
-    // /dev/input/jsN appearance in /proc/bus/input/devices (js number == pad index).
+    // RetroArch's udev joypad driver does NOT use kernel jsN as the pad index.
+    // It opens every ID_INPUT_JOYSTICK event node (udev_enumerate order ≈ /proc
+    // joystick appearance order) and assigns vacant slots 0,1,2,… via
+    // udev_find_vacant_pad(). input_playerN_joypad_index selects that slot.
+    //
+    // Concurrent sessions each plug a unique VID/PID uinput pad, but every
+    // RetroArch still sees every sibling pad. If we bind using jsN (merk's pad
+    // is often js0 while cloud is js1), a later slot can get joypad_index=0 and
+    // actually read the earlier kid's pad — cross-session button bleed.
     std::ifstream in("/proc/bus/input/devices");
     if (!in) {
         std::cerr << "Warning: cannot read /proc/bus/input/devices for udev pad indices\n";
@@ -215,6 +222,7 @@ std::vector<std::size_t> find_archstreamer_udev_joypad_indices(
     std::uint16_t vendor = 0;
     std::uint16_t product = 0;
     std::string name;
+    std::size_t ordinal = 0;
     while (std::getline(in, line)) {
         if (line.rfind("I:", 0) == 0) {
             vendor = 0;
@@ -241,12 +249,13 @@ std::vector<std::size_t> find_archstreamer_udev_joypad_indices(
             if (js_pos == std::string::npos) {
                 continue;
             }
-            std::size_t index = 0;
+            std::size_t js_number = 0;
             try {
-                index = static_cast<std::size_t>(std::stoul(line.substr(js_pos + 2)));
+                js_number = static_cast<std::size_t>(std::stoul(line.substr(js_pos + 2)));
             } catch (const std::exception&) {
                 continue;
             }
+            const std::size_t ra_index = ordinal++;
             const bool virtual_pad =
                 (vendor == kVirtualVendorId &&
                  product >= base &&
@@ -254,14 +263,14 @@ std::vector<std::size_t> find_archstreamer_udev_joypad_indices(
                 (product_id_base == 0 && name.rfind("ArchStreamer", 0) == 0);
             if (verbose) {
                 std::cout
-                    << "  udev[js" << index << "] " << name << " "
+                    << "  udev-ra[" << ra_index << "] js" << js_number << " " << name << " "
                     << hex_vid_pid(vendor, product)
-                    << (virtual_pad ? " (virtual)" : "") << '\n';
+                    << (virtual_pad ? " (slot match)" : "") << '\n';
             }
             if (!virtual_pad) {
                 continue;
             }
-            found.push_back({product, index});
+            found.push_back({product, ra_index});
         }
     }
 

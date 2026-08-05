@@ -412,7 +412,7 @@ std::filesystem::path write_retroarch_input_override(
         << "input_max_users = \"" << static_cast<int>(players) << "\"\n"
         // Full button maps are written below. Autodetect must stay off so a sibling
         // concurrent session's ArchStreamer pad cannot steal player 1 on button activity
-        // (udev still enumerates every /dev/input/js* even with SDL EXCEPT filters).
+        // (udev still opens every joystick event node; we bind by discovery ordinal).
         << "input_autodetect_enable = \"false\"\n"
         << "notification_show_autoconfig = \"false\"\n"
         << "joypad_autoconfig_dir = \"" << autoconfig_directory.string() << "\"\n";

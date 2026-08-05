@@ -34,9 +34,10 @@ object PhysicalGamepad {
         val sources = device.sources
         val gamepad = sources and InputDevice.SOURCE_GAMEPAD == InputDevice.SOURCE_GAMEPAD
         val joystick = sources and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK
-        if (!gamepad && !joystick) return false
-        // Many BT keyboards advertise SOURCE_JOYSTICK. Require real pad buttons so
-        // letter/Enter/Backspace keys are not swallowed as "gamepad" input.
+        // Real gamepads always qualify. Joystick-only is also used by many BT keyboards, so
+        // require at least one pad button before treating those as controllers.
+        if (gamepad) return true
+        if (!joystick) return false
         val padKeys = device.hasKeys(
             KeyEvent.KEYCODE_BUTTON_A,
             KeyEvent.KEYCODE_BUTTON_B,
@@ -44,6 +45,8 @@ object PhysicalGamepad {
             KeyEvent.KEYCODE_BUTTON_Y,
             KeyEvent.KEYCODE_BUTTON_L1,
             KeyEvent.KEYCODE_BUTTON_R1,
+            KeyEvent.KEYCODE_BUTTON_START,
+            KeyEvent.KEYCODE_BUTTON_SELECT,
         )
         return padKeys.any { it }
     }

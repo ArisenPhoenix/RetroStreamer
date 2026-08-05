@@ -171,6 +171,11 @@ data class UiState(
     /** How many recent app sessions to include when sending logs. */
     val logSessions: String = "3",
     val logSendStatus: String = "",
+    /**
+     * Settings → Debug: append touch/physical/keyboard pad events and UDP sends
+     * to the on-device client log (use Send logs to host to retrieve).
+     */
+    val logControls: Boolean = false,
     // Remote tab (SSH) — password is session-only, not persisted.
     val remoteSshHost: String = "",
     val remoteSshUser: String = "",
@@ -215,6 +220,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             streamQuality = qualityFromPrefs(),
             streamSize = sizeFromPrefs(),
             logSessions = prefs.getString(KEY_LOG_SESSIONS, "3").orEmpty().ifBlank { "3" },
+            logControls = prefs.getBoolean(KEY_LOG_CONTROLS, false),
             editingOverlayFamily = OverlaySystemFamily.Standard,
             editingOverlayProfile = overlayProfiles[OverlaySystemFamily.Standard]
                 ?: OverlayProfile.DEFAULT,
@@ -282,6 +288,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private var ffWanted: Boolean? = null
     private var lastAvResyncAtMs: Long = 0L
     private var latestPad = ControllerState()
+    /** Last overlay/physical pad logged while [UiState.logControls] is on (dedupe spam). */
+    private var lastLoggedSourcePad: ControllerState? = null
     /** Held RemotedKey bits (desktop remoted keyboard subset). */
     private val remotedKeysHeld = AtomicInteger(0)
     /** Keyboard arrow keys merged into the pad as D-pad while playing. */
@@ -824,6 +832,9 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
      * 1. Soft keyboard dialog up → leave keys alone (Enter/Backspace type in the OSK).
      * 2. Play menu open → keys navigate/select/close the drawer only.
      * 3. Otherwise → Backspace opens menu; arrows = joypad D-pad; P/Space/Enter/… remoted.
+     *
+     * Events from a real [PhysicalGamepad] device are left to [onGamepadKeyEvent]
+     * (MainActivity routes those first).
      */
     fun onPlayKeyEvent(event: KeyEvent): Boolean {
         val snap = _state.value
@@ -838,6 +849,17 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             return false
         }
         if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_UP) {
+            return false
+        }
+        // Pad devices: only Backspace opens the menu from this path; face/D-pad stay on tracker.
+        if (PhysicalGamepad.isGameControllerDeviceId(event.deviceId)) {
+            if (menuDrawerOpen) return false
+            if (event.keyCode == KeyEvent.KEYCODE_DEL) {
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                    requestPlayMenu()
+                }
+                return true
+            }
             return false
         }
         val down = event.action == KeyEvent.ACTION_DOWN
@@ -864,6 +886,9 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         setRemotedKey(bit, down)
         return true
     }
+
+    fun isPhysicalGamepadDevice(deviceId: Int): Boolean =
+        PhysicalGamepad.isGameControllerDeviceId(deviceId)
 
     private fun handlePlayMenuKey(keyCode: Int, edge: Boolean): Boolean {
         if (isPlayMenuCloseKey(keyCode)) {
@@ -954,15 +979,21 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun setRemotedKey(bit: Int, down: Boolean) {
-        remotedKeysHeld.updateAndGet { cur ->
+        val next = remotedKeysHeld.updateAndGet { cur ->
             if (down) cur or bit else cur and bit.inv()
         }
+        logControl(
+            "keyboard remoted bit=0x${bit.toString(16)} down=$down held=0x${next.toString(16)}",
+        )
     }
 
     private fun setKeyboardDpad(mask: Int, down: Boolean) {
-        keyboardDpadBits.updateAndGet { cur ->
+        val next = keyboardDpadBits.updateAndGet { cur ->
             if (down) cur or mask else cur and mask.inv()
         }
+        logControl(
+            "keyboard dpad mask=0x${mask.toString(16)} down=$down held=0x${next.toString(16)}",
+        )
     }
 
     private fun clearRemotedKeys() {
@@ -981,11 +1012,23 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun onPhysicalPadState(state: ControllerState) {
-        if (!_state.value.physicalInputActive) return
-        if (menuDrawerOpen) return
+        if (!_state.value.physicalInputActive) {
+            logControl("physical pad ignored (physicalInputActive=false) ${formatPad(state)}")
+            return
+        }
+        if (menuDrawerOpen) {
+            logControl("physical pad ignored (menuDrawerOpen) ${formatPad(state)}")
+            return
+        }
         // Remaps come from the overlay Action editor; face swaps from the shared map profile.
         val map = mapProfileFor(sessionFamily)
-        latestPad = ControllerState.applyFaceButtonSwaps(state, map.swapNw, map.swapSe)
+        val swapped = ControllerState.applyFaceButtonSwaps(state, map.swapNw, map.swapSe)
+        latestPad = swapped
+        logControlPad(
+            "physical",
+            swapped,
+            "swapNw=${map.swapNw} swapSe=${map.swapSe}",
+        )
     }
 
     /** Overlay Action remap for a control kind (Custom layout); else the kind default. */
@@ -1696,6 +1739,35 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         prefs.edit().putString(KEY_LOG_SESSIONS, sessions).apply()
     }
 
+    fun setLogControls(enabled: Boolean) {
+        _state.update { it.copy(logControls = enabled) }
+        prefs.edit().putBoolean(KEY_LOG_CONTROLS, enabled).apply()
+        lastLoggedSourcePad = null
+        ClientFileLog.append(
+            if (enabled) "ctrl: logging enabled" else "ctrl: logging disabled",
+        )
+    }
+
+    /** Append a controls-debug line when Settings → Debug → Log controls is on. */
+    private fun logControl(message: String) {
+        if (!_state.value.logControls) return
+        ClientFileLog.append("ctrl: $message")
+    }
+
+    private fun formatPad(pad: ControllerState): String =
+        "buttons=0x${pad.buttons.toString(16)}" +
+            " sticks=${pad.leftX},${pad.leftY}/${pad.rightX},${pad.rightY}" +
+            " triggers=${pad.leftTrigger}/${pad.rightTrigger}"
+
+    private fun logControlPad(source: String, pad: ControllerState, extra: String = "") {
+        if (!_state.value.logControls) return
+        val prev = lastLoggedSourcePad
+        if (prev != null && pad.sameControlsAs(prev)) return
+        lastLoggedSourcePad = pad
+        val suffix = if (extra.isEmpty()) "" else " $extra"
+        ClientFileLog.append("ctrl: $source → ${formatPad(pad)}$suffix")
+    }
+
     fun sendLogsToHost() {
         if (_state.value.busy) return
         val host = _state.value.host.trim()
@@ -1794,6 +1866,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     /** Drawer open during play → pause (unless control editing relaxed it). */
     fun onPlayMenuOpened() {
         menuDrawerOpen = true
+        logControl("menuDrawerOpen=true (pads muted for UDP)")
         clearRemotedKeys()
         clearKeyboardDpad()
         menuHatUp = false
@@ -1806,6 +1879,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     /** Drawer closed → unpause (unless drawer re-opens before this applies). */
     fun onPlayMenuClosed() {
         menuDrawerOpen = false
+        logControl("menuDrawerOpen=false (pads unmuted)")
         menuHatUp = false
         menuHatDown = false
         clearRemotedKeys()
@@ -2244,9 +2318,28 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun onPadState(state: ControllerState) {
-        if (_state.value.physicalInputActive) return
         val snap = _state.value
-        latestPad = ControllerState.applyFaceButtonSwaps(state, snap.swapNw, snap.swapSe)
+        if (snap.physicalInputActive) {
+            if (state.buttons != 0 ||
+                state.leftTrigger != 0 ||
+                state.rightTrigger != 0 ||
+                state.leftX.toInt() != 0 ||
+                state.leftY.toInt() != 0
+            ) {
+                logControl(
+                    "overlay ignored (physicalInputActive) ${formatPad(state)} " +
+                        "pad=${snap.physicalPadLabel.ifBlank { "?" }}",
+                )
+            }
+            return
+        }
+        val swapped = ControllerState.applyFaceButtonSwaps(state, snap.swapNw, snap.swapSe)
+        latestPad = swapped
+        logControlPad(
+            "overlay",
+            swapped,
+            "swapNw=${snap.swapNw} swapSe=${snap.swapSe} menuOpen=$menuDrawerOpen",
+        )
     }
 
     /** Remoted DS stylus; coords are normalized 0..65535 within the bottom screen. */
@@ -2465,13 +2558,16 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private fun startInputLoop() {
         inputJob?.cancel()
         inputJob = viewModelScope.launch(Dispatchers.IO) {
-            // Match desktop: ~250 Hz keepalive so Wi‑Fi loss recovers within one tick.
-            // Triple-send on edges for lossy links.
+            // Poll often so short taps are not missed; only spam UDP on change.
+            // Idle keepalive ~25 Hz (desktop keeps ~250 Hz — fine on LAN PC, wasteful on phone).
             val pollMs = 4L
+            val keepaliveMs = 40L
             val changeCopies = 3
             var lastSent = ControllerState()
             var haveLast = false
+            var lastSendAtMs = 0L
             var lastSentKeys = -1
+            var lastKeysSendAtMs = 0L
             while (isActive) {
                 val active = session ?: break
                 // Drain stylus first so press+release in one poll both go out.
@@ -2486,19 +2582,34 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                     }
                 }
                 val pad = padForSend()
+                val now = System.currentTimeMillis()
                 val changed = !haveLast || !pad.sameControlsAs(lastSent)
-                // Always send each tick so a dropped button-down edge recovers quickly.
-                val copies = if (changed || !haveLast) changeCopies else 1
-                val sentOk = runCatching {
-                    active.sendControllerCopies(localPlayer = 0, state = pad, copies = copies)
-                }.onFailure { err ->
-                    ClientFileLog.append(
-                        "Input send failed: ${err.javaClass.simpleName}: ${err.message}",
-                    )
-                }.isSuccess
-                if (sentOk) {
-                    lastSent = pad
-                    haveLast = true
+                val dueKeepalive = haveLast && (now - lastSendAtMs) >= keepaliveMs
+                if (changed || dueKeepalive || !haveLast) {
+                    val copies = if (changed || !haveLast) changeCopies else 1
+                    if (changed || !haveLast) {
+                        logControl(
+                            "udp pad ${formatPad(pad)} copies=$copies " +
+                                "menuOpen=$menuDrawerOpen " +
+                                "kbDpad=0x${keyboardDpadBits.get().toString(16)} " +
+                                "physicalActive=${_state.value.physicalInputActive}",
+                        )
+                    }
+                    val sentOk = runCatching {
+                        active.sendControllerCopies(localPlayer = 0, state = pad, copies = copies)
+                    }.onFailure { err ->
+                        ClientFileLog.append(
+                            "Input send failed: ${err.javaClass.simpleName}: ${err.message}",
+                        )
+                    }.isSuccess
+                    // Only advance "last sent" on success so a failed edge is retried.
+                    if (sentOk) {
+                        lastSent = pad
+                        haveLast = true
+                        lastSendAtMs = now
+                    } else if (changed || !haveLast) {
+                        logControl("udp pad send FAILED ${formatPad(pad)}")
+                    }
                 }
                 val keys =
                     if (menuDrawerOpen || _state.value.softKeyboard != null) {
@@ -2507,21 +2618,25 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                         remotedKeysHeld.get()
                     }
                 val keysChanged = keys != lastSentKeys
-                val keysCopies = if (keysChanged || lastSentKeys < 0) changeCopies else 1
-                // Always refresh keys each tick (same recovery model as pads).
-                var keysOk = true
-                repeat(keysCopies) {
-                    val ok = runCatching {
+                val keysKeepalive = lastSentKeys >= 0 && (now - lastKeysSendAtMs) >= keepaliveMs
+                if (keysChanged || keysKeepalive || lastSentKeys < 0) {
+                    if (keysChanged || lastSentKeys < 0) {
+                        logControl(
+                            "udp keys=0x${keys.toString(16)} " +
+                                "menuOpen=$menuDrawerOpen osk=${_state.value.softKeyboard != null}",
+                        )
+                    }
+                    val keysOk = runCatching {
                         active.sendKeyboard(keys)
                     }.onFailure { err ->
                         ClientFileLog.append(
                             "Keyboard send failed: ${err.javaClass.simpleName}: ${err.message}",
                         )
                     }.isSuccess
-                    keysOk = keysOk && ok
-                }
-                if (keysOk) {
-                    lastSentKeys = keys
+                    if (keysOk) {
+                        lastSentKeys = keys
+                        lastKeysSendAtMs = now
+                    }
                 }
                 delay(pollMs)
             }
@@ -2770,6 +2885,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         private const val KEY_STREAM_SIZE = "stream_size"
         private const val KEY_DISCOVERY_SEEDS = "discovery_seeds"
         private const val KEY_LOG_SESSIONS = "log_sessions"
+        private const val KEY_LOG_CONTROLS = "log_controls"
         private const val KEY_USE_PHYSICAL = "use_physical_controller"
         private const val KEY_REMOTE_SSH_HOST = "remote_ssh_host"
         private const val KEY_REMOTE_SSH_USER = "remote_ssh_user"

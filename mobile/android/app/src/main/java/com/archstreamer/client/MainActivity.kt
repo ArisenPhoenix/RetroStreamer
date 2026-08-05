@@ -61,9 +61,13 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        // Play keyboard/UI first so BT keyboards mislabeled as joysticks still work.
+        // Real pads must hit the gamepad tracker before play-keyboard remotes, otherwise
+        // DPAD_* keys are stolen as "keyboard D-pad" and BUTTON_* never update latestPad
+        // when hasKeys filtering rejected the device.
+        val fromPad = viewModel.isPhysicalGamepadDevice(event.deviceId)
+        if (fromPad && viewModel.onGamepadKeyEvent(event)) return true
         if (viewModel.onPlayKeyEvent(event)) return true
-        if (viewModel.onGamepadKeyEvent(event)) return true
+        if (!fromPad && viewModel.onGamepadKeyEvent(event)) return true
         return super.dispatchKeyEvent(event)
     }
 

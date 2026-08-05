@@ -58,8 +58,8 @@ ArchStreamerPadBinding resolve_exclusive_archstreamer_pads(
     std::uint16_t product_id_base,
     std::vector<ArchStreamerSdlPad> fallback = {});
 
-// RetroArch `udev` joypad indices for ArchStreamer uinput pads (from /proc/bus/input/devices).
-// Prefer this over SDL indices when input_joypad_driver=udev — the two enumerations differ.
+// RetroArch `udev` joypad slot indices for ArchStreamer uinput pads.
+// Matches RetroArch vacant-slot order (joystick appearance in /proc), NOT kernel jsN.
 std::vector<std::size_t> find_archstreamer_udev_joypad_indices(
     std::size_t players,
     bool verbose = false,

@@ -76,8 +76,10 @@ PadPlan resolve_retroarch_slot_pad_plan(
     }
 
     // Hide sibling-session ArchStreamer pads (and physical pads) from SDL. RetroArch's
-    // udev driver still sees every /dev/input/js*, so joypad_index stays absolute —
-    // do not remap pads to 0..n-1 the way Ryujinx exclusive plans do.
+    // udev driver still opens every ID_INPUT_JOYSTICK event node and numbers them as
+    // vacant slots 0..n-1 in discovery order (not kernel jsN). joypad_index must be
+    // that discovery ordinal for this slot's VID/PID — do not remap to 0..n-1 the way
+    // Ryujinx exclusive plans do.
     plan.mode = PadPlanMode::Exclusive;
     plan.exclusive_filter = filter;
     plan.ignore_devices.clear();

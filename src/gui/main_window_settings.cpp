@@ -7,6 +7,7 @@
 #include "common/catalog_paths.hpp"
 #include "common/catalog_presenter.hpp"
 #include "common/addresses.hpp"
+#include "common/client_debug_log.hpp"
 #include "common/discovery.hpp"
 #include "common/game_assets.hpp"
 #include "common/platform/paths.hpp"
@@ -286,6 +287,19 @@ void MainWindow::load_persisted_settings() {
         settings_log_sessions_->setValue(
             qBound(settings.value("client/logSessions", 3).toInt(), 1, 20));
     }
+    if (logs_controls_ != nullptr) {
+        logs_controls_->setChecked(settings.value("client/logControls", false).toBool());
+    }
+    if (logs_connections_ != nullptr) {
+        logs_connections_->setChecked(settings.value("client/logConnections", false).toBool());
+    }
+    if (logs_video_ != nullptr) {
+        logs_video_->setChecked(settings.value("client/logVideo", false).toBool());
+    }
+    if (logs_audio_ != nullptr) {
+        logs_audio_->setChecked(settings.value("client/logAudio", false).toBool());
+    }
+    apply_debug_log_flags_from_ui();
 #ifdef ARCHSTREAMER_HAS_HOST
     if (settings_native_host_runner_ != nullptr) {
         const QSignalBlocker blocker(settings_native_host_runner_);
@@ -413,6 +427,21 @@ void MainWindow::load_persisted_settings() {
         qBound(settings.value("remote/trackedControlPort", 0).toInt(), 0, 65535);
     if (settings_update_repo_ != nullptr) {
         settings_update_repo_->setText(settings.value("update/repoRoot").toString());
+    }
+    if (settings_update_branch_ != nullptr) {
+        const auto branch = settings.value("update/branch", "master").toString().trimmed();
+        if (!branch.isEmpty()) {
+            const auto index = settings_update_branch_->findText(branch);
+            if (index >= 0) {
+                settings_update_branch_->setCurrentIndex(index);
+            } else {
+                settings_update_branch_->setEditText(branch);
+            }
+        }
+    }
+    // CLI --branch (session) wins over the persisted default when both are set.
+    if (!session_update_branch_.isEmpty()) {
+        apply_session_update_branch_to_ui();
     }
     if (client_role_ != nullptr) {
         const auto role = settings.value("client/role", "Player").toString();
@@ -568,6 +597,18 @@ void MainWindow::save_persisted_settings() {
     if (settings_log_sessions_ != nullptr) {
         settings.setValue("client/logSessions", settings_log_sessions_->value());
     }
+    if (logs_controls_ != nullptr) {
+        settings.setValue("client/logControls", logs_controls_->isChecked());
+    }
+    if (logs_connections_ != nullptr) {
+        settings.setValue("client/logConnections", logs_connections_->isChecked());
+    }
+    if (logs_video_ != nullptr) {
+        settings.setValue("client/logVideo", logs_video_->isChecked());
+    }
+    if (logs_audio_ != nullptr) {
+        settings.setValue("client/logAudio", logs_audio_->isChecked());
+    }
 #ifdef ARCHSTREAMER_HAS_HOST
     if (settings_native_host_runner_ != nullptr) {
         settings.setValue("host/nativeHostRunner", settings_native_host_runner_->text().trimmed());
@@ -649,6 +690,12 @@ void MainWindow::save_persisted_settings() {
     settings.setValue("remote/trackedControlPort", remote_tracked_control_port_);
     if (settings_update_repo_ != nullptr) {
         settings.setValue("update/repoRoot", settings_update_repo_->text().trimmed());
+    }
+    if (settings_update_branch_ != nullptr) {
+        const auto branch = settings_update_branch_->currentText().trimmed();
+        if (!branch.isEmpty()) {
+            settings.setValue("update/branch", branch);
+        }
     }
     if (client_role_ != nullptr) {
         settings.setValue("client/role", client_role_->currentText());
@@ -788,6 +835,51 @@ void MainWindow::restore_last_session_tab() {
 
 void MainWindow::apply_log_level_from_settings() {
     gui_log_level.store(static_cast<int>(current_log_level()));
+}
+
+void MainWindow::apply_debug_log_flags_from_ui() {
+    auto& flags = archstreamer::client_debug_log_flags();
+    const bool controls = logs_controls_ != nullptr && logs_controls_->isChecked();
+    const bool connections = logs_connections_ != nullptr && logs_connections_->isChecked();
+    const bool video = logs_video_ != nullptr && logs_video_->isChecked();
+    const bool audio = logs_audio_ != nullptr && logs_audio_->isChecked();
+
+    const bool controls_changed = flags.controls.load() != controls;
+    const bool connections_changed = flags.connections.load() != connections;
+    const bool video_changed = flags.video.load() != video;
+    const bool audio_changed = flags.audio.load() != audio;
+
+    flags.controls.store(controls);
+    flags.connections.store(connections);
+    flags.video.store(video);
+    flags.audio.store(audio);
+
+    if (!restoring_settings_) {
+        if (controls_changed) {
+            archstreamer::client_debug_log_note(
+                controls ? "ctrl: logging enabled" : "ctrl: logging disabled");
+            append_logs_tab(controls ? "Log controls enabled." : "Log controls disabled.");
+        }
+        if (connections_changed) {
+            archstreamer::client_debug_log_note(
+                connections ? "conn: logging enabled" : "conn: logging disabled");
+            append_logs_tab(connections ? "Log connections enabled." : "Log connections disabled.");
+        }
+        if (video_changed) {
+            archstreamer::client_debug_log_note(
+                video ? "video: logging enabled" : "video: logging disabled");
+            append_logs_tab(video ? "Log video enabled." : "Log video disabled.");
+        }
+        if (audio_changed) {
+            archstreamer::client_debug_log_note(
+                audio ? "audio: logging enabled" : "audio: logging disabled");
+            append_logs_tab(audio ? "Log audio enabled." : "Log audio disabled.");
+        }
+    }
+}
+
+void MainWindow::append_logs_tab(const QString& text, GuiLogLevel level) {
+    append_log(logs_log_ != nullptr ? logs_log_ : settings_log_, text, level);
 }
 
 GuiLogLevel MainWindow::current_log_level() const {

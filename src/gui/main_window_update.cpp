@@ -188,6 +188,45 @@ QString parse_check_field(const QString& output, const QString& key) {
     return {};
 }
 
+QString git_current_branch(const QString& repo) {
+    if (repo.isEmpty()) {
+        return {};
+    }
+    QProcess process;
+    process.setProgram(QStringLiteral("git"));
+    process.setArguments(
+        {QStringLiteral("-C"), repo, QStringLiteral("rev-parse"), QStringLiteral("--abbrev-ref"),
+         QStringLiteral("HEAD")});
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start();
+    if (!process.waitForFinished(5000) || process.exitCode() != 0) {
+        return {};
+    }
+    return QString::fromLocal8Bit(process.readAllStandardOutput()).trimmed();
+}
+
+bool confirm_branch_if_diverged(
+    QWidget* parent,
+    const QString& repo,
+    const QString& selected_branch) {
+    const auto current = git_current_branch(repo);
+    if (current.isEmpty() ||
+        current == QLatin1String("HEAD") ||
+        current.compare(selected_branch, Qt::CaseSensitive) == 0) {
+        return true;
+    }
+    const auto reply = QMessageBox::question(
+        parent,
+        QStringLiteral("Different update branch"),
+        QStringLiteral(
+            "This checkout is currently on \"%1\", but Updates is set to \"%2\".\n\n"
+            "Continue using origin/%2?")
+            .arg(current, selected_branch),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+    return reply == QMessageBox::Yes;
+}
+
 } // namespace
 
 QWidget* MainWindow::build_updates_group(QWidget* parent) {
@@ -219,8 +258,9 @@ QWidget* MainWindow::build_updates_group(QWidget* parent) {
     settings_update_branch_->addItems({QStringLiteral("master"), QStringLiteral("dev")});
     settings_update_branch_->setCurrentText(QStringLiteral("master"));
     settings_update_branch_->setToolTip(
-        "Branch to track for this session only (not saved).\n"
-        "Default is master. Launch with --branch <name> to override\n"
+        "Branch to pull/build for Updates.\n"
+        "The last value you enter is remembered for next launch.\n"
+        "Launch with --branch <name> to override for this session only\n"
         "(e.g. archstreamer_gui --branch dev).");
 
     settings_update_status_ = new QLabel(
@@ -244,6 +284,9 @@ QWidget* MainWindow::build_updates_group(QWidget* parent) {
     form->addRow(buttons);
 
     connect(settings_update_repo_, &QLineEdit::editingFinished, this, [this] {
+        persist_settings_if_idle();
+    });
+    connect(settings_update_branch_, &QComboBox::currentTextChanged, this, [this](const QString&) {
         persist_settings_if_idle();
     });
     connect(settings_update_check_, &QPushButton::clicked, this, [this] {
@@ -334,6 +377,14 @@ void MainWindow::check_for_updates() {
         settings_update_repo_->setText(repo);
     }
 
+    const auto branch = update_branch_name();
+    if (!confirm_branch_if_diverged(this, repo, branch)) {
+        set_update_status(
+            QStringLiteral("Update check cancelled (branch still \"%1\").")
+                .arg(git_current_branch(repo)));
+        return;
+    }
+
     const auto script = self_update_script_path(repo);
     const auto python = find_python_executable();
     if (python.isEmpty()) {
@@ -348,7 +399,7 @@ void MainWindow::check_for_updates() {
     if (settings_update_apply_ != nullptr) {
         settings_update_apply_->setEnabled(false);
     }
-    set_update_status(QStringLiteral("Checking origin/%1 …").arg(update_branch_name()));
+    set_update_status(QStringLiteral("Checking origin/%1 …").arg(branch));
 
     auto* process = new QProcess(this);
     process->setProgram(python);
@@ -361,7 +412,7 @@ void MainWindow::check_for_updates() {
     args << script
          << QStringLiteral("check")
          << QStringLiteral("--repo") << repo
-         << QStringLiteral("--branch") << update_branch_name();
+         << QStringLiteral("--branch") << branch;
     process->setArguments(args);
     process->setWorkingDirectory(repo);
     process->setProcessChannelMode(QProcess::MergedChannels);
@@ -470,6 +521,14 @@ void MainWindow::apply_updates() {
         return;
     }
 
+    const auto branch = update_branch_name();
+    if (!confirm_branch_if_diverged(this, repo, branch)) {
+        set_update_status(
+            QStringLiteral("Update cancelled (branch still \"%1\").")
+                .arg(git_current_branch(repo)));
+        return;
+    }
+
     // Keep each QStringLiteral contiguous: MSVC rejects #ifdef inside macro args
     // (QStringLiteral is a macro), which is the classic Windows build break here.
 #ifdef Q_OS_WIN
@@ -491,7 +550,7 @@ void MainWindow::apply_updates() {
     const auto reply = QMessageBox::question(
         this,
         QStringLiteral("Update ArchStreamer"),
-        prompt.arg(update_branch_name()),
+        prompt.arg(branch),
         QMessageBox::Yes | QMessageBox::No,
         QMessageBox::No);
     if (reply != QMessageBox::Yes) {
@@ -510,7 +569,7 @@ void MainWindow::apply_updates() {
     args << script
          << QStringLiteral("apply")
          << QStringLiteral("--repo") << repo
-         << QStringLiteral("--branch") << update_branch_name()
+         << QStringLiteral("--branch") << branch
          << QStringLiteral("--reset-hard")
          << QStringLiteral("--launch")
          << QStringLiteral("--wait-secs") << QStringLiteral("2");

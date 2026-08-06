@@ -1296,6 +1296,42 @@ private fun ControlsSection(state: UiState, viewModel: ClientViewModel) {
         TextButton(onClick = viewModel::resetOverlayProfile) {
             Text("Reset ${state.editingOverlayFamily.title} to defaults")
         }
+
+        HorizontalDivider()
+        Text("Controls sync", style = MaterialTheme.typography.titleMedium)
+        Text(
+            when {
+                !state.hasProfileUsername ->
+                    "Set a save-profile username first. “android” is never pushed or pulled."
+                !state.controlsSyncReady ->
+                    "Connect to a host with your password (or join a session) before syncing."
+                else ->
+                    "Pull or push this username's button maps and overlay profiles " +
+                        "(SQL pack under the host save profile). Manual only — " +
+                        "runtime remaps stay in memory after load."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedButton(
+                onClick = viewModel::pullControlsFromHost,
+                enabled = !state.busy && state.controlsSyncReady,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Pull from host")
+            }
+            Button(
+                onClick = viewModel::pushControlsToHost,
+                enabled = !state.busy && state.controlsSyncReady,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Push to host")
+            }
+        }
     }
 }
 
@@ -1414,42 +1450,6 @@ private fun GameOptionsSection(state: UiState, viewModel: ClientViewModel) {
                 },
                 style = MaterialTheme.typography.bodyMedium,
             )
-        }
-
-        HorizontalDivider()
-        Text("Controls sync", style = MaterialTheme.typography.titleMedium)
-        Text(
-            when {
-                !state.hasProfileUsername ->
-                    "Set a save-profile username first. “android” is never pushed or pulled."
-                !state.controlsSyncReady ->
-                    "Connect to a host with your password (or join a session) before syncing."
-                else ->
-                    "Pull or push this username's button maps and overlay profiles " +
-                        "(SQL pack under the host save profile). Manual only — " +
-                        "runtime remaps stay in memory after load."
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OutlinedButton(
-                onClick = viewModel::pullControlsFromHost,
-                enabled = !state.busy && state.controlsSyncReady,
-                modifier = Modifier.weight(1f),
-            ) {
-                Text("Pull from host")
-            }
-            Button(
-                onClick = viewModel::pushControlsToHost,
-                enabled = !state.busy && state.controlsSyncReady,
-                modifier = Modifier.weight(1f),
-            ) {
-                Text("Push to host")
-            }
         }
 
         HorizontalDivider()

@@ -17,6 +17,9 @@
 #include "client/audio_playback_device.hpp"
 #include "client/video_window_geometry.hpp"
 #include "common/controller_button_map.hpp"
+#include "common/controls_db_pack.hpp"
+#include "common/client_debug_log.hpp"
+#include "client/controls_sync.hpp"
 #include "archstreamer/runtime_cadence/cadence.hpp"
 #ifdef ARCHSTREAMER_HAS_HOST
 #include "host/user_controls_db.hpp"
@@ -91,6 +94,7 @@ MainWindow::MainWindow() {
     tabs_->addTab(build_controls_tab(), "Controls");
     tabs_->addTab(build_game_options_tab(), "Game Options");
     tabs_->addTab(build_profile_tab(), "Profile");
+    tabs_->addTab(build_logs_tab(), "Logs");
     tabs_->addTab(build_settings_tab(), "Settings");
     setCentralWidget(tabs_);
     load_persisted_settings();
@@ -643,6 +647,35 @@ QWidget* MainWindow::build_controls_tab() {
 
     root->addWidget(map_box);
 
+    auto* sync_box = new QGroupBox("Controls sync", page);
+    auto* sync_layout = new QVBoxLayout(sync_box);
+    controls_sync_status_ = new QLabel(
+        "Pull/Push the controller map for your Profile username to the host "
+        "(Client tab host + password). Connect is not required — this opens its own lobby session.",
+        sync_box);
+    controls_sync_status_->setWordWrap(true);
+    sync_layout->addWidget(controls_sync_status_);
+    auto* sync_row = new QWidget(sync_box);
+    auto* sync_buttons = new QHBoxLayout(sync_row);
+    sync_buttons->setContentsMargins(0, 0, 0, 0);
+    controls_sync_pull_ = new QPushButton("Pull from host", sync_row);
+    controls_sync_push_ = new QPushButton("Push to host", sync_row);
+    controls_sync_pull_->setToolTip(
+        "Download this username's controls.sqlite from the host save profile and apply locally.");
+    controls_sync_push_->setToolTip(
+        "Upload the local controller map (and any stored overlay profiles) to the host profile.");
+    sync_buttons->addWidget(controls_sync_pull_);
+    sync_buttons->addWidget(controls_sync_push_);
+    sync_buttons->addStretch(1);
+    sync_layout->addWidget(sync_row);
+    connect(controls_sync_pull_, &QPushButton::clicked, this, [this] {
+        pull_controls_from_host();
+    });
+    connect(controls_sync_push_, &QPushButton::clicked, this, [this] {
+        push_controls_to_host();
+    });
+    root->addWidget(sync_box);
+
     game_options_pad_osk_ = new QPushButton(QStringLiteral("Pad on-screen keyboard"), page);
     game_options_pad_osk_->setCheckable(true);
     game_options_pad_osk_->setToolTip(
@@ -1093,6 +1126,193 @@ void MainWindow::save_controller_map_document() {
     settings.setValue("client/swapFaceSe", standard.swap_se);
 }
 
+void MainWindow::set_controls_sync_status(const QString& text) {
+    if (controls_sync_status_ != nullptr) {
+        controls_sync_status_->setText(text);
+    }
+    append_log(client_log_, QStringLiteral("[controls] %1").arg(text));
+}
+
+void MainWindow::set_controls_sync_busy(bool busy) {
+    controls_sync_busy_ = busy;
+    if (controls_sync_pull_ != nullptr) {
+        controls_sync_pull_->setEnabled(!busy);
+    }
+    if (controls_sync_push_ != nullptr) {
+        controls_sync_push_->setEnabled(!busy);
+    }
+}
+
+void MainWindow::pull_controls_from_host() {
+    if (controls_sync_busy_) {
+        return;
+    }
+    if (client_host_ == nullptr || client_port_ == nullptr) {
+        set_controls_sync_status(QStringLiteral("Client tab is not available."));
+        return;
+    }
+    const auto username = profile_client_username();
+    if (username.empty()) {
+        set_controls_sync_status(QStringLiteral("Set a Profile username before pulling controls."));
+        return;
+    }
+    const auto host = client_host_->text().trimmed().toStdString();
+    if (host.empty()) {
+        set_controls_sync_status(QStringLiteral("Set the Client host address before pulling."));
+        return;
+    }
+    const auto password = client_password_ != nullptr
+        ? client_password_->text().toStdString()
+        : std::string{};
+    const auto port = static_cast<std::uint16_t>(client_port_->value());
+
+    set_controls_sync_busy(true);
+    set_controls_sync_status(QStringLiteral("Pulling controls…"));
+    std::thread([this, host, port, username, password] {
+        const auto result = archstreamer::pull_controls_db_from_host(host, port, username, password);
+        QMetaObject::invokeMethod(this, [this, result, username] {
+            if (!result.ok) {
+                set_controls_sync_status(
+                    QStringLiteral("Pull failed: %1").arg(QString::fromStdString(result.message)));
+                set_controls_sync_busy(false);
+                return;
+            }
+            if (!result.found) {
+                set_controls_sync_status(QString::fromStdString(result.message));
+                set_controls_sync_busy(false);
+                return;
+            }
+            std::string error;
+            auto rows = archstreamer::import_controls_db_pack(result.db_bytes, username, &error);
+            if (!rows.has_value()) {
+                set_controls_sync_status(
+                    QStringLiteral("Pull failed: %1")
+                        .arg(QString::fromStdString(error.empty() ? "invalid pack" : error)));
+                set_controls_sync_busy(false);
+                return;
+            }
+
+            auto store = archstreamer::cadence::make_runtime_store();
+            if (!store || !store->ensure_ready()) {
+                set_controls_sync_status(QStringLiteral("Pull failed: local controls store unavailable."));
+                set_controls_sync_busy(false);
+                return;
+            }
+            for (const auto& row : *rows) {
+                archstreamer::cadence::ControlsRecord controls;
+                controls.username = row.username;
+                controls.kind = row.kind;
+                controls.document_json = row.document_json;
+                controls.version = row.version;
+                controls.updated_at = row.updated_at;
+                (void)store->upsert_controls(controls);
+            }
+
+            // Refresh editor from the pulled button_map when present.
+            for (const auto& row : *rows) {
+                if (row.kind != archstreamer::kControlsDbPackKindButtonMap) {
+                    continue;
+                }
+                if (auto document = archstreamer::controller_map_document_from_json(row.document_json);
+                    document.has_value() && controller_map_prefs_) {
+                    for (std::size_t i = 0; i < archstreamer::ControllerMapFamilyCount; ++i) {
+                        const auto family = static_cast<archstreamer::ControllerMapFamily>(i);
+                        controller_map_prefs_->set_profile(family, document->profile(family));
+                    }
+                    sync_controller_map_editor_ui();
+                    save_controller_map_document();
+                }
+                break;
+            }
+
+            set_controls_sync_status(QString::fromStdString(result.message));
+            set_controls_sync_busy(false);
+        }, Qt::QueuedConnection);
+    }).detach();
+}
+
+void MainWindow::push_controls_to_host() {
+    if (controls_sync_busy_) {
+        return;
+    }
+    if (client_host_ == nullptr || client_port_ == nullptr) {
+        set_controls_sync_status(QStringLiteral("Client tab is not available."));
+        return;
+    }
+    const auto username = profile_client_username();
+    if (username.empty()) {
+        set_controls_sync_status(QStringLiteral("Set a Profile username before pushing controls."));
+        return;
+    }
+    const auto host = client_host_->text().trimmed().toStdString();
+    if (host.empty()) {
+        set_controls_sync_status(QStringLiteral("Set the Client host address before pushing."));
+        return;
+    }
+    const auto password = client_password_ != nullptr
+        ? client_password_->text().toStdString()
+        : std::string{};
+    const auto port = static_cast<std::uint16_t>(client_port_->value());
+
+    commit_controller_map_editor_ui();
+    save_controller_map_document();
+
+    std::vector<archstreamer::ControlsDbPackRow> rows;
+    auto store = archstreamer::cadence::make_runtime_store();
+    if (store && store->ensure_ready()) {
+        for (const auto& kind : {
+                 std::string(archstreamer::cadence::kControlsKindButtonMap),
+                 std::string(archstreamer::cadence::kControlsKindOverlayProfiles),
+             }) {
+            if (auto found = store->find_controls(username, kind); found.has_value()) {
+                archstreamer::ControlsDbPackRow row;
+                row.username = found->username;
+                row.kind = found->kind;
+                row.document_json = found->document_json;
+                row.version = found->version;
+                row.updated_at = found->updated_at;
+                rows.push_back(std::move(row));
+            }
+        }
+    }
+    if (rows.empty() && controller_map_prefs_) {
+        archstreamer::ControllerMapDocument document;
+        for (std::size_t i = 0; i < archstreamer::ControllerMapFamilyCount; ++i) {
+            const auto family = static_cast<archstreamer::ControllerMapFamily>(i);
+            document.profile(family) = controller_map_prefs_->profile(family);
+        }
+        archstreamer::ControlsDbPackRow row;
+        row.username = username;
+        row.kind = std::string(archstreamer::kControlsDbPackKindButtonMap);
+        row.document_json = archstreamer::controller_map_document_to_json(document);
+        row.version = archstreamer::ControllerMapDocumentVersion;
+        rows.push_back(std::move(row));
+    }
+
+    std::string error;
+    auto bytes = archstreamer::export_controls_db_pack(username, rows, &error);
+    if (bytes.empty()) {
+        set_controls_sync_status(
+            QStringLiteral("Push failed: %1")
+                .arg(QString::fromStdString(error.empty() ? "empty pack" : error)));
+        return;
+    }
+
+    set_controls_sync_busy(true);
+    set_controls_sync_status(QStringLiteral("Pushing controls…"));
+    std::thread([this, host, port, username, password, bytes = std::move(bytes)]() mutable {
+        const auto result =
+            archstreamer::push_controls_db_to_host(host, port, username, password, bytes);
+        QMetaObject::invokeMethod(this, [this, result] {
+            set_controls_sync_status(
+                result.ok
+                    ? QString::fromStdString(result.message)
+                    : QStringLiteral("Push failed: %1").arg(QString::fromStdString(result.message)));
+            set_controls_sync_busy(false);
+        }, Qt::QueuedConnection);
+    }).detach();
+}
+
 QWidget* MainWindow::build_profile_tab() {
     auto* page = new QWidget(this);
     auto* root = new QHBoxLayout(page);
@@ -1200,6 +1420,124 @@ QWidget* MainWindow::build_profile_tab() {
     return page;
 }
 
+QWidget* MainWindow::build_logs_tab() {
+    auto* page = new QWidget(this);
+    auto* root = new QHBoxLayout(page);
+
+    auto* form_box = new QGroupBox("Log handling", page);
+    auto* form = new QFormLayout(form_box);
+
+    settings_log_level_ = new QComboBox(form_box);
+    settings_log_level_->addItem("Quiet", static_cast<int>(GuiLogLevel::Quiet));
+    settings_log_level_->addItem("Normal", static_cast<int>(GuiLogLevel::Normal));
+    settings_log_level_->addItem("Verbose", static_cast<int>(GuiLogLevel::Verbose));
+    settings_log_level_->setCurrentIndex(1);
+    settings_log_level_->setToolTip(
+        "Quiet: errors and critical session events only.\n"
+        "Normal: ArchStreamer host/client activity (default).\n"
+        "Verbose: also logs RetroArch output and enables RetroArch --verbose.");
+    form->addRow("Log level", settings_log_level_);
+
+    settings_log_sessions_ = new QSpinBox(form_box);
+    settings_log_sessions_->setRange(1, 20);
+    settings_log_sessions_->setValue(3);
+    settings_log_sessions_->setSuffix(" sessions");
+    settings_log_sessions_->setToolTip(
+        "How many recent app sessions from gui.log to include when sending logs to the host.");
+    settings_send_logs_ = new QPushButton("Send logs to host", form_box);
+    settings_send_logs_->setToolTip(
+        "Opens a short control connection and uploads recent gui.log sessions "
+        "(plus gst video/audio tails when those checkboxes are on) for host-side inspection.");
+    form->addRow("Send log depth", settings_log_sessions_);
+    form->addRow("", settings_send_logs_);
+
+    auto* debug_box = new QGroupBox("Debug categories", page);
+    auto* debug_layout = new QVBoxLayout(debug_box);
+
+    auto add_debug_row = [debug_layout](
+                             QCheckBox*& checkbox,
+                             QWidget* parent,
+                             const QString& title,
+                             const QString& on_help,
+                             const QString& off_help) {
+        checkbox = new QCheckBox(title, parent);
+        checkbox->setChecked(false);
+        checkbox->setToolTip(off_help + "\n\nWhen on: " + on_help);
+        auto* help = new QLabel(off_help, parent);
+        help->setWordWrap(true);
+        help->setStyleSheet(QStringLiteral("color: palette(mid);"));
+        debug_layout->addWidget(checkbox);
+        debug_layout->addWidget(help);
+        QObject::connect(checkbox, &QCheckBox::toggled, help, [help, on_help, off_help](bool on) {
+            help->setText(on ? on_help : off_help);
+        });
+    };
+
+    add_debug_row(
+        logs_controls_,
+        debug_box,
+        "Log controls",
+        "On — pad, keyboard, and mapped control changes are written to gui.log "
+        "(lines prefixed ctrl:). Use Send logs to host after a play session.",
+        "Off — no per-control spam. Enable to diagnose dead buttons / keyboard vs pad merge.");
+    add_debug_row(
+        logs_connections_,
+        debug_box,
+        "Log connections",
+        "On — TCP connect/close and session lifecycle are written to gui.log "
+        "(lines prefixed conn:). Use Send logs to host after a play session.",
+        "Off — no connection lifecycle lines. Enable to diagnose drops, rebinds, and join ordering.");
+    add_debug_row(
+        logs_video_,
+        debug_box,
+        "Log video",
+        "On — per-heartbeat decode stats, cutovers, and stalls are written to gui.log "
+        "(lines prefixed video:). Send logs also attaches gst-video-receiver.log.",
+        "Off — no video decode spam. Enable when diagnosing freezes, black screens, or cutovers.");
+    add_debug_row(
+        logs_audio_,
+        debug_box,
+        "Log audio",
+        "On — audio restart / dead-receiver notes are written to gui.log "
+        "(lines prefixed audio:). Send logs also attaches gst-audio-receiver.log.",
+        "Off — no audio pipeline spam. Enable when diagnosing lip-sync or silent audio.");
+
+    connect(settings_log_level_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+        apply_log_level_from_settings();
+        persist_settings_if_idle();
+    });
+    connect(settings_log_sessions_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
+        persist_settings_if_idle();
+    });
+    connect(settings_send_logs_, &QPushButton::clicked, this, [this] {
+        send_client_logs_to_host();
+    });
+    const auto persist_flags = [this](bool) {
+        apply_debug_log_flags_from_ui();
+        persist_settings_if_idle();
+    };
+    connect(logs_controls_, &QCheckBox::toggled, this, persist_flags);
+    connect(logs_connections_, &QCheckBox::toggled, this, persist_flags);
+    connect(logs_video_, &QCheckBox::toggled, this, persist_flags);
+    connect(logs_audio_, &QCheckBox::toggled, this, persist_flags);
+
+    auto* left = new QVBoxLayout();
+    left->addWidget(form_box);
+    left->addWidget(debug_box);
+    left->addWidget(new QLabel(
+        "Debug categories write to the same gui.log used by Send logs.\n"
+        "Leave them off unless diagnosing a session — then enable, reproduce, and send.",
+        page));
+    left->addStretch();
+
+    logs_log_ = new QPlainTextEdit(page);
+    logs_log_->setObjectName(QStringLiteral("logsLog"));
+    logs_log_->setReadOnly(true);
+    root->addLayout(left, 1);
+    root->addWidget(logs_log_, 2);
+    return page;
+}
+
 QWidget* MainWindow::build_settings_tab() {
     auto* page = new QWidget(this);
     auto* root = new QHBoxLayout(page);
@@ -1280,16 +1618,6 @@ QWidget* MainWindow::build_settings_tab() {
         "How long the host waits for remote clients to join before giving up.\n"
         "Increase this when testing LAN connections between machines.");
 
-    settings_log_level_ = new QComboBox(form_box);
-    settings_log_level_->addItem("Quiet", static_cast<int>(GuiLogLevel::Quiet));
-    settings_log_level_->addItem("Normal", static_cast<int>(GuiLogLevel::Normal));
-    settings_log_level_->addItem("Verbose", static_cast<int>(GuiLogLevel::Verbose));
-    settings_log_level_->setCurrentIndex(1);
-    settings_log_level_->setToolTip(
-        "Quiet: errors and critical session events only.\n"
-        "Normal: ArchStreamer host/client activity (default).\n"
-        "Verbose: also logs RetroArch output and enables RetroArch --verbose.");
-
     settings_show_framecount_ = new QCheckBox(
         "Show host Frames counter (debug)",
         form_box);
@@ -1300,7 +1628,6 @@ QWidget* MainWindow::build_settings_tab() {
         "Useful when diagnosing stuck static menus on GL/Xvfb capture.");
 
     form->addRow("Host lobby wait", settings_session_timeout_);
-    form->addRow("Log level", settings_log_level_);
     form->addRow("", settings_show_framecount_);
 
 #ifdef ARCHSTREAMER_HAS_HOST
@@ -1314,18 +1641,6 @@ QWidget* MainWindow::build_settings_tab() {
         persist_settings_if_idle();
     });
 #endif
-
-    settings_log_sessions_ = new QSpinBox(form_box);
-    settings_log_sessions_->setRange(1, 20);
-    settings_log_sessions_->setValue(3);
-    settings_log_sessions_->setSuffix(" sessions");
-    settings_log_sessions_->setToolTip(
-        "How many recent app sessions from gui.log to include when sending logs to the host.");
-    settings_send_logs_ = new QPushButton("Send logs to host", form_box);
-    settings_send_logs_->setToolTip(
-        "Opens a short control connection and uploads recent gui.log sessions for host-side inspection.");
-    form->addRow("Send log depth", settings_log_sessions_);
-    form->addRow("", settings_send_logs_);
 
     connect(settings_art_root_, &QLineEdit::editingFinished, this, [this] {
         apply_art_root_to_pickers();
@@ -1365,21 +1680,11 @@ QWidget* MainWindow::build_settings_tab() {
     connect(settings_session_timeout_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
         persist_settings_if_idle();
     });
-    connect(settings_log_level_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
-        apply_log_level_from_settings();
-        persist_settings_if_idle();
-    });
     connect(settings_show_framecount_, &QCheckBox::toggled, this, [this](bool checked) {
         if (heartbeat_prefs_) {
             heartbeat_prefs_->set_show_framecount(checked);
         }
         persist_settings_if_idle();
-    });
-    connect(settings_log_sessions_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
-        persist_settings_if_idle();
-    });
-    connect(settings_send_logs_, &QPushButton::clicked, this, [this] {
-        send_client_logs_to_host();
     });
     connect(settings_audio_out_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
         apply_audio_output_from_settings();
@@ -1403,13 +1708,13 @@ QWidget* MainWindow::build_settings_tab() {
         "Clients cache host art under ~/.cache/archstreamer/hosts/<host>/Art.\n"
         "Steam account ID is on the Profile tab.\n"
         "Stream quality, capture, and GPU options live on the Stream tab.\n"
-        "Log level Verbose is required to see RetroArch console output.",
+        "Log level and Send logs live on the Logs tab.",
 #else
         "Art root is used for local Steam import when available.\n"
         "Clients cache host art under the ArchStreamer cache directory.\n"
         "Steam account ID is on the Profile tab.\n"
         "Stream quality options live on the Stream tab.\n"
-        "Log level Verbose includes extra client diagnostics.",
+        "Log level and Send logs live on the Logs tab.",
 #endif
         page));
     left->addWidget(build_updates_group(page));

@@ -7,6 +7,7 @@
 #include "client/session_service.hpp"
 #include "client/video_window_geometry.hpp"
 #include "common/addresses.hpp"
+#include "common/client_debug_log.hpp"
 #include "common/link_capability.hpp"
 #include "common/platform/default_platform.hpp"
 #include "common/serialization.hpp"
@@ -17,6 +18,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
@@ -45,6 +47,15 @@ bool same_controls(const ControllerState& a, const ControllerState& b) {
         a.right_y == b.right_y &&
         a.left_trigger == b.left_trigger &&
         a.right_trigger == b.right_trigger;
+}
+
+std::string format_pad_state(const ControllerState& pad) {
+    std::ostringstream out;
+    out << "buttons=0x" << std::hex << pad.buttons << std::dec
+        << " sticks=" << pad.left_x << ',' << pad.left_y
+        << '/' << pad.right_x << ',' << pad.right_y
+        << " triggers=" << pad.left_trigger << '/' << pad.right_trigger;
+    return out.str();
 }
 
 bool handle_control_message(TcpStream& stream, const ClientAppCallbacks& callbacks, ClientRunResult& result) {
@@ -535,6 +546,11 @@ ClientRunResult ClientApp::join_session(
                             map_extras);
                         any_ff_held = any_ff_held || map_extras.fast_forward_held;
                         any_screen_swap = any_screen_swap || map_extras.screen_swap_edge;
+                        if (changed) {
+                            client_debug_log_ctrl(
+                                "pad P" + std::to_string(player + 1) + " → " +
+                                format_pad_state(mapped));
+                        }
                         for (int copy = 0; copy < copies; ++copy) {
                             auto sample = mapped;
                             // Distinct timestamps so host ordering accepts each UDP copy.
@@ -580,6 +596,11 @@ ClientRunResult ClientApp::join_session(
 
                         const bool changed = !have_last_keys || !same_keys(last_keys, wire);
                         const int copies = changed ? kChangeCopies : 1;
+                        if (changed) {
+                            std::ostringstream hex;
+                            hex << std::hex << wire.keys;
+                            client_debug_log_ctrl("keyboard keys=0x" + hex.str());
+                        }
                         for (int copy = 0; copy < copies; ++copy) {
                             auto sample = wire;
                             sample.timestamp_us =
@@ -644,10 +665,12 @@ ClientRunResult ClientApp::join_session(
         }
         if (const auto pending = video_cutover->take_pending(); pending.has_value()) {
             if (media_receiver.begin_video_pending(*pending)) {
+                client_debug_log_video("staging cutover uri=" + *pending);
                 if (session_callbacks.on_status) {
                     session_callbacks.on_status("Warming staged video quality…");
                 }
             } else if (session_callbacks.on_status) {
+                client_debug_log_video("staging cutover failed to open");
                 session_callbacks.on_status("Failed to open staged video path.");
             }
         }
@@ -673,10 +696,12 @@ ClientRunResult ClientApp::join_session(
             result.media_endpoint->video_uri != attempted_video_switch) {
             attempted_video_switch = result.media_endpoint->video_uri;
             if (media_receiver.switch_video(attempted_video_switch)) {
+                client_debug_log_video("promoted staged uri=" + attempted_video_switch);
                 if (session_callbacks.on_status) {
                     session_callbacks.on_status("Promoted staged video quality.");
                 }
             } else if (session_callbacks.on_status) {
+                client_debug_log_video("promote staged failed uri=" + attempted_video_switch);
                 session_callbacks.on_status("Failed to promote staged video quality.");
             }
         }
@@ -730,6 +755,7 @@ ClientRunResult ClientApp::join_session(
         }
         if (joined_session.stream.peer_closed()) {
             result.host_disconnected = true;
+            client_debug_log_conn("host disconnected (control socket closed)");
             if (callbacks.on_host_disconnected) {
                 callbacks.on_host_disconnected();
             }
@@ -783,6 +809,7 @@ ClientRunResult ClientApp::join_session(
                 zero_frame_streak = 0;
                 audio_realign_after_video_stall = false;
                 last_decoded_frames = media_receiver.decoded_frame_count();
+                client_debug_log_audio("manual / requested realign to video");
                 if (callbacks.on_status) {
                     callbacks.on_status("Realigned audio to video.");
                 }
@@ -840,6 +867,8 @@ ClientRunResult ClientApp::join_session(
                             if (media_receiver.resync_audio()) {
                                 next_resync_allowed = now + std::chrono::seconds(15);
                                 last_decoded_frames = media_receiver.decoded_frame_count();
+                                client_debug_log_audio(
+                                    "restarted after video stall (lip-sync realign)");
                                 if (callbacks.on_status) {
                                     callbacks.on_status(
                                         "Video recovered; restarted audio to match (lip-sync).");
@@ -849,6 +878,18 @@ ClientRunResult ClientApp::join_session(
                         zero_frame_streak = 0;
                         audio_realign_after_video_stall = false;
                     }
+                }
+                client_debug_log_video(
+                    "heartbeat frames_delta=" + std::to_string(frames_delta) +
+                    " decoded=" + std::to_string(last_decoded_frames) +
+                    " zero_streak=" + std::to_string(zero_frame_streak) +
+                    " video_running=" +
+                    std::string(media_receiver.video_running() ? "1" : "0") +
+                    " audio_running=" +
+                    std::string(media_receiver.audio_running() ? "1" : "0"));
+                if (client_debug_log_flags().audio.load(std::memory_order_relaxed) &&
+                    !media_receiver.audio_running()) {
+                    client_debug_log_audio("receiver not running");
                 }
             }
             auto wanted_tier = config.wanted_tier;

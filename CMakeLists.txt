@@ -108,6 +108,7 @@ set(ARCHSTREAMER_CORE_SOURCES
     src/common/art_transfer.cpp
     src/common/catalog_presenter.cpp
     src/common/cli_common.cpp
+    src/common/client_debug_log.cpp
     src/common/client_logs.cpp
     src/common/controller_button_map.cpp
     src/common/controller_normalization.cpp
@@ -216,6 +217,7 @@ add_library(archstreamer_client
     src/client/client_app.cpp
     src/client/client_media_playback.cpp
     src/client/controller_manager.cpp
+    src/client/controls_sync.cpp
     src/client/game_filter.cpp
     src/client/gstreamer_probe.cpp
     src/client/audio_playback_device.cpp
@@ -228,6 +230,7 @@ add_library(archstreamer_client
     src/client/remoted_keyboard_source.cpp
     src/client/session_client.cpp
     src/client/session_service.cpp
+    src/common/controls_db_pack.cpp
 )
 if(ARCHSTREAMER_HAS_GST_LIBS)
     target_compile_definitions(archstreamer_client PUBLIC ARCHSTREAMER_HAS_GST_LIBS=1)
@@ -255,6 +258,9 @@ target_link_libraries(archstreamer_client
     PUBLIC
         archstreamer_controller
 )
+if(ARCHSTREAMER_SQLITE_TARGET)
+    target_link_libraries(archstreamer_client PRIVATE ${ARCHSTREAMER_SQLITE_TARGET})
+endif()
 
 set(ARCHSTREAMER_INSTALL_TARGETS
     session_client

@@ -2,6 +2,7 @@
 
 #include "client/catalog_cache.hpp"
 #include "common/art_transfer.hpp"
+#include "common/client_debug_log.hpp"
 #include "common/serialization.hpp"
 
 #include <stdexcept>
@@ -57,7 +58,11 @@ ClientSessionService::ClientSessionService(
 }
 
 PendingSession ClientSessionService::begin() const {
+    client_debug_log_conn(
+        "TCP connect begin " + host_ + ":" + std::to_string(control_port_));
     auto stream = TcpStream::connect_to(host_, control_port_);
+    client_debug_log_conn(
+        "TCP connected " + host_ + ":" + std::to_string(control_port_));
     SessionClient session;
     auto cached_game_list = load_catalog_cache(catalog_cache_path_);
     stream.send_packet(serialize_packet(session.make_game_list_request(cached_game_list.catalog_revision)));
@@ -87,7 +92,11 @@ PendingSession ClientSessionService::begin() const {
 }
 
 ActiveSessionInfo ClientSessionService::active_session_info() const {
+    client_debug_log_conn(
+        "TCP connect begin (ActiveSessionInfo) " + host_ + ":" +
+        std::to_string(control_port_));
     auto stream = TcpStream::connect_to(host_, control_port_);
+    client_debug_log_conn("TCP connected (ActiveSessionInfo)");
     stream.send_packet(serialize_packet(ActiveSessionInfoRequest{}));
 
     const auto payload = receive_client_control_payload(stream);

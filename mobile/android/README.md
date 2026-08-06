@@ -25,7 +25,7 @@ Open **this folder** (`mobile/android`) in Android Studio — not the C++ repo r
   (`databases/archstreamer_cadence.sqlite`, `user_controls` kinds
   `button_map` / `overlay_profiles`). SharedPreferences caches overlays after load.
   First launch imports legacy `controller_button_map.json` and prefs overlays into SQL.
-- Manual **Pull from host** / **Push to host** (Game Options) exchanges a binary
+- Manual **Pull from host** / **Push to host** (Controls tab) exchanges a binary
   `controls.sqlite` pack over TCP (`ControlsDbPull`/`Push`). Requires an authenticated
   connection (LobbyPresence or live session) and a real save-profile username — the
   local “android” placeholder is never transported. On the host the file lives at
@@ -35,16 +35,20 @@ Open **this folder** (`mobile/android`) in Android Studio — not the C++ repo r
 
 ## Smoke: remaps survive process death
 
-1. Connect, open Game Options, change a button remap, leave the screen.
+1. Connect, open Controls, change a button remap / overlay, leave the screen.
 2. Force-stop the app (or kill process); relaunch.
 3. Remaps should match. Confirm with:
+...
+2. Controls → **Push to host**, then change a remap/overlay on another device and
+   **Pull from host** (or the reverse).
+
    `adb shell run-as com.archstreamer.client ls databases/`
    (expect `archstreamer_cadence.sqlite`; JSON file may remain as a one-shot backup).
 
 ## Smoke: host controls sync
 
 1. Sign in with a save-profile username (e.g. `alina`), connect catalog (or play).
-2. Game Options → **Push to host**, then change a remap/overlay on another device and
+2. Controls → **Push to host**, then change a remap/overlay on another device and
    **Pull from host** (or the reverse).
 3. Host file: `~/.local/share/archstreamer/saves/<user>/controls.sqlite`.
 

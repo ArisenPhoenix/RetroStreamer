@@ -52,7 +52,8 @@ public:
     ~MainWindow() override;
 
     void apply_debug_profile(const QString& profile);
-    /** Session-only update branch (CLI --branch). Not written to QSettings. */
+    /** CLI --branch override for this process. Persisted branch still loads first;
+     *  this wins when set (see load_persisted_settings). */
     void set_session_update_branch(const QString& branch);
 
 #ifdef ARCHSTREAMER_HAS_HOST
@@ -70,7 +71,10 @@ private:
     QWidget* build_controls_tab();
     QWidget* build_game_options_tab();
     QWidget* build_profile_tab();
+    QWidget* build_logs_tab();
     QWidget* build_settings_tab();
+    void apply_debug_log_flags_from_ui();
+    void append_logs_tab(const QString& text, GuiLogLevel level = GuiLogLevel::Normal);
     QWidget* build_updates_group(QWidget* parent);
     void check_for_updates();
     void apply_updates();
@@ -89,6 +93,10 @@ private:
     std::filesystem::path controller_map_file_path() const;
     void load_controller_map_document();
     void save_controller_map_document();
+    void pull_controls_from_host();
+    void push_controls_to_host();
+    void set_controls_sync_status(const QString& text);
+    void set_controls_sync_busy(bool busy);
 
     void refresh_client_controllers();
 #ifdef ARCHSTREAMER_HAS_HOST
@@ -282,6 +290,10 @@ private:
     QComboBox* game_options_remap_l3_ = nullptr;
     QComboBox* game_options_remap_r3_ = nullptr;
     QPushButton* game_options_pad_osk_ = nullptr;
+    QLabel* controls_sync_status_ = nullptr;
+    QPushButton* controls_sync_pull_ = nullptr;
+    QPushButton* controls_sync_push_ = nullptr;
+    bool controls_sync_busy_ = false;
     QLabel* game_options_status_ = nullptr;
     QComboBox* game_options_disc_ = nullptr;
     QPushButton* game_options_swap_ = nullptr;
@@ -359,6 +371,11 @@ private:
     QComboBox* settings_log_level_ = nullptr;
     QSpinBox* settings_log_sessions_ = nullptr;
     QPushButton* settings_send_logs_ = nullptr;
+    QCheckBox* logs_controls_ = nullptr;
+    QCheckBox* logs_connections_ = nullptr;
+    QCheckBox* logs_video_ = nullptr;
+    QCheckBox* logs_audio_ = nullptr;
+    QPlainTextEdit* logs_log_ = nullptr;
     QCheckBox* settings_show_framecount_ = nullptr;
     QLineEdit* settings_update_repo_ = nullptr;
     QComboBox* settings_update_branch_ = nullptr;

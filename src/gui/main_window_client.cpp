@@ -8,6 +8,7 @@
 #include "common/catalog_paths.hpp"
 #include "common/catalog_presenter.hpp"
 #include "common/addresses.hpp"
+#include "common/client_debug_log.hpp"
 #include "common/client_logs.hpp"
 #include "common/discovery.hpp"
 #include "common/game_assets.hpp"
@@ -18,6 +19,7 @@
 #include "client/client_media_playback.hpp"
 #include "client/game_filter.hpp"
 #include "client/audio_playback_device.hpp"
+#include "client/gstreamer_media_pipeline.hpp"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -731,7 +733,9 @@ void MainWindow::stop_client_connect() {
 }
 
 void MainWindow::send_client_logs_to_host() {
-    auto* log = settings_log_ != nullptr ? settings_log_ : client_log_;
+    auto* log = logs_log_ != nullptr
+        ? logs_log_
+        : (settings_log_ != nullptr ? settings_log_ : client_log_);
     if (client_host_ == nullptr || client_port_ == nullptr) {
         append_log(log, "Send logs: host/port fields missing.", GuiLogLevel::Quiet);
         return;
@@ -744,10 +748,32 @@ void MainWindow::send_client_logs_to_host() {
     const auto sessions = settings_log_sessions_ != nullptr
         ? static_cast<std::uint32_t>(settings_log_sessions_->value())
         : 3u;
-    const auto text = archstreamer::extract_last_log_sessions_from_file(
+    auto text = archstreamer::extract_last_log_sessions_from_file(
         gui_log_path(),
         archstreamer::GuiLogSessionMarker,
         sessions);
+    if (logs_video_ != nullptr && logs_video_->isChecked()) {
+        const auto video_tail = archstreamer::read_log_file_tail(
+            archstreamer::gst_video_receiver_log_path());
+        if (!video_tail.empty()) {
+            text += "\n\n=== gst-video-receiver.log ===\n";
+            text += video_tail;
+        }
+        const auto synced_tail = archstreamer::read_log_file_tail(
+            archstreamer::gst_synced_receiver_log_path());
+        if (!synced_tail.empty()) {
+            text += "\n\n=== gst-synced-media-receiver.log ===\n";
+            text += synced_tail;
+        }
+    }
+    if (logs_audio_ != nullptr && logs_audio_->isChecked()) {
+        const auto audio_tail = archstreamer::read_log_file_tail(
+            archstreamer::gst_audio_receiver_log_path());
+        if (!audio_tail.empty()) {
+            text += "\n\n=== gst-audio-receiver.log ===\n";
+            text += audio_tail;
+        }
+    }
     if (text.empty()) {
         append_log(log, "Send logs: gui.log is empty or unreadable.", GuiLogLevel::Quiet);
         return;

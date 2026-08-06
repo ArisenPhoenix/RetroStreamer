@@ -22,6 +22,7 @@ if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
 from scriptutil import (  # noqa: E402
+    cmake_cache_generator,
     default_vcpkg_root,
     ensure_msvc_on_path,
     eprint,
@@ -30,6 +31,7 @@ from scriptutil import (  # noqa: E402
     require_windows,
     run,
     which,
+    windows_vs_cmake_generator,
 )
 
 
@@ -64,6 +66,11 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Parallel build jobs (default: CPU count, min 2)",
     )
+    p.add_argument(
+        "--ninja",
+        action="store_true",
+        help="Prefer Ninja when MSVC env is available (default: Visual Studio generator)",
+    )
     return p.parse_args()
 
 
@@ -93,31 +100,44 @@ def main() -> int:
         shutil.rmtree(build_dir)
 
     host_flag = "ON" if args.build_host else "OFF"
-    needs_configure = args.reconfigure or args.clean or not cache.is_file()
 
-    # Ninja needs cl.exe on PATH. Developer PowerShell has it; GUI update often doesn't.
+    # Ninja needs a full MSVC env. GUI / normal shells usually don't have it — the
+    # Visual Studio generator does not need cl.exe on PATH (matches older working builds).
     msvc_ready = ensure_msvc_on_path()
-    if not msvc_ready:
-        eprint(
-            "No C++ compiler on PATH (cl.exe). Install \"Desktop development with C++\" "
-            "(Visual Studio or Build Tools), then retry."
+    existing_gen = cmake_cache_generator(cache)
+    if (
+        existing_gen.lower() == "ninja"
+        and not msvc_ready
+        and build_dir.is_dir()
+        and not args.clean
+    ):
+        print(
+            "Existing build/ is a Ninja tree but cl.exe is unavailable; "
+            "cleaning so CMake can use the Visual Studio generator."
         )
+        shutil.rmtree(build_dir)
+        existing_gen = ""
 
+    needs_configure = args.reconfigure or args.clean or not cache.is_file()
     if needs_configure:
         print(f"Configuring CMake (ARCHSTREAMER_BUILD_HOST={host_flag})...")
         require_cmd("cmake")
         cmake_cmd: list[str | Path] = ["cmake", "-S", root, "-B", build_dir]
         fresh_tree = args.clean or not cache.is_file()
-        if fresh_tree and which("ninja") and msvc_ready:
+        prefer_ninja = args.ninja or os.environ.get("ARCHSTREAMER_WINDOWS_NINJA", "").strip() in {
+            "1",
+            "true",
+            "yes",
+        }
+        if fresh_tree and prefer_ninja and which("ninja") and msvc_ready:
             cmake_cmd.extend(["-G", "Ninja", f"-DCMAKE_BUILD_TYPE={args.config}"])
             print("Using Ninja generator.")
-        elif fresh_tree and which("ninja") and not msvc_ready:
-            print(
-                "Ninja is installed but MSVC is not on PATH; "
-                "using Visual Studio generator instead."
-            )
         elif fresh_tree:
-            print("Ninja not found; using CMake's default generator (often Visual Studio).")
+            vs_args = windows_vs_cmake_generator()
+            cmake_cmd.extend(vs_args)
+            print(f"Using {vs_args[1]} (-A x64).")
+            if which("ninja") and not prefer_ninja:
+                print("Tip: pass --ninja (with MSVC env) for faster incremental builds.")
         else:
             print("Reconfigure: keeping existing generator from build cache.")
         cmake_cmd.extend(
@@ -130,13 +150,6 @@ def main() -> int:
     else:
         print(f"Reusing existing build cache ({cache}).")
         print("Pass --reconfigure to refresh cmake options, or --clean for a full rebuild.")
-        if which("ninja") and not msvc_ready and cache.is_file():
-            # Existing Ninja trees still need cl at build time.
-            eprint(
-                "Build cache looks like a Ninja tree but cl.exe is unavailable. "
-                "Re-run with --clean so CMake can use the Visual Studio generator, "
-                "or open \"x64 Native Tools Command Prompt for VS\" and rebuild."
-            )
 
     jobs = args.jobs
     if jobs <= 0:

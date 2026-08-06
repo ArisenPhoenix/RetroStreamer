@@ -124,11 +124,10 @@ def _vswhere_path() -> Path | None:
     return candidate if candidate.is_file() else None
 
 
-def find_vcvars64() -> Path | None:
-    """Locate vcvars64.bat via vswhere (VS Build Tools / Visual Studio with C++)."""
+def _vswhere_query(*extra: str) -> str:
     vswhere = _vswhere_path()
     if vswhere is None:
-        return None
+        return ""
     result = subprocess.run(
         [
             str(vswhere),
@@ -137,51 +136,130 @@ def find_vcvars64() -> Path | None:
             "*",
             "-requires",
             "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-            "-property",
-            "installationPath",
+            *extra,
         ],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
-    install = (result.stdout or "").strip()
+    return (result.stdout or "").strip()
+
+
+def find_vcvars64() -> Path | None:
+    """Locate vcvars64.bat via vswhere (VS Build Tools / Visual Studio with C++)."""
+    install = _vswhere_query("-property", "installationPath")
     if not install:
         return None
     bat = Path(install) / "VC" / "Auxiliary" / "Build" / "vcvars64.bat"
     return bat if bat.is_file() else None
 
 
+def find_msvc_cl() -> Path | None:
+    """Locate Hostx64\\x64\\cl.exe via vswhere -find (does not require Dev Shell)."""
+    raw = _vswhere_query("-find", r"VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe")
+    paths = [Path(line.strip()) for line in raw.splitlines() if line.strip()]
+    paths = [p for p in paths if p.is_file()]
+    if not paths:
+        return None
+    # Newest MSVC toolset first (path sorts by version string reasonably).
+    paths.sort(key=lambda p: p.as_posix(), reverse=True)
+    return paths[0]
+
+
+def windows_vs_cmake_generator() -> list[str]:
+    """Explicit VS generator args so cmake does not need cl.exe on PATH."""
+    line = _vswhere_query("-property", "catalog_productLineVersion")
+    # catalog_productLineVersion is like "2022" / "2019".
+    mapping = {
+        "2022": "Visual Studio 17 2022",
+        "2019": "Visual Studio 16 2019",
+        "2017": "Visual Studio 15 2017",
+    }
+    name = mapping.get(line.strip(), "Visual Studio 17 2022")
+    return ["-G", name, "-A", "x64"]
+
+
+def _decode_cmd_output(data: bytes | str) -> str:
+    if isinstance(data, str):
+        return data
+    for enc in ("mbcs", "oem", "utf-8"):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
+def _apply_vcvars_env(vcvars: Path) -> bool:
+    """Run vcvars64.bat and merge its environment into os.environ."""
+    # cmd.exe needs this quote pattern for bat paths that contain spaces.
+    command = f'"{vcvars}" && set'
+    result = subprocess.run(
+        ["cmd.exe", "/c", command],
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        err = _decode_cmd_output(result.stderr or result.stdout or b"vcvars64.bat failed")
+        eprint(err.strip())
+        return False
+    text = _decode_cmd_output(result.stdout or b"")
+    applied = 0
+    for line in text.splitlines():
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        if not key or key.startswith("!") or key.lower() in {"pwd", "cd"}:
+            continue
+        os.environ[key] = value
+        applied += 1
+    return applied > 0 and bool(which("cl") or which("clang-cl"))
+
+
 def ensure_msvc_on_path() -> bool:
-    """Ensure cl.exe is on PATH for Ninja builds (loads vcvars64 when needed).
+    """Ensure cl.exe (+ SDK env) is available for Ninja builds.
 
     GUI self-update and normal PowerShell often lack the VS Developer environment.
-    Returns True if a C++ compiler is available afterward.
     """
     if which("cl") or which("clang-cl"):
         return True
     if sys.platform != "win32":
         return False
+
+    # Prefer full vcvars (sets INCLUDE/LIB/PATH). Fall back to putting cl on PATH.
     vcvars = find_vcvars64()
-    if vcvars is None:
-        return False
-    # Import the environment vcvars64 would set for this process.
-    result = subprocess.run(
-        ["cmd.exe", "/d", "/s", "/c", f'call "{vcvars}" >nul && set'],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        eprint((result.stderr or result.stdout or "vcvars64.bat failed").strip())
-        return False
-    for line in (result.stdout or "").splitlines():
-        if "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        if not key or key.startswith("!"):
-            continue
-        os.environ[key] = value
-    return bool(which("cl") or which("clang-cl"))
+    if vcvars is not None and _apply_vcvars_env(vcvars):
+        return True
+
+    cl = find_msvc_cl()
+    if cl is not None:
+        cl_dir = str(cl.parent)
+        path = os.environ.get("PATH", "")
+        if cl_dir.lower() not in path.lower():
+            os.environ["PATH"] = cl_dir + os.pathsep + path
+        if which("cl"):
+            eprint(
+                f"Found cl.exe at {cl} but full VS env (vcvars) did not load; "
+                "Ninja builds may still fail — prefer the Visual Studio CMake generator."
+            )
+            return True
+    return False
+
+
+def cmake_cache_generator(cache_file: Path) -> str:
+    """Read CMAKE_GENERATOR from an existing CMakeCache.txt (empty if missing)."""
+    if not cache_file.is_file():
+        return ""
+    try:
+        for line in cache_file.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("CMAKE_GENERATOR:"):
+                _, _, value = line.partition("=")
+                return value.strip()
+    except OSError:
+        return ""
+    return ""
 
 
 def default_vcpkg_root() -> Path:

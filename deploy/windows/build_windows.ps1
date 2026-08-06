@@ -15,6 +15,7 @@ param(
     [switch]$Clean,
     [switch]$InstallDeps,
     [switch]$BuildHost,
+    [switch]$Ninja,
     [string]$VcpkgRoot = "",
     [string]$Config = "Release",
     [int]$Jobs = 0
@@ -55,7 +56,13 @@ if ($Clean -and (Test-Path $buildDir)) {
 }
 
 $hostFlag = if ($BuildHost) { "ON" } else { "OFF" }
-$needsConfigure = $Reconfigure -or $Clean -or -not (Test-Path $cacheFile)
+
+function Get-CMakeCacheGenerator([string]$CachePath) {
+    if (-not (Test-Path $CachePath)) { return "" }
+    $line = Select-String -Path $CachePath -Pattern "^CMAKE_GENERATOR:" | Select-Object -First 1
+    if (-not $line) { return "" }
+    return ($line.Line -split "=", 2)[1].Trim()
+}
 
 function Ensure-MsvcOnPath {
     if (Get-Command cl -ErrorAction SilentlyContinue) { return $true }
@@ -65,7 +72,7 @@ function Ensure-MsvcOnPath {
     if ([string]::IsNullOrWhiteSpace($install)) { return $false }
     $vcvars = Join-Path $install "VC\Auxiliary\Build\vcvars64.bat"
     if (-not (Test-Path $vcvars)) { return $false }
-    $envDump = cmd.exe /d /s /c "`"$vcvars`" >nul && set"
+    $envDump = cmd.exe /c "`"$vcvars`" && set"
     if ($LASTEXITCODE -ne 0) { return $false }
     foreach ($line in ($envDump -split "`r?`n")) {
         if ($line -match "^(.*?)=(.*)$") {
@@ -75,11 +82,30 @@ function Ensure-MsvcOnPath {
     return [bool](Get-Command cl -ErrorAction SilentlyContinue)
 }
 
-$msvcReady = Ensure-MsvcOnPath
-if (-not $msvcReady) {
-    Write-Warning "No C++ compiler on PATH (cl.exe). Install Desktop development with C++ (VS / Build Tools)."
+function Get-VsCMakeGeneratorArgs {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    $year = "2022"
+    if (Test-Path $vswhere) {
+        $found = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property catalog_productLineVersion
+        if (-not [string]::IsNullOrWhiteSpace($found)) { $year = $found.Trim() }
+    }
+    $name = switch ($year) {
+        "2019" { "Visual Studio 16 2019" }
+        "2017" { "Visual Studio 15 2017" }
+        Default { "Visual Studio 17 2022" }
+    }
+    return @("-G", $name, "-A", "x64")
 }
 
+$msvcReady = Ensure-MsvcOnPath
+$existingGen = Get-CMakeCacheGenerator $cacheFile
+if (($existingGen -eq "Ninja") -and (-not $msvcReady) -and (Test-Path $buildDir) -and (-not $Clean)) {
+    Write-Host "Existing build/ is a Ninja tree but cl.exe is unavailable; cleaning for Visual Studio generator."
+    Remove-Item -Recurse -Force $buildDir
+    $existingGen = ""
+}
+
+$needsConfigure = $Reconfigure -or $Clean -or -not (Test-Path $cacheFile)
 if ($needsConfigure) {
     Write-Host "Configuring CMake (ARCHSTREAMER_BUILD_HOST=$hostFlag)..."
 
@@ -87,14 +113,13 @@ if ($needsConfigure) {
     # existing generator (VS vs Ninja) or cmake errors out.
     $generatorArgs = @()
     $freshTree = $Clean -or -not (Test-Path $cacheFile)
-    if ($freshTree -and (Get-Command ninja -ErrorAction SilentlyContinue) -and $msvcReady) {
+    $preferNinja = $Ninja -or ($env:ARCHSTREAMER_WINDOWS_NINJA -in @("1", "true", "yes"))
+    if ($freshTree -and $preferNinja -and (Get-Command ninja -ErrorAction SilentlyContinue) -and $msvcReady) {
         $generatorArgs = @("-G", "Ninja", "-DCMAKE_BUILD_TYPE=$Config")
         Write-Host "Using Ninja generator."
-    } elseif ($freshTree -and (Get-Command ninja -ErrorAction SilentlyContinue) -and -not $msvcReady) {
-        Write-Host "Ninja is installed but MSVC is not on PATH; using Visual Studio generator instead."
     } elseif ($freshTree) {
-        Write-Host "Ninja not found; using CMake's default generator (often Visual Studio)."
-        Write-Host "Tip: install Ninja and re-run with -Clean for faster incremental builds."
+        $generatorArgs = Get-VsCMakeGeneratorArgs
+        Write-Host "Using $($generatorArgs[1]) (-A x64)."
     } else {
         Write-Host "Reconfigure: keeping existing generator from build cache."
     }

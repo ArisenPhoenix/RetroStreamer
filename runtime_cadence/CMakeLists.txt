@@ -37,16 +37,25 @@ target_link_libraries(archstreamer_cadence_file
 )
 
 # SQLite is required for cadence=db and for the host game metadata store.
+# Always expose a real target (`archstreamer_sqlite`) that parents can link.
+# Linking parents directly to `PkgConfig::ARCHSTREAMER_SQLITE` breaks: that
+# IMPORTED target is directory-scoped to this subdirectory (common on Windows
+# when MSYS/Chocolatey pkg-config finds sqlite3.pc).
 set(ARCHSTREAMER_CADENCE_SQLITE_TARGET "")
-if(PkgConfig_FOUND)
+
+# Prefer FetchContent amalgamation on Windows — MSVC builds rarely have a usable
+# sqlite3 via pkg-config, and when they do the imported target is often invisible.
+if(NOT WIN32 AND PkgConfig_FOUND)
     pkg_check_modules(ARCHSTREAMER_SQLITE QUIET IMPORTED_TARGET sqlite3)
     if(ARCHSTREAMER_SQLITE_FOUND)
         message(STATUS "Found sqlite3: ${ARCHSTREAMER_SQLITE_VERSION}")
-        set(ARCHSTREAMER_CADENCE_SQLITE_TARGET PkgConfig::ARCHSTREAMER_SQLITE)
+        add_library(archstreamer_sqlite INTERFACE)
+        target_link_libraries(archstreamer_sqlite INTERFACE PkgConfig::ARCHSTREAMER_SQLITE)
+        set(ARCHSTREAMER_CADENCE_SQLITE_TARGET archstreamer_sqlite)
     endif()
 endif()
 if(NOT ARCHSTREAMER_CADENCE_SQLITE_TARGET)
-    message(STATUS "sqlite3 pkg-config not found; fetching amalgamation via FetchContent")
+    message(STATUS "sqlite3 pkg-config not used; fetching amalgamation via FetchContent")
     enable_language(C)
     include(FetchContent)
     FetchContent_Declare(
@@ -59,7 +68,8 @@ if(NOT ARCHSTREAMER_CADENCE_SQLITE_TARGET)
     if(NOT EXISTS "${sqlite_amalgamation_SOURCE_DIR}/sqlite3.c")
         message(FATAL_ERROR
             "SQLite amalgamation missing after FetchContent.\n"
-            "Install system sqlite3 devel, or allow network for FetchContent.")
+            "Allow network access once so CMake can download sqlite-amalgamation,\n"
+            "or on Linux install libsqlite3-dev / sqlite-devel.")
     endif()
     add_library(archstreamer_sqlite3 STATIC
         "${sqlite_amalgamation_SOURCE_DIR}/sqlite3.c"
@@ -71,7 +81,9 @@ if(NOT ARCHSTREAMER_CADENCE_SQLITE_TARGET)
     )
     find_package(Threads REQUIRED)
     target_link_libraries(archstreamer_sqlite3 PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
-    set(ARCHSTREAMER_CADENCE_SQLITE_TARGET archstreamer_sqlite3)
+    add_library(archstreamer_sqlite INTERFACE)
+    target_link_libraries(archstreamer_sqlite INTERFACE archstreamer_sqlite3)
+    set(ARCHSTREAMER_CADENCE_SQLITE_TARGET archstreamer_sqlite)
 endif()
 set(ARCHSTREAMER_SQLITE_TARGET "${ARCHSTREAMER_CADENCE_SQLITE_TARGET}" PARENT_SCOPE)
 

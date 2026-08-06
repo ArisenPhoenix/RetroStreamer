@@ -178,5 +178,7 @@ Ops include: `ping`, `upsert_user`, `find_user`, `delete_user`, `list_users`,
 
 ## Dependencies (db cadence)
 
-Prefer system `sqlite3` via pkg-config (`libsqlite3-dev` / `sqlite-devel`).
+Prefer system `sqlite3` via pkg-config (`libsqlite3-dev` / `sqlite-devel`) on
+Linux. Windows always vendors the SQLite amalgamation via CMake FetchContent
+(one-time network download; no separate sqlite install needed).
 If missing, CMake FetchContent downloads the official SQLite amalgamation.

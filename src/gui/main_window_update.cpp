@@ -16,9 +16,12 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QProcess>
+#include <QProcessEnvironment>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QTextCursor>
 #include <QVBoxLayout>
 
 #include <filesystem>
@@ -537,14 +540,14 @@ void MainWindow::apply_updates() {
         "- reset the repo to origin/%1 (discards local edits in that checkout)\n"
         "- rebuild ArchStreamer\n"
         "- reinstall into Program Files (may need Admin)\n"
-        "- quit this app and relaunch when finished\n\n"
+        "- keep this app open (restart later to load the new build)\n\n"
         "Continue?");
 #else
     const QString prompt = QStringLiteral(
         "This will:\n"
         "- reset the repo to origin/%1 (discards local edits in that checkout)\n"
         "- rebuild ArchStreamer\n"
-        "- quit this app and relaunch when finished\n\n"
+        "- keep this app open (restart later to load the new build)\n\n"
         "Continue?");
 #endif
     const auto reply = QMessageBox::question(
@@ -558,8 +561,22 @@ void MainWindow::apply_updates() {
     }
 
     persist_settings_if_idle();
-    set_update_status(QStringLiteral("Starting update - this window will close..."));
 
+    update_busy_ = true;
+    if (settings_update_check_ != nullptr) {
+        settings_update_check_->setEnabled(false);
+    }
+    if (settings_update_apply_ != nullptr) {
+        settings_update_apply_->setEnabled(false);
+    }
+    set_update_status(QStringLiteral("Updating origin/%1 — see log for progress…").arg(branch));
+    if (settings_log_ != nullptr) {
+        settings_log_->appendPlainText(
+            QStringLiteral("\n——— Update started (origin/%1) ———").arg(branch));
+    }
+
+    auto* process = new QProcess(this);
+    process->setProgram(python);
     QStringList args;
 #ifdef Q_OS_WIN
     if (QFileInfo(python).fileName().compare(QStringLiteral("py"), Qt::CaseInsensitive) == 0) {
@@ -571,20 +588,81 @@ void MainWindow::apply_updates() {
          << QStringLiteral("--repo") << repo
          << QStringLiteral("--branch") << branch
          << QStringLiteral("--reset-hard")
-         << QStringLiteral("--launch")
-         << QStringLiteral("--wait-secs") << QStringLiteral("2");
+         << QStringLiteral("--keep-running")
+         << QStringLiteral("--wait-secs") << QStringLiteral("0");
 #ifdef ARCHSTREAMER_HAS_HOST
     args << QStringLiteral("--build-host");
 #endif
-
-    const bool started = QProcess::startDetached(python, args, repo);
-    if (!started) {
-        set_update_status(QStringLiteral("Failed to start the update process."));
-        return;
+    process->setArguments(args);
+    process->setWorkingDirectory(repo);
+    process->setProcessChannelMode(QProcess::MergedChannels);
+    {
+        auto env = QProcessEnvironment::systemEnvironment();
+        env.insert(QStringLiteral("PYTHONUNBUFFERED"), QStringLiteral("1"));
+        process->setProcessEnvironment(env);
     }
 
-    // Quit so binaries can be overwritten (especially on Windows).
-    QCoreApplication::quit();
+    connect(process, &QProcess::readyReadStandardOutput, this, [this, process] {
+        const auto chunk = QString::fromLocal8Bit(process->readAllStandardOutput());
+        if (chunk.isEmpty() || settings_log_ == nullptr) {
+            return;
+        }
+        settings_log_->moveCursor(QTextCursor::End);
+        settings_log_->insertPlainText(chunk);
+        settings_log_->moveCursor(QTextCursor::End);
+    });
+
+    connect(process, &QProcess::finished, this, [this, process](int code, QProcess::ExitStatus) {
+        // Drain any remaining buffered output.
+        const auto tail = QString::fromLocal8Bit(process->readAllStandardOutput());
+        if (!tail.isEmpty() && settings_log_ != nullptr) {
+            settings_log_->moveCursor(QTextCursor::End);
+            settings_log_->insertPlainText(tail);
+            settings_log_->moveCursor(QTextCursor::End);
+        }
+        process->deleteLater();
+        update_busy_ = false;
+        if (settings_update_check_ != nullptr) {
+            settings_update_check_->setEnabled(true);
+        }
+
+        if (code == 0) {
+            set_update_status(
+                QStringLiteral(
+                    "Update installed. Restart ArchStreamer to load the new build."));
+            if (settings_update_apply_ != nullptr) {
+                settings_update_apply_->setEnabled(false);
+            }
+            if (settings_log_ != nullptr) {
+                settings_log_->appendPlainText(
+                    QStringLiteral("——— Update finished — restart to use it ———"));
+            }
+            return;
+        }
+
+        set_update_status(
+            QStringLiteral("Update failed (exit %1). See Settings log for details.").arg(code));
+        if (settings_update_apply_ != nullptr) {
+            settings_update_apply_->setEnabled(true);
+        }
+        if (settings_log_ != nullptr) {
+            settings_log_->appendPlainText(
+                QStringLiteral("——— Update failed (exit %1) ———").arg(code));
+        }
+    });
+
+    process->start();
+    if (!process->waitForStarted(5'000)) {
+        update_busy_ = false;
+        if (settings_update_check_ != nullptr) {
+            settings_update_check_->setEnabled(true);
+        }
+        if (settings_update_apply_ != nullptr) {
+            settings_update_apply_->setEnabled(true);
+        }
+        set_update_status(QStringLiteral("Failed to start the update process."));
+        process->deleteLater();
+    }
 }
 
 void MainWindow::set_update_status(const QString& text) {

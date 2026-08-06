@@ -99,22 +99,65 @@ def cmd_check(root: Path, branch: str) -> int:
     return 0
 
 
-def _stop_procs_windows() -> None:
-    names = [
-        "archstreamer_gui",
-        "session_client",
-        "host_runner",
-        "client_catalog_probe",
-        "game_catalog_probe",
-        "asset_probe",
-        "steam_art_import",
-        "uinput_probe",
-        "controller_probe",
-        "archstreamer_ssh_askpass",
+def _windows_install_binaries() -> list[str]:
+    return [
+        "archstreamer_gui.exe",
+        "session_client.exe",
+        "host_runner.exe",
+        "client_catalog_probe.exe",
+        "game_catalog_probe.exe",
+        "asset_probe.exe",
+        "steam_art_import.exe",
+        "uinput_probe.exe",
+        "controller_probe.exe",
+        "archstreamer_ssh_askpass.exe",
+        "archstreamer_cadence.exe",
     ]
-    for name in names:
+
+
+def _stage_aside_locked_exes(prefix: Path) -> None:
+    """Rename installed exes so cmake --install can write replacements while they run.
+
+    Windows allows renaming a running image; the process keeps the old file handle.
+    New launches pick up the freshly installed binaries after restart.
+    """
+    bin_dir = prefix / "bin"
+    if not bin_dir.is_dir():
+        return
+    for name in _windows_install_binaries():
+        path = bin_dir / name
+        if not path.is_file():
+            continue
+        staged = path.with_name(name + ".old")
+        try:
+            if staged.exists():
+                staged.unlink()
+        except OSError:
+            pass
+        try:
+            path.rename(staged)
+            print(f"Staged aside (still running): {name} → {staged.name}")
+        except OSError as exc:
+            print(f"Note: could not stage {name} aside ({exc}); install may fail if locked.")
+
+
+def _cleanup_staged_exes(prefix: Path) -> None:
+    bin_dir = prefix / "bin"
+    if not bin_dir.is_dir():
+        return
+    for path in bin_dir.glob("*.old"):
+        try:
+            path.unlink()
+            print(f"Removed stale {path.name}")
+        except OSError:
+            # Still held by the running process — fine; next update retries.
+            pass
+
+
+def _stop_procs_windows() -> None:
+    for name in _windows_install_binaries():
         subprocess.run(
-            ["taskkill", "/F", "/IM", f"{name}.exe"],
+            ["taskkill", "/F", "/IM", name],
             capture_output=True,
             text=True,
             check=False,
@@ -191,9 +234,14 @@ def _build_windows(root: Path, args: argparse.Namespace) -> None:
 def _install_windows(root: Path, args: argparse.Namespace) -> None:
     prefix = Path(args.prefix)
     vcpkg_root = Path(args.vcpkg_root) if args.vcpkg_root else default_vcpkg_root()
+    keep_running = bool(getattr(args, "keep_running", False))
     print(f"Installing to {prefix} ...")
-    _stop_procs_windows()
-    time.sleep(0.5)
+    if keep_running:
+        print("Keeping ArchStreamer running — staging locked exes aside for overwrite.")
+        _stage_aside_locked_exes(prefix)
+    else:
+        _stop_procs_windows()
+        time.sleep(0.5)
     require_cmd("cmake")
     install_ok = False
     for attempt in range(1, 6):
@@ -214,7 +262,10 @@ def _install_windows(root: Path, args: argparse.Namespace) -> None:
             install_ok = True
             break
         eprint(f"cmake --install failed (attempt {attempt}/5); retrying...")
-        _stop_procs_windows()
+        if keep_running:
+            _stage_aside_locked_exes(prefix)
+        else:
+            _stop_procs_windows()
         time.sleep(1)
     if not install_ok:
         raise SystemExit(f"cmake --install failed for prefix {prefix}")
@@ -229,11 +280,19 @@ def _install_windows(root: Path, args: argparse.Namespace) -> None:
         vcpkg_root,
         "--shortcuts",
     ]
-    if args.launch:
+    # Never relaunch over a live GUI session — caller asks the user to restart.
+    if args.launch and not keep_running:
         finish_cmd.append("--launch")
     if args.branch:
         finish_cmd.extend(["--gui-branch", args.branch])
     run(finish_cmd, cwd=root)
+    if keep_running:
+        _cleanup_staged_exes(prefix)
+        print("")
+        print("Install finished. This running session is still the old build.")
+        print("Restart ArchStreamer to load the updated binaries.")
+    else:
+        _cleanup_staged_exes(prefix)
 
 
 def _build_linux(root: Path, args: argparse.Namespace) -> Path:
@@ -287,34 +346,48 @@ def cmd_apply(root: Path, args: argparse.Namespace) -> int:
     if not branch:
         raise SystemExit("--branch must not be empty")
 
-    # Give the GUI a moment to exit after it spawned us detached.
-    if args.wait_secs > 0:
+    keep_running = bool(getattr(args, "keep_running", False))
+
+    # Detached/quit-and-relaunch path: give the GUI a moment to exit.
+    if not keep_running and args.wait_secs > 0:
         time.sleep(args.wait_secs)
 
-    if sys.platform == "win32":
-        _stop_procs_windows()
+    if not keep_running:
+        if sys.platform == "win32":
+            _stop_procs_windows()
+        else:
+            _stop_procs_linux()
+        time.sleep(0.3)
     else:
-        _stop_procs_linux()
-    time.sleep(0.3)
+        print("Keeping current ArchStreamer process running during update.")
 
     os.chdir(root)
-    print("=== ArchStreamer self-update ===")
-    print(f"Repo: {root}")
-    print(f"Branch: {branch}")
-    print(f"Platform: {sys.platform}")
+    # Force line-buffered progress when the GUI streams this process.
+    try:
+        sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+        sys.stderr.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+    print("=== ArchStreamer self-update ===", flush=True)
+    print(f"Repo: {root}", flush=True)
+    print(f"Branch: {branch}", flush=True)
+    print(f"Platform: {sys.platform}", flush=True)
 
     if not args.skip_pull:
         _pull(root, branch, reset_hard=args.reset_hard)
         head = _short(root, "HEAD")
         subject = _git(root, "log", "-1", "--pretty=%s").stdout.strip()
-        print(f"Git: {head} {subject} [{branch}]")
+        print(f"Git: {head} {subject} [{branch}]", flush=True)
     else:
-        print("Skipping git pull.")
+        print("Skipping git pull.", flush=True)
 
     if sys.platform == "win32":
         _build_windows(root, args)
         if args.skip_install:
             print("Skipping install. Binary under build\\ or build\\Release\\")
+            if keep_running:
+                print("Restart ArchStreamer after installing to pick up the new build.")
             return 0
         _install_windows(root, args)
         print("Done.")
@@ -322,7 +395,7 @@ def cmd_apply(root: Path, args: argparse.Namespace) -> int:
 
     gui = _build_linux(root, args)
     print(f"Built: {gui}")
-    if args.launch:
+    if args.launch and not keep_running:
         cmd = [str(gui)]
         if branch:
             cmd.extend(["--branch", branch])
@@ -332,7 +405,11 @@ def cmd_apply(root: Path, args: argparse.Namespace) -> int:
             cwd=str(root),
             start_new_session=True,
         )
-    print("Done. Restart ArchStreamer if it was not relaunched.")
+        print("Done. Restart ArchStreamer if it was not relaunched.")
+    elif keep_running:
+        print("Done. Restart ArchStreamer to load the updated build.")
+    else:
+        print("Done. Restart ArchStreamer if it was not relaunched.")
     return 0
 
 
@@ -353,10 +430,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--clean", action="store_true")
     p.add_argument("--launch", action="store_true", help="Relaunch GUI when finished")
     p.add_argument(
+        "--keep-running",
+        action="store_true",
+        help=(
+            "Do not stop the current ArchStreamer process; stream-friendly for the GUI. "
+            "Installed changes apply after the user restarts the app."
+        ),
+    )
+    p.add_argument(
         "--wait-secs",
         type=float,
         default=1.5,
-        help="Seconds to wait before apply (so the GUI can exit)",
+        help="Seconds to wait before apply (so a quitting GUI can exit); ignored with --keep-running",
     )
     p.add_argument(
         "--prefix",
@@ -364,23 +449,69 @@ def parse_args() -> argparse.Namespace:
         default=Path(r"C:\Program Files\ArchStreamer"),
         help="Windows install prefix",
     )
+    p.add_argument(
+        "--pause-on-exit",
+        action="store_true",
+        help="Windows: keep the console open after apply (success or failure)",
+    )
     p.add_argument("--vcpkg-root", type=Path, default=None)
     p.add_argument("--config", default="Release")
     return p.parse_args()
 
 
+def _pause_if_requested(args: argparse.Namespace, code: int) -> int:
+    if not getattr(args, "pause_on_exit", False):
+        return code
+    if sys.platform != "win32":
+        return code
+    try:
+        if code == 0:
+            input("\nUpdate finished. Press Enter to close this window...")
+        else:
+            input(
+                f"\nUpdate failed (exit {code}). "
+                "Scroll up for the CMake/build error, then press Enter to close..."
+            )
+    except EOFError:
+        time.sleep(60 if code != 0 else 5)
+    return code
+
+
 def main() -> int:
     args = parse_args()
-    root = Path(args.repo).resolve() if args.repo else repo_root(Path(__file__))
-    if not (root / "CMakeLists.txt").is_file():
-        raise SystemExit(f"Not an ArchStreamer repo root: {root}")
-    if args.action == "check":
-        return cmd_check(root, (args.branch or "master").strip())
-    return cmd_apply(root, args)
+    code = 1
+    try:
+        root = Path(args.repo).resolve() if args.repo else repo_root(Path(__file__))
+        if not (root / "CMakeLists.txt").is_file():
+            raise SystemExit(f"Not an ArchStreamer repo root: {root}")
+        if args.action == "check":
+            code = cmd_check(root, (args.branch or "master").strip())
+        else:
+            code = cmd_apply(root, args)
+    except subprocess.CalledProcessError as exc:
+        eprint(str(exc))
+        stderr = getattr(exc, "stderr", None)
+        if stderr:
+            eprint(stderr)
+        code = exc.returncode or 1
+    except SystemExit as exc:
+        if isinstance(exc.code, int):
+            code = exc.code
+        elif exc.code is None:
+            code = 0
+        else:
+            eprint(str(exc.code))
+            code = 1
+        if args.action != "apply" or not getattr(args, "pause_on_exit", False):
+            raise
+    except Exception as exc:  # noqa: BLE001 — keep console open for GUI apply
+        eprint(f"Update failed: {exc}")
+        code = 1
+
+    if args.action == "apply":
+        return _pause_if_requested(args, code)
+    return code
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except subprocess.CalledProcessError as exc:
-        raise SystemExit(exc.returncode) from exc
+    raise SystemExit(main())

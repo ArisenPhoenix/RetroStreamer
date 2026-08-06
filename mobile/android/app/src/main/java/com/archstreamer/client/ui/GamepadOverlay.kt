@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -78,6 +79,7 @@ fun GamepadOverlay(
     onState: (ControllerState) -> Unit = {},
     onMenuClick: () -> Unit = {},
     onFastForwardHold: (Boolean) -> Unit = {},
+    onScreenSwap: () -> Unit = {},
     onItemsChange: (List<OverlayItem>) -> Unit = {},
     onDoneEditing: () -> Unit = {},
 ) {
@@ -95,6 +97,7 @@ fun GamepadOverlay(
     val itemsLatest by rememberUpdatedState(items)
     val onItemsChangeLatest by rememberUpdatedState(onItemsChange)
     val onFastForwardHoldLatest by rememberUpdatedState(onFastForwardHold)
+    val onScreenSwapLatest by rememberUpdatedState(onScreenSwap)
     val onMenuClickLatest by rememberUpdatedState(onMenuClick)
 
     fun emit() {
@@ -142,6 +145,7 @@ fun GamepadOverlay(
             OverlayAction.Menu -> if (down) onMenuClickLatest()
             OverlayAction.LeftStick, OverlayAction.RightStick -> Unit
             OverlayAction.FastForward -> onFastForwardHoldLatest(down)
+            OverlayAction.ScreenSwap -> if (down) onScreenSwapLatest()
         }
     }
 
@@ -299,6 +303,7 @@ fun GamepadOverlay(
                 ) {
                     val label = item.displayLabel()
                     val useFfIcon = item.resolvedAction() == OverlayAction.FastForward
+                    val useSwapIcon = item.resolvedAction() == OverlayAction.ScreenSwap
                     when (item.kind) {
                         OverlayControlKind.Menu -> {
                             MenuPadButton(
@@ -316,10 +321,12 @@ fun GamepadOverlay(
                         OverlayControlKind.ShoulderL2,
                         OverlayControlKind.ShoulderR2,
                         OverlayControlKind.FastForward,
+                        OverlayControlKind.ScreenSwap,
                         -> {
                             ShoulderButton(
                                 label = label,
                                 useFastForwardIcon = useFfIcon,
+                                useScreenSwapIcon = useSwapIcon,
                                 width = unitBtn * 1.55f,
                                 height = unitBtn * 0.72f,
                                 colors = colors,
@@ -333,6 +340,7 @@ fun GamepadOverlay(
                             PadButton(
                                 label = label,
                                 useFastForwardIcon = useFfIcon,
+                                useScreenSwapIcon = useSwapIcon,
                                 mask = 0,
                                 size = unitBtn * 0.85f,
                                 colors = colors,
@@ -626,6 +634,7 @@ private fun ShoulderButton(
     colors: PadColors,
     enabled: Boolean = true,
     useFastForwardIcon: Boolean = false,
+    useScreenSwapIcon: Boolean = false,
     onPress: (Boolean) -> Unit,
 ) {
     var pressed by remember { mutableStateOf(false) }
@@ -664,15 +673,20 @@ private fun ShoulderButton(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        if (useFastForwardIcon) {
-            Icon(
+        when {
+            useFastForwardIcon -> Icon(
                 Icons.Filled.FastForward,
                 contentDescription = "Fast-forward",
                 tint = colors.label,
                 modifier = Modifier.size(height * 0.58f),
             )
-        } else {
-            Text(
+            useScreenSwapIcon -> Icon(
+                Icons.Filled.SwapVert,
+                contentDescription = "Screen swap",
+                tint = colors.label,
+                modifier = Modifier.size(height * 0.58f),
+            )
+            else -> Text(
                 text = label,
                 color = colors.label,
                 fontWeight = FontWeight.Bold,
@@ -811,6 +825,7 @@ private fun PadButton(
     onButton: (Int, Boolean) -> Unit,
     enabled: Boolean = true,
     useFastForwardIcon: Boolean = false,
+    useScreenSwapIcon: Boolean = false,
 ) {
     var pressed by remember { mutableStateOf(false) }
     Box(
@@ -847,15 +862,20 @@ private fun PadButton(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        if (useFastForwardIcon) {
-            Icon(
+        when {
+            useFastForwardIcon -> Icon(
                 Icons.Filled.FastForward,
                 contentDescription = "Fast-forward",
                 tint = colors.label,
                 modifier = Modifier.size(size * 0.45f),
             )
-        } else {
-            Text(
+            useScreenSwapIcon -> Icon(
+                Icons.Filled.SwapVert,
+                contentDescription = "Screen swap",
+                tint = colors.label,
+                modifier = Modifier.size(size * 0.45f),
+            )
+            else -> Text(
                 text = label,
                 color = colors.label,
                 fontWeight = FontWeight.Bold,

@@ -2,23 +2,30 @@ package com.archstreamer.client
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import com.archstreamer.client.net.ClientFileLog
 import com.archstreamer.client.ui.ArchStreamerApp
 import com.archstreamer.client.ui.ClientViewModel
 import com.archstreamer.client.ui.theme.ArchStreamerTheme
@@ -50,14 +57,41 @@ class MainActivity : ComponentActivity() {
                         ensureBluetoothPermission()
                     }
                 }
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background,
-                ) {
-                    ArchStreamerApp(viewModel = viewModel)
+                Box(modifier = Modifier.fillMaxSize()) {
+                    // Compose alone does not always receive keyboard attach/detach
+                    // config callbacks; a View sink keeps Activity from missing them
+                    // (see detachable-keyboard guidance). Manifest lists keyboard|… .
+                    AndroidView(
+                        factory = { ctx ->
+                            object : View(ctx) {
+                                override fun onConfigurationChanged(newConfig: Configuration) {
+                                    super.onConfigurationChanged(newConfig)
+                                }
+                            }
+                        },
+                        modifier = Modifier.size(0.dp),
+                    )
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background,
+                    ) {
+                        ArchStreamerApp(viewModel = viewModel)
+                    }
                 }
             }
         }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // BT keyboard wake often flips keyboard / keyboardHidden / navigation without
+        // recreating us (configChanges). Refresh pads; log when connections debug is on.
+        ClientFileLog.conn(
+            "configChanged keyboard=${newConfig.keyboard} " +
+                "keyboardHidden=${newConfig.keyboardHidden} " +
+                "navigation=${newConfig.navigation}",
+        )
+        viewModel.refreshPhysicalPads()
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {

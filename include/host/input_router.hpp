@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/protocol.hpp"
+#include "host/emulator_control_plane.hpp"
 #include "host/seat_manager.hpp"
 #include "host/virtual_gamepad.hpp"
 #include "host/virtual_keyboard.hpp"
@@ -21,6 +22,8 @@ public:
     void set_seat_assignment(SeatAssignment assignment);
     /** Optional melonDS (etc.) stylus sink; cleared automatically when null. */
     void set_touch_handler(TouchHandler handler);
+    /** Which backend applies EmulatorControl intents (also sets Switch-style hotkeys). */
+    void set_emulator_backend(EmulatorControlBackend backend);
     bool route(const ControllerInput& input);
     bool route(const KeyboardInput& input);
     bool route(const TouchInput& input);
@@ -39,6 +42,7 @@ private:
 
     VirtualGamepadBus& gamepads_;
     VirtualKeyboard* keyboard_ = nullptr;
+    EmulatorControlPlane control_plane_;
     TouchHandler touch_handler_;
     SeatAssignment assignment_;
     std::map<PlayerKey, std::uint64_t> last_input_timestamp_by_player_;

@@ -1,12 +1,12 @@
 package com.archstreamer.client.protocol
 
 /**
- * Wire types matching include/common/protocol.hpp (ProtocolVersion 23).
+ * Wire types matching include/common/protocol.hpp (ProtocolVersion 25).
  * Keep field order identical to the C++ serializers.
  */
 object Protocol {
     const val MAGIC: Int = 0x41525354 // "ARST"
-    const val VERSION: Int = 23
+    const val VERSION: Int = 25
     const val HEADER_SIZE: Int = 11 // u32 + u16 + u8 + u32, little-endian, no padding
 
     const val DEFAULT_CONTROL_PORT: Int = 45555
@@ -235,6 +235,12 @@ enum class EmulatorControlState(val id: Int) {
     Unchanged(0),
     Off(1),
     On(2),
+}
+
+/** Matches EmulatorControlAction* in protocol.hpp — one-shot action codes. */
+object EmulatorControlAction {
+    const val None: Int = 0
+    const val ScreenSwap: Int = 64
 }
 
 /** Matches DiscControlAction in protocol.hpp. */

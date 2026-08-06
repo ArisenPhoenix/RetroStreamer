@@ -50,13 +50,14 @@ enum class ControllerMapAction(val id: String, val title: String) {
     L("l", "L"),
     R("r", "R"),
     L2("l2", "L2"),
-    R2("r2", "R2 (swap screens)"),
+    R2("r2", "R2"),
     Select("select", "Select"),
     Start("start", "Start"),
     Menu("menu", "Menu"),
     LeftStick("left_stick", "L3"),
     RightStick("right_stick", "R3"),
     FastForward("ff", "Fast-forward"),
+    ScreenSwap("screen_swap", "Screen swap"),
     ;
 
     companion object {
@@ -165,12 +166,14 @@ data class ControllerMapDocument(
 data class ControllerMapApplyState(
     var prevMenuDown: Boolean = false,
     var prevFfHeld: Boolean = false,
+    var prevScreenSwapDown: Boolean = false,
 )
 
 data class ControllerMapApplyExtras(
     var fastForwardHeld: Boolean = false,
     var menuEdge: Boolean = false,
     var fastForwardChanged: Boolean = false,
+    var screenSwapEdge: Boolean = false,
 )
 
 object ControllerButtonMap {
@@ -198,6 +201,7 @@ object ControllerButtonMap {
         val extras = ControllerMapApplyExtras()
         if (profile.identity()) {
             applyState.prevMenuDown = false
+            applyState.prevScreenSwapDown = false
             if (applyState.prevFfHeld) {
                 extras.fastForwardChanged = true
             }
@@ -229,6 +233,7 @@ object ControllerButtonMap {
         var rightTrigger = 0
         var ffHeld = false
         var menuDown = false
+        var screenSwapDown = false
 
         fun dispatch(source: ControllerMapSource, down: Boolean, level: Int) {
             if (!down) return
@@ -248,6 +253,7 @@ object ControllerButtonMap {
                 ControllerMapAction.LeftStick -> buttons = buttons or ControllerState.BUTTON_LEFT_STICK
                 ControllerMapAction.RightStick -> buttons = buttons or ControllerState.BUTTON_RIGHT_STICK
                 ControllerMapAction.FastForward -> ffHeld = true
+                ControllerMapAction.ScreenSwap -> screenSwapDown = true
             }
         }
 
@@ -270,8 +276,10 @@ object ControllerButtonMap {
         extras.fastForwardHeld = ffHeld
         extras.menuEdge = menuDown && !applyState.prevMenuDown
         extras.fastForwardChanged = ffHeld != applyState.prevFfHeld
+        extras.screenSwapEdge = screenSwapDown && !applyState.prevScreenSwapDown
         applyState.prevMenuDown = menuDown
         applyState.prevFfHeld = ffHeld
+        applyState.prevScreenSwapDown = screenSwapDown
         return out to extras
     }
 

@@ -62,7 +62,8 @@ void apply_action(
     bool down,
     std::uint16_t analog_level,
     bool& ff_held,
-    bool& menu_down) {
+    bool& menu_down,
+    bool& screen_swap_down) {
     if (!down) {
         return;
     }
@@ -111,6 +112,9 @@ void apply_action(
         break;
     case ControllerMapAction::FastForward:
         ff_held = true;
+        break;
+    case ControllerMapAction::ScreenSwap:
+        screen_swap_down = true;
         break;
     }
 }
@@ -295,6 +299,8 @@ std::string_view controller_map_action_id(ControllerMapAction action) {
         return "right_stick";
     case ControllerMapAction::FastForward:
         return "ff";
+    case ControllerMapAction::ScreenSwap:
+        return "screen_swap";
     }
     return "default";
 }
@@ -318,7 +324,7 @@ std::string_view controller_map_action_title(ControllerMapAction action) {
     case ControllerMapAction::L2:
         return "L2";
     case ControllerMapAction::R2:
-        return "R2 (swap screens)";
+        return "R2";
     case ControllerMapAction::Select:
         return "Select";
     case ControllerMapAction::Start:
@@ -331,6 +337,8 @@ std::string_view controller_map_action_title(ControllerMapAction action) {
         return "R3";
     case ControllerMapAction::FastForward:
         return "Fast-forward";
+    case ControllerMapAction::ScreenSwap:
+        return "Screen swap";
     }
     return "Default";
 }
@@ -380,6 +388,9 @@ std::optional<ControllerMapAction> controller_map_action_from_id(std::string_vie
     }
     if (id == "ff") {
         return ControllerMapAction::FastForward;
+    }
+    if (id == "screen_swap") {
+        return ControllerMapAction::ScreenSwap;
     }
     return std::nullopt;
 }
@@ -496,6 +507,7 @@ ControllerState apply_controller_button_map(
 
     if (profile.identity()) {
         apply_state.prev_menu_down = false;
+        apply_state.prev_screen_swap_down = false;
         if (apply_state.prev_ff_held) {
             extras.fast_forward_changed = true;
         }
@@ -524,10 +536,11 @@ ControllerState apply_controller_button_map(
 
     bool ff_held = false;
     bool menu_down = false;
+    bool screen_swap_down = false;
 
     const auto dispatch = [&](ControllerMapSource source, bool down, std::uint16_t level) {
         const auto action = controller_map_resolve_action(source, profile.action_for(source));
-        apply_action(out, action, down, level, ff_held, menu_down);
+        apply_action(out, action, down, level, ff_held, menu_down, screen_swap_down);
     };
 
     dispatch(ControllerMapSource::Select, select_down, 0xFFFF);
@@ -544,8 +557,10 @@ ControllerState apply_controller_button_map(
     extras.fast_forward_held = ff_held;
     extras.menu_edge = menu_down && !apply_state.prev_menu_down;
     extras.fast_forward_changed = ff_held != apply_state.prev_ff_held;
+    extras.screen_swap_edge = screen_swap_down && !apply_state.prev_screen_swap_down;
     apply_state.prev_menu_down = menu_down;
     apply_state.prev_ff_held = ff_held;
+    apply_state.prev_screen_swap_down = screen_swap_down;
     return out;
 }
 

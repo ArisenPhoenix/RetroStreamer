@@ -18,6 +18,10 @@ object ClientFileLog {
     private val lock = ReentrantLock()
     private var logFile: File? = null
 
+    /** Settings → Debug → Log connections. */
+    @Volatile
+    var logConnections: Boolean = false
+
     fun init(context: Context) {
         lock.withLock {
             if (logFile != null) return
@@ -32,6 +36,12 @@ object ClientFileLog {
 
     fun append(message: String) {
         appendLine("[${timestamp()}] $message")
+    }
+
+    /** Connection lifecycle line when [logConnections] is on (`conn:` prefix). */
+    fun conn(message: String) {
+        if (!logConnections) return
+        append("conn: $message")
     }
 
     fun extractLastSessions(sessionCount: Int): ByteArray {

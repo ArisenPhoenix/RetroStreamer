@@ -7,6 +7,7 @@ import com.archstreamer.client.protocol.ControllerInfo
 import com.archstreamer.client.protocol.ControllerState
 import com.archstreamer.client.protocol.DiscControlAction
 import com.archstreamer.client.protocol.DisplayLayoutPreference
+import com.archstreamer.client.protocol.EmulatorControlAction
 import com.archstreamer.client.protocol.EmulatorControlState
 import com.archstreamer.client.protocol.GameInfo
 import com.archstreamer.client.protocol.GameSessionMode
@@ -206,7 +207,7 @@ data class JoinedPlaySession(
         inputSocket.send(datagram)
     }
 
-    /** Press then release a remoted key (e.g. P → PAUSE_TOGGLE). */
+    /** Press then release is unused for pause — clients send EmulatorControl instead. */
     fun pulseKeyboardKey(keyMask: Int, holdMs: Long = 40L) {
         sendKeyboard(keyMask)
         Thread.sleep(holdMs)
@@ -253,7 +254,10 @@ data class JoinedPlaySession(
      */
     fun resyncAudio(): Boolean {
         val player = audioPlayer ?: return false
-        return runCatching { player.restart() }.getOrDefault(false)
+        ClientFileLog.conn("audio resync restart begin clientId=${welcome.clientId}")
+        val ok = runCatching { player.restart() }.getOrDefault(false)
+        ClientFileLog.conn("audio resync restart ${if (ok) "ok" else "failed"}")
+        return ok
     }
 
     fun sendSoftKeyboardResponse(response: SoftKeyboardResponse) {
@@ -269,12 +273,16 @@ data class JoinedPlaySession(
     fun sendEmulatorControl(
         pause: EmulatorControlState = EmulatorControlState.Unchanged,
         fastForward: EmulatorControlState = EmulatorControlState.Unchanged,
+        force: Boolean = false,
+        action: Int = EmulatorControlAction.None,
     ) {
         control.send(
             PacketCodec.emulatorControl(
                 clientId = welcome.clientId,
                 pause = pause,
                 fastForward = fastForward,
+                force = force,
+                action = action,
             ),
         )
     }
@@ -337,6 +345,7 @@ data class JoinedPlaySession(
                 true
             } else {
                 val player = RtpVideoPlayer(port).also { it.startReceiving() }
+                ClientFileLog.conn("video staging bind port=$port uri=$videoUri")
                 // Decode without a visible view so Ready means "frames out", not "UDP heard".
                 val thread = HandlerThread("staging-probe-$port").also { it.start() }
                 val reader = ImageReader.newInstance(1920, 1080, ImageFormat.PRIVATE, 3)
@@ -404,6 +413,7 @@ data class JoinedPlaySession(
             stagingUri = null
             stagingReadySent = false
             runCatching { previous?.close() }
+            ClientFileLog.conn("video promote staging→live port=$port")
             return videoPlayer
         }
 
@@ -413,6 +423,7 @@ data class JoinedPlaySession(
             stagingPlayer = null
             stagingUri = null
             stagingReadySent = false
+            ClientFileLog.conn("video promote keep live port=$port")
             return videoPlayer
         }
 
@@ -423,6 +434,7 @@ data class JoinedPlaySession(
         stagingReadySent = false
         runCatching { videoPlayer?.close() }
         videoPlayer = RtpVideoPlayer(port).also { it.startReceiving() }
+        ClientFileLog.conn("video rebind live port=$port")
         return videoPlayer
     }
 
@@ -432,6 +444,7 @@ data class JoinedPlaySession(
      */
     fun leave(reason: String = "client left"): Boolean {
         if (!control.isConnected()) return false
+        ClientFileLog.conn("session leave clientId=${welcome.clientId} reason=$reason")
         control.send(PacketCodec.clientSessionLeave(welcome.clientId, reason))
         return true
     }
@@ -444,6 +457,10 @@ data class JoinedPlaySession(
 
     /** Tear down without leave — use after leave was already sent, or when the link is dead. */
     fun closeAfterLeave() {
+        ClientFileLog.conn(
+            "session teardown clientId=${welcome.clientId} " +
+                "video=${videoPlayer != null} audio=${audioPlayer != null}",
+        )
         clearStagingProbe()
         runCatching { stagingPlayer?.close() }
         stagingPlayer = null
@@ -480,6 +497,10 @@ object SessionJoiner {
         controllerGuid: String = "android-touch-0",
         onPasswordChangeRequired: (() -> String)? = null,
     ): JoinedPlaySession {
+        ClientFileLog.conn(
+            "join begin $host control=$controlPort input=$inputPort " +
+                "user=$username game=${game.id} audio=$receiveAudio",
+        )
         val control = ControlConnection(host, controlPort)
         var videoPlayer: RtpVideoPlayer? = null
         var audioPlayer: RtpOpusPlayer? = null
@@ -541,6 +562,7 @@ object SessionJoiner {
                     else -> error("expected HostWelcome, got $p")
                 }
             }
+            ClientFileLog.conn("join welcome clientId=${welcome.clientId}")
             val seats = when (val p = control.receive()) {
                 is IncomingPacket.Seats -> p.value
                 is IncomingPacket.Error -> error(p.value.message)
@@ -565,10 +587,12 @@ object SessionJoiner {
                         if (videoPlayer == null && p.value.videoUri.isNotBlank()) {
                             val port = MediaUris.portFrom(p.value.videoUri, MediaUris.H264_SCHEME)
                             videoPlayer = RtpVideoPlayer(port).also { it.startReceiving() }
+                            ClientFileLog.conn("join video bind port=$port")
                         }
                         if (receiveAudio && audioPlayer == null && p.value.audioUri.isNotBlank()) {
                             val port = MediaUris.portFrom(p.value.audioUri, MediaUris.OPUS_SCHEME)
                             audioPlayer = RtpOpusPlayer(port).also { it.start() }
+                            ClientFileLog.conn("join audio bind port=$port")
                         }
                     }
                     is IncomingPacket.Starting -> starting = p.value
@@ -580,6 +604,10 @@ object SessionJoiner {
             }
 
             val inputSocket = DatagramSocket()
+            ClientFileLog.conn(
+                "join ready clientId=${welcome.clientId} " +
+                    "inputLocal=${inputSocket.localPort} → $host:$inputPort",
+            )
             return JoinedPlaySession(
                 host = host,
                 controlPort = controlPort,
@@ -602,6 +630,7 @@ object SessionJoiner {
                 audioPlayer = null
             }
         } catch (t: Throwable) {
+            ClientFileLog.conn("join failed: ${t.message ?: t}")
             runCatching { videoPlayer?.close() }
             runCatching { audioPlayer?.close() }
             runCatching { control.close() }

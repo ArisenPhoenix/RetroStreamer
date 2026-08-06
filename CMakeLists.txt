@@ -270,6 +270,7 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/host_session_hub.cpp
         src/host/input_router.cpp
         src/host/input_router_demux.cpp
+        src/host/emulator_control_plane.cpp
         src/host/active_session_slot.cpp
         src/host/launch_environment.cpp
         src/host/libretro_core_registry.cpp

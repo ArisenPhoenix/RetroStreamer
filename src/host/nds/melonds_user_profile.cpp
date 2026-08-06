@@ -63,15 +63,13 @@ void write_toml_string(std::ostream& out, std::string_view key, std::string_view
     out << "\"\n";
 }
 
-void write_joystick_table(std::ostream& out, bool portrait_layout) {
+void write_joystick_table(std::ostream& out, bool /*portrait_layout*/) {
     // Raw SDL_JoystickGetButton indices for ArchStreamer uinput (EV_KEY ascending):
     // 0 SOUTH/A, 1 EAST/B, 2 NORTH/Y, 3 WEST/X, 4 TL, 5 TR, 6 Select, 7 Start,
     // 8 Guide, 9–10 sticks, 11–14 D-pad. melonDS does not use GameController button IDs.
     //
-    // R2 = axis 5 trigger (same encoding as before). Landscape EmphTop uses
-    // HK_SwapScreenEmphasis (large top ↔ large bottom); portrait Even uses
-    // HK_SwapScreens — matches libretro melonds_swapscreen_mode=Toggle / R2.
-    constexpr int kJoyR2Trigger = (5 << 24) | (2 << 20) | 0x10000 | 0xFFFF;
+    // Screen swap is not on R2 — EmulatorControl ScreenSwap taps keyboard F6
+    // (see write_keyboard_hotkeys). Joystick R2 stays a normal trigger if used.
     out << "\n[Instance0.Joystick]\n";
     out << "A = 0\n";
     out << "B = 1\n";
@@ -85,13 +83,8 @@ void write_joystick_table(std::ostream& out, bool portrait_layout) {
     out << "L = 4\n";
     out << "X = 3\n";
     out << "Y = 2\n";
-    if (portrait_layout) {
-        out << "HK_SwapScreens = " << kJoyR2Trigger << "\n";
-        out << "HK_SwapScreenEmphasis = -1\n";
-    } else {
-        out << "HK_SwapScreens = -1\n";
-        out << "HK_SwapScreenEmphasis = " << kJoyR2Trigger << "\n";
-    }
+    out << "HK_SwapScreens = -1\n";
+    out << "HK_SwapScreenEmphasis = -1\n";
     out << "HK_Lid = -1\n";
     out << "HK_Mic = -1\n";
     out << "HK_Pause = -1\n";
@@ -100,6 +93,54 @@ void write_joystick_table(std::ostream& out, bool portrait_layout) {
     out << "HK_FastForwardToggle = -1\n";
     out << "HK_FrameLimitToggle = -1\n";
     out << "HK_FullscreenToggle = -1\n";
+    out << "HK_FrameStep = -1\n";
+    out << "HK_SlowMo = -1\n";
+    out << "HK_SlowMoToggle = -1\n";
+    out << "HK_PowerButton = -1\n";
+    out << "HK_VolumeUp = -1\n";
+    out << "HK_VolumeDown = -1\n";
+    out << "HK_SolarSensorIncrease = -1\n";
+    out << "HK_SolarSensorDecrease = -1\n";
+}
+
+/**
+ * Keyboard hotkeys for ArchStreamer EmulatorControl (XTest into the melonDS window).
+ * Values are Qt::Key_* ints (see melonDS getEventKeyVal).
+ * HK_Pause = toggle on press; HK_FastForward = hold while down;
+ * F6 = layout-appropriate screen swap (portrait SwapScreens / landscape SwapScreenEmphasis).
+ */
+void write_keyboard_hotkeys(std::ostream& out, bool portrait_layout) {
+    constexpr int kQtKeySpace = 0x20;       // Qt::Key_Space
+    constexpr int kQtKeyF5 = 0x01000034;    // Qt::Key_F5
+    constexpr int kQtKeyF6 = 0x01000035;    // Qt::Key_F6
+    out << "\n[Instance0.Keyboard]\n";
+    out << "A = -1\n";
+    out << "B = -1\n";
+    out << "Select = -1\n";
+    out << "Start = -1\n";
+    out << "Right = -1\n";
+    out << "Left = -1\n";
+    out << "Up = -1\n";
+    out << "Down = -1\n";
+    out << "R = -1\n";
+    out << "L = -1\n";
+    out << "X = -1\n";
+    out << "Y = -1\n";
+    out << "HK_Lid = -1\n";
+    out << "HK_Mic = -1\n";
+    out << "HK_Pause = " << kQtKeyF5 << "\n";
+    out << "HK_Reset = -1\n";
+    out << "HK_FastForward = " << kQtKeySpace << "\n";
+    out << "HK_FastForwardToggle = -1\n";
+    out << "HK_FrameLimitToggle = -1\n";
+    out << "HK_FullscreenToggle = -1\n";
+    if (portrait_layout) {
+        out << "HK_SwapScreens = " << kQtKeyF6 << "\n";
+        out << "HK_SwapScreenEmphasis = -1\n";
+    } else {
+        out << "HK_SwapScreens = -1\n";
+        out << "HK_SwapScreenEmphasis = " << kQtKeyF6 << "\n";
+    }
     out << "HK_FrameStep = -1\n";
     out << "HK_SlowMo = -1\n";
     out << "HK_SlowMoToggle = -1\n";
@@ -243,11 +284,12 @@ MelonDsUserProfile prepare_melonds_user_profile(
     out << "ShowOSD = false\n";
 
     write_joystick_table(out, layout.portrait);
+    write_keyboard_hotkeys(out, layout.portrait);
 
     std::cout << "melonDS config: JoystickID=" << seed.joystick_id
               << " layout=" << layout.core_layout
               << " filter=" << (seed.sdl_device_filter.empty() ? "(none)" : seed.sdl_device_filter)
-              << '\n';
+              << " (Keyboard HK_Pause=F5 HK_FastForward=Space HK_Swap*=F6)\n";
     return profile;
 }
 

@@ -15,7 +15,7 @@
 namespace archstreamer {
 
 constexpr std::uint32_t ProtocolMagic = 0x41525354; // "ARST"
-constexpr std::uint16_t ProtocolVersion = 23;
+constexpr std::uint16_t ProtocolVersion = 25;
 constexpr std::uint8_t MaxRemoteClients = 2;
 constexpr std::uint8_t MaxPlayersPerClient = 2;
 constexpr std::uint8_t MaxRetroArchPorts = 5; // Ports 0-3 plus a host player if desired.
@@ -300,7 +300,10 @@ struct DsScreenLayout {
 
 /**
  * Explicit playback controls (client → host). Tri-state so a packet can change
- * pause, FF, both, or neither — no toggle desync, no hold-to-activate.
+ * pause, FF, both, or neither — absolute desired state, not a raw key toggle.
+ *
+ * Host expands these fields into ArchStreamer intents (see EmulatorControlPlane):
+ * stateful Pause / FastForward; action kinds (ScreenSwap, …) via [action].
  */
 enum class EmulatorControlState : std::uint8_t {
     Unchanged = 0,
@@ -308,10 +311,18 @@ enum class EmulatorControlState : std::uint8_t {
     On = 2,
 };
 
+/** One-shot EmulatorControlPlane action codes (0 = none; ≥64 match EmulatorIntentKind). */
+constexpr std::uint8_t EmulatorControlActionNone = 0;
+constexpr std::uint8_t EmulatorControlActionScreenSwap = 64;
+
 struct EmulatorControl {
     ClientId client_id = 0;
     EmulatorControlState pause = EmulatorControlState::Unchanged;
     EmulatorControlState fast_forward = EmulatorControlState::Unchanged;
+    /** Non-zero: host re-applies even when its cache already matches (idempotent backends). */
+    std::uint8_t force = 0;
+    /** 0 = none; otherwise an EmulatorIntentKind action code (e.g. ScreenSwap=64). */
+    std::uint8_t action = EmulatorControlActionNone;
 };
 
 enum class MediaQualityTier : std::uint8_t {

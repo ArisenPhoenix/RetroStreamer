@@ -25,6 +25,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import com.archstreamer.client.protocol.SoftKeyboardRequest
+import kotlinx.coroutines.yield
 
 /**
  * Host SoftKeyboardRequest UI — submit one string (or cancel).
@@ -43,7 +44,11 @@ fun SoftKeyboardDialog(
     val focusRequester = remember { FocusRequester() }
 
     LaunchedEffect(request.requestId) {
-        focusRequester.requestFocus()
+        // Wait until the TextField has the FocusRequester modifier applied.
+        // A waking BT keyboard can tear composition mid-focus; unguarded
+        // requestFocus() throws IllegalStateException and kills the process.
+        yield()
+        runCatching { focusRequester.requestFocus() }
     }
 
     AlertDialog(

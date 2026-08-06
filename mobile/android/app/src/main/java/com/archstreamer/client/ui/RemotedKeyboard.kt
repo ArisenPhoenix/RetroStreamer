@@ -5,8 +5,9 @@ import com.archstreamer.client.protocol.ControllerState
 import com.archstreamer.client.protocol.RemotedKey
 
 /**
- * Remoted-key bits for host VirtualKeyboard (P pause, Space FF, …).
+ * Remoted-key bits for host VirtualKeyboard (Space FF hold on RetroArch, …).
  * Arrow keys are intentionally omitted — on mobile they map to joypad D-pad while playing.
+ * Keyboard F / P are handled via EmulatorControl (absolute FF / pause toggles), not remoted.
  */
 fun remotedKeyBitFromAndroidKeyCode(keyCode: Int): Int? = when (keyCode) {
     KeyEvent.KEYCODE_SPACE -> RemotedKey.SPACE
@@ -15,7 +16,6 @@ fun remotedKeyBitFromAndroidKeyCode(keyCode: Int): Int? = when (keyCode) {
     KeyEvent.KEYCODE_TAB -> RemotedKey.TAB
     KeyEvent.KEYCODE_DEL -> RemotedKey.BACKSPACE // Android DEL = Backspace
     KeyEvent.KEYCODE_F1 -> RemotedKey.F1
-    KeyEvent.KEYCODE_P -> RemotedKey.P
     KeyEvent.KEYCODE_F8 -> RemotedKey.F8
     else -> null
 }

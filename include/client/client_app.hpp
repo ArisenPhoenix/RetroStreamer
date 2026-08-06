@@ -105,28 +105,65 @@ struct ClientControllerMapPrefs {
     }
 };
 
-/** Explicit FF On/Off over the TCP control channel (parity with mobile remapped FF). */
+/** Explicit pause / FF / actions over the TCP control channel (host owns actuators). */
 struct EmulatorControlBridge {
     std::mutex mutex;
     bool want_fast_forward = false;
     bool sent_fast_forward = false;
+    bool want_paused = false;
+    bool sent_paused = false;
+    bool have_sent_paused = false;
+    bool pending_screen_swap = false;
 
     void set_fast_forward_held(bool held) {
         std::lock_guard lock(mutex);
         want_fast_forward = held;
     }
 
+    /** Absolute pause On/Off (menu / failsafe). */
+    void set_paused(bool paused) {
+        std::lock_guard lock(mutex);
+        want_paused = paused;
+    }
+
+    /** Keyboard P edge while not in OSK — toggle desired pause. */
+    void toggle_pause() {
+        std::lock_guard lock(mutex);
+        want_paused = !want_paused;
+    }
+
+    void request_screen_swap() {
+        std::lock_guard lock(mutex);
+        pending_screen_swap = true;
+    }
+
     std::optional<EmulatorControl> take_pending(ClientId client_id) {
         std::lock_guard lock(mutex);
-        if (want_fast_forward == sent_fast_forward) {
+        const bool ff_changed = want_fast_forward != sent_fast_forward;
+        const bool pause_changed = !have_sent_paused || want_paused != sent_paused;
+        if (!ff_changed && !pause_changed && !pending_screen_swap) {
             return std::nullopt;
         }
-        sent_fast_forward = want_fast_forward;
         EmulatorControl control;
         control.client_id = client_id;
-        control.fast_forward = want_fast_forward
-            ? EmulatorControlState::On
-            : EmulatorControlState::Off;
+        if (pause_changed) {
+            sent_paused = want_paused;
+            have_sent_paused = true;
+            control.pause = want_paused
+                ? EmulatorControlState::On
+                : EmulatorControlState::Off;
+            control.force = 1;
+        }
+        if (ff_changed) {
+            sent_fast_forward = want_fast_forward;
+            control.fast_forward = want_fast_forward
+                ? EmulatorControlState::On
+                : EmulatorControlState::Off;
+        }
+        if (pending_screen_swap) {
+            pending_screen_swap = false;
+            control.action = EmulatorControlActionScreenSwap;
+        }
         return control;
     }
 
@@ -134,6 +171,10 @@ struct EmulatorControlBridge {
         std::lock_guard lock(mutex);
         want_fast_forward = false;
         sent_fast_forward = false;
+        want_paused = false;
+        sent_paused = false;
+        have_sent_paused = false;
+        pending_screen_swap = false;
     }
 };
 
@@ -230,10 +271,13 @@ struct SoftKeyboardBridge {
     std::mutex mutex;
     std::optional<SoftKeyboardRequest> pending_request;
     std::optional<SoftKeyboardResponse> pending_response;
+    /** True while the pad OSK dialog is up — remoted P must not become pause. */
+    bool dialog_open = false;
 
     void set_request(SoftKeyboardRequest request) {
         std::lock_guard lock(mutex);
         pending_request = std::move(request);
+        dialog_open = true;
     }
 
     std::optional<SoftKeyboardRequest> take_request() {
@@ -246,6 +290,7 @@ struct SoftKeyboardBridge {
     void submit_response(SoftKeyboardResponse response) {
         std::lock_guard lock(mutex);
         pending_response = std::move(response);
+        dialog_open = false;
     }
 
     std::optional<SoftKeyboardResponse> take_response() {
@@ -253,6 +298,11 @@ struct SoftKeyboardBridge {
         auto response = pending_response;
         pending_response.reset();
         return response;
+    }
+
+    bool is_dialog_open() {
+        std::lock_guard lock(mutex);
+        return dialog_open;
     }
 };
 

@@ -5,7 +5,7 @@ import org.json.JSONObject
 
 /**
  * What a control does when pressed. [Default] resolves from [OverlayControlKind.defaultAction].
- * Remap e.g. R → R2 for melonDS screen swap.
+ * Remap e.g. Select → Fast-forward, or a shoulder → Screen Swap.
  */
 enum class OverlayAction(val id: String, val title: String) {
     Default("default", "Default"),
@@ -16,13 +16,14 @@ enum class OverlayAction(val id: String, val title: String) {
     ButtonL("l", "L"),
     ButtonR("r", "R"),
     ButtonL2("l2", "L2"),
-    ButtonR2("r2", "R2 (swap screens)"),
+    ButtonR2("r2", "R2"),
     Select("select", "Select"),
     Start("start", "Start"),
     Menu("menu", "Menu"),
     LeftStick("left_stick", "Left stick"),
     RightStick("right_stick", "Right stick"),
     FastForward("ff", "Fast-forward"),
+    ScreenSwap("screen_swap", "Screen swap"),
     ;
 
     companion object {
@@ -57,6 +58,7 @@ enum class OverlayControlKind(
     FaceAbxy("face_abxy", "A / B / X / Y", OverlayAction.Default, remappable = false),
     FaceAb("face_ab", "A / B", OverlayAction.Default, remappable = false),
     FastForward("ff", "Fast-forward", OverlayAction.FastForward, remappable = true),
+    ScreenSwap("screen_swap", "Screen swap", OverlayAction.ScreenSwap, remappable = true),
     ;
 
     companion object {
@@ -160,8 +162,8 @@ object OverlayPresets {
             item(OverlayControlKind.ShoulderL, 0.10f, 0.08f),
             item(OverlayControlKind.Select, 0.42f, 0.09f),
             item(OverlayControlKind.Start, 0.58f, 0.09f),
-            // R2 = melonDS "Swap screens" (same as desktop right trigger).
-            item(OverlayControlKind.ShoulderR2, 0.78f, 0.08f),
+            // Dedicated Screen Swap (EmulatorControl action) — not R2.
+            item(OverlayControlKind.ScreenSwap, 0.78f, 0.08f),
             item(OverlayControlKind.ShoulderR, 0.90f, 0.08f),
             // Keep dpad/face on the top screen so the bottom pane stays tappable.
             // Landscape: left ~75% is top (EmphTop). Portrait stack: upper half is top.
@@ -184,6 +186,7 @@ object OverlayPresets {
         OverlayControlKind.FaceAbxy -> item(kind, 0.84f, 0.78f)
         OverlayControlKind.FaceAb -> item(kind, 0.82f, 0.72f)
         OverlayControlKind.FastForward -> item(kind, 0.50f, 0.22f)
+        OverlayControlKind.ScreenSwap -> item(kind, 0.78f, 0.08f)
     }
 
     private fun item(kind: OverlayControlKind, cx: Float, cy: Float, scale: Float = 1f) =

@@ -500,6 +500,8 @@ ByteBuffer serialize_payload(const EmulatorControl& payload) {
     writer.write_pod<ClientId>(payload.client_id);
     writer.write_pod<std::uint8_t>(static_cast<std::uint8_t>(payload.pause));
     writer.write_pod<std::uint8_t>(static_cast<std::uint8_t>(payload.fast_forward));
+    writer.write_pod<std::uint8_t>(payload.force);
+    writer.write_pod<std::uint8_t>(payload.action);
     return writer.take();
 }
 
@@ -1091,6 +1093,8 @@ EmulatorControl read_emulator_control(Reader& reader) {
     payload.client_id = reader.read_pod<ClientId>();
     payload.pause = static_cast<EmulatorControlState>(reader.read_pod<std::uint8_t>());
     payload.fast_forward = static_cast<EmulatorControlState>(reader.read_pod<std::uint8_t>());
+    payload.force = reader.read_pod<std::uint8_t>();
+    payload.action = reader.read_pod<std::uint8_t>();
     return payload;
 }
 

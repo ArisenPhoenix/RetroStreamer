@@ -57,19 +57,28 @@ public:
     void set_target_pid(int pid) { target_pid_ = pid; }
 
     /**
-     * Switch/Ryujinx: P via XTest F5; FF uses Custom VSync @ 200% (~2x) via F1
-     * mode cycle (Switch → Unbounded → Custom). RetroArch: NCI pause + Space hold-FF.
+     * Switch/Ryujinx: P via XTest F5; FF via F1 VSync cycle to Custom@200%.
+     * melonDS: F5 pause toggle + Space hold-FF (Keyboard binds in melonDS.toml).
+     * RetroArch: NCI pause + Space hold-FF.
      */
     void set_switch_style_hotkeys(bool enabled) { switch_style_hotkeys_ = enabled; }
+    void set_melonds_style_hotkeys(bool enabled) { melonds_style_hotkeys_ = enabled; }
 
     /** Per-session RetroArch network_cmd_port (multi-slot hosts). */
     void set_netcmd_port(std::uint16_t port) { netcmd_port_ = port; }
 
     void apply(const KeyboardState& state);
-    /** Absolute pause / FF from EmulatorControl (preferred over remoted key toggles). */
+    /**
+     * Absolute pause / FF from EmulatorControl. Prefer EmulatorControlPlane as
+     * the ingress; this remains for direct callers and remoted-key bridges.
+     */
     void apply_emulator_control(const EmulatorControl& control);
-    void set_paused(bool want_paused);
-    void set_fast_forward(bool want_on);
+    void set_paused(bool want_paused, bool force = false);
+    void set_fast_forward(bool want_on, bool force = false);
+    /** If FF is desired on, re-press the hold key (after unpause focus steal). */
+    void reassert_fast_forward_hold();
+    /** One-shot melonDS screen swap (keyboard F6); no-op on other backends. */
+    void trigger_screen_swap();
     void release_all();
 
 private:
@@ -79,7 +88,8 @@ private:
     bool focus_emulator_window(bool settle);
     void xtest_tap_keysym(unsigned long keysym);
     void xtest_set_keysym(unsigned long keysym, bool down);
-    void set_retroarch_ff_space_held(bool want_held);
+    void set_ff_key_held(bool want_held);
+    unsigned long ff_hold_keysym() const;
 
     std::string capture_display_;
     void* display_ = nullptr; // Display*
@@ -88,14 +98,16 @@ private:
     bool logged_ff_ = false;
     bool logged_focus_miss_ = false;
     bool switch_style_hotkeys_ = false;
+    bool melonds_style_hotkeys_ = false;
     bool paused_ = false;
     bool fast_forward_ = false;
-    /** True while we are holding Space for RetroArch hold-fast-forward. */
-    bool ff_space_held_ = false;
+    /** True while holding the FF key (Space for RetroArch hold-FF). */
+    bool ff_key_held_ = false;
     /**
-     * True while Ryujinx is in Switch (1x) VSync mode. FF moves to Custom @ 200%
-     * (two F1 taps from Switch); FF off returns with one F1 tap.
+     * Ryujinx F1 VSync cycle index: 0=Switch, 1=Unbounded, 2=Custom@200%.
+     * ryujinx_switch_vsync_ mirrors (mode==0) for older call sites.
      */
+    std::uint8_t ryujinx_vsync_mode_ = 0;
     bool ryujinx_switch_vsync_ = true;
     int target_pid_ = 0;
     std::uint16_t netcmd_port_ = DefaultRetroArchNetcmdPort;

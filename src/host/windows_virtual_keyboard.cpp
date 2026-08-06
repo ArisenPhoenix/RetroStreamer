@@ -107,6 +107,11 @@ void VirtualKeyboard::rebind_display(std::string capture_display) {
 
 void VirtualKeyboard::plug() {
     plugged_ = true;
+    paused_ = false;
+    fast_forward_ = false;
+    ff_key_held_ = false;
+    ryujinx_vsync_mode_ = 0;
+    ryujinx_switch_vsync_ = true;
 }
 
 void VirtualKeyboard::unplug() {
@@ -149,37 +154,67 @@ void VirtualKeyboard::apply_xtest_edges(std::uint32_t previous, std::uint32_t ne
 
 void VirtualKeyboard::apply_xtest_space_autorepeat() {}
 
-void VirtualKeyboard::set_retroarch_ff_space_held(bool want_held) {
-    if (want_held == ff_space_held_) {
+unsigned long VirtualKeyboard::ff_hold_keysym() const {
+    // Windows uses VK codes in set_ff_key_held; keysym unused.
+    return 0;
+}
+
+void VirtualKeyboard::set_ff_key_held(bool want_held) {
+    const WORD vk = VK_SPACE;
+    if (want_held == ff_key_held_) {
         if (want_held) {
-            send_vk(VK_SPACE, true);
+            send_vk(vk, true);
         }
         return;
     }
-    send_vk(VK_SPACE, want_held);
-    ff_space_held_ = want_held;
+    send_vk(vk, want_held);
+    ff_key_held_ = want_held;
 }
 
-void VirtualKeyboard::set_paused(bool want_paused) {
-    if (!plugged_) {
+void VirtualKeyboard::reassert_fast_forward_hold() {
+    if (!plugged_ || !fast_forward_) {
         return;
     }
     if (switch_style_hotkeys_) {
-        if (want_paused == paused_) {
+        return;
+    }
+    set_ff_key_held(true);
+}
+
+void VirtualKeyboard::set_paused(bool want_paused, bool force) {
+    if (!plugged_) {
+        return;
+    }
+    if (want_paused == paused_) {
+        if ((switch_style_hotkeys_ || melonds_style_hotkeys_) && !force) {
             return;
         }
+        if (!switch_style_hotkeys_ && !melonds_style_hotkeys_) {
+            if (!force) {
+                const auto current = query_retroarch_paused(netcmd_port_);
+                if (current.has_value() && *current == want_paused) {
+                    return;
+                }
+                if (!current.has_value()) {
+                    return;
+                }
+            }
+        }
+    }
+    if (switch_style_hotkeys_ || melonds_style_hotkeys_) {
         tap_vk(VK_F5);
         paused_ = want_paused;
         std::cout
             << "EmulatorControl: pause=" << (want_paused ? "on" : "off")
-            << " (SendInput F5)\n";
+            << " (SendInput F5" << (melonds_style_hotkeys_ ? "/melonDS" : "")
+            << (force ? ", force" : "") << ")\n";
         return;
     }
     if (set_retroarch_paused(want_paused, netcmd_port_)) {
         paused_ = want_paused;
         std::cout
             << "EmulatorControl: pause=" << (want_paused ? "on" : "off")
-            << " (netcmd " << netcmd_port_ << ")\n";
+            << " (netcmd " << netcmd_port_ << (force ? ", force" : "") << ")\n";
     } else if (want_paused) {
         if (send_retroarch_netcmd("PAUSE_TOGGLE", netcmd_port_)) {
             paused_ = true;
@@ -188,61 +223,88 @@ void VirtualKeyboard::set_paused(bool want_paused) {
     }
 }
 
-void VirtualKeyboard::set_fast_forward(bool want_on) {
+void VirtualKeyboard::set_fast_forward(bool want_on, bool force) {
     if (!plugged_) {
         return;
     }
     if (switch_style_hotkeys_) {
-        if (want_on == fast_forward_) {
+        if (want_on == fast_forward_ && !force) {
             return;
         }
         if (want_on) {
-            if (ryujinx_switch_vsync_) {
+            if (force && ryujinx_vsync_mode_ != 0) {
+                while (ryujinx_vsync_mode_ != 0) {
+                    tap_vk(VK_F1);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(40));
+                    ryujinx_vsync_mode_ = static_cast<std::uint8_t>((ryujinx_vsync_mode_ + 1) % 3);
+                }
+            }
+            if (ryujinx_vsync_mode_ == 0) {
                 tap_vk(VK_F1);
                 std::this_thread::sleep_for(std::chrono::milliseconds(40));
                 tap_vk(VK_F1);
-                ryujinx_switch_vsync_ = false;
+                ryujinx_vsync_mode_ = 2;
             }
-        } else if (!ryujinx_switch_vsync_) {
-            tap_vk(VK_F1);
-            ryujinx_switch_vsync_ = true;
+            ryujinx_switch_vsync_ = false;
+            fast_forward_ = true;
+        } else {
+            int guard = 0;
+            while (ryujinx_vsync_mode_ != 0 && guard < 2) {
+                tap_vk(VK_F1);
+                std::this_thread::sleep_for(std::chrono::milliseconds(40));
+                ryujinx_vsync_mode_ = static_cast<std::uint8_t>((ryujinx_vsync_mode_ + 1) % 3);
+                ++guard;
+            }
+            ryujinx_switch_vsync_ = (ryujinx_vsync_mode_ == 0);
+            fast_forward_ = false;
         }
-        fast_forward_ = want_on;
         std::cout
             << "EmulatorControl: fast_forward=" << (want_on ? "on" : "off")
-            << " (SendInput F1 VSync cycle)\n";
+            << " (SendInput F1 VSync mode=" << static_cast<int>(ryujinx_vsync_mode_)
+            << (force ? ", force" : "") << ")\n";
         return;
     }
-    const bool already = (want_on == fast_forward_ && want_on == ff_space_held_);
-    if (already && want_on) {
-        set_retroarch_ff_space_held(true);
+    const bool already = (want_on == fast_forward_ && want_on == ff_key_held_);
+    if (already && !force) {
         return;
     }
-    if (already) {
+    if (already && force && want_on) {
+        set_ff_key_held(true);
         return;
     }
-    set_retroarch_ff_space_held(want_on);
+    set_ff_key_held(want_on);
     fast_forward_ = want_on;
     std::cout
         << "EmulatorControl: fast_forward=" << (want_on ? "on" : "off")
-        << " (hold Space)\n";
+        << " (hold Space" << (melonds_style_hotkeys_ ? "/melonDS" : "")
+        << (force ? ", force" : "") << ")\n";
+}
+
+void VirtualKeyboard::trigger_screen_swap() {
+    if (!plugged_) {
+        return;
+    }
+    if (!melonds_style_hotkeys_) {
+        std::cerr << "EmulatorControl: screen_swap ignored (not melonDS)\n";
+        return;
+    }
+    tap_vk(VK_F6);
+    std::cout << "EmulatorControl: screen_swap (SendInput F6/melonDS)\n";
 }
 
 void VirtualKeyboard::apply_emulator_control(const EmulatorControl& control) {
+    const bool force = control.force != 0;
     if (control.pause == EmulatorControlState::On) {
-        set_paused(true);
+        set_paused(true, force);
     } else if (control.pause == EmulatorControlState::Off) {
-        set_paused(false);
+        set_paused(false, force);
     }
     if (control.fast_forward == EmulatorControlState::On) {
-        set_fast_forward(true);
+        set_fast_forward(true, force);
     } else if (control.fast_forward == EmulatorControlState::Off) {
-        set_fast_forward(false);
-    } else if (
-        control.pause == EmulatorControlState::Off &&
-        fast_forward_ &&
-        !switch_style_hotkeys_) {
-        set_retroarch_ff_space_held(true);
+        set_fast_forward(false, force);
+    } else if (control.pause == EmulatorControlState::Off) {
+        reassert_fast_forward_hold();
     }
 }
 
@@ -272,12 +334,9 @@ void VirtualKeyboard::apply(const KeyboardState& state) {
                 break;
             }
             if (binding.key == KeyP) {
-                if (!switch_style_hotkeys_) {
-                    const auto current = query_retroarch_paused(netcmd_port_);
-                    set_paused(!(current.value_or(paused_)));
-                } else {
-                    set_paused(!paused_);
-                }
+                // Pause is EmulatorControl-only on every backend (RA netcmd / F5).
+                std::cerr
+                    << "Keyboard: remoted P ignored — use EmulatorControl pause\n";
                 break;
             }
             if (binding.netcmd != nullptr) {
@@ -294,11 +353,13 @@ void VirtualKeyboard::apply(const KeyboardState& state) {
     if (switch_style_hotkeys_) {
         const bool space_was = bit_down(previous, KeySpace);
         const bool space_now = bit_down(next, KeySpace);
-        if (space_now && !space_was) {
-            tap_vk(VK_SPACE);
+        if (space_now && !space_was && !fast_forward_) {
+            // Desktop remoted Space edge when EmulatorControl does not own FF.
+            send_vk(VK_SPACE, true);
+            send_vk(VK_SPACE, false);
         }
     } else if (!fast_forward_) {
-        set_retroarch_ff_space_held(bit_down(next, KeySpace));
+        set_ff_key_held(bit_down(next, KeySpace));
     }
 
     last_keys_ = next;
@@ -306,9 +367,9 @@ void VirtualKeyboard::apply(const KeyboardState& state) {
 }
 
 void VirtualKeyboard::release_all() {
-    if (ff_space_held_) {
-        send_vk(VK_SPACE, false);
-        ff_space_held_ = false;
+    if (ff_key_held_) {
+        set_ff_key_held(false);
+        fast_forward_ = false;
     }
     if (has_last_ && last_keys_ != 0) {
         apply_xtest_edges(last_keys_, 0);

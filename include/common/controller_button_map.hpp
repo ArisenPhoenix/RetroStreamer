@@ -54,6 +54,7 @@ enum class ControllerMapAction : std::uint8_t {
     LeftStick,
     RightStick,
     FastForward,
+    ScreenSwap,
 };
 
 /**
@@ -91,10 +92,11 @@ struct ControllerMapProfile {
     bool identity() const;
 };
 
-/** Rising-edge / hold bookkeeping for Menu and Fast-forward side effects. */
+/** Rising-edge / hold bookkeeping for Menu, Fast-forward, and Screen-swap side effects. */
 struct ControllerMapApplyState {
     bool prev_menu_down = false;
     bool prev_ff_held = false;
+    bool prev_screen_swap_down = false;
 };
 
 struct ControllerMapApplyExtras {
@@ -102,6 +104,8 @@ struct ControllerMapApplyExtras {
     /** True on the frame a Menu-bound source is newly pressed. */
     bool menu_edge = false;
     bool fast_forward_changed = false;
+    /** True on the frame a ScreenSwap-bound source is newly pressed. */
+    bool screen_swap_edge = false;
 };
 
 std::string_view controller_map_family_id(ControllerMapFamily family);

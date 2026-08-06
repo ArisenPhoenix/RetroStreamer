@@ -450,7 +450,7 @@ ClientRunResult ClientApp::join_session(
         config.input_port.has_value() &&
         config.filter.requested_players > 0 &&
         result.client_id.has_value();
-    // Viewers request 0 pads but still need remoted keyboard (Space=FF, P=pause).
+    // Viewers request 0 pads but still need remoted keyboard (Space=FF hold; P→EmulatorControl).
     const bool want_keyboard =
         config.input_port.has_value() &&
         config.send_keyboard &&
@@ -497,6 +497,7 @@ ClientRunResult ClientApp::join_session(
             want_pads,
             controller_map_prefs = callbacks.controller_map_prefs,
             emulator_control = callbacks.emulator_control,
+            soft_keyboard = callbacks.soft_keyboard,
             ds_touch = callbacks.ds_touch,
             keyboard_poller = std::move(keyboard_poller)
         ]() mutable {
@@ -504,6 +505,7 @@ ClientRunResult ClientApp::join_session(
             std::array<bool, MaxPlayersPerClient> have_last_sent{};
             KeyboardState last_keys{};
             bool have_last_keys = false;
+            bool prev_p_down = false;
             std::array<ControllerMapApplyState, MaxPlayersPerClient> map_apply_states{};
             constexpr auto kInputTick = std::chrono::milliseconds(4);
             constexpr int kChangeCopies = 3;
@@ -514,6 +516,7 @@ ClientRunResult ClientApp::join_session(
                     map_profile = controller_map_prefs->snapshot_active();
                 }
                 bool any_ff_held = false;
+                bool any_screen_swap = false;
                 if (want_pads && controller_backend.has_value()) {
                     for (LocalPlayerIndex player = 0; player < config.filter.requested_players; ++player) {
                         const auto state = controller_backend->poll(player);
@@ -531,6 +534,7 @@ ClientRunResult ClientApp::join_session(
                             map_apply_states[player],
                             map_extras);
                         any_ff_held = any_ff_held || map_extras.fast_forward_held;
+                        any_screen_swap = any_screen_swap || map_extras.screen_swap_edge;
                         for (int copy = 0; copy < copies; ++copy) {
                             auto sample = mapped;
                             // Distinct timestamps so host ordering accepts each UDP copy.
@@ -555,18 +559,33 @@ ClientRunResult ClientApp::join_session(
                 }
                 if (emulator_control) {
                     emulator_control->set_fast_forward_held(any_ff_held);
+                    if (any_screen_swap) {
+                        emulator_control->request_screen_swap();
+                    }
                 }
 
                 if (config.send_keyboard && keyboard_poller) {
                     if (const auto keys = keyboard_poller->poll(); keys.has_value()) {
-                        const bool changed = !have_last_keys || !same_keys(last_keys, *keys);
+                        auto wire = *keys;
+                        // P is never remoted — pause is EmulatorControl only (host picks
+                        // RA netcmd vs F5). Skip while pad OSK is typing a name.
+                        const bool p_down = key_down(wire, KeyP);
+                        wire.keys &= ~static_cast<std::uint32_t>(KeyP);
+                        const bool osk_open =
+                            soft_keyboard != nullptr && soft_keyboard->is_dialog_open();
+                        if (p_down && !prev_p_down && !osk_open && emulator_control) {
+                            emulator_control->toggle_pause();
+                        }
+                        prev_p_down = p_down;
+
+                        const bool changed = !have_last_keys || !same_keys(last_keys, wire);
                         const int copies = changed ? kChangeCopies : 1;
                         for (int copy = 0; copy < copies; ++copy) {
-                            auto sample = *keys;
+                            auto sample = wire;
                             sample.timestamp_us =
                                 archstreamer::steady_timestamp_us() + static_cast<std::uint64_t>(copy);
                             if (copy > 0) {
-                                sample.sequence = keys->sequence + static_cast<std::uint32_t>(copy);
+                                sample.sequence = wire.sequence + static_cast<std::uint32_t>(copy);
                             }
                             const auto packet = input_sender->make_keyboard(0, sample);
                             try {
@@ -577,7 +596,7 @@ ClientRunResult ClientApp::join_session(
                             } catch (...) {
                             }
                         }
-                        last_keys = *keys;
+                        last_keys = wire;
                         have_last_keys = true;
                     }
                 }

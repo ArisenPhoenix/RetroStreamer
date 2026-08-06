@@ -10,7 +10,8 @@
 
 namespace archstreamer {
 
-// Client-side capture of remoted hotkeys (Space=FF, P=pause, …).
+// Client-side capture of remoted hotkeys (Space=FF hold, …).
+// Pause (P) is not remoted — clients convert it to EmulatorControl.
 // The UDP KeyboardInput wire format is unchanged; this only samples local keys.
 //
 // Semantics (host InputRouter): remoted keys are session-wide — they do not

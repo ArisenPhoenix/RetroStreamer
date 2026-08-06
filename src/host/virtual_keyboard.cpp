@@ -136,12 +136,16 @@ void VirtualKeyboard::plug() {
     last_keys_ = 0;
     paused_ = false;
     fast_forward_ = false;
-    ff_space_held_ = false;
+    ff_key_held_ = false;
+    ryujinx_vsync_mode_ = 0;
+    ryujinx_switch_vsync_ = true;
     std::cout
         << "Virtual keyboard ready on " << capture_display_
         << (switch_style_hotkeys_
-                ? " (Ryujinx FF→hold F6 turbo@200%, P→F5 pause; arrows/Enter/Esc→XTest)\n"
-                : " (Space→XTest hold-FF, F8→Yuzu continuous FF, P→pause, F1→menu; arrows/Enter/Esc→XTest)\n");
+                ? " (Ryujinx FF→F1 VSync Custom@200%, P→F5 pause; arrows/Enter/Esc→XTest)\n"
+                : melonds_style_hotkeys_
+                    ? " (melonDS FF→hold Space, Pause→F5, Swap→F6; arrows/Enter/Esc→XTest)\n"
+                    : " (Space→XTest hold-FF, F8→Yuzu continuous FF, P→pause, F1→menu; arrows/Enter/Esc→XTest)\n");
 }
 
 void VirtualKeyboard::unplug() {
@@ -210,7 +214,7 @@ void VirtualKeyboard::apply_xtest_edges(std::uint32_t previous, std::uint32_t ne
 }
 
 void VirtualKeyboard::apply_xtest_space_autorepeat() {
-    // Unused — Space is handled in apply() / set_retroarch_ff_space_held().
+    // Unused — Space/F6 hold is handled in apply() / set_ff_key_held().
 }
 
 void VirtualKeyboard::xtest_tap_keysym(unsigned long keysym) {
@@ -246,16 +250,35 @@ void VirtualKeyboard::xtest_set_keysym(unsigned long keysym, bool down) {
     XFlush(display);
 }
 
-void VirtualKeyboard::set_retroarch_ff_space_held(bool want_held) {
-    if (want_held == ff_space_held_) {
+unsigned long VirtualKeyboard::ff_hold_keysym() const {
+    // RetroArch session cfg: input_hold_fast_forward=space.
+    // Ryujinx EmulatorControl FF uses F1 VSync taps (see set_fast_forward).
+    return XK_space;
+}
+
+void VirtualKeyboard::set_ff_key_held(bool want_held) {
+    const unsigned long keysym = ff_hold_keysym();
+    if (want_held == ff_key_held_) {
         if (want_held) {
             // Re-assert focus + down in case the capture window ate the key.
-            xtest_set_keysym(XK_space, true);
+            xtest_set_keysym(keysym, true);
         }
         return;
     }
-    xtest_set_keysym(XK_space, want_held);
-    ff_space_held_ = want_held;
+    xtest_set_keysym(keysym, want_held);
+    ff_key_held_ = want_held;
+}
+
+void VirtualKeyboard::reassert_fast_forward_hold() {
+    if (!plugged_ || !fast_forward_) {
+        return;
+    }
+    if (switch_style_hotkeys_) {
+        // Ryujinx FF is tap-based (F1), not a hold key.
+        return;
+    }
+    // RetroArch Space hold and melonDS HK_FastForward=Space.
+    set_ff_key_held(true);
 }
 
 namespace {
@@ -355,6 +378,8 @@ bool title_looks_like_emulator(const std::string& title) {
         lower.find("yuzu") != std::string::npos ||
         lower.find("suyu") != std::string::npos ||
         lower.find("sudachi") != std::string::npos ||
+        lower.find("melonds") != std::string::npos ||
+        lower.find("melon ds") != std::string::npos ||
         lower.find("retroarch") != std::string::npos;
 }
 
@@ -713,7 +738,7 @@ bool VirtualKeyboard::focus_emulator_window(bool settle) {
         if (!logged_focus_miss_) {
             logged_focus_miss_ = true;
             std::cerr
-                << "Virtual keyboard: no Ryujinx/yuzu window on " << capture_display_
+                << "Virtual keyboard: no emulator window on " << capture_display_
                 << " (pid=" << target_pid_ << ") — Space/FF will not reach the emulator\n";
         }
         return false;
@@ -736,7 +761,7 @@ bool VirtualKeyboard::focus_emulator_window(bool settle) {
         if (!logged_focus_miss_) {
             logged_focus_miss_ = true;
             std::cerr
-                << "Virtual keyboard: failed to focus Ryujinx/yuzu on " << capture_display_
+                << "Virtual keyboard: failed to focus emulator on " << capture_display_
                 << " (pid=" << target_pid_ << ") — F5/Space may miss the emulator\n";
         }
         return false;
@@ -744,29 +769,32 @@ bool VirtualKeyboard::focus_emulator_window(bool settle) {
     return true;
 }
 
-void VirtualKeyboard::set_paused(bool want_paused) {
+void VirtualKeyboard::set_paused(bool want_paused, bool force) {
     if (!plugged_) {
         return;
     }
-    // Client sends absolute On/Off (menu open ⇒ pause; overlay edit relaxes). F5 is a
-    // toggle, so we only tap when the desired state differs from our last applied value.
+    // Client sends absolute On/Off. F5 is a toggle, so we only tap when the
+    // desired state differs from our last applied value. force re-applies even
+    // when the cache matches — used to recover when the game drifted opposite
+    // the cache (e.g. a missed F5 earlier).
     if (want_paused == paused_) {
-        // Still reconcile RetroArch from GET_STATUS when possible.
-        if (!switch_style_hotkeys_) {
-            const auto current = query_retroarch_paused(netcmd_port_);
-            if (current.has_value() && *current == want_paused) {
-                return;
-            }
-            if (current.has_value()) {
-                // Local cache drifted — fall through and fix.
-            } else {
-                return;
-            }
-        } else {
+        if ((switch_style_hotkeys_ || melonds_style_hotkeys_) && !force) {
             return;
         }
+        if (!switch_style_hotkeys_ && !melonds_style_hotkeys_) {
+            if (!force) {
+                const auto current = query_retroarch_paused(netcmd_port_);
+                if (current.has_value() && *current == want_paused) {
+                    return;
+                }
+                if (!current.has_value()) {
+                    return;
+                }
+                // Local cache drifted — fall through and fix.
+            }
+        }
     }
-    if (switch_style_hotkeys_) {
+    if (switch_style_hotkeys_ || melonds_style_hotkeys_) {
         // Under gamescope, activate can report success while focus never sticks. If we
         // still flip paused_ after a missed F5, the next absolute On/Off inverts the game.
         if (!focus_emulator_window(/*settle=*/true)) {
@@ -792,14 +820,15 @@ void VirtualKeyboard::set_paused(bool want_paused) {
         paused_ = want_paused;
         std::cout
             << "EmulatorControl: pause=" << (want_paused ? "on" : "off")
-            << " (XTest F5) on " << capture_display_ << '\n';
+            << " (XTest F5" << (melonds_style_hotkeys_ ? "/melonDS" : "")
+            << (force ? ", force" : "") << ") on " << capture_display_ << '\n';
         return;
     }
     if (set_retroarch_paused(want_paused, netcmd_port_)) {
         paused_ = want_paused;
         std::cout
             << "EmulatorControl: pause=" << (want_paused ? "on" : "off")
-            << " (netcmd " << netcmd_port_ << ")\n";
+            << " (netcmd " << netcmd_port_ << (force ? ", force" : "") << ")\n";
     } else if (want_paused) {
         if (send_retroarch_netcmd("PAUSE_TOGGLE", netcmd_port_)) {
             paused_ = true;
@@ -808,71 +837,122 @@ void VirtualKeyboard::set_paused(bool want_paused) {
     }
 }
 
-void VirtualKeyboard::set_fast_forward(bool want_on) {
+void VirtualKeyboard::set_fast_forward(bool want_on, bool force) {
     if (!plugged_) {
         return;
     }
     if (switch_style_hotkeys_) {
-        if (want_on == fast_forward_) {
+        // Ryujinx: F1 cycles Switch(0) → Unbounded(1) → Custom@200%(2) → Switch.
+        // On = land on Custom (2 taps from Switch). Off = return to Switch
+        // (1 tap from Custom, or 2 from Unbounded if an On tap was missed).
+        if (want_on == fast_forward_ && !force) {
             return;
         }
-        // Ryujinx VSync modes cycle Switch → Unbounded → Custom → Switch (F1).
-        // Custom refresh is preconfigured at 200% (~2x). From Switch, two taps land
-        // on Custom; one tap from Custom returns to Switch. Brief Unbounded blip is OK.
+        if (!focus_emulator_window(/*settle=*/true)) {
+            std::cerr
+                << "EmulatorControl: fast_forward=" << (want_on ? "on" : "off")
+                << " skipped — no emulator focus on " << capture_display_ << '\n';
+            // Do not update caches — client may retry Off; updating would strand turbo.
+            return;
+        }
         if (want_on) {
-            if (ryujinx_switch_vsync_) {
+            // Drive to Custom@200% from Switch. If force and we were already in a
+            // non-Switch mode, step back to Switch first so two taps land on Custom.
+            if (force && ryujinx_vsync_mode_ != 0) {
+                while (ryujinx_vsync_mode_ != 0) {
+                    xtest_tap_keysym(XK_F1);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(40));
+                    ryujinx_vsync_mode_ = static_cast<std::uint8_t>((ryujinx_vsync_mode_ + 1) % 3);
+                }
+            }
+            if (ryujinx_vsync_mode_ == 0) {
                 xtest_tap_keysym(XK_F1);
                 std::this_thread::sleep_for(std::chrono::milliseconds(40));
                 xtest_tap_keysym(XK_F1);
-                ryujinx_switch_vsync_ = false;
+                ryujinx_vsync_mode_ = 2; // Custom
             }
-        } else if (!ryujinx_switch_vsync_) {
-            xtest_tap_keysym(XK_F1);
-            ryujinx_switch_vsync_ = true;
+            ryujinx_switch_vsync_ = false;
+            fast_forward_ = true;
+        } else {
+            // Return to Switch. From Custom need 1 tap; from Unbounded need 2
+            // (On tap missed → landed Unbounded while we thought Custom).
+            int guard = 0;
+            while (ryujinx_vsync_mode_ != 0 && guard < 2) {
+                xtest_tap_keysym(XK_F1);
+                std::this_thread::sleep_for(std::chrono::milliseconds(40));
+                ryujinx_vsync_mode_ = static_cast<std::uint8_t>((ryujinx_vsync_mode_ + 1) % 3);
+                ++guard;
+            }
+            ryujinx_switch_vsync_ = (ryujinx_vsync_mode_ == 0);
+            fast_forward_ = false;
         }
-        fast_forward_ = want_on;
         std::cout
             << "EmulatorControl: fast_forward=" << (want_on ? "on" : "off")
-            << " (Ryujinx VSync " << (want_on ? "Custom@200%" : "Switch")
-            << ") on " << capture_display_ << '\n';
+            << " (Ryujinx VSync mode=" << static_cast<int>(ryujinx_vsync_mode_)
+            << (want_on ? " Custom@200%" : " Switch")
+            << (force ? ", force" : "") << ") on " << capture_display_ << '\n';
         return;
     }
 
-    // RetroArch session cfg: input_hold_fast_forward=space, toggle=nul.
-    // Hold Space for as long as the client wants FF — toggle netcmd desyncs easily.
-    // force refresh when already on so menu-close can re-assert after unpause.
-    const bool already = (want_on == fast_forward_ && want_on == ff_space_held_);
-    if (already && want_on) {
-        set_retroarch_ff_space_held(true);
+    // RetroArch hold-FF and melonDS HK_FastForward — Space while held.
+    const bool already = (want_on == fast_forward_ && want_on == ff_key_held_);
+    if (already && !force) {
         return;
     }
-    if (already) {
+    if (melonds_style_hotkeys_) {
+        // Same focus gate as pause: under gamescope a missed Space strands FF state.
+        if (!focus_emulator_window(/*settle=*/true)) {
+            std::cerr
+                << "EmulatorControl: fast_forward=" << (want_on ? "on" : "off")
+                << " skipped — no emulator focus on " << capture_display_ << '\n';
+            return;
+        }
+    }
+    if (already && force && want_on) {
+        set_ff_key_held(true);
         return;
     }
-    set_retroarch_ff_space_held(want_on);
+    set_ff_key_held(want_on);
     fast_forward_ = want_on;
     std::cout
         << "EmulatorControl: fast_forward=" << (want_on ? "on" : "off")
-        << " (hold Space on " << capture_display_ << ")\n";
+        << " (hold Space" << (melonds_style_hotkeys_ ? "/melonDS" : "")
+        << (force ? ", force" : "") << ") on " << capture_display_ << '\n';
+}
+
+void VirtualKeyboard::trigger_screen_swap() {
+    if (!plugged_) {
+        return;
+    }
+    if (!melonds_style_hotkeys_) {
+        std::cerr << "EmulatorControl: screen_swap ignored (not melonDS)\n";
+        return;
+    }
+    if (!focus_emulator_window(/*settle=*/true)) {
+        std::cerr
+            << "EmulatorControl: screen_swap skipped — no emulator focus on "
+            << capture_display_ << '\n';
+        return;
+    }
+    xtest_tap_keysym(XK_F6);
+    std::cout
+        << "EmulatorControl: screen_swap (XTest F6/melonDS) on " << capture_display_
+        << '\n';
 }
 
 void VirtualKeyboard::apply_emulator_control(const EmulatorControl& control) {
+    const bool force = control.force != 0;
     if (control.pause == EmulatorControlState::On) {
-        set_paused(true);
+        set_paused(true, force);
     } else if (control.pause == EmulatorControlState::Off) {
-        set_paused(false);
+        set_paused(false, force);
     }
     if (control.fast_forward == EmulatorControlState::On) {
-        set_fast_forward(true);
+        set_fast_forward(true, force);
     } else if (control.fast_forward == EmulatorControlState::Off) {
-        set_fast_forward(false);
-    } else if (
-        control.pause == EmulatorControlState::Off &&
-        fast_forward_ &&
-        !switch_style_hotkeys_) {
-        // Unpause can steal focus; re-assert Space hold so RetroArch FF stays active.
-        // Ryujinx uses F6 toggles — do not re-tap or we would flip turbo off.
-        set_retroarch_ff_space_held(true);
+        set_fast_forward(false, force);
+    } else if (control.pause == EmulatorControlState::Off) {
+        reassert_fast_forward_hold();
     }
 }
 
@@ -905,13 +985,10 @@ void VirtualKeyboard::apply(const KeyboardState& state) {
                 break;
             }
             if (binding.key == KeyP) {
-                // Desktop remoted P: toggle via explicit set (query when possible).
-                if (!switch_style_hotkeys_) {
-                    const auto current = query_retroarch_paused(netcmd_port_);
-                    set_paused(!(current.value_or(paused_)));
-                } else {
-                    set_paused(!paused_);
-                }
+                // Pause is EmulatorControl-only on every backend (RA netcmd / F5).
+                // Remoted P from a client is a bug — strip it client-side.
+                std::cerr
+                    << "Keyboard: remoted P ignored — use EmulatorControl pause\n";
                 break;
             }
             if (binding.netcmd != nullptr &&
@@ -939,15 +1016,12 @@ void VirtualKeyboard::apply(const KeyboardState& state) {
         apply_xtest_edges(previous, next);
     }
 
-    // Space → fast-forward:
-    // - Switch/Ryujinx + RetroArch: hold Space while the remoted key is down
-    //   (Ryujinx turbo_mode_while_held; RetroArch input_hold_fast_forward).
-    //   EmulatorControl owns the hold when fast_forward_ is set; remoted Space
-    //   only applies when FF control is off.
+    // Space → fast-forward hold when EmulatorControl FF is off (RetroArch).
+    // Ryujinx FF is EmulatorControl F1 taps only.
     const bool space_down = bit_down(next, KeySpace);
     const bool space_was = bit_down(previous, KeySpace);
     if (space_down != space_was && display_ != nullptr) {
-        if (!fast_forward_) {
+        if (!fast_forward_ && !switch_style_hotkeys_) {
             xtest_set_keysym(XK_space, space_down);
         }
     }
@@ -957,8 +1031,8 @@ void VirtualKeyboard::apply(const KeyboardState& state) {
 }
 
 void VirtualKeyboard::release_all() {
-    if (ff_space_held_) {
-        set_retroarch_ff_space_held(false);
+    if (ff_key_held_) {
+        set_ff_key_held(false);
         fast_forward_ = false;
     }
     KeyboardState empty{};

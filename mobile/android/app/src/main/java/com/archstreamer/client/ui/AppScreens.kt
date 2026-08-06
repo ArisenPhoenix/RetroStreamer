@@ -119,7 +119,7 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
                 viewModel.selectSection(NavSection.Settings)
                 closeDrawer()
             }
-            PlayMenuFocusItem.Pause -> viewModel.setPaused(!state.paused)
+            PlayMenuFocusItem.Pause -> viewModel.setPaused(!state.paused, force = true)
             PlayMenuFocusItem.FastForward -> viewModel.setFastForward(!state.fastForward)
             PlayMenuFocusItem.EditControls -> {
                 viewModel.beginOverlayEdit()
@@ -210,7 +210,7 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
                 onResyncAv = {
                     viewModel.resyncAv()
                 },
-                onPausedChange = viewModel::setPaused,
+                onPausedChange = { enabled -> viewModel.setPaused(enabled, force = true) },
                 onFastForwardChange = viewModel::setFastForward,
                 onDisconnect = {
                     viewModel.disconnect()
@@ -1154,7 +1154,7 @@ private fun ControlsSection(state: UiState, viewModel: ClientViewModel) {
                 "Defaults follow the game system. Edit a family to override layout, " +
                     "face swaps, opacity, and one named custom (separate landscape / portrait). " +
                     "While editing a custom, select a control and use Action to remap " +
-                    "(e.g. Select → Fast-forward, R → R2 for DS screen swap). Remaps apply to " +
+                    "(e.g. Select → Fast-forward, add Screen swap for DS). Remaps apply to " +
                     "the touch overlay and to a physical controller.",
                 style = MaterialTheme.typography.bodyMedium,
             )
@@ -1601,6 +1601,31 @@ private fun SettingsSection(state: UiState, viewModel: ClientViewModel) {
                 onCheckedChange = viewModel::setLogControls,
             )
         }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Log connections")
+                Text(
+                    if (state.logConnections) {
+                        "On — TCP connect/close and session/media bind lifecycle " +
+                            "are written to the on-device log (lines prefixed conn:). " +
+                            "Use Send logs to host after a play session."
+                    } else {
+                        "Off — no connection lifecycle lines. Enable to diagnose " +
+                            "drops, rebinds, and join ordering."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = state.logConnections,
+                onCheckedChange = viewModel::setLogConnections,
+            )
+        }
     }
 }
 
@@ -1652,6 +1677,7 @@ private fun PlayScreen(
                 onState = viewModel::onPadState,
                 onMenuClick = onOpenMenu,
                 onFastForwardHold = viewModel::setFastForward,
+                onScreenSwap = viewModel::triggerScreenSwap,
                 onItemsChange = viewModel::updateOverlayItems,
                 onDoneEditing = viewModel::finishOverlayEdit,
             )

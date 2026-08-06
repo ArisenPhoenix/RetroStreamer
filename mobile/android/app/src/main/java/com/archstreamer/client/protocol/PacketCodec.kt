@@ -251,11 +251,15 @@ object PacketCodec {
         clientId: Int,
         pause: EmulatorControlState = EmulatorControlState.Unchanged,
         fastForward: EmulatorControlState = EmulatorControlState.Unchanged,
+        force: Boolean = false,
+        action: Int = EmulatorControlAction.None,
     ): ByteArray {
         val payload = WireWriter().apply {
             writeU8(clientId)
             writeU8(pause.id)
             writeU8(fastForward.id)
+            writeU8(if (force) 1 else 0)
+            writeU8(action)
         }.toByteArray()
         return wrap(PacketType.EmulatorControl, payload)
     }

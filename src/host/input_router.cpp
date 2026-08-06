@@ -8,7 +8,7 @@
 namespace archstreamer {
 
 InputRouter::InputRouter(VirtualGamepadBus& gamepads, VirtualKeyboard* keyboard)
-    : gamepads_(gamepads), keyboard_(keyboard) {
+    : gamepads_(gamepads), keyboard_(keyboard), control_plane_(keyboard) {
 }
 
 void InputRouter::set_seat_assignment(SeatAssignment assignment) {
@@ -21,6 +21,11 @@ void InputRouter::set_seat_assignment(SeatAssignment assignment) {
 void InputRouter::set_touch_handler(TouchHandler handler) {
     std::lock_guard lock(mutex_);
     touch_handler_ = std::move(handler);
+}
+
+void InputRouter::set_emulator_backend(EmulatorControlBackend backend) {
+    std::lock_guard lock(mutex_);
+    control_plane_.set_backend(backend);
 }
 
 bool InputRouter::client_has_seat(ClientId client_id) const {
@@ -146,7 +151,7 @@ void InputRouter::apply_emulator_control(const EmulatorControl& control) {
     if (!client_has_seat(control.client_id) && control.client_id != HostClientId) {
         return;
     }
-    keyboard_->apply_emulator_control(control);
+    control_plane_.apply_from_client(control);
 }
 
 void InputRouter::neutralize_client(ClientId client_id) {

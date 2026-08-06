@@ -200,11 +200,12 @@ QWidget* MainWindow::build_client_tab() {
     client_players_ = new QSpinBox(form_box);
     client_players_->setRange(0, 2);
     client_players_->setValue(1);
-    client_send_keyboard_ = new QCheckBox("Send keyboard (Space=FF, P=pause)", form_box);
+    client_send_keyboard_ = new QCheckBox("Send keyboard (Space=FF; P=pause via EmulatorControl)", form_box);
     client_send_keyboard_->setChecked(true);
     client_send_keyboard_->setToolTip(
         "Forwards Space, P, arrows, Enter, Esc, Tab, Backspace, and F1 to the host.\n"
-        "Space = fast-forward (hold), F8 = Yuzu continuous FF, P = pause, F1 = RetroArch menu.\n"
+        "Space = fast-forward (hold), F8 = Yuzu continuous FF, P = pause (EmulatorControl), "
+        "F1 = RetroArch menu.\n"
         "Works even when the video window has focus (not only this GUI).");
     connect(client_port_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
         update_client_host_summary(client_host_label_);
@@ -569,6 +570,7 @@ QWidget* MainWindow::build_controls_tab() {
             archstreamer::ControllerMapAction::LeftStick,
             archstreamer::ControllerMapAction::RightStick,
             archstreamer::ControllerMapAction::FastForward,
+            archstreamer::ControllerMapAction::ScreenSwap,
         };
         for (const auto action : actions) {
             combo->addItem(
@@ -603,8 +605,8 @@ QWidget* MainWindow::build_controls_tab() {
     map_form->addRow("R3 (stick click) →", game_options_remap_r3_);
 
     auto* remap_hint = new QLabel(
-        "Remaps apply to physical button presses (e.g. L3 → Fast-forward, R → R2 for "
-        "DS screen swap). Stick movement, face A/B/X/Y, and the D-pad stay fixed; "
+        "Remaps apply to physical button presses (e.g. L3 → Fast-forward, Select → Screen swap "
+        "for DS). Stick movement, face A/B/X/Y, and the D-pad stay fixed; "
         "use Swap NW/SE for face buttons.",
         map_box);
     remap_hint->setWordWrap(true);

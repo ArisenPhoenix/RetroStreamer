@@ -1118,6 +1118,13 @@ void ActiveSessionSlot::run_session() {
 
     input_router_ = std::make_unique<InputRouter>(*gamepads_, keyboard_.get());
     input_router_->set_seat_assignment(launch_plan.seats);
+    if (switch_backend) {
+        input_router_->set_emulator_backend(EmulatorControlBackend::Ryujinx);
+    } else if (melonds_backend != nullptr) {
+        input_router_->set_emulator_backend(EmulatorControlBackend::MelonDS);
+    } else {
+        input_router_->set_emulator_backend(EmulatorControlBackend::RetroArch);
+    }
     melonds_touch_ctrl_.reset();
     if (melonds_backend != nullptr && melonds_backend->profile() != nullptr) {
         melonds_touch_ctrl_ = std::make_unique<MelonDsCtrlClient>(

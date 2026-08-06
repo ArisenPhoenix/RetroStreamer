@@ -27,6 +27,7 @@ import com.archstreamer.client.protocol.ControllerState
 import com.archstreamer.client.protocol.DisplayLayoutPreference
 import com.archstreamer.client.protocol.DiscControlAction
 import com.archstreamer.client.protocol.DsScreenLayout
+import com.archstreamer.client.protocol.EmulatorControlAction
 import com.archstreamer.client.protocol.EmulatorControlState
 import com.archstreamer.client.protocol.GameInfo
 import com.archstreamer.client.protocol.LinkAction
@@ -182,6 +183,11 @@ data class UiState(
      * to the on-device client log (use Send logs to host to retrieve).
      */
     val logControls: Boolean = false,
+    /**
+     * Settings → Debug: append TCP/UDP connection open/close/lifecycle lines
+     * (`conn:` prefix) to the on-device client log.
+     */
+    val logConnections: Boolean = false,
     // Remote tab (SSH) — password is session-only, not persisted.
     val remoteSshHost: String = "",
     val remoteSshUser: String = "",
@@ -232,6 +238,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             streamSize = sizeFromPrefs(),
             logSessions = prefs.getString(KEY_LOG_SESSIONS, "3").orEmpty().ifBlank { "3" },
             logControls = prefs.getBoolean(KEY_LOG_CONTROLS, false),
+            logConnections = prefs.getBoolean(KEY_LOG_CONNECTIONS, false),
             editingOverlayFamily = OverlaySystemFamily.Standard,
             editingOverlayProfile = overlayProfiles[OverlaySystemFamily.Standard]
                 ?: OverlayProfile.DEFAULT,
@@ -329,6 +336,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             }
         },
         onFastForward = { held -> setFastForward(held) },
+        onScreenSwap = { triggerScreenSwap() },
     )
     private val inputManager = application.getSystemService(InputManager::class.java)
     private val inputDeviceListener = object : InputManager.InputDeviceListener {
@@ -353,6 +361,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         ClientFileLog.init(application)
+        ClientFileLog.logConnections = prefs.getBoolean(KEY_LOG_CONNECTIONS, false)
         inputManager?.registerInputDeviceListener(
             inputDeviceListener,
             Handler(Looper.getMainLooper()),
@@ -543,6 +552,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         OverlayAction.LeftStick -> ControllerMapAction.LeftStick
         OverlayAction.RightStick -> ControllerMapAction.RightStick
         OverlayAction.FastForward -> ControllerMapAction.FastForward
+        OverlayAction.ScreenSwap -> ControllerMapAction.ScreenSwap
     }
 
     private fun updateEditingMapProfile(transform: (ControllerMapProfile) -> ControllerMapProfile) {
@@ -967,6 +977,25 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             return true
         }
 
+        // F → toggle EmulatorControl fast-forward (edge only). Hold would release
+        // back to Off and cannot correct a host FF boolean stuck opposite the UI;
+        // a toggle always sends the flipped absolute On/Off.
+        if (keyCode == KeyEvent.KEYCODE_F) {
+            if (edge) {
+                setFastForward(!_state.value.fastForward, force = true)
+            }
+            return true
+        }
+
+        // P → absolute pause toggle (same ownership as menu pause). Never remoted:
+        // host remoted-P is a cache toggle that desyncs EmulatorControl On/Off.
+        if (keyCode == KeyEvent.KEYCODE_P) {
+            if (edge) {
+                setPaused(!_state.value.paused, force = true)
+            }
+            return true
+        }
+
         val bit = remotedKeyBitFromAndroidKeyCode(keyCode) ?: return false
         setRemotedKey(bit, down)
         return true
@@ -996,7 +1025,10 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             else -> Unit
         }
         // Consume other remoted keys so they do not hit the host while the menu owns input.
-        if (remotedKeyBitFromAndroidKeyCode(keyCode) != null) {
+        if (keyCode == KeyEvent.KEYCODE_F ||
+            keyCode == KeyEvent.KEYCODE_P ||
+            remotedKeyBitFromAndroidKeyCode(keyCode) != null
+        ) {
             return true
         }
         return false
@@ -1017,6 +1049,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             keyCode == KeyEvent.KEYCODE_SPACE ||
             keyCode == KeyEvent.KEYCODE_P ||
             keyCode == KeyEvent.KEYCODE_TAB ||
+            keyCode == KeyEvent.KEYCODE_F ||
             keyCode == KeyEvent.KEYCODE_F1 ||
             keyCode == KeyEvent.KEYCODE_F8
         ) {
@@ -1932,6 +1965,15 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
+    fun setLogConnections(enabled: Boolean) {
+        _state.update { it.copy(logConnections = enabled) }
+        prefs.edit().putBoolean(KEY_LOG_CONNECTIONS, enabled).apply()
+        ClientFileLog.logConnections = enabled
+        ClientFileLog.append(
+            if (enabled) "conn: logging enabled" else "conn: logging disabled",
+        )
+    }
+
     /** Append a controls-debug line when Settings → Debug → Log controls is on. */
     private fun logControl(message: String) {
         if (!_state.value.logControls) return
@@ -2100,19 +2142,12 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             // Initial Closed while playing / drawer open before first frame: do not poke.
             if (lastSentMenuPause == null && !wantPaused) return@launch
             if (lastSentMenuPause == wantPaused) return@launch
-            lastSentMenuPause = wantPaused
-            _state.update { it.copy(paused = wantPaused) }
             val reassertFf = !wantPaused && _state.value.fastForward
-            if (reassertFf) {
-                lastSentFf = true
-                lastFfSendAtMs = System.currentTimeMillis()
-            }
-            runCatching {
-                session?.sendEmulatorControl(
-                    pause = if (wantPaused) EmulatorControlState.On else EmulatorControlState.Off,
-                    fastForward = if (reassertFf) EmulatorControlState.On else EmulatorControlState.Unchanged,
-                )
-            }
+            pushEmulatorControls(
+                pause = wantPaused,
+                fastForward = if (reassertFf) true else null,
+                force = true,
+            )
         }
     }
 
@@ -2127,56 +2162,129 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             _state.update { it.copy(paused = false) }
             return
         }
-        lastSentMenuPause = false
-        _state.update { it.copy(paused = false) }
         val reassertFf = _state.value.fastForward
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching {
-                session?.sendEmulatorControl(
-                    pause = EmulatorControlState.Off,
-                    fastForward = if (reassertFf) EmulatorControlState.On else EmulatorControlState.Unchanged,
-                )
-            }
-        }
+        pushEmulatorControls(
+            pause = false,
+            fastForward = if (reassertFf) true else null,
+            force = true,
+        )
     }
 
     /**
      * Play-menu pause switch (same absolute On/Off model as fast-forward).
      * Failsafe when menu F5 desyncs: flip Pause to match what you want the game to do.
      * Pause On is ignored until at least one video frame has been decoded.
+     * @param force when true, re-send even if UI already matches (host cache may have drifted).
      */
-    fun setPaused(enabled: Boolean) {
+    fun setPaused(enabled: Boolean, force: Boolean = false) {
         if (!_state.value.playing) return
         if (enabled && session?.videoPlayer?.hasDecodedFrames() != true) return
-        if (_state.value.paused == enabled) return
+        if (!force && _state.value.paused == enabled) return
         menuPauseJob?.cancel()
         menuPauseJob = null
-        lastSentMenuPause = enabled
-        _state.update { it.copy(paused = enabled) }
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching {
-                session?.sendEmulatorControl(
-                    pause = if (enabled) EmulatorControlState.On else EmulatorControlState.Off,
-                )
-            }
-        }
+        pushEmulatorControls(pause = enabled, force = force)
     }
 
     /**
-     * Absolute FF On/Off (menu switch, overlay hold, or remapped physical button).
-     * UI updates immediately; host packets are coalesced and capped to once per second
-     * so Select-bounce / rapid taps cannot desync Ryujinx's F1 VSync cycle.
+     * Absolute FF On/Off (menu switch, overlay hold, remapped physical button, or
+     * keyboard F toggle). UI updates immediately; host packets are coalesced and
+     * capped to once per second so rapid taps cannot desync F1 VSync.
+     * Off always force-sends (and retries): a focus-missed Off leaves the host
+     * cache On while UI shows Off, and without a resend turbo sticks permanently.
      */
-    fun setFastForward(enabled: Boolean) {
+    fun setFastForward(enabled: Boolean, force: Boolean = false) {
         if (!_state.value.playing) return
         _state.update { it.copy(fastForward = enabled) }
         ffWanted = enabled
-        scheduleFastForwardSend()
+        val forceSend = force || !enabled
+        if (forceSend) {
+            lastSentFf = null
+        }
+        scheduleFastForwardSend(forceSend = forceSend, retryOff = !enabled)
+    }
+
+    /** One-shot DS screen swap via EmulatorControl action (melonDS F6). */
+    fun triggerScreenSwap() {
+        if (!_state.value.playing) return
+        val active = session ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                active.sendEmulatorControl(action = EmulatorControlAction.ScreenSwap)
+            }.onFailure { err ->
+                ClientFileLog.append(
+                    "EmulatorControl screen_swap failed: ${err.javaClass.simpleName}: ${err.message}",
+                )
+            }
+        }
+        ClientFileLog.append("emuControl action=ScreenSwap")
+    }
+
+    /**
+     * Single owner for desired pause / fast-forward → host EmulatorControlPlane.
+     * @param pause null = leave Unchanged on the wire; non-null updates UI + sends On/Off
+     * @param fastForward same
+     * @param force ask host to re-apply even if its cache already matches
+     */
+    private fun pushEmulatorControls(
+        pause: Boolean? = null,
+        fastForward: Boolean? = null,
+        force: Boolean = false,
+    ) {
+        if (!_state.value.playing) return
+        val active = session ?: return
+        if (pause != null) {
+            lastSentMenuPause = pause
+            _state.update { it.copy(paused = pause) }
+        }
+        if (fastForward != null) {
+            ffWanted = fastForward
+            _state.update { it.copy(fastForward = fastForward) }
+            if (force) {
+                lastSentFf = null
+            }
+        }
+        // Remoted P/Space must not fight absolute intents on the same session.
+        clearRemotedKeys()
+        val pauseWire = when (pause) {
+            true -> EmulatorControlState.On
+            false -> EmulatorControlState.Off
+            null -> EmulatorControlState.Unchanged
+        }
+        val ffWire = when (fastForward) {
+            true -> EmulatorControlState.On
+            false -> EmulatorControlState.Off
+            null -> EmulatorControlState.Unchanged
+        }
+        if (pauseWire == EmulatorControlState.Unchanged &&
+            ffWire == EmulatorControlState.Unchanged
+        ) {
+            return
+        }
+        if (fastForward != null) {
+            lastSentFf = fastForward
+            lastFfSendAtMs = System.currentTimeMillis()
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                active.sendEmulatorControl(
+                    pause = pauseWire,
+                    fastForward = ffWire,
+                    force = force,
+                )
+            }.onFailure { err ->
+                ClientFileLog.append(
+                    "EmulatorControl send failed: ${err.javaClass.simpleName}: ${err.message}",
+                )
+            }
+        }
+        ClientFileLog.append(
+            "emuControl push pause=${pause ?: "-"} ff=${fastForward ?: "-"} force=$force",
+        )
     }
 
     /**
      * Desktop "Resync A/V" fallback: restart Opus so audio meets the live video edge.
-     * Rate-limited to once per 15s (same as desktop client).
+     * Rate-limited to once per 15s (same as desktop client). Video is not touched.
      */
     fun resyncAv() {
         if (!_state.value.playing) {
@@ -2185,7 +2293,10 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         }
         viewModelScope.launch(Dispatchers.IO) {
             val status = when (tryResyncAudio(manual = true)) {
-                1 -> "Realigned audio to video."
+                1 -> {
+                    reassertEmulatorControlsAfterAvResync()
+                    "Realigned audio to video."
+                }
                 0 -> "A/V resync cooling down… try again shortly."
                 else -> "A/V resync failed (no audio stream?)."
             }
@@ -2194,8 +2305,9 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * Restart Opus to the live video edge. Shared by manual Resync and automatic
-     * stall recovery (desktop client_app).
+     * Same audio-only restart as the Resync button. Call only from a background
+     * coroutine — never inline on the heartbeat loop (that blocked and felt like
+     * a multi-second game freeze).
      * @return 1 ok, 0 cooling down, -1 failed
      */
     private fun tryResyncAudio(manual: Boolean): Int {
@@ -2218,8 +2330,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * Mirror desktop client_app: video stall while audio free-runs → when frames
-     * return, restart Opus so lip-sync meets the live edge again.
+     * After a video stall (≥3 zero-frame heartbeats), fire the same async audio
+     * restart as the Resync button when frames return — never block heartbeat.
      */
     private fun noteHeartbeatFrames(active: JoinedPlaySession, framesDelta: Int) {
         val video = active.videoPlayer ?: return
@@ -2236,15 +2348,31 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             }
             return
         }
-        if (audioRealignAfterVideoStall) {
+        zeroFrameStreak = 0
+        if (!audioRealignAfterVideoStall) return
+        audioRealignAfterVideoStall = false
+        viewModelScope.launch(Dispatchers.IO) {
             if (tryResyncAudio(manual = false) == 1) {
+                reassertEmulatorControlsAfterAvResync()
                 _state.update {
                     it.copy(status = "Video recovered; restarted audio to match (lip-sync).")
                 }
             }
         }
-        zeroFrameStreak = 0
-        audioRealignAfterVideoStall = false
+    }
+
+    /**
+     * Re-push absolute pause + FF after A/V resync so a host F1/F5 cache drift
+     * (common when FF was on across a stall) does not stick perpetual turbo.
+     */
+    private fun reassertEmulatorControlsAfterAvResync() {
+        val snap = _state.value
+        if (!snap.playing) return
+        pushEmulatorControls(
+            pause = snap.paused || lastSentMenuPause == true,
+            fastForward = snap.fastForward,
+            force = true,
+        )
     }
 
     private fun resetAvStallState() {
@@ -2254,26 +2382,42 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         lastAvResyncAtMs = 0L
     }
 
-    private fun scheduleFastForwardSend() {
+    private fun scheduleFastForwardSend(
+        forceSend: Boolean = false,
+        retryOff: Boolean = false,
+    ) {
         ffJob?.cancel()
         ffJob = viewModelScope.launch(Dispatchers.IO) {
             delay(FF_COALESCE_MS)
             if (!_state.value.playing) return@launch
             var want = ffWanted ?: return@launch
-            if (lastSentFf == want) return@launch
+            if (!forceSend && lastSentFf == want) return@launch
             val elapsed = System.currentTimeMillis() - lastFfSendAtMs
             if (lastFfSendAtMs > 0L && elapsed < FF_MIN_INTERVAL_MS) {
                 delay(FF_MIN_INTERVAL_MS - elapsed)
             }
             if (!_state.value.playing) return@launch
             want = ffWanted ?: return@launch
-            if (lastSentFf == want) return@launch
+            if (!forceSend && lastSentFf == want) return@launch
             lastSentFf = want
             lastFfSendAtMs = System.currentTimeMillis()
-            runCatching {
-                session?.sendEmulatorControl(
-                    fastForward = if (want) EmulatorControlState.On else EmulatorControlState.Off,
-                )
+            fun sendOnce(force: Boolean) {
+                runCatching {
+                    session?.sendEmulatorControl(
+                        fastForward = if (want) EmulatorControlState.On else EmulatorControlState.Off,
+                        force = force,
+                    )
+                }
+            }
+            sendOnce(force = forceSend)
+            // Focus-missed Off leaves Ryujinx in Custom/Unbounded while UI is Off.
+            if (retryOff && !want && ffWanted == false) {
+                delay(180L)
+                if (!_state.value.playing || ffWanted != false) return@launch
+                sendOnce(force = true)
+                delay(320L)
+                if (!_state.value.playing || ffWanted != false) return@launch
+                sendOnce(force = true)
             }
         }
     }
@@ -2529,6 +2673,12 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                             }
                         },
                     )
+                }
+                // Grace reconnect / fresh join: align host cache+emu to client defaults.
+                lastSentMenuPause = false
+                resetFastForwardSendState()
+                viewModelScope.launch(Dispatchers.IO) {
+                    pushEmulatorControls(pause = false, fastForward = false, force = true)
                 }
             }.onFailure { err ->
                 val msg = err.message ?: err.toString()
@@ -3155,6 +3305,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         private const val KEY_DISCOVERY_SEEDS = "discovery_seeds"
         private const val KEY_LOG_SESSIONS = "log_sessions"
         private const val KEY_LOG_CONTROLS = "log_controls"
+        private const val KEY_LOG_CONNECTIONS = "log_connections"
         private const val KEY_USE_PHYSICAL = "use_physical_controller"
         private const val KEY_REMOTE_SSH_HOST = "remote_ssh_host"
         private const val KEY_REMOTE_SSH_USER = "remote_ssh_user"

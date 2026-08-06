@@ -81,6 +81,7 @@ class PhysicalGamepadTracker(
     private val onState: (ControllerState) -> Unit,
     private val onMenuClick: () -> Unit,
     private val onFastForward: (Boolean) -> Unit,
+    private val onScreenSwap: () -> Unit,
 ) {
     private var buttons: Int = 0
     private var leftX: Short = 0
@@ -96,6 +97,8 @@ class PhysicalGamepadTracker(
     private var ffFromL2 = false
     private var ffFromR2 = false
     private var ffFromDigital = false
+    private var swapFromL2 = false
+    private var swapFromR2 = false
 
     fun reset() {
         clearFastForward()
@@ -196,6 +199,15 @@ class PhysicalGamepadTracker(
                 }
             }
             OverlayAction.Menu -> if (down) onMenuClick()
+            OverlayAction.ScreenSwap -> {
+                if (fromTriggerKind == OverlayControlKind.ShoulderL2 ||
+                    fromTriggerKind == OverlayControlKind.ShoulderR2
+                ) {
+                    // refreshTriggers owns L2/R2 → ScreenSwap edges.
+                    return
+                }
+                if (down) onScreenSwap()
+            }
             OverlayAction.ButtonA -> setButton(ControllerState.BUTTON_A, down)
             OverlayAction.ButtonB -> setButton(ControllerState.BUTTON_B, down)
             OverlayAction.ButtonX -> setButton(ControllerState.BUTTON_X, down)
@@ -233,12 +245,29 @@ class PhysicalGamepadTracker(
                     ffFromL2 = l2Down
                     publishFastForward()
                 }
+                if (swapFromL2) {
+                    swapFromL2 = false
+                }
+            }
+            OverlayAction.ScreenSwap -> {
+                leftTrigger = 0
+                if (ffFromL2) {
+                    ffFromL2 = false
+                    publishFastForward()
+                }
+                if (l2Down && !swapFromL2) {
+                    swapFromL2 = true
+                    onScreenSwap()
+                } else if (!l2Down) {
+                    swapFromL2 = false
+                }
             }
             else -> {
                 if (ffFromL2) {
                     ffFromL2 = false
                     publishFastForward()
                 }
+                swapFromL2 = false
                 leftTrigger = if (l2 == OverlayAction.ButtonL2 || l2 == OverlayAction.Default) {
                     triggerLevel(leftTriggerButton, leftTriggerAxis)
                 } else {
@@ -254,12 +283,29 @@ class PhysicalGamepadTracker(
                     ffFromR2 = r2Down
                     publishFastForward()
                 }
+                if (swapFromR2) {
+                    swapFromR2 = false
+                }
+            }
+            OverlayAction.ScreenSwap -> {
+                rightTrigger = 0
+                if (ffFromR2) {
+                    ffFromR2 = false
+                    publishFastForward()
+                }
+                if (r2Down && !swapFromR2) {
+                    swapFromR2 = true
+                    onScreenSwap()
+                } else if (!r2Down) {
+                    swapFromR2 = false
+                }
             }
             else -> {
                 if (ffFromR2) {
                     ffFromR2 = false
                     publishFastForward()
                 }
+                swapFromR2 = false
                 rightTrigger = if (r2 == OverlayAction.ButtonR2 || r2 == OverlayAction.Default) {
                     triggerLevel(rightTriggerButton, rightTriggerAxis)
                 } else {

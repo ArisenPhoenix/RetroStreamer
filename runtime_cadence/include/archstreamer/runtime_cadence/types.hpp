@@ -31,19 +31,22 @@ struct UserRecord {
     std::int64_t updated_at = 0;
 };
 
-/** Portable controls document (button_map JSON, future overlay kinds). */
+/** Portable controls document (button_map / overlay_profiles JSON). */
 struct ControlsRecord {
     std::string username;
-    /** e.g. "button_map". */
+    /** e.g. "button_map" or "overlay_profiles". */
     std::string kind = "button_map";
-    /** Full ControllerMapDocument JSON (or future schema). */
+    /** Full document JSON for the kind. */
     std::string document_json;
     int version = 1;
     std::int64_t updated_at = 0;
 };
 
 inline constexpr std::string_view kControlsKindButtonMap = "button_map";
+inline constexpr std::string_view kControlsKindOverlayProfiles = "overlay_profiles";
 inline constexpr std::string_view kControlsDefaultUsername = "_default";
+/** Soft cap for ControlsDbPull/Push pack payloads (real packs are a few KB). */
+inline constexpr std::size_t kControlsDbPackMaxBytes = 2u * 1024u * 1024u;
 
 /**
  * One live (or recently ended) play session. Resource claims hang off session_id.

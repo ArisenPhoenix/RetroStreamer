@@ -4,6 +4,7 @@
 #include "common/catalog_paths.hpp"
 #include "common/client_logs.hpp"
 #include "common/game_identity.hpp"
+#include "host/controls_db_sync.hpp"
 #include "host/save_active_sessions.hpp"
 #include "host/user_credentials.hpp"
 
@@ -588,6 +589,22 @@ SessionPlan gather_session_clients(
                 password_change != nullptr) {
                 stream->send_packet(serialize_packet(
                     acknowledge_password_change(save_root, *password_change)));
+                continue;
+            }
+            if (std::holds_alternative<ControlsDbPull>(first_payload)
+                || std::holds_alternative<ControlsDbPush>(first_payload)) {
+                if (std::holds_alternative<ControlsDbPull>(first_payload)) {
+                    ControlsDbResponse response;
+                    response.username = std::get<ControlsDbPull>(first_payload).username;
+                    response.found = false;
+                    stream->send_packet(serialize_packet(response));
+                } else {
+                    ControlsDbAck ack;
+                    ack.username = std::get<ControlsDbPush>(first_payload).username;
+                    ack.ok = false;
+                    ack.message = "connect with LobbyPresence or join a session first";
+                    stream->send_packet(serialize_packet(ack));
+                }
                 continue;
             }
             const auto* game_list_request = std::get_if<GameListRequest>(&first_payload);

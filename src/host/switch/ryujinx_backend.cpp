@@ -36,12 +36,12 @@ SwitchBackendPrepResult RyujinxBackend::prepare(
         ctx.players,
         ctx.verbose,
         ctx.product_id_base,
-        result.resolved_pads);
-    if (!pad_plan.exclusive()) {
-        pad_plan.ignore_devices = ctx.ignore_controller;
-    }
+        result.resolved_pads,
+        ctx.ignore_controller);
     result.resolved_pads = pad_plan.pads;
     result.pad_plan = pad_plan;
+    // exclusive_filter is the own-pad keep list (diagnostics); launch IGNORE comes from
+    // pad_plan.ignore_devices via apply_pad_plan.
     configure_ryujinx_archstreamer_controls(
         ryujinx_user, pad_plan.pads, pad_plan.exclusive_filter);
     result.ryujinx_profile = std::move(ryujinx_user);

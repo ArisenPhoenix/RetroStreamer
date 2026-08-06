@@ -50,15 +50,15 @@ MelonDsBackendPrepResult MelonDsBackend::prepare(
         ctx.players,
         ctx.verbose,
         ctx.product_id_base,
-        result.resolved_pads);
-    if (!pad_plan.exclusive()) {
-        pad_plan.ignore_devices = ctx.ignore_controller;
-    }
+        result.resolved_pads,
+        ctx.ignore_controller);
     result.resolved_pads = pad_plan.pads;
     result.pad_plan = pad_plan;
 
     MelonDsProfileSeed seed;
     seed.display_layout = ctx.display_layout;
+    // exclusive_filter is the own-pad keep list (diagnostics); launch IGNORE comes from
+    // pad_plan.ignore_devices via apply_pad_plan.
     apply_melonds_pad_seed(seed, result.resolved_pads, pad_plan.exclusive_filter);
 
     result.profile = prepare_melonds_user_profile(

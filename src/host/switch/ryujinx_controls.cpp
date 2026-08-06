@@ -153,7 +153,8 @@ void RyujinxControls::configure_archstreamer_controls(
     profile.sdl_device_filter = sdl_device_filter;
     std::cout << "Ryujinx Controls: bound " << pads.size()
               << " ArchStreamer pad(s) via GamepadSDL2 (+ SDL_GAMECONTROLLERCONFIG), sdl index "
-              << pads.front().sdl_index << (sdl_device_filter.empty() ? " (unfiltered)" : " (exclusive)")
+              << pads.front().sdl_index
+              << (sdl_device_filter.empty() ? " (unfiltered)" : " (keep " + sdl_device_filter + ")")
               << '\n';
 }
 

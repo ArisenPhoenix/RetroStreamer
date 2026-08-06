@@ -1,12 +1,12 @@
 package com.archstreamer.client.protocol
 
 /**
- * Wire types matching include/common/protocol.hpp (ProtocolVersion 21).
+ * Wire types matching include/common/protocol.hpp (ProtocolVersion 23).
  * Keep field order identical to the C++ serializers.
  */
 object Protocol {
     const val MAGIC: Int = 0x41525354 // "ARST"
-    const val VERSION: Int = 22
+    const val VERSION: Int = 23
     const val HEADER_SIZE: Int = 11 // u32 + u16 + u8 + u32, little-endian, no padding
 
     const val DEFAULT_CONTROL_PORT: Int = 45555
@@ -52,7 +52,11 @@ enum class PacketType(val id: Int) {
     TouchInput(32),
     DsScreenLayout(33),
     LobbyPresence(34),
-    LobbyPresenceAck(35);
+    LobbyPresenceAck(35),
+    ControlsDbPull(36),
+    ControlsDbResponse(37),
+    ControlsDbPush(38),
+    ControlsDbAck(39);
 
     companion object {
         fun fromId(id: Int): PacketType =
@@ -407,5 +411,15 @@ sealed class IncomingPacket {
     data class ActiveSession(val value: ActiveSessionInfo) : IncomingPacket()
     data object PasswordChangeRequired : IncomingPacket()
     data class LobbyPresenceAck(val clientId: Int) : IncomingPacket()
+    data class ControlsDb(val username: String, val found: Boolean, val dbBytes: ByteArray) : IncomingPacket() {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is ControlsDb) return false
+            return username == other.username && found == other.found && dbBytes.contentEquals(other.dbBytes)
+        }
+        override fun hashCode(): Int =
+            31 * (31 * username.hashCode() + found.hashCode()) + dbBytes.contentHashCode()
+    }
+    data class ControlsDbAck(val username: String, val ok: Boolean, val message: String) : IncomingPacket()
     data class Unknown(val type: PacketType) : IncomingPacket()
 }

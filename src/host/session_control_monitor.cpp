@@ -4,6 +4,7 @@
 #include "common/serialization.hpp"
 #include "host/active_session_slot.hpp"
 #include "host/cadence_session_events.hpp"
+#include "host/controls_db_sync.hpp"
 #include "host/host_session_hub.hpp"
 #include "host/retroarch_config_writer.hpp"
 #include "host/retroarch_netcmd.hpp"
@@ -302,6 +303,18 @@ std::optional<std::string> SessionControlMonitor::poll() {
                 try {
                     client.stream.send_packet(serialize_packet(
                         acknowledge_password_change(save_root_, *password_change)));
+                } catch (const std::exception&) {
+                }
+            } else if (std::holds_alternative<ControlsDbPull>(payload)
+                       || std::holds_alternative<ControlsDbPush>(payload)) {
+                try {
+                    const auto claimed = !client.hello.username.empty()
+                        ? client.hello.username
+                        : plan_.save_username;
+                    auto reply = handle_controls_db_packet(save_root_, claimed, payload);
+                    if (!reply.empty()) {
+                        client.stream.send_packet(reply);
+                    }
                 } catch (const std::exception&) {
                 }
             } else if (const auto* video_ready = std::get_if<MediaVideoReady>(&payload);

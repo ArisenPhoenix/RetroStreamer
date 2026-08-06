@@ -37,6 +37,7 @@ import com.archstreamer.client.protocol.Protocol
 import com.archstreamer.client.protocol.SoftKeyboardRequest
 import com.archstreamer.client.protocol.SoftKeyboardResponse
 import com.archstreamer.client.protocol.systemSupportsLink
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -53,6 +54,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 /** Mirrors the desktop GUI top-level tabs (client-only subset). */
 enum class NavSection(val title: String) {
@@ -73,8 +75,12 @@ data class UiState(
     val host: String = "",
     val controlPort: String = Protocol.DEFAULT_CONTROL_PORT.toString(),
     val inputPort: String = Protocol.DEFAULT_INPUT_PORT.toString(),
-    val username: String = "android",
-    /** Session-only password (not persisted). */
+    /** Save-profile username. Empty / placeholder "android" cannot edit or sync controls. */
+    val username: String = "",
+    /** True when [username] is a real save profile (not blank / not the android placeholder). */
+    val hasProfileUsername: Boolean = false,
+    /** Authenticated LobbyPresence or live session — required before Pull/Push. */
+    val controlsSyncReady: Boolean = false,
     val password: String = "",
     val newPassword: String = "",
     val confirmPassword: String = "",
@@ -199,10 +205,10 @@ data class UiState(
 
 class ClientViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = application.getSharedPreferences(PREFS_NAME, Application.MODE_PRIVATE)
-    private var overlayProfiles = OverlayProfileStore.loadAll(prefs).toMutableMap()
     private val cadenceControls = CadenceControlsStore(application)
     private val buttonMapFile =
         File(application.filesDir, ControllerMapDocument.FILE_NAME)
+    private var overlayProfiles = loadOverlayProfiles().toMutableMap()
     private var buttonMapDocument = loadButtonMapDocument()
     private var passwordChangeLatch: java.util.concurrent.CountDownLatch? = null
     @Volatile private var passwordChangeResult: String = ""
@@ -216,7 +222,12 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             inputPort = prefs.getString(KEY_INPUT_PORT, Protocol.DEFAULT_INPUT_PORT.toString())
                 .orEmpty()
                 .ifBlank { Protocol.DEFAULT_INPUT_PORT.toString() },
-            username = prefs.getString(KEY_USERNAME, "android").orEmpty().ifBlank { "android" },
+            username = prefs.getString(KEY_USERNAME, "").orEmpty().let { raw ->
+                if (raw.equals(PLACEHOLDER_USERNAME, ignoreCase = true)) "" else raw
+            },
+            hasProfileUsername = isProfileUsername(
+                prefs.getString(KEY_USERNAME, "").orEmpty(),
+            ),
             streamQuality = qualityFromPrefs(),
             streamSize = sizeFromPrefs(),
             logSessions = prefs.getString(KEY_LOG_SESSIONS, "3").orEmpty().ifBlank { "3" },
@@ -274,6 +285,9 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private var session: JoinedPlaySession? = null
     /** Open control TCP after Connect (Users-tab Connected) until play/disconnect. */
     private var lobbyPresence: ControlConnection? = null
+    /** In-flight ControlsDb reply while playing (session control loop delivers it). */
+    private val controlsSyncWaiter =
+        AtomicReference<CompletableDeferred<IncomingPacket>?>(null)
     private var inputJob: Job? = null
     private var heartbeatJob: Job? = null
     private var controlJob: Job? = null
@@ -287,6 +301,11 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     /** Latest user/overlay intent while [ffJob] coalesces + rate-limits. */
     private var ffWanted: Boolean? = null
     private var lastAvResyncAtMs: Long = 0L
+    /** Desktop client_app: ≥3 zero-frame heartbeats → realign audio when frames return. */
+    private var zeroFrameStreak = 0
+    private var audioRealignAfterVideoStall = false
+    /** Ignore pre-first-frame zeros (stream still starting). */
+    private var everDecodedVideoFrames = false
     private var latestPad = ControllerState()
     /** Last overlay/physical pad logged while [UiState.logControls] is on (dedupe spam). */
     private var lastLoggedSourcePad: ControllerState? = null
@@ -362,55 +381,114 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private fun mapProfileFor(family: OverlaySystemFamily): ControllerMapProfile =
         buttonMapDocument.profile(OverlaySystemFamily.toMapFamily(family))
 
-    private fun controlsUsername(): String =
-        prefs.getString(KEY_USERNAME, "android").orEmpty().ifBlank { "android" }
+    /**
+     * Real save-profile username for SQL persistence / host sync.
+     * Placeholder "android" and blank are local-only and never transported.
+     * Reads prefs (always initialized) so class property init is safe.
+     */
+    private fun profileUsernameOrNull(): String? {
+        val raw = prefs.getString(KEY_USERNAME, "").orEmpty().trim()
+        return raw.takeIf { isProfileUsername(it) }
+    }
+
+    private fun requireProfileUsername(): String =
+        profileUsernameOrNull()
+            ?: error("Set a save-profile username on the Profile tab first")
+
+    private fun loadOverlayProfiles(): Map<OverlaySystemFamily, OverlayProfile> {
+        val username = profileUsernameOrNull()
+        if (username != null) {
+            cadenceControls.findControls(username, CadenceControlsStore.KIND_OVERLAY_PROFILES)
+                ?.let { json ->
+                    OverlayProfileStore.decodeDocument(json)?.let { return it }
+                }
+            // One-shot import from SharedPreferences → SQL for this profile.
+            val fromPrefs = OverlayProfileStore.loadAll(prefs)
+            persistOverlayProfiles(fromPrefs, username)
+            return fromPrefs
+        }
+        return OverlayProfileStore.loadAll(prefs)
+    }
+
+    private fun persistOverlayProfiles(
+        profiles: Map<OverlaySystemFamily, OverlayProfile> = overlayProfiles,
+        username: String? = profileUsernameOrNull(),
+    ) {
+        OverlayProfileStore.saveAll(prefs, profiles)
+        if (username == null) return
+        val json = OverlayProfileStore.encodeDocument(profiles)
+        cadenceControls.upsertControls(
+            username = username,
+            kind = CadenceControlsStore.KIND_OVERLAY_PROFILES,
+            documentJson = json,
+            version = OverlayProfileStore.DOCUMENT_VERSION,
+        )
+    }
+
+    private fun reloadControlsFromLocalStore() {
+        overlayProfiles = loadOverlayProfiles().toMutableMap()
+        buttonMapDocument = loadButtonMapDocument()
+        val family = _state.value.editingOverlayFamily
+        _state.update {
+            it.copy(
+                editingOverlayProfile = overlayProfiles[family] ?: OverlayProfile.DEFAULT,
+                editingMapProfile = buttonMapDocument.profile(
+                    OverlaySystemFamily.toMapFamily(family),
+                ),
+            )
+        }
+    }
 
     private fun loadButtonMapDocument(): ControllerMapDocument {
-        val username = controlsUsername()
-        cadenceControls.findControls(username)?.let { json ->
-            return runCatching { ControllerMapStore.decode(json) }
-                .getOrDefault(ControllerMapDocument())
-        }
-        cadenceControls.findControls(CadenceControlsStore.DEFAULT_USERNAME)?.let { json ->
-            return runCatching { ControllerMapStore.decode(json) }
-                .getOrDefault(ControllerMapDocument())
+        val username = profileUsernameOrNull()
+        if (username != null) {
+            cadenceControls.findControls(username)?.let { json ->
+                return runCatching { ControllerMapStore.decode(json) }
+                    .getOrDefault(ControllerMapDocument())
+            }
+
+            // One-shot import from legacy filesDir JSON, then stop relying on the file.
+            if (buttonMapFile.isFile) {
+                val loaded = ControllerMapStore.load(buttonMapFile)
+                cadenceControls.upsertControls(
+                    username = username,
+                    documentJson = ControllerMapStore.encode(loaded),
+                    version = loaded.version,
+                )
+                return loaded
+            }
+
+            // First run: migrate overlay face swaps into the portable document.
+            var doc = ControllerMapDocument()
+            var changed = false
+            OverlaySystemFamily.entries.forEach { family ->
+                val overlay = overlayProfiles[family] ?: return@forEach
+                if (!overlay.swapNw && !overlay.swapSe) return@forEach
+                val mapFamily = OverlaySystemFamily.toMapFamily(family)
+                val profile = doc.profile(mapFamily).copy(
+                    swapNw = overlay.swapNw,
+                    swapSe = overlay.swapSe,
+                )
+                doc = doc.withProfile(mapFamily, profile)
+                changed = true
+            }
+            if (changed) {
+                persistButtonMapDocument(doc, username)
+            }
+            return doc
         }
 
-        // One-shot import from legacy filesDir JSON, then stop relying on the file.
         if (buttonMapFile.isFile) {
-            val loaded = ControllerMapStore.load(buttonMapFile)
-            cadenceControls.upsertControls(
-                username = username,
-                documentJson = ControllerMapStore.encode(loaded),
-                version = loaded.version,
-            )
-            return loaded
+            return ControllerMapStore.load(buttonMapFile)
         }
-
-        // First run: migrate overlay face swaps into the portable document.
-        var doc = ControllerMapDocument()
-        var changed = false
-        OverlaySystemFamily.entries.forEach { family ->
-            val overlay = overlayProfiles[family] ?: return@forEach
-            if (!overlay.swapNw && !overlay.swapSe) return@forEach
-            val mapFamily = OverlaySystemFamily.toMapFamily(family)
-            val profile = doc.profile(mapFamily).copy(
-                swapNw = overlay.swapNw,
-                swapSe = overlay.swapSe,
-            )
-            doc = doc.withProfile(mapFamily, profile)
-            changed = true
-        }
-        if (changed) {
-            persistButtonMapDocument(doc, username)
-        }
-        return doc
+        return ControllerMapDocument()
     }
 
     private fun persistButtonMapDocument(
         document: ControllerMapDocument = buttonMapDocument,
-        username: String = controlsUsername(),
+        username: String? = profileUsernameOrNull(),
     ) {
+        if (username == null) return
         cadenceControls.upsertControls(
             username = username,
             documentJson = ControllerMapStore.encode(document),
@@ -468,6 +546,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun updateEditingMapProfile(transform: (ControllerMapProfile) -> ControllerMapProfile) {
+        if (profileUsernameOrNull() == null) return
         val overlayFamily = _state.value.editingOverlayFamily
         val mapFamily = OverlaySystemFamily.toMapFamily(overlayFamily)
         val next = transform(mapProfileFor(overlayFamily))
@@ -477,6 +556,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         val overlay = profileFor(overlayFamily).copy(swapNw = next.swapNw, swapSe = next.swapSe)
         overlayProfiles[overlayFamily] = overlay
         OverlayProfileStore.save(prefs, overlayFamily, overlay)
+        persistOverlayProfiles()
         _state.update {
             val live = !it.playing || sessionFamily == overlayFamily
             it.copy(
@@ -611,9 +691,11 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun resetOverlayProfile() {
+        if (profileUsernameOrNull() == null) return
         val family = _state.value.editingOverlayFamily
         OverlayProfileStore.reset(prefs, family)
         overlayProfiles[family] = OverlayProfile.DEFAULT
+        persistOverlayProfiles()
         publishEditing(family)
         applyLiveOverlayFrom(family, OverlayProfile.DEFAULT)
         if (!_state.value.playing) {
@@ -626,6 +708,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     /** Enter layout editor (play drawer or Controls). Edits the active family. */
     fun beginOverlayEdit() {
+        if (profileUsernameOrNull() == null) return
         val snap = _state.value
         val family = if (snap.playing) sessionFamily else snap.editingOverlayFamily
         val profile = profileFor(family)
@@ -716,6 +799,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun saveOverlayCustom(rawName: String) {
+        if (profileUsernameOrNull() == null) return
         val snap = _state.value
         if (!snap.overlayEditing) return
         val family = snap.editingOverlayFamily
@@ -730,6 +814,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         )
         overlayProfiles[family] = next
         OverlayProfileStore.save(prefs, family, next)
+        persistOverlayProfiles()
         syncButtonMapRemapsFromItems(family, custom.itemsFor(snap.overlayOrientation))
         _state.update {
             it.copy(
@@ -1048,10 +1133,12 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun updateEditingProfile(transform: (OverlayProfile) -> OverlayProfile) {
+        if (profileUsernameOrNull() == null) return
         val family = _state.value.editingOverlayFamily
         val next = transform(profileFor(family))
         overlayProfiles[family] = next
         OverlayProfileStore.save(prefs, family, next)
+        persistOverlayProfiles()
         publishEditing(family)
         applyLiveOverlayFrom(family, next)
     }
@@ -1589,25 +1676,122 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun onUsernameChange(value: String) {
-        val username = value.trim()
-        _state.update { it.copy(username = username) }
-        prefs.edit().putString(KEY_USERNAME, username).apply()
-        // Load remaps for this username when present; otherwise keep current in-memory map.
-        val stored = username.ifBlank { "android" }.let { name ->
-            cadenceControls.findControls(name)
-                ?: cadenceControls.findControls(CadenceControlsStore.DEFAULT_USERNAME)
+        val username = value.trim().let { raw ->
+            if (raw.equals(PLACEHOLDER_USERNAME, ignoreCase = true)) "" else raw
         }
-        if (stored != null) {
-            buttonMapDocument = runCatching { ControllerMapStore.decode(stored) }
-                .getOrDefault(buttonMapDocument)
-            _state.update {
-                it.copy(
-                    editingMapProfile = buttonMapDocument.profile(
-                        OverlaySystemFamily.toMapFamily(it.editingOverlayFamily),
-                    ),
+        prefs.edit().putString(KEY_USERNAME, username).apply()
+        _state.update {
+            it.copy(
+                username = username,
+                hasProfileUsername = isProfileUsername(username),
+            )
+        }
+        reloadControlsFromLocalStore()
+        refreshControlsSyncReady()
+    }
+
+    fun pullControlsFromHost() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _state.update { it.copy(busy = true, status = "Pulling controls…") }
+            runCatching {
+                val username = requireProfileUsername()
+                withControlsSyncConnection { send, receive ->
+                    persistOverlayProfiles()
+                    persistButtonMapDocument()
+                    send(PacketCodec.controlsDbPull(username))
+                    when (val packet = receive()) {
+                        is IncomingPacket.ControlsDb -> {
+                            if (!packet.found || packet.dbBytes.isEmpty()) {
+                                error("No controls stored on host for $username")
+                            }
+                            if (!cadenceControls.importPackBytes(username, packet.dbBytes)) {
+                                error("Failed to import controls database")
+                            }
+                            reloadControlsFromLocalStore()
+                            "Pulled controls for $username"
+                        }
+                        is IncomingPacket.Error -> error(packet.value.message)
+                        else -> error("unexpected response: $packet")
+                    }
+                }
+            }.fold(
+                onSuccess = { msg ->
+                    _state.update { it.copy(busy = false, status = msg) }
+                },
+                onFailure = { err ->
+                    _state.update {
+                        it.copy(busy = false, status = "Pull failed: ${err.message}")
+                    }
+                },
+            )
+        }
+    }
+
+    fun pushControlsToHost() {
+        viewModelScope.launch(Dispatchers.IO) {
+            _state.update { it.copy(busy = true, status = "Pushing controls…") }
+            runCatching {
+                val username = requireProfileUsername()
+                withControlsSyncConnection { send, receive ->
+                    persistOverlayProfiles()
+                    persistButtonMapDocument()
+                    val bytes = cadenceControls.exportPackBytes(username)
+                    send(PacketCodec.controlsDbPush(username, bytes))
+                    when (val packet = receive()) {
+                        is IncomingPacket.ControlsDbAck -> {
+                            if (!packet.ok) error(packet.message.ifBlank { "push rejected" })
+                            "Pushed controls for $username"
+                        }
+                        is IncomingPacket.Error -> error(packet.value.message)
+                        else -> error("unexpected response: $packet")
+                    }
+                }
+            }.fold(
+                onSuccess = { msg ->
+                    _state.update { it.copy(busy = false, status = msg) }
+                },
+                onFailure = { err ->
+                    _state.update {
+                        it.copy(busy = false, status = "Push failed: ${err.message}")
+                    }
+                },
+            )
+        }
+    }
+
+    /**
+     * Sync only on an already-authenticated connection (LobbyPresence or live session).
+     * Does not dial a temporary socket.
+     */
+    private suspend fun <T> withControlsSyncConnection(
+        block: suspend (
+            send: (ByteArray) -> Unit,
+            receive: suspend () -> IncomingPacket,
+        ) -> T,
+    ): T {
+        val held = lobbyPresence
+        if (held != null && held.isConnected()) {
+            return block(
+                { bytes -> held.send(bytes) },
+                { held.receive() },
+            )
+        }
+        val active = session
+        if (active != null && _state.value.playing) {
+            val deferred = CompletableDeferred<IncomingPacket>()
+            check(controlsSyncWaiter.compareAndSet(null, deferred)) {
+                "controls sync already in progress"
+            }
+            try {
+                return block(
+                    { bytes -> active.sendControlPacket(bytes) },
+                    { deferred.await() },
                 )
+            } finally {
+                controlsSyncWaiter.compareAndSet(deferred, null)
             }
         }
+        error("Connect to a host (with password) before syncing controls")
     }
 
     fun onPasswordChange(value: String) {
@@ -1999,23 +2183,75 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             _state.update { it.copy(status = "Join a session before resyncing A/V.") }
             return
         }
+        viewModelScope.launch(Dispatchers.IO) {
+            val status = when (tryResyncAudio(manual = true)) {
+                1 -> "Realigned audio to video."
+                0 -> "A/V resync cooling down… try again shortly."
+                else -> "A/V resync failed (no audio stream?)."
+            }
+            _state.update { it.copy(status = status) }
+        }
+    }
+
+    /**
+     * Restart Opus to the live video edge. Shared by manual Resync and automatic
+     * stall recovery (desktop client_app).
+     * @return 1 ok, 0 cooling down, -1 failed
+     */
+    private fun tryResyncAudio(manual: Boolean): Int {
         val now = System.currentTimeMillis()
         if (lastAvResyncAtMs > 0L && now - lastAvResyncAtMs < AV_RESYNC_MIN_INTERVAL_MS) {
-            _state.update { it.copy(status = "A/V resync cooling down… try again shortly.") }
+            return 0
+        }
+        val ok = runCatching { session?.resyncAudio() == true }.getOrDefault(false)
+        if (!ok) {
+            return -1
+        }
+        lastAvResyncAtMs = now
+        zeroFrameStreak = 0
+        audioRealignAfterVideoStall = false
+        ClientFileLog.append(
+            if (manual) "A/V resync: audio restarted"
+            else "A/V resync (auto): audio restarted",
+        )
+        return 1
+    }
+
+    /**
+     * Mirror desktop client_app: video stall while audio free-runs → when frames
+     * return, restart Opus so lip-sync meets the live edge again.
+     */
+    private fun noteHeartbeatFrames(active: JoinedPlaySession, framesDelta: Int) {
+        val video = active.videoPlayer ?: return
+        if (active.audioPlayer == null) return
+        if (video.hasDecodedFrames()) {
+            everDecodedVideoFrames = true
+        }
+        if (!everDecodedVideoFrames) return
+
+        if (framesDelta == 0) {
+            ++zeroFrameStreak
+            if (zeroFrameStreak >= AV_STALL_ZERO_FRAME_HEARTBEATS) {
+                audioRealignAfterVideoStall = true
+            }
             return
         }
-        viewModelScope.launch(Dispatchers.IO) {
-            val ok = runCatching { session?.resyncAudio() == true }.getOrDefault(false)
-            if (ok) {
-                lastAvResyncAtMs = System.currentTimeMillis()
-                ClientFileLog.append("A/V resync: audio restarted")
-                _state.update { it.copy(status = "Realigned audio to video.") }
-            } else {
+        if (audioRealignAfterVideoStall) {
+            if (tryResyncAudio(manual = false) == 1) {
                 _state.update {
-                    it.copy(status = "A/V resync failed (no audio stream?).")
+                    it.copy(status = "Video recovered; restarted audio to match (lip-sync).")
                 }
             }
         }
+        zeroFrameStreak = 0
+        audioRealignAfterVideoStall = false
+    }
+
+    private fun resetAvStallState() {
+        zeroFrameStreak = 0
+        audioRealignAfterVideoStall = false
+        everDecodedVideoFrames = false
+        lastAvResyncAtMs = 0L
     }
 
     private fun scheduleFastForwardSend() {
@@ -2102,6 +2338,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                         expandedSystems = expanded,
                         artByAssetKey = emptyMap(),
                         status = "Loaded ${catalog.games.size} games (rev ${catalog.catalogRevision}).$presenceNote",
+                        controlsSyncReady = profileUsernameOrNull() != null && presence != null,
                     )
                 }
                 startArtPrefetch(catalog.games, host, port)
@@ -2276,6 +2513,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                         linkStatus = "",
                         linkStatusKind = null,
                         status = "Playing ${game.title()}",
+                        controlsSyncReady = profileUsernameOrNull() != null,
                         mediaHint = run {
                             val video = joined.videoPlayer
                             val audio = joined.audioPlayer
@@ -2356,7 +2594,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     fun leavePlay() {
         menuDrawerOpen = false
         lastSentMenuPause = null
-        lastAvResyncAtMs = 0L
+        resetAvStallState()
         pendingDsTouches.clear()
         clearRemotedKeys()
         clearKeyboardDpad()
@@ -2646,17 +2884,18 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun startHeartbeatLoop() {
         heartbeatJob?.cancel()
+        resetAvStallState()
         heartbeatJob = viewModelScope.launch(Dispatchers.IO) {
             while (isActive) {
                 val active = session ?: break
-                val failed = runCatching { active.sendHeartbeat() }.exceptionOrNull()
-                if (failed != null) {
+                val frames = runCatching { active.sendHeartbeat() }.getOrElse { failed ->
                     failPlaySession(
                         message = "Connection lost (heartbeat): ${failed.message ?: failed}",
                         sendLeave = false,
                     )
                     return@launch
                 }
+                noteHeartbeatFrames(active, frames)
                 // Drawer may have opened before the first decoded frame; apply pause once
                 // frames exist so we still pause for a long-open menu after init.
                 if (menuDrawerOpen &&
@@ -2686,6 +2925,14 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                     return@launch
                 }
                 when (packet) {
+                    is IncomingPacket.ControlsDb,
+                    is IncomingPacket.ControlsDbAck,
+                    -> {
+                        val waiter = controlsSyncWaiter.getAndSet(null)
+                        if (waiter != null) {
+                            waiter.complete(packet)
+                        }
+                    }
                     is IncomingPacket.SoftKeyboard -> showSoftKeyboard(packet.value)
                     is IncomingPacket.DsScreens -> {
                         _state.update { it.copy(dsScreenLayout = packet.value) }
@@ -2803,12 +3050,22 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    private fun refreshControlsSyncReady() {
+        val ready = profileUsernameOrNull() != null &&
+            (
+                (lobbyPresence?.isConnected() == true) ||
+                    (_state.value.playing && session != null)
+                )
+        _state.update { it.copy(controlsSyncReady = ready) }
+    }
+
     private fun clearLobbyPresence() {
         val held = lobbyPresence
         lobbyPresence = null
         if (held != null) {
             runCatching { held.close() }
         }
+        refreshControlsSyncReady()
     }
 
     /**
@@ -2821,7 +3078,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private fun endSession(sendLeave: Boolean = true) {
         menuDrawerOpen = false
         lastSentMenuPause = null
-        lastAvResyncAtMs = 0L
+        resetAvStallState()
         clearRemotedKeys()
         resetFastForwardSendState()
         val active = session
@@ -2834,6 +3091,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         heartbeatJob = null
         if (active == null) {
             latestPad = ControllerState()
+            refreshControlsSyncReady()
             return
         }
         // Leave must not run on the main thread (NetworkOnMainThreadException
@@ -2858,6 +3116,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
         latestPad = ControllerState()
+        refreshControlsSyncReady()
     }
 
     private fun endSessionLocked() {
@@ -2877,6 +3136,15 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     companion object {
         const val RECENT_GROUP = "Recents"
+        /** Local join placeholder — never used for SQL persistence or host sync. */
+        const val PLACEHOLDER_USERNAME = "android"
+
+        fun isProfileUsername(name: String): Boolean {
+            val trimmed = name.trim()
+            return trimmed.isNotEmpty() &&
+                !trimmed.equals(PLACEHOLDER_USERNAME, ignoreCase = true)
+        }
+
         private const val PREFS_NAME = "archstreamer_client"
         private const val KEY_HOST = "host"
         private const val KEY_CONTROL_PORT = "control_port"
@@ -2911,6 +3179,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         private const val FF_MIN_INTERVAL_MS = 1_000L
         /** Match desktop client_app A/V resync cooldown. */
         private const val AV_RESYNC_MIN_INTERVAL_MS = 15_000L
+        /** Desktop: ≥3 consecutive zero-frame heartbeats arms audio realign. */
+        private const val AV_STALL_ZERO_FRAME_HEARTBEATS = 3
     }
 
     private fun recentPrefsKey(host: String, controlPort: String): String {

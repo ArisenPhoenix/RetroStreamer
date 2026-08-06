@@ -1,6 +1,8 @@
 package com.archstreamer.client.ui
 
 import android.content.SharedPreferences
+import org.json.JSONArray
+import org.json.JSONObject
 import kotlin.math.roundToInt
 
 /**
@@ -123,8 +125,10 @@ data class OverlayProfile(
     }
 }
 
-/** Load / save overlay.<family>.* prefs. */
+/** Load / save overlay.<family>.* prefs (runtime cache; SQL is canonical). */
 object OverlayProfileStore {
+    const val DOCUMENT_VERSION = 1
+
     fun loadAll(prefs: SharedPreferences): Map<OverlaySystemFamily, OverlayProfile> =
         OverlaySystemFamily.entries.associateWith { load(prefs, it) }
 
@@ -191,6 +195,10 @@ object OverlayProfileStore {
         editor.apply()
     }
 
+    fun saveAll(prefs: SharedPreferences, profiles: Map<OverlaySystemFamily, OverlayProfile>) {
+        profiles.forEach { (family, profile) -> save(prefs, family, profile) }
+    }
+
     fun reset(prefs: SharedPreferences, family: OverlaySystemFamily) {
         val prefix = "overlay.${family.id}."
         prefs.edit()
@@ -203,6 +211,66 @@ object OverlayProfileStore {
             .remove(prefix + "items_portrait")
             .remove(prefix + "custom_name")
             .apply()
+    }
+
+    /** Encode all families into the overlay_profiles SQL document JSON. */
+    fun encodeDocument(profiles: Map<OverlaySystemFamily, OverlayProfile>): String {
+        val families = JSONObject()
+        OverlaySystemFamily.entries.forEach { family ->
+            val profile = profiles[family] ?: OverlayProfile.DEFAULT
+            val obj = JSONObject()
+                .put("layout", profile.layoutMode.id)
+                .put("opacity", profile.clampedOpacity().toDouble())
+                .put("swap_nw", profile.swapNw)
+                .put("swap_se", profile.swapSe)
+            val custom = profile.custom
+            if (custom != null) {
+                obj.put("custom_name", custom.clampedName())
+                obj.put("items_landscape", JSONArray(OverlayItemCodec.encode(custom.landscape)))
+                obj.put("items_portrait", JSONArray(OverlayItemCodec.encode(custom.portrait)))
+            }
+            families.put(family.id, obj)
+        }
+        return JSONObject()
+            .put("version", DOCUMENT_VERSION)
+            .put("families", families)
+            .toString()
+    }
+
+    fun decodeDocument(raw: String?): Map<OverlaySystemFamily, OverlayProfile>? {
+        if (raw.isNullOrBlank()) return null
+        return runCatching {
+            val root = JSONObject(raw)
+            val families = root.optJSONObject("families") ?: return@runCatching null
+            OverlaySystemFamily.entries.associateWith { family ->
+                val obj = families.optJSONObject(family.id) ?: return@associateWith OverlayProfile.DEFAULT
+                val landscape = OverlayItemCodec.decode(obj.optJSONArray("items_landscape")?.toString())
+                val portrait = OverlayItemCodec.decode(obj.optJSONArray("items_portrait")?.toString())
+                    ?: landscape
+                val custom = if (landscape != null || portrait != null) {
+                    OverlayCustomLayout(
+                        name = obj.optString("custom_name", OverlayCustomLayout.DEFAULT_NAME),
+                        landscape = landscape.orEmpty(),
+                        portrait = portrait.orEmpty(),
+                    )
+                } else {
+                    null
+                }
+                var layout = OverlayLayoutMode.fromId(obj.optString("layout", OverlayLayoutMode.Auto.id))
+                if (layout == OverlayLayoutMode.Custom && custom == null) {
+                    layout = OverlayLayoutMode.Auto
+                }
+                OverlayProfile(
+                    layoutMode = layout,
+                    swapNw = obj.optBoolean("swap_nw", false),
+                    swapSe = obj.optBoolean("swap_se", false),
+                    opacity = obj.optDouble("opacity", OverlayProfile.DEFAULT_OPACITY.toDouble())
+                        .toFloat()
+                        .coerceIn(OverlayProfile.MIN_OPACITY, OverlayProfile.MAX_OPACITY),
+                    custom = custom,
+                )
+            }
+        }.getOrNull()
     }
 }
 

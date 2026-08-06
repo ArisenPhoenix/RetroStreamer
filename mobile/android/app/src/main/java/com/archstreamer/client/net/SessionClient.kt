@@ -213,7 +213,11 @@ data class JoinedPlaySession(
         sendKeyboard(0)
     }
 
-    fun sendHeartbeat() {
+    /**
+     * Send ViewerHeartbeat with the latest video decode/loss stats.
+     * @return frames decoded since the previous heartbeat (for stall→audio realign).
+     */
+    fun sendHeartbeat(): Int {
         val stats = videoPlayer?.takeHeartbeatStats()
         val frames = stats?.framesDecodedDelta ?: 0
         val loss = stats?.lossPermille ?: 0
@@ -228,6 +232,19 @@ data class JoinedPlaySession(
                 displayLayout = displayLayout,
             ),
         )
+        return frames
+    }
+
+    fun sendControlsDbPull(username: String) {
+        control.send(PacketCodec.controlsDbPull(username))
+    }
+
+    fun sendControlsDbPush(username: String, dbBytes: ByteArray) {
+        control.send(PacketCodec.controlsDbPush(username, dbBytes))
+    }
+
+    fun sendControlPacket(packet: ByteArray) {
+        control.send(packet)
     }
 
     /**

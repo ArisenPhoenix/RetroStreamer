@@ -127,8 +127,9 @@ RyujinxUserProfile prepare_ryujinx_user_profile(
 
 // Bind Player1…N to ArchStreamer uinput pads (GamepadSDL2 + GUID) and build an
 // SDL_GAMECONTROLLERCONFIG mapping so Ryujinx can open those pads under gamescope.
-// pads must carry the SDL joystick indices the Ryujinx child will see; pass the
-// sdl_device_filter that guarantees it (see resolve_exclusive_archstreamer_pads).
+// pads must carry the SDL joystick indices the Ryujinx child will see under the
+// sibling IGNORE list from resolve_exclusive_pad_plan / apply_pad_plan.
+// sdl_device_filter is the own-pad keep list (diagnostics / Config annotations).
 void configure_ryujinx_archstreamer_controls(
     RyujinxUserProfile& profile,
     const std::vector<ArchStreamerSdlPad>& pads,

@@ -21,22 +21,35 @@ Open **this folder** (`mobile/android`) in Android Studio — not the C++ repo r
 - Viewer heartbeats (keeps the host session alive)
 - On-screen gamepad overlay → UDP `ControllerInput`
 - Optional physical USB/Bluetooth gamepad (Game Options); Home/Guide opens the play menu
-- Controller remaps persisted in local SQLite (`files/archstreamer_cadence.sqlite`,
-  `user_controls` — same document JSON as desktop cadence). First launch imports
-  legacy `controller_button_map.json` from `filesDir` if present.
+- Controller remaps + overlay profiles in local SQLite
+  (`databases/archstreamer_cadence.sqlite`, `user_controls` kinds
+  `button_map` / `overlay_profiles`). SharedPreferences caches overlays after load.
+  First launch imports legacy `controller_button_map.json` and prefs overlays into SQL.
+- Manual **Pull from host** / **Push to host** (Game Options) exchanges a binary
+  `controls.sqlite` pack over TCP (`ControlsDbPull`/`Push`). Requires an authenticated
+  connection (LobbyPresence or live session) and a real save-profile username — the
+  local “android” placeholder is never transported. On the host the file lives at
+  `saves/<username>/controls.sqlite`. Desktop reuses `button_map`; mobile reuses
+  overlays; same schema across devices. Controls editing is locked until a profile
+  username is set.
 
 ## Smoke: remaps survive process death
 
 1. Connect, open Game Options, change a button remap, leave the screen.
 2. Force-stop the app (or kill process); relaunch.
 3. Remaps should match. Confirm with:
-   `adb shell run-as com.archstreamer.client ls files/`
+   `adb shell run-as com.archstreamer.client ls databases/`
    (expect `archstreamer_cadence.sqlite`; JSON file may remain as a one-shot backup).
+
+## Smoke: host controls sync
+
+1. Sign in with a save-profile username (e.g. `alina`), connect catalog (or play).
+2. Game Options → **Push to host**, then change a remap/overlay on another device and
+   **Pull from host** (or the reverse).
+3. Host file: `~/.local/share/archstreamer/saves/<user>/controls.sqlite`.
 
 ## Not yet
 
-- Syncing mobile remaps up to the host over the wire
-- Overlay layout in SQL (still SharedPreferences)
 - Opus audio decode
 - Soft keyboard OSK for Ryujinx prompts
 - LAN discovery / art download

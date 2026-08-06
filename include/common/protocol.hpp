@@ -15,7 +15,7 @@
 namespace archstreamer {
 
 constexpr std::uint32_t ProtocolMagic = 0x41525354; // "ARST"
-constexpr std::uint16_t ProtocolVersion = 22;
+constexpr std::uint16_t ProtocolVersion = 23;
 constexpr std::uint8_t MaxRemoteClients = 2;
 constexpr std::uint8_t MaxPlayersPerClient = 2;
 constexpr std::uint8_t MaxRetroArchPorts = 5; // Ports 0-3 plus a host player if desired.
@@ -75,6 +75,14 @@ enum class PacketType : std::uint8_t {
     LobbyPresence = 34,
     // Host → client: presence accepted (client keeps the TCP open until leave/play).
     LobbyPresenceAck = 35,
+    // Client → host: pull profile controls.sqlite for username.
+    ControlsDbPull = 36,
+    // Host → client: controls DB bytes (empty db_bytes when missing).
+    ControlsDbResponse = 37,
+    // Client → host: push profile controls.sqlite for username.
+    ControlsDbPush = 38,
+    // Host → client: push result.
+    ControlsDbAck = 39,
 };
 
 enum class ClientRole : std::uint8_t {
@@ -737,6 +745,31 @@ struct LobbyPresenceAck {
     ClientId client_id = 0;
 };
 
+/** Client → host: download <save_root>/<username>/controls.sqlite. */
+struct ControlsDbPull {
+    std::string username;
+};
+
+/** Host → client: found=false and empty bytes when the profile has no controls DB yet. */
+struct ControlsDbResponse {
+    std::string username;
+    bool found = false;
+    std::vector<std::uint8_t> db_bytes;
+};
+
+/** Client → host: replace profile controls.sqlite (must only contain this username). */
+struct ControlsDbPush {
+    std::string username;
+    std::vector<std::uint8_t> db_bytes;
+};
+
+/** Host → client: push accepted or rejected. */
+struct ControlsDbAck {
+    std::string username;
+    bool ok = false;
+    std::string message;
+};
+
 using PacketPayload = std::variant<
     ClientHello,
     HostWelcome,
@@ -772,7 +805,11 @@ using PacketPayload = std::variant<
     PasswordChangeRequired,
     PasswordChange,
     LobbyPresence,
-    LobbyPresenceAck>;
+    LobbyPresenceAck,
+    ControlsDbPull,
+    ControlsDbResponse,
+    ControlsDbPush,
+    ControlsDbAck>;
 
 ClientRole role_for_player_count(std::uint8_t requested_players);
 bool valid_player_count(std::uint8_t requested_players);

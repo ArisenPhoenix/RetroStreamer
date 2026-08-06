@@ -1,6 +1,7 @@
 #include "host/host_concurrent_lobby.hpp"
 
 #include "host/active_session_slot.hpp"
+#include "host/controls_db_sync.hpp"
 #include "host/emulator_orphan_reaper.hpp"
 #include "host/game_catalog.hpp"
 #include "host/host_app_config.hpp"
@@ -131,7 +132,7 @@ int run_concurrent_session_host(
                     erase_presence_at(i);
                     continue;
                 }
-                // Drain keepalives / stray packets so the socket stays healthy.
+                // Drain keepalives / controls sync so the socket stays healthy.
                 try {
                     while (client.stream.readable()) {
                         const auto packet = client.stream.receive_packet();
@@ -139,8 +140,15 @@ int run_concurrent_session_host(
                             erase_presence_at(i);
                             goto next_presence;
                         }
-                        // Ignore payload; presence is the open TCP itself.
-                        (void)deserialize_packet(*packet);
+                        auto payload = deserialize_packet(*packet);
+                        if (std::holds_alternative<ControlsDbPull>(payload)
+                            || std::holds_alternative<ControlsDbPush>(payload)) {
+                            auto reply = handle_controls_db_packet(
+                                config.save_root, client.username, payload);
+                            if (!reply.empty()) {
+                                client.stream.send_packet(reply);
+                            }
+                        }
                     }
                 } catch (const std::exception&) {
                     erase_presence_at(i);

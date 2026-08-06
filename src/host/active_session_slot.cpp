@@ -912,9 +912,8 @@ void ActiveSessionSlot::run_session() {
     std::vector<std::size_t> resolved_indices;
     std::vector<ArchStreamerSdlPad> resolved_pads;
     const bool use_udev = config.retroarch_joypad_driver == "udev";
-    // Concurrent slots must not see each other's ArchStreamer uinput pads. Shared IGNORE
-    // only blacks out DualShock/Steam; sibling virtual pads stay visible to udev/SDL and
-    // RetroArch autodetect can rebind P1 to the other kid's pad.
+    // Concurrent slots must not see each other's ArchStreamer uinput pads. Exclusive
+    // PadPlan IGNORES sibling VID/PIDs (EXCEPT alone fails for uinput under Ryujinx).
     const auto slot_pad_plan = resolve_retroarch_slot_pad_plan(
         launch_plan.players,
         config.ignore_controller.value_or(""),

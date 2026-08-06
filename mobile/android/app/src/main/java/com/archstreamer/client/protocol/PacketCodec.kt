@@ -323,6 +323,21 @@ object PacketCodec {
         return wrap(PacketType.LobbyPresence, payload)
     }
 
+    fun controlsDbPull(username: String): ByteArray {
+        val payload = WireWriter().apply {
+            writeString(username)
+        }.toByteArray()
+        return wrap(PacketType.ControlsDbPull, payload)
+    }
+
+    fun controlsDbPush(username: String, dbBytes: ByteArray): ByteArray {
+        val payload = WireWriter().apply {
+            writeString(username)
+            writeBytes(dbBytes)
+        }.toByteArray()
+        return wrap(PacketType.ControlsDbPush, payload)
+    }
+
     fun artAssetRequest(assetKey: String, role: String, cachedSha256: String = ""): ByteArray {
         val payload = WireWriter().apply {
             writeString(assetKey)
@@ -533,6 +548,16 @@ object PacketCodec {
             }
             PacketType.PasswordChangeRequired -> IncomingPacket.PasswordChangeRequired
             PacketType.LobbyPresenceAck -> IncomingPacket.LobbyPresenceAck(reader.readU8())
+            PacketType.ControlsDbResponse -> IncomingPacket.ControlsDb(
+                username = reader.readString(),
+                found = reader.readBool(),
+                dbBytes = reader.readBytes(),
+            )
+            PacketType.ControlsDbAck -> IncomingPacket.ControlsDbAck(
+                username = reader.readString(),
+                ok = reader.readBool(),
+                message = reader.readString(),
+            )
             else -> IncomingPacket.Unknown(type)
         }
     }

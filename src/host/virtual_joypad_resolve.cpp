@@ -83,6 +83,33 @@ std::string sdl_archstreamer_pad_whitelist(std::size_t players, std::uint16_t pr
     return result;
 }
 
+std::string sdl_archstreamer_sibling_ignore_list(
+    std::size_t players,
+    std::uint16_t product_id_base,
+    const std::string& physical_ignore) {
+    // Concurrent slots use product_id_base = 0xa517 + slot*8 (see apply_slot_product_id_offset).
+    // Reserve the full band so stale pads from older crashes are also hidden.
+    constexpr int kSlotStride = 8;
+    constexpr int kMaxSlots = 4; // matches clamp_max_session_slots upper bound
+    const auto own_base = product_id_base != 0 ? product_id_base : kVirtualProductIdBase;
+    const auto own_count = std::max<std::size_t>(players, 1);
+    const auto own_end = static_cast<std::uint16_t>(own_base + own_count);
+
+    std::string result = physical_ignore;
+    const auto band_end =
+        static_cast<std::uint16_t>(kVirtualProductIdBase + kSlotStride * kMaxSlots);
+    for (std::uint16_t product = kVirtualProductIdBase; product < band_end; ++product) {
+        if (product >= own_base && product < own_end) {
+            continue;
+        }
+        if (!result.empty()) {
+            result += ",";
+        }
+        result += hex_vid_pid(kVirtualVendorId, product);
+    }
+    return result;
+}
+
 std::vector<ArchStreamerSdlPad> find_archstreamer_sdl_pads(
     std::size_t players,
     const std::string& ignore_devices,
@@ -96,14 +123,15 @@ ArchStreamerPadBinding resolve_exclusive_archstreamer_pads(
     std::size_t players,
     bool verbose,
     std::uint16_t product_id_base,
-    std::vector<ArchStreamerSdlPad> fallback) {
-    auto filter = sdl_archstreamer_pad_whitelist(players, product_id_base);
+    std::vector<ArchStreamerSdlPad> fallback,
+    const std::string& physical_ignore) {
+    auto ignore = sdl_archstreamer_sibling_ignore_list(players, product_id_base, physical_ignore);
     auto pads = scan_archstreamer_sdl_pads(
-        players, /*ignore_devices=*/{}, filter, verbose, product_id_base);
+        players, ignore, /*only_devices=*/{}, verbose, product_id_base);
     if (pads.empty()) {
         return {std::move(fallback), {}};
     }
-    return {std::move(pads), std::move(filter)};
+    return {std::move(pads), std::move(ignore)};
 }
 
 namespace {

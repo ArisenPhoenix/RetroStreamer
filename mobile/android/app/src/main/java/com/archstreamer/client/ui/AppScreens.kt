@@ -1133,6 +1133,7 @@ private fun StreamSection(state: UiState, viewModel: ClientViewModel) {
 @Composable
 private fun ControlsSection(state: UiState, viewModel: ClientViewModel) {
     val profile = state.editingOverlayProfile
+    val canEdit = state.hasProfileUsername
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1141,14 +1142,23 @@ private fun ControlsSection(state: UiState, viewModel: ClientViewModel) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("Overlay controller", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "Defaults follow the game system. Edit a family to override layout, " +
-                "face swaps, opacity, and one named custom (separate landscape / portrait). " +
-                "While editing a custom, select a control and use Action to remap " +
-                "(e.g. Select → Fast-forward, R → R2 for DS screen swap). Remaps apply to " +
-                "the touch overlay and to a physical controller.",
-            style = MaterialTheme.typography.bodyMedium,
-        )
+        if (!canEdit) {
+            Text(
+                "Set a save-profile username on the Profile tab before editing controls. " +
+                    "The default “android” name is local-only and is not synced.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+        } else {
+            Text(
+                "Defaults follow the game system. Edit a family to override layout, " +
+                    "face swaps, opacity, and one named custom (separate landscape / portrait). " +
+                    "While editing a custom, select a control and use Action to remap " +
+                    "(e.g. Select → Fast-forward, R → R2 for DS screen swap). Remaps apply to " +
+                    "the touch overlay and to a physical controller.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
 
         Text("Input source", style = MaterialTheme.typography.titleSmall)
         Row(
@@ -1178,6 +1188,8 @@ private fun ControlsSection(state: UiState, viewModel: ClientViewModel) {
                 onCheckedChange = viewModel::setUsePhysicalController,
             )
         }
+
+        if (!canEdit) return@Column
 
         if (state.playing) {
             Text(
@@ -1405,6 +1417,42 @@ private fun GameOptionsSection(state: UiState, viewModel: ClientViewModel) {
         }
 
         HorizontalDivider()
+        Text("Controls sync", style = MaterialTheme.typography.titleMedium)
+        Text(
+            when {
+                !state.hasProfileUsername ->
+                    "Set a save-profile username first. “android” is never pushed or pulled."
+                !state.controlsSyncReady ->
+                    "Connect to a host with your password (or join a session) before syncing."
+                else ->
+                    "Pull or push this username's button maps and overlay profiles " +
+                        "(SQL pack under the host save profile). Manual only — " +
+                        "runtime remaps stay in memory after load."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedButton(
+                onClick = viewModel::pullControlsFromHost,
+                enabled = !state.busy && state.controlsSyncReady,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Pull from host")
+            }
+            Button(
+                onClick = viewModel::pushControlsToHost,
+                enabled = !state.busy && state.controlsSyncReady,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Push to host")
+            }
+        }
+
+        HorizontalDivider()
         Text(
             "While playing: menu → Software keyboard opens the OSK even if the host " +
                 "did not detect a dialog.",
@@ -1431,7 +1479,9 @@ private fun ProfileSection(state: UiState, viewModel: ClientViewModel) {
             modifier = Modifier.fillMaxWidth(),
         )
         Text(
-            "Session password is on the Client tab. Change it here after connecting to a host.",
+            "Required to edit and sync controls. Leave blank until you pick a real " +
+                "profile — the “android” placeholder is never transported to the host. " +
+                "Session password is on the Client tab.",
             style = MaterialTheme.typography.bodySmall,
         )
         Text("Change password", style = MaterialTheme.typography.titleMedium)

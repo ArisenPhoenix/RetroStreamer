@@ -37,23 +37,26 @@ PadPlan resolve_exclusive_pad_plan(
     std::size_t players,
     bool verbose,
     std::uint16_t product_id_base,
-    std::vector<ArchStreamerSdlPad> fallback) {
+    std::vector<ArchStreamerSdlPad> fallback,
+    const std::string& physical_ignore) {
     const auto binding = resolve_exclusive_archstreamer_pads(
-        players, verbose, product_id_base, std::move(fallback));
+        players, verbose, product_id_base, std::move(fallback), physical_ignore);
 
     PadPlan plan;
-    plan.pads = std::move(binding.pads);
     if (binding.sdl_device_filter.empty()) {
-        // Filtered scan failed — degrade to shared indices; caller should set
-        // ignore_devices from the host blacklist before apply_pad_plan.
+        // Filtered scan failed — degrade to shared physical IGNORE only.
         plan.mode = PadPlanMode::Shared;
+        plan.pads = binding.pads;
+        plan.ignore_devices = physical_ignore;
         return plan;
     }
 
     plan.mode = PadPlanMode::Exclusive;
-    plan.exclusive_filter = binding.sdl_device_filter;
-    // Child under EXCEPT enumerates only these pads as 0..n-1 regardless of host
-    // kernel jsN order. Bindings must use child-facing indices.
+    plan.pads = std::move(binding.pads);
+    plan.ignore_devices = binding.sdl_device_filter;
+    plan.exclusive_filter = sdl_archstreamer_pad_whitelist(players, product_id_base);
+    // Child under sibling IGNORE enumerates only these pads as 0..n-1 regardless of
+    // host kernel jsN order. Bindings must use child-facing indices.
     for (std::size_t i = 0; i < plan.pads.size(); ++i) {
         plan.pads[i].sdl_index = i;
     }
@@ -70,33 +73,28 @@ PadPlan resolve_retroarch_slot_pad_plan(
     auto plan = resolve_shared_pad_plan(
         players, ignore_devices, verbose, product_id_base, use_udev);
 
-    const auto filter = sdl_archstreamer_pad_whitelist(players, product_id_base);
-    if (filter.empty() || plan.pads.empty()) {
+    const auto keep = sdl_archstreamer_pad_whitelist(players, product_id_base);
+    const auto ignore =
+        sdl_archstreamer_sibling_ignore_list(players, product_id_base, ignore_devices);
+    if (ignore.empty() || plan.pads.empty()) {
         return plan;
     }
 
-    // Hide sibling-session ArchStreamer pads (and physical pads) from SDL. RetroArch's
-    // udev driver still opens every ID_INPUT_JOYSTICK event node and numbers them as
-    // vacant slots 0..n-1 in discovery order (not kernel jsN). joypad_index must be
-    // that discovery ordinal for this slot's VID/PID — do not remap to 0..n-1 the way
+    // Hide sibling-session ArchStreamer pads (and physical pads) from SDL via IGNORE.
+    // RetroArch's udev driver still opens every ID_INPUT_JOYSTICK event node and numbers
+    // them as vacant slots 0..n-1 in discovery order (not kernel jsN). joypad_index must
+    // be that discovery ordinal for this slot's VID/PID — do not remap to 0..n-1 the way
     // Ryujinx exclusive plans do.
     plan.mode = PadPlanMode::Exclusive;
-    plan.exclusive_filter = filter;
-    plan.ignore_devices.clear();
+    plan.exclusive_filter = keep;
+    plan.ignore_devices = ignore;
     return plan;
 }
 
 void apply_pad_plan(ProcessEnvironment& env, const PadPlan& plan) {
-    if (plan.exclusive()) {
-        env.clear_var("SDL_GAMECONTROLLER_IGNORE_DEVICES");
-        if (!plan.exclusive_filter.empty()) {
-            env.set("SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT", plan.exclusive_filter);
-        } else {
-            env.clear_var("SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT");
-        }
-        return;
-    }
-
+    // Always clear EXCEPT. Exclusive used to rely on IGNORE_DEVICES_EXCEPT alone; that
+    // fails to hide ArchStreamer uinput siblings under Ryujinx, leaving the other kid's
+    // pad at SDL index 0 and stealing the bind mid-session.
     env.clear_var("SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT");
     if (!plan.ignore_devices.empty()) {
         env.set("SDL_GAMECONTROLLER_IGNORE_DEVICES", plan.ignore_devices);
@@ -113,7 +111,8 @@ void log_pad_plan(const PadPlan& plan, std::optional<int> slot_index) {
     out << "PadPlan mode=" << (plan.exclusive() ? "exclusive" : "shared")
         << " pads=" << plan.pads.size();
     if (plan.exclusive()) {
-        out << " filter=" << (plan.exclusive_filter.empty() ? "(none)" : plan.exclusive_filter);
+        out << " keep=" << (plan.exclusive_filter.empty() ? "(none)" : plan.exclusive_filter);
+        out << " ignore=" << (plan.ignore_devices.empty() ? "(none)" : plan.ignore_devices);
         if (!plan.udev_indices.empty()) {
             out << " udev-abs";
         }

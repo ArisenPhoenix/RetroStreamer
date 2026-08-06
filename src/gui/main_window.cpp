@@ -17,6 +17,7 @@
 #include "client/audio_playback_device.hpp"
 #include "client/video_window_geometry.hpp"
 #include "common/controller_button_map.hpp"
+#include "host/user_controls_db.hpp"
 #include "archstreamer/runtime_cadence/cadence.hpp"
 
 #include <QCheckBox>
@@ -887,6 +888,39 @@ std::filesystem::path MainWindow::controller_map_file_path() const {
 
 namespace {
 
+bool upsert_controller_map_to_profile(
+    const std::filesystem::path& save_root,
+    const std::string& username,
+    const archstreamer::ControllerMapDocument& document) {
+    if (save_root.empty() || username.empty()) {
+        return false;
+    }
+    archstreamer::UserControlsRow row;
+    row.username = username;
+    row.kind = std::string(archstreamer::kControlsKindButtonMap);
+    row.document_json = archstreamer::controller_map_document_to_json(document);
+    row.version = archstreamer::ControllerMapDocumentVersion;
+    return archstreamer::upsert_user_controls_row(
+        archstreamer::user_controls_db_path_for(save_root, username),
+        row);
+}
+
+std::optional<archstreamer::ControllerMapDocument> load_controller_map_from_profile(
+    const std::filesystem::path& save_root,
+    const std::string& username) {
+    if (save_root.empty() || username.empty()) {
+        return std::nullopt;
+    }
+    auto found = archstreamer::find_user_controls_row(
+        archstreamer::user_controls_db_path_for(save_root, username),
+        username,
+        archstreamer::kControlsKindButtonMap);
+    if (!found.has_value()) {
+        return std::nullopt;
+    }
+    return archstreamer::controller_map_document_from_json(found->document_json);
+}
+
 bool upsert_controller_map_to_cadence(
     const std::string& username,
     const archstreamer::ControllerMapDocument& document) {
@@ -941,20 +975,28 @@ void MainWindow::load_controller_map_document() {
     if (username.empty()) {
         username = std::string(archstreamer::cadence::kControlsDefaultUsername);
     }
-    if (auto document = load_controller_map_from_cadence(username); document.has_value()) {
+    if (auto document = load_controller_map_from_profile(save_root_path(), username);
+        document.has_value()) {
         apply_document(*document);
         return;
     }
+    if (auto document = load_controller_map_from_cadence(username); document.has_value()) {
+        apply_document(*document);
+        (void)upsert_controller_map_to_profile(save_root_path(), username, *document);
+        return;
+    }
 
-    // One-shot import: AppConfig JSON → cadence user_controls.
+    // One-shot import: AppConfig JSON → profile controls.sqlite.
     const auto path = controller_map_file_path();
     if (auto document = archstreamer::controller_map_document_load_file(path); document.has_value()) {
         apply_document(*document);
-        (void)upsert_controller_map_to_cadence(username, *document);
+        if (!upsert_controller_map_to_profile(save_root_path(), username, *document)) {
+            (void)upsert_controller_map_to_cadence(username, *document);
+        }
         return;
     }
 
-    // Migrate legacy QSettings keys into cadence (and leave a JSON backup once).
+    // Migrate legacy QSettings keys into profile store (and leave a JSON backup once).
     QSettings settings("ArchStreamer", "ArchStreamer");
     archstreamer::ControllerMapDocument document;
     const bool legacy_nw = settings.value("client/swapFaceNw", false).toBool();
@@ -993,7 +1035,9 @@ void MainWindow::load_controller_map_document() {
         controller_map_prefs_->set_profile(family, profile);
     }
     if (migrated) {
-        (void)upsert_controller_map_to_cadence(username, document);
+        if (!upsert_controller_map_to_profile(save_root_path(), username, document)) {
+            (void)upsert_controller_map_to_cadence(username, document);
+        }
         archstreamer::controller_map_document_save_file(path, document);
     }
     sync_controller_map_editor_ui();
@@ -1012,9 +1056,10 @@ void MainWindow::save_controller_map_document() {
     if (username.empty()) {
         username = std::string(archstreamer::cadence::kControlsDefaultUsername);
     }
-    if (!upsert_controller_map_to_cadence(username, document)) {
-        // Cadence unavailable — keep AppConfig JSON so remaps are not lost.
-        archstreamer::controller_map_document_save_file(controller_map_file_path(), document);
+    if (!upsert_controller_map_to_profile(save_root_path(), username, document)) {
+        if (!upsert_controller_map_to_cadence(username, document)) {
+            archstreamer::controller_map_document_save_file(controller_map_file_path(), document);
+        }
     }
 
     // Keep legacy keys in sync for older builds.

@@ -89,6 +89,10 @@ ByteBuffer serialize_payload(const PasswordChangeRequired& payload);
 ByteBuffer serialize_payload(const PasswordChange& payload);
 ByteBuffer serialize_payload(const LobbyPresence& payload);
 ByteBuffer serialize_payload(const LobbyPresenceAck& payload);
+ByteBuffer serialize_payload(const ControlsDbPull& payload);
+ByteBuffer serialize_payload(const ControlsDbResponse& payload);
+ByteBuffer serialize_payload(const ControlsDbPush& payload);
+ByteBuffer serialize_payload(const ControlsDbAck& payload);
 
 PacketType packet_type_for(const ClientHello& payload);
 PacketType packet_type_for(const HostWelcome& payload);
@@ -125,6 +129,10 @@ PacketType packet_type_for(const PasswordChangeRequired& payload);
 PacketType packet_type_for(const PasswordChange& payload);
 PacketType packet_type_for(const LobbyPresence& payload);
 PacketType packet_type_for(const LobbyPresenceAck& payload);
+PacketType packet_type_for(const ControlsDbPull& payload);
+PacketType packet_type_for(const ControlsDbResponse& payload);
+PacketType packet_type_for(const ControlsDbPush& payload);
+PacketType packet_type_for(const ControlsDbAck& payload);
 
 ByteBuffer serialize_packet(const ClientHello& payload);
 ByteBuffer serialize_packet(const HostWelcome& payload);
@@ -161,6 +169,10 @@ ByteBuffer serialize_packet(const PasswordChangeRequired& payload);
 ByteBuffer serialize_packet(const PasswordChange& payload);
 ByteBuffer serialize_packet(const LobbyPresence& payload);
 ByteBuffer serialize_packet(const LobbyPresenceAck& payload);
+ByteBuffer serialize_packet(const ControlsDbPull& payload);
+ByteBuffer serialize_packet(const ControlsDbResponse& payload);
+ByteBuffer serialize_packet(const ControlsDbPush& payload);
+ByteBuffer serialize_packet(const ControlsDbAck& payload);
 
 PacketPayload deserialize_packet(std::span<const std::uint8_t> packet);
 

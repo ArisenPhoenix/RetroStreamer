@@ -286,6 +286,8 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/catalog_ops.cpp
         src/host/catalog_repair.cpp
         src/host/user_credentials.cpp
+        src/host/user_controls_db.cpp
+        src/host/controls_db_sync.cpp
         src/host/standalone_emulator.cpp
         src/host/switch/switch_fs.cpp
         src/host/switch/switch_system_defaults.cpp

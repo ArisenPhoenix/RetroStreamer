@@ -4,6 +4,7 @@
 #include "common/art_transfer.hpp"
 #include "common/catalog_paths.hpp"
 #include "common/serialization.hpp"
+#include "host/controls_db_sync.hpp"
 #include "host/host_app_config.hpp"
 #include "host/host_launch_planner.hpp"
 #include "host/session_lobby.hpp"
@@ -135,6 +136,23 @@ void poll_active_session_joins(
             password_change != nullptr) {
             stream->send_packet(serialize_packet(
                 acknowledge_password_change(config.save_root, *password_change)));
+            return;
+        }
+        if (std::holds_alternative<ControlsDbPull>(first_payload)
+            || std::holds_alternative<ControlsDbPush>(first_payload)) {
+            // Catalog one-shot sockets are unauthenticated; require LobbyPresence or a session.
+            if (std::holds_alternative<ControlsDbPull>(first_payload)) {
+                ControlsDbResponse response;
+                response.username = std::get<ControlsDbPull>(first_payload).username;
+                response.found = false;
+                stream->send_packet(serialize_packet(response));
+            } else {
+                ControlsDbAck ack;
+                ack.username = std::get<ControlsDbPush>(first_payload).username;
+                ack.ok = false;
+                ack.message = "connect with LobbyPresence or join a session first";
+                stream->send_packet(serialize_packet(ack));
+            }
             return;
         }
         const auto art_root = config.art_root.empty()
@@ -333,6 +351,22 @@ std::optional<AcceptedControlHello> try_accept_control_hello(
             password_change != nullptr) {
             stream->send_packet(serialize_packet(
                 acknowledge_password_change(save_root, *password_change)));
+            return AcceptedControlHello{};
+        }
+        if (std::holds_alternative<ControlsDbPull>(first_payload)
+            || std::holds_alternative<ControlsDbPush>(first_payload)) {
+            if (std::holds_alternative<ControlsDbPull>(first_payload)) {
+                ControlsDbResponse response;
+                response.username = std::get<ControlsDbPull>(first_payload).username;
+                response.found = false;
+                stream->send_packet(serialize_packet(response));
+            } else {
+                ControlsDbAck ack;
+                ack.username = std::get<ControlsDbPush>(first_payload).username;
+                ack.ok = false;
+                ack.message = "connect with LobbyPresence or join a session first";
+                stream->send_packet(serialize_packet(ack));
+            }
             return AcceptedControlHello{};
         }
         const auto* game_list_request = std::get_if<GameListRequest>(&first_payload);

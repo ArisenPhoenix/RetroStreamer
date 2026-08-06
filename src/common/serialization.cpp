@@ -536,6 +536,35 @@ ByteBuffer serialize_payload(const LobbyPresenceAck& payload) {
     return writer.take();
 }
 
+ByteBuffer serialize_payload(const ControlsDbPull& payload) {
+    Writer writer;
+    writer.write_string(payload.username);
+    return writer.take();
+}
+
+ByteBuffer serialize_payload(const ControlsDbResponse& payload) {
+    Writer writer;
+    writer.write_string(payload.username);
+    writer.write_bool(payload.found);
+    writer.write_bytes(payload.db_bytes);
+    return writer.take();
+}
+
+ByteBuffer serialize_payload(const ControlsDbPush& payload) {
+    Writer writer;
+    writer.write_string(payload.username);
+    writer.write_bytes(payload.db_bytes);
+    return writer.take();
+}
+
+ByteBuffer serialize_payload(const ControlsDbAck& payload) {
+    Writer writer;
+    writer.write_string(payload.username);
+    writer.write_bool(payload.ok);
+    writer.write_string(payload.message);
+    return writer.take();
+}
+
 PacketType packet_type_for(const ClientHello&) { return PacketType::ClientHello; }
 PacketType packet_type_for(const HostWelcome&) { return PacketType::HostWelcome; }
 PacketType packet_type_for(const ClientConfig&) { return PacketType::ClientConfig; }
@@ -571,6 +600,10 @@ PacketType packet_type_for(const PasswordChangeRequired&) { return PacketType::P
 PacketType packet_type_for(const PasswordChange&) { return PacketType::PasswordChange; }
 PacketType packet_type_for(const LobbyPresence&) { return PacketType::LobbyPresence; }
 PacketType packet_type_for(const LobbyPresenceAck&) { return PacketType::LobbyPresenceAck; }
+PacketType packet_type_for(const ControlsDbPull&) { return PacketType::ControlsDbPull; }
+PacketType packet_type_for(const ControlsDbResponse&) { return PacketType::ControlsDbResponse; }
+PacketType packet_type_for(const ControlsDbPush&) { return PacketType::ControlsDbPush; }
+PacketType packet_type_for(const ControlsDbAck&) { return PacketType::ControlsDbAck; }
 
 template <typename Payload>
 ByteBuffer serialize_packet_impl(const Payload& payload) {
@@ -724,6 +757,22 @@ ByteBuffer serialize_packet(const LobbyPresence& payload) {
 }
 
 ByteBuffer serialize_packet(const LobbyPresenceAck& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const ControlsDbPull& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const ControlsDbResponse& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const ControlsDbPush& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const ControlsDbAck& payload) {
     return serialize_packet_impl(payload);
 }
 
@@ -1076,6 +1125,35 @@ LobbyPresenceAck read_lobby_presence_ack(Reader& reader) {
     return LobbyPresenceAck{reader.read_pod<ClientId>()};
 }
 
+ControlsDbPull read_controls_db_pull(Reader& reader) {
+    ControlsDbPull payload;
+    payload.username = reader.read_string();
+    return payload;
+}
+
+ControlsDbResponse read_controls_db_response(Reader& reader) {
+    ControlsDbResponse payload;
+    payload.username = reader.read_string();
+    payload.found = reader.read_bool();
+    payload.db_bytes = reader.read_bytes();
+    return payload;
+}
+
+ControlsDbPush read_controls_db_push(Reader& reader) {
+    ControlsDbPush payload;
+    payload.username = reader.read_string();
+    payload.db_bytes = reader.read_bytes();
+    return payload;
+}
+
+ControlsDbAck read_controls_db_ack(Reader& reader) {
+    ControlsDbAck payload;
+    payload.username = reader.read_string();
+    payload.ok = reader.read_bool();
+    payload.message = reader.read_string();
+    return payload;
+}
+
 PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
     Reader header_reader(packet);
     const auto magic = header_reader.read_pod<std::uint32_t>();
@@ -1167,6 +1245,14 @@ PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
             return read_lobby_presence(payload_reader);
         case PacketType::LobbyPresenceAck:
             return read_lobby_presence_ack(payload_reader);
+        case PacketType::ControlsDbPull:
+            return read_controls_db_pull(payload_reader);
+        case PacketType::ControlsDbResponse:
+            return read_controls_db_response(payload_reader);
+        case PacketType::ControlsDbPush:
+            return read_controls_db_push(payload_reader);
+        case PacketType::ControlsDbAck:
+            return read_controls_db_ack(payload_reader);
     }
 
     throw std::runtime_error("unknown packet type");

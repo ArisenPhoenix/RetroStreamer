@@ -118,6 +118,72 @@ def require_linux() -> None:
         raise SystemExit("This script is intended for Linux/Unix hosts.")
 
 
+def _vswhere_path() -> Path | None:
+    base = os.environ.get("ProgramFiles(x86)") or r"C:\Program Files (x86)"
+    candidate = Path(base) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
+    return candidate if candidate.is_file() else None
+
+
+def find_vcvars64() -> Path | None:
+    """Locate vcvars64.bat via vswhere (VS Build Tools / Visual Studio with C++)."""
+    vswhere = _vswhere_path()
+    if vswhere is None:
+        return None
+    result = subprocess.run(
+        [
+            str(vswhere),
+            "-latest",
+            "-products",
+            "*",
+            "-requires",
+            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+            "-property",
+            "installationPath",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    install = (result.stdout or "").strip()
+    if not install:
+        return None
+    bat = Path(install) / "VC" / "Auxiliary" / "Build" / "vcvars64.bat"
+    return bat if bat.is_file() else None
+
+
+def ensure_msvc_on_path() -> bool:
+    """Ensure cl.exe is on PATH for Ninja builds (loads vcvars64 when needed).
+
+    GUI self-update and normal PowerShell often lack the VS Developer environment.
+    Returns True if a C++ compiler is available afterward.
+    """
+    if which("cl") or which("clang-cl"):
+        return True
+    if sys.platform != "win32":
+        return False
+    vcvars = find_vcvars64()
+    if vcvars is None:
+        return False
+    # Import the environment vcvars64 would set for this process.
+    result = subprocess.run(
+        ["cmd.exe", "/d", "/s", "/c", f'call "{vcvars}" >nul && set'],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        eprint((result.stderr or result.stdout or "vcvars64.bat failed").strip())
+        return False
+    for line in (result.stdout or "").splitlines():
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        if not key or key.startswith("!"):
+            continue
+        os.environ[key] = value
+    return bool(which("cl") or which("clang-cl"))
+
+
 def default_vcpkg_root() -> Path:
     env = os.environ.get("VCPKG_ROOT", "").strip()
     if env:

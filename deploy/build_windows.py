@@ -23,6 +23,7 @@ if str(_SCRIPTS) not in sys.path:
 
 from scriptutil import (  # noqa: E402
     default_vcpkg_root,
+    ensure_msvc_on_path,
     eprint,
     repo_root,
     require_cmd,
@@ -93,14 +94,28 @@ def main() -> int:
 
     host_flag = "ON" if args.build_host else "OFF"
     needs_configure = args.reconfigure or args.clean or not cache.is_file()
+
+    # Ninja needs cl.exe on PATH. Developer PowerShell has it; GUI update often doesn't.
+    msvc_ready = ensure_msvc_on_path()
+    if not msvc_ready:
+        eprint(
+            "No C++ compiler on PATH (cl.exe). Install \"Desktop development with C++\" "
+            "(Visual Studio or Build Tools), then retry."
+        )
+
     if needs_configure:
         print(f"Configuring CMake (ARCHSTREAMER_BUILD_HOST={host_flag})...")
         require_cmd("cmake")
         cmake_cmd: list[str | Path] = ["cmake", "-S", root, "-B", build_dir]
         fresh_tree = args.clean or not cache.is_file()
-        if fresh_tree and which("ninja"):
+        if fresh_tree and which("ninja") and msvc_ready:
             cmake_cmd.extend(["-G", "Ninja", f"-DCMAKE_BUILD_TYPE={args.config}"])
             print("Using Ninja generator.")
+        elif fresh_tree and which("ninja") and not msvc_ready:
+            print(
+                "Ninja is installed but MSVC is not on PATH; "
+                "using Visual Studio generator instead."
+            )
         elif fresh_tree:
             print("Ninja not found; using CMake's default generator (often Visual Studio).")
         else:
@@ -115,6 +130,13 @@ def main() -> int:
     else:
         print(f"Reusing existing build cache ({cache}).")
         print("Pass --reconfigure to refresh cmake options, or --clean for a full rebuild.")
+        if which("ninja") and not msvc_ready and cache.is_file():
+            # Existing Ninja trees still need cl at build time.
+            eprint(
+                "Build cache looks like a Ninja tree but cl.exe is unavailable. "
+                "Re-run with --clean so CMake can use the Visual Studio generator, "
+                "or open \"x64 Native Tools Command Prompt for VS\" and rebuild."
+            )
 
     jobs = args.jobs
     if jobs <= 0:

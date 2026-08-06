@@ -48,13 +48,114 @@ QString find_python_executable() {
     return {};
 }
 
+bool path_exists(const QString& path) {
+    std::error_code ec;
+    return std::filesystem::exists(std::filesystem::path(path.toStdString()), ec);
+}
+
+bool is_git_checkout_root(const QString& path) {
+    const QDir dir(path);
+    if (!dir.exists(QStringLiteral("CMakeLists.txt"))) {
+        return false;
+    }
+    // Plain repos use a .git directory; worktrees/submodules use a .git file.
+    return path_exists(dir.absoluteFilePath(QStringLiteral(".git")));
+}
+
+bool has_self_update_script(const QString& repo) {
+    return QFileInfo::exists(
+        QDir(repo).absoluteFilePath(QStringLiteral("deploy/gui_self_update.py")));
+}
+
+QString strip_path_quotes(QString path) {
+    path = path.trimmed();
+    if (path.size() >= 2) {
+        const QChar a = path.front();
+        const QChar b = path.back();
+        if ((a == QLatin1Char('"') && b == QLatin1Char('"')) ||
+            (a == QLatin1Char('\'') && b == QLatin1Char('\''))) {
+            path = path.mid(1, path.size() - 2).trimmed();
+        }
+    }
+    return path;
+}
+
+/** Accept repo root, deploy/, or a file under the checkout; walk up to CMakeLists+.git. */
+QString resolve_repo_checkout(QString typed) {
+    typed = strip_path_quotes(std::move(typed));
+    if (typed.isEmpty()) {
+        return {};
+    }
+
+    QFileInfo info(typed);
+    QString start = info.exists()
+        ? (info.isFile() ? info.absolutePath() : info.absoluteFilePath())
+        : QDir::cleanPath(typed);
+
+    QDir dir(start);
+    for (int i = 0; i < 8; ++i) {
+        const QString candidate = dir.absolutePath();
+        if (is_git_checkout_root(candidate)) {
+            return QDir::toNativeSeparators(candidate);
+        }
+        if (!dir.cdUp()) {
+            break;
+        }
+    }
+    return QDir::toNativeSeparators(start);
+}
+
+QString explain_repo_problem(const QString& repo) {
+    if (repo.isEmpty()) {
+        return QStringLiteral(
+            "Could not find the git repo. Set Repo under Updates to a shared checkout "
+            "(Program Files installs cannot auto-detect).");
+    }
+    if (!path_exists(repo)) {
+        return QStringLiteral(
+            "Repo path not found (or this Windows account cannot access it):\n%1\n"
+            "Put the checkout somewhere both users can read "
+            "(e.g. C:\\dev\\ArchStreamer), not under another user's Documents.")
+            .arg(repo);
+    }
+    if (!is_git_checkout_root(repo)) {
+        return QStringLiteral(
+            "Not an ArchStreamer git checkout (need CMakeLists.txt and .git):\n%1\n"
+            "Point Repo at the repo root, not Program Files and not only the deploy\\ folder.")
+            .arg(repo);
+    }
+    if (!has_self_update_script(repo)) {
+        return QStringLiteral("deploy/gui_self_update.py missing in %1").arg(repo);
+    }
+    return {};
+}
+
 std::filesystem::path detect_repo_root() {
-    const QStringList seeds = {
+    QStringList seeds = {
         QCoreApplication::applicationDirPath(),
         QFileInfo(QCoreApplication::applicationFilePath()).absolutePath(),
         QDir::currentPath(),
     };
+#ifdef Q_OS_WIN
+    // Shared locations for multi-user PCs (Program Files install cannot walk to .git).
+    seeds << QStringLiteral("C:/dev/ArchStreamer")
+          << QStringLiteral("C:/dev/RetroStreamer")
+          << QStringLiteral("C:/ArchStreamer")
+          << QStringLiteral("C:/RetroStreamer")
+          << QStringLiteral("C:/Users/Public/Documents/ArchStreamer")
+          << QStringLiteral("C:/Users/Public/Documents/RetroStreamer");
+#endif
+
     for (const auto& seed_q : seeds) {
+        if (seed_q.isEmpty()) {
+            continue;
+        }
+        const QString resolved = resolve_repo_checkout(seed_q);
+        if (!resolved.isEmpty() && is_git_checkout_root(resolved) &&
+            has_self_update_script(resolved)) {
+            return std::filesystem::path(resolved.toStdString());
+        }
+        // Fall back: walk parents of the seed even without the script (older checkouts).
         auto cur = std::filesystem::path(seed_q.toStdString());
         std::error_code ec;
         cur = std::filesystem::weakly_canonical(cur, ec);
@@ -62,8 +163,8 @@ std::filesystem::path detect_repo_root() {
             cur = std::filesystem::path(seed_q.toStdString());
         }
         for (int i = 0; i < 8; ++i) {
-            if (std::filesystem::is_regular_file(cur / "CMakeLists.txt") &&
-                std::filesystem::is_directory(cur / ".git")) {
+            const QString candidate = QString::fromStdString(cur.string());
+            if (is_git_checkout_root(candidate)) {
                 return cur;
             }
             if (!cur.has_parent_path() || cur == cur.parent_path()) {
@@ -108,9 +209,10 @@ QWidget* MainWindow::build_updates_group(QWidget* parent) {
     settings_update_repo_->setPlaceholderText(
         QStringLiteral("auto-detect from this binary / current directory"));
     settings_update_repo_->setToolTip(
-        "Git checkout that contains CMakeLists.txt and .git.\n"
-        "On Windows this is usually Documents\\RetroStreamer.\n"
-        "On Linux this is usually the repo with build/archstreamer_gui.");
+        "Git checkout that contains CMakeLists.txt, .git, and deploy/gui_self_update.py.\n"
+        "A Program Files install cannot auto-detect — set this explicitly.\n"
+        "Multi-user Windows: use a shared folder (e.g. C:\\dev\\ArchStreamer),\n"
+        "not another account's Documents. You can paste the repo root or the deploy\\ folder.");
 
     settings_update_branch_ = new QComboBox(box);
     settings_update_branch_->setEditable(true);
@@ -186,7 +288,7 @@ QString MainWindow::update_repo_path() const {
     if (settings_update_repo_ != nullptr) {
         const auto typed = settings_update_repo_->text().trimmed();
         if (!typed.isEmpty()) {
-            return typed;
+            return resolve_repo_checkout(typed);
         }
     }
     const auto detected = detect_repo_root();
@@ -205,12 +307,10 @@ QString MainWindow::update_branch_name() const {
 }
 
 QString MainWindow::self_update_script_path(const QString& repo) const {
-    const QDir root(repo);
-    const auto script = root.absoluteFilePath(QStringLiteral("deploy/gui_self_update.py"));
-    if (QFileInfo::exists(script)) {
-        return script;
+    if (repo.isEmpty() || !has_self_update_script(repo)) {
+        return {};
     }
-    return {};
+    return QDir(repo).absoluteFilePath(QStringLiteral("deploy/gui_self_update.py"));
 }
 
 void MainWindow::check_for_updates() {
@@ -225,21 +325,16 @@ void MainWindow::check_for_updates() {
 #endif
 
     const auto repo = update_repo_path();
-    if (repo.isEmpty()) {
-        set_update_status(
-            QStringLiteral("Could not find the git repo. Set the Repo path under Updates."));
+    if (const auto problem = explain_repo_problem(repo); !problem.isEmpty()) {
+        set_update_status(problem);
         return;
     }
-    if (settings_update_repo_ != nullptr && settings_update_repo_->text().trimmed().isEmpty()) {
+    if (settings_update_repo_ != nullptr &&
+        settings_update_repo_->text().trimmed().isEmpty()) {
         settings_update_repo_->setText(repo);
     }
 
     const auto script = self_update_script_path(repo);
-    if (script.isEmpty()) {
-        set_update_status(
-            QStringLiteral("deploy/gui_self_update.py missing in %1").arg(repo));
-        return;
-    }
     const auto python = find_python_executable();
     if (python.isEmpty()) {
         set_update_status(QStringLiteral("Python not found on PATH (need python3/python/py)."));
@@ -364,10 +459,14 @@ void MainWindow::apply_updates() {
 #endif
 
     const auto repo = update_repo_path();
+    if (const auto problem = explain_repo_problem(repo); !problem.isEmpty()) {
+        set_update_status(problem);
+        return;
+    }
     const auto script = self_update_script_path(repo);
     const auto python = find_python_executable();
-    if (repo.isEmpty() || script.isEmpty() || python.isEmpty()) {
-        set_update_status(QStringLiteral("Update cannot start (repo/script/python missing)."));
+    if (python.isEmpty()) {
+        set_update_status(QStringLiteral("Python not found on PATH (need python3/python/py)."));
         return;
     }
 

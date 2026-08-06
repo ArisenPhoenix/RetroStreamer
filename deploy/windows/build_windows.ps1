@@ -56,6 +56,30 @@ if ($Clean -and (Test-Path $buildDir)) {
 
 $hostFlag = if ($BuildHost) { "ON" } else { "OFF" }
 $needsConfigure = $Reconfigure -or $Clean -or -not (Test-Path $cacheFile)
+
+function Ensure-MsvcOnPath {
+    if (Get-Command cl -ErrorAction SilentlyContinue) { return $true }
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path $vswhere)) { return $false }
+    $install = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    if ([string]::IsNullOrWhiteSpace($install)) { return $false }
+    $vcvars = Join-Path $install "VC\Auxiliary\Build\vcvars64.bat"
+    if (-not (Test-Path $vcvars)) { return $false }
+    $envDump = cmd.exe /d /s /c "`"$vcvars`" >nul && set"
+    if ($LASTEXITCODE -ne 0) { return $false }
+    foreach ($line in ($envDump -split "`r?`n")) {
+        if ($line -match "^(.*?)=(.*)$") {
+            Set-Item -Path "Env:$($Matches[1])" -Value $Matches[2]
+        }
+    }
+    return [bool](Get-Command cl -ErrorAction SilentlyContinue)
+}
+
+$msvcReady = Ensure-MsvcOnPath
+if (-not $msvcReady) {
+    Write-Warning "No C++ compiler on PATH (cl.exe). Install Desktop development with C++ (VS / Build Tools)."
+}
+
 if ($needsConfigure) {
     Write-Host "Configuring CMake (ARCHSTREAMER_BUILD_HOST=$hostFlag)..."
 
@@ -63,9 +87,11 @@ if ($needsConfigure) {
     # existing generator (VS vs Ninja) or cmake errors out.
     $generatorArgs = @()
     $freshTree = $Clean -or -not (Test-Path $cacheFile)
-    if ($freshTree -and (Get-Command ninja -ErrorAction SilentlyContinue)) {
+    if ($freshTree -and (Get-Command ninja -ErrorAction SilentlyContinue) -and $msvcReady) {
         $generatorArgs = @("-G", "Ninja", "-DCMAKE_BUILD_TYPE=$Config")
         Write-Host "Using Ninja generator."
+    } elseif ($freshTree -and (Get-Command ninja -ErrorAction SilentlyContinue) -and -not $msvcReady) {
+        Write-Host "Ninja is installed but MSVC is not on PATH; using Visual Studio generator instead."
     } elseif ($freshTree) {
         Write-Host "Ninja not found; using CMake's default generator (often Visual Studio)."
         Write-Host "Tip: install Ninja and re-run with -Clean for faster incremental builds."

@@ -20,7 +20,11 @@ Linux-only tools (gamescope, Gamescope WSI, VirtualGL, uinput) are **not** used 
 
 ## Update / install (client PC)
 
-Repo usually lives at `%USERPROFILE%\Documents\RetroStreamer`.
+Repo for a single user can live at `%USERPROFILE%\Documents\RetroStreamer`.
+For multiple Windows accounts on one PC, use a **shared** checkout instead
+(e.g. `C:\dev\ArchStreamer`) so every account can read it — GUI self-update
+cannot auto-detect from a Program Files install, and another user's Documents
+is often inaccessible.
 
 ```powershell
 # After Linux pushes to GitHub — pull deploy branch (master), build, install:

@@ -17,8 +17,10 @@
 #include "client/audio_playback_device.hpp"
 #include "client/video_window_geometry.hpp"
 #include "common/controller_button_map.hpp"
-#include "host/user_controls_db.hpp"
 #include "archstreamer/runtime_cadence/cadence.hpp"
+#ifdef ARCHSTREAMER_HAS_HOST
+#include "host/user_controls_db.hpp"
+#endif
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -890,6 +892,7 @@ std::filesystem::path MainWindow::controller_map_file_path() const {
 
 namespace {
 
+#ifdef ARCHSTREAMER_HAS_HOST
 bool upsert_controller_map_to_profile(
     const std::filesystem::path& save_root,
     const std::string& username,
@@ -922,6 +925,7 @@ std::optional<archstreamer::ControllerMapDocument> load_controller_map_from_prof
     }
     return archstreamer::controller_map_document_from_json(found->document_json);
 }
+#endif
 
 bool upsert_controller_map_to_cadence(
     const std::string& username,
@@ -977,14 +981,18 @@ void MainWindow::load_controller_map_document() {
     if (username.empty()) {
         username = std::string(archstreamer::cadence::kControlsDefaultUsername);
     }
+#ifdef ARCHSTREAMER_HAS_HOST
     if (auto document = load_controller_map_from_profile(save_root_path(), username);
         document.has_value()) {
         apply_document(*document);
         return;
     }
+#endif
     if (auto document = load_controller_map_from_cadence(username); document.has_value()) {
         apply_document(*document);
+#ifdef ARCHSTREAMER_HAS_HOST
         (void)upsert_controller_map_to_profile(save_root_path(), username, *document);
+#endif
         return;
     }
 
@@ -992,9 +1000,13 @@ void MainWindow::load_controller_map_document() {
     const auto path = controller_map_file_path();
     if (auto document = archstreamer::controller_map_document_load_file(path); document.has_value()) {
         apply_document(*document);
+#ifdef ARCHSTREAMER_HAS_HOST
         if (!upsert_controller_map_to_profile(save_root_path(), username, *document)) {
             (void)upsert_controller_map_to_cadence(username, *document);
         }
+#else
+        (void)upsert_controller_map_to_cadence(username, *document);
+#endif
         return;
     }
 
@@ -1037,9 +1049,13 @@ void MainWindow::load_controller_map_document() {
         controller_map_prefs_->set_profile(family, profile);
     }
     if (migrated) {
+#ifdef ARCHSTREAMER_HAS_HOST
         if (!upsert_controller_map_to_profile(save_root_path(), username, document)) {
             (void)upsert_controller_map_to_cadence(username, document);
         }
+#else
+        (void)upsert_controller_map_to_cadence(username, document);
+#endif
         archstreamer::controller_map_document_save_file(path, document);
     }
     sync_controller_map_editor_ui();
@@ -1058,11 +1074,17 @@ void MainWindow::save_controller_map_document() {
     if (username.empty()) {
         username = std::string(archstreamer::cadence::kControlsDefaultUsername);
     }
+#ifdef ARCHSTREAMER_HAS_HOST
     if (!upsert_controller_map_to_profile(save_root_path(), username, document)) {
         if (!upsert_controller_map_to_cadence(username, document)) {
             archstreamer::controller_map_document_save_file(controller_map_file_path(), document);
         }
     }
+#else
+    if (!upsert_controller_map_to_cadence(username, document)) {
+        archstreamer::controller_map_document_save_file(controller_map_file_path(), document);
+    }
+#endif
 
     // Keep legacy keys in sync for older builds.
     const auto standard = document.profile(archstreamer::ControllerMapFamily::Standard);

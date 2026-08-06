@@ -17,6 +17,7 @@
 #   -Reconfigure   force cmake reconfigure
 #   -Clean         wipe build/ first
 #   -Launch        start the installed GUI when done
+#   -Jobs          parallel cmake build jobs (default: 2)
 #   -Prefix        install root (default: C:\Program Files\ArchStreamer)
 #   -VcpkgRoot     default C:\dev\vcpkg or $env:VCPKG_ROOT
 #
@@ -37,6 +38,7 @@ param(
     [string]$Prefix = "C:\Program Files\ArchStreamer",
     [string]$VcpkgRoot = "",
     [string]$Config = "Release",
+    [int]$Jobs = 2,
     [string]$Branch = "master"
 )
 
@@ -114,10 +116,12 @@ if (-not $SkipPull) {
     Write-Host "Skipping git pull."
 }
 
-Write-Host "Building..."
+if ($Jobs -le 0) { $Jobs = 2 }
+Write-Host "Building (-j$Jobs)..."
 $buildArgs = @{
     Config = $Config
     VcpkgRoot = $VcpkgRoot
+    Jobs = $Jobs
 }
 if ($BuildHost) { $buildArgs["BuildHost"] = $true }
 if ($Reconfigure) { $buildArgs["Reconfigure"] = $true }

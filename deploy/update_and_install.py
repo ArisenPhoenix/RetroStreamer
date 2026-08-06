@@ -62,6 +62,12 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--config", default="Release", help="CMake build config (default: Release)")
     p.add_argument(
+        "--jobs",
+        type=int,
+        default=2,
+        help="Parallel build jobs passed to cmake --build (default: 2)",
+    )
+    p.add_argument(
         "--branch",
         default="master",
         help="Git branch to pull (default: master)",
@@ -204,7 +210,8 @@ def main() -> int:
     else:
         print("Skipping git pull.")
 
-    print("Building...")
+    jobs = args.jobs if args.jobs > 0 else 2
+    print(f"Building (-j{jobs})...")
     build_cmd: list[str | Path] = [
         sys.executable,
         build_py,
@@ -212,6 +219,8 @@ def main() -> int:
         args.config,
         "--vcpkg-root",
         vcpkg_root,
+        "--jobs",
+        str(jobs),
     ]
     if args.build_host:
         build_cmd.append("--build-host")

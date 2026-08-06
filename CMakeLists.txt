@@ -21,6 +21,10 @@ if(WIN32)
 else()
     option(ARCHSTREAMER_BUILD_HOST "Build host runtime (Linux)" ON)
 endif()
+if(MSVC)
+    # Source/u8 literals are UTF-8; without this MSVC uses the system code page.
+    add_compile_options(/utf-8)
+endif()
 option(ARCHSTREAMER_REQUIRE_GUI "Fail configure if Qt6 Widgets is missing" OFF)
 option(ARCHSTREAMER_BUILD_CONTROLLER_PROBE "Build controller probe tool" ON)
 # Experimental DoubleCherryGB dual-machine cable (no GB/GBC saves to test with yet).

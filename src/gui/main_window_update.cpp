@@ -371,16 +371,24 @@ void MainWindow::apply_updates() {
         return;
     }
 
-    QString prompt = QStringLiteral(
-        "This will:\n"
-        "• reset the repo to origin/%1 (discards local edits in that checkout)\n"
-        "• rebuild ArchStreamer\n");
+    // Keep each QStringLiteral contiguous: MSVC rejects #ifdef inside macro args
+    // (QStringLiteral is a macro), which is the classic Windows build break here.
 #ifdef Q_OS_WIN
-    prompt += QStringLiteral("• reinstall into Program Files (may need Admin)\n");
-#endif
-    prompt += QStringLiteral(
-        "• quit this app and relaunch when finished\n\n"
+    const QString prompt = QStringLiteral(
+        "This will:\n"
+        "- reset the repo to origin/%1 (discards local edits in that checkout)\n"
+        "- rebuild ArchStreamer\n"
+        "- reinstall into Program Files (may need Admin)\n"
+        "- quit this app and relaunch when finished\n\n"
         "Continue?");
+#else
+    const QString prompt = QStringLiteral(
+        "This will:\n"
+        "- reset the repo to origin/%1 (discards local edits in that checkout)\n"
+        "- rebuild ArchStreamer\n"
+        "- quit this app and relaunch when finished\n\n"
+        "Continue?");
+#endif
     const auto reply = QMessageBox::question(
         this,
         QStringLiteral("Update ArchStreamer"),
@@ -392,7 +400,7 @@ void MainWindow::apply_updates() {
     }
 
     persist_settings_if_idle();
-    set_update_status(QStringLiteral("Starting update — this window will close…"));
+    set_update_status(QStringLiteral("Starting update - this window will close..."));
 
     QStringList args;
 #ifdef Q_OS_WIN

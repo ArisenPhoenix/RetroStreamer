@@ -192,14 +192,14 @@ std::vector<LinkOutbound> HostSessionHub::handle_link(
     ClientId from_client_id,
     const std::string& from_username,
     const LinkRequest& request) {
-    const GameId& game_id = from_slot.plan().selected_game_id;
+    // Host-wide username lookup (empty game_id): any seated player on this host.
     auto outbound = link_coordinator_.handle(
         from_slot.plan(),
         from_client_id,
         from_username,
         request,
-        [this, &game_id](std::string_view target) {
-            return username_seated(target, game_id);
+        [this](std::string_view target) {
+            return username_seated(target, GameId{});
         },
         [this](ClientId peer_id) {
             return slot_for_client(peer_id) != nullptr;
@@ -241,12 +241,29 @@ std::vector<LinkOutbound> HostSessionHub::handle_link(
             const bool cross_slot =
                 peer_slot != nullptr && peer_slot != &from_slot;
 
+            // Peer bond always succeeds; cable/LDN only when both share a system.
+            const std::string& from_system = from_slot.plan().system_key;
+            const std::string peer_system =
+                peer_slot != nullptr ? peer_slot->plan().system_key : std::string{};
+            if (peer_slot == nullptr || from_system.empty() || from_system != peer_system) {
+                const std::string soft =
+                    "Matched with " + peer_user +
+                    " (no in-game cable — different systems or peer unavailable)";
+                for (auto& update : outbound) {
+                    if (update.response.status == LinkStatus::Matched) {
+                        update.response.message = soft;
+                    }
+                }
+                std::cout << "Link: " << soft << '\n';
+                continue;
+            }
+
             const std::uint16_t netplay_port = static_cast<std::uint16_t>(
                 55435 +
-                std::min(from_slot.slot_index(), peer_slot != nullptr ? peer_slot->slot_index() : 0));
+                std::min(from_slot.slot_index(), peer_slot->slot_index()));
 
             const auto start = link_cable_.begin(
-                from_slot.plan().system_key,
+                from_system,
                 peer_id,
                 from_client_id,
                 peer_user,

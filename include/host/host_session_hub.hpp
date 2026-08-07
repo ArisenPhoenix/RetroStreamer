@@ -26,6 +26,7 @@ public:
     void register_slot(ActiveSessionSlot* slot);
     void unregister_slot(ActiveSessionSlot* slot);
 
+    /** Seated player lookup. Empty game_id = any title on this host. */
     bool username_seated(std::string_view username, const GameId& game_id) const;
     // A persistent save/config profile must have only one live writer. Reconnects
     // attach to that slot before new-session admission reaches this check.

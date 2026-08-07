@@ -377,8 +377,7 @@ LinkCableBackend::StartResult LinkCableBackend::begin(
         // Sessions already start with multiplayer_mode=ldn_mitm — no relaunch.
         result.message =
             "Matched " + user_a_ + " ↔ " + user_b_ +
-            ". Local Wireless (ldn_mitm) is enabled — open Local Play / LDN in-game. "
-            "Both players must be on Ryujinx with the same title.";
+            ". Local Wireless (ldn_mitm) is enabled — open Local Play / LDN in-game.";
         return result;
     }
 

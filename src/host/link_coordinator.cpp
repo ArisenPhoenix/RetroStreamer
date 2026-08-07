@@ -62,8 +62,7 @@ void LinkCoordinator::clear_client(ClientId client_id) {
 const LinkCoordinator::PendingOffer* LinkCoordinator::find_mutual(
     ClientId from_client_id,
     const std::string& from_username,
-    const std::string& target_username,
-    const GameId& game_id) const {
+    const std::string& target_username) const {
     for (const auto& offer : pending_) {
         if (offer.from_client_id == from_client_id) {
             continue;
@@ -74,9 +73,8 @@ const LinkCoordinator::PendingOffer* LinkCoordinator::find_mutual(
         if (!username_equal(offer.target_username, from_username)) {
             continue;
         }
-        if (!game_id.empty() && !offer.game_id.empty() && offer.game_id != game_id) {
-            continue;
-        }
+        // game_id is intentionally ignored: Link is a host-wide peer bond.
+        // Cable/LDN arming is gated by system_key in HostSessionHub.
         return &offer;
     }
     return nullptr;
@@ -149,11 +147,11 @@ std::vector<LinkOutbound> LinkCoordinator::handle(
     const auto game_id =
         !request.game_id.empty() ? request.game_id : plan.selected_game_id;
 
+    // Match on mutual usernames only — game_id is not a gate (Sword↔Shield, etc.).
     if (const auto* mutual = find_mutual(
             from_client_id,
             from_username,
-            request.target_username,
-            game_id);
+            request.target_username);
         mutual != nullptr) {
         const auto peer_id = mutual->from_client_id;
         const auto peer_name = mutual->from_username;

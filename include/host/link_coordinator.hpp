@@ -20,9 +20,9 @@ struct LinkOutbound {
 };
 
 /**
- * Tracks mutual link requests between seated clients.
- * On match, LinkCableBackend may start a system-specific backend (multi-instance TBD;
- * DEBUG_GB_LINK enables experimental DoubleCherryGB dual-GB relaunch).
+ * Tracks mutual link requests between seated clients (host-wide username bond).
+ * Game id is not a match gate. HostSessionHub arms LinkCableBackend only when
+ * both peers share the same system_key.
  */
 class LinkCoordinator {
 public:
@@ -56,8 +56,7 @@ private:
     const PendingOffer* find_mutual(
         ClientId from_client_id,
         const std::string& from_username,
-        const std::string& target_username,
-        const GameId& game_id) const;
+        const std::string& target_username) const;
 };
 
 } // namespace archstreamer

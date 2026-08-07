@@ -463,7 +463,12 @@ if(ARCHSTREAMER_BUILD_CONTROLLER_PROBE)
         PRIVATE
             archstreamer_controller
     )
-    list(APPEND ARCHSTREAMER_INSTALL_TARGETS controller_probe)
+    # Windows Program Files installs often fail with "permission denied" when a
+    # leftover controller_probe.exe is still running / locked. Keep the tool in
+    # the build tree for local debugging; do not install it on Windows.
+    if(NOT WIN32)
+        list(APPEND ARCHSTREAMER_INSTALL_TARGETS controller_probe)
+    endif()
 endif()
 
 add_executable(session_client

@@ -41,7 +41,9 @@ is often inaccessible.
 
 `-ResetHard` discards local edits on the Windows tree so it always matches `origin/<Branch>` (recommended for a pure client machine).
 
-Install overwrites `C:\Program Files\ArchStreamer\bin\*.exe`. Run an **Admin** PowerShell, and close `archstreamer_gui` / `session_client` first (the script stops them when it can). A locked `session_client.exe` usually shows as cmake `file INSTALL cannot copy file` / permission denied.
+Install overwrites `C:\Program Files\ArchStreamer\bin\*.exe`. Run an **Admin** PowerShell, and close `archstreamer_gui` / `session_client` first (the script stops them when it can, and renames stubborn `*.exe` aside before copying). A locked binary usually shows as cmake `file INSTALL cannot copy file` / permission denied.
+
+`controller_probe.exe` is built for local debugging but **not** installed into Program Files on Windows (avoids a common leftover lock during updates). Run it from `build\` / `build\Release\` when needed.
 
 Admin install also writes **All Users** shortcuts:
 - Start Menu → **ArchStreamer** (every Windows account)

@@ -147,11 +147,57 @@ $procsToStop = @(
     "uinput_probe",
     "controller_probe"
 )
-foreach ($name in $procsToStop) {
-    Get-Process -Name $name -ErrorAction SilentlyContinue |
-        Stop-Process -Force -ErrorAction SilentlyContinue
+
+function Stop-ArchStreamerInstallProcs {
+    foreach ($name in $procsToStop) {
+        Get-Process -Name $name -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+    }
 }
+
+# Running images often cannot be overwritten but *can* be renamed aside.
+function Move-LockedInstallExesAside {
+    if (-not (Test-Path $installBin)) {
+        return
+    }
+    foreach ($name in $procsToStop) {
+        $exe = Join-Path $installBin "$name.exe"
+        if (-not (Test-Path $exe)) {
+            continue
+        }
+        $bak = Join-Path $installBin "$name.exe.old"
+        Remove-Item -LiteralPath $bak -Force -ErrorAction SilentlyContinue
+        try {
+            Move-Item -LiteralPath $exe -Destination $bak -Force -ErrorAction Stop
+            Write-Host "Moved locked/previous $name.exe -> $name.exe.old"
+        } catch {
+            Write-Warning "Could not move $exe aside: $($_.Exception.Message)"
+        }
+    }
+}
+
+Stop-ArchStreamerInstallProcs
 Start-Sleep -Milliseconds 500
+Move-LockedInstallExesAside
+
+# controller_probe is no longer installed on Windows; remove a leftover Program Files
+# copy so a locked old probe cannot confuse future updates.
+$obsoleteProbe = Join-Path $installBin "controller_probe.exe"
+if (Test-Path $obsoleteProbe) {
+    try {
+        Remove-Item -LiteralPath $obsoleteProbe -Force -ErrorAction Stop
+        Write-Host "Removed obsolete $obsoleteProbe (no longer installed on Windows)."
+    } catch {
+        $obsoleteBak = Join-Path $installBin "controller_probe.exe.old"
+        Remove-Item -LiteralPath $obsoleteBak -Force -ErrorAction SilentlyContinue
+        try {
+            Move-Item -LiteralPath $obsoleteProbe -Destination $obsoleteBak -Force -ErrorAction Stop
+            Write-Host "Moved obsolete controller_probe.exe aside (was locked)."
+        } catch {
+            Write-Warning "Could not remove obsolete controller_probe.exe: $($_.Exception.Message)"
+        }
+    }
+}
 
 # If something still holds an installed exe (Explorer preview, AV), retry a few times.
 $installOk = $false
@@ -161,19 +207,38 @@ for ($attempt = 1; $attempt -le 5; $attempt++) {
         $installOk = $true
         break
     }
-    Write-Warning "cmake --install failed (attempt $attempt/5). Retrying after stopping processes again..."
-    foreach ($name in $procsToStop) {
-        Get-Process -Name $name -ErrorAction SilentlyContinue |
-            Stop-Process -Force -ErrorAction SilentlyContinue
-    }
+    Write-Warning "cmake --install failed (attempt $attempt/5). Retrying after unlock..."
+    Stop-ArchStreamerInstallProcs
     Start-Sleep -Seconds 1
+    Move-LockedInstallExesAside
 }
 if (-not $installOk) {
+    $locked = @()
+    if (Test-Path $installBin) {
+        foreach ($name in $procsToStop) {
+            $exe = Join-Path $installBin "$name.exe"
+            if (Test-Path $exe) {
+                try {
+                    $fs = [System.IO.File]::Open($exe, 'Open', 'ReadWrite', 'None')
+                    $fs.Close()
+                } catch {
+                    $locked += $exe
+                }
+            }
+        }
+    }
+    $lockedMsg = if ($locked.Count -gt 0) {
+        "Still locked:`n  - " + ($locked -join "`n  - ")
+    } else {
+        "No specific locked bin detected (may be Admin / AV)."
+    }
     throw @"
 cmake --install failed (often permission denied on $installBin\*.exe).
 
+$lockedMsg
+
 Common causes:
-  1. ArchStreamer / session_client still running — close them (Task Manager).
+  1. ArchStreamer / session_client / controller_probe still running — close them (Task Manager).
   2. Not elevated — Program Files needs Admin PowerShell.
   3. Antivirus briefly locking the new binaries — retry.
 
@@ -181,6 +246,10 @@ Then re-run:
   .\deploy\windows\update-and-install.ps1 -SkipPull
 "@
 }
+
+# Best-effort cleanup of rename-aside copies from a previous unlock.
+Get-ChildItem -Path $installBin -Filter "*.exe.old" -ErrorAction SilentlyContinue |
+    Remove-Item -Force -ErrorAction SilentlyContinue
 
 $finish = Join-Path $RepoRoot "deploy\windows\finish-install.ps1"
 $finishArgs = @{

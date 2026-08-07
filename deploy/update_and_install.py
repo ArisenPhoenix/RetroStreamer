@@ -75,19 +75,21 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+_INSTALL_PROC_NAMES = (
+    "archstreamer_gui",
+    "session_client",
+    "host_runner",
+    "client_catalog_probe",
+    "game_catalog_probe",
+    "asset_probe",
+    "steam_art_import",
+    "uinput_probe",
+    "controller_probe",
+)
+
+
 def _stop_archstreamer_procs() -> None:
-    names = [
-        "archstreamer_gui",
-        "session_client",
-        "host_runner",
-        "client_catalog_probe",
-        "game_catalog_probe",
-        "asset_probe",
-        "steam_art_import",
-        "uinput_probe",
-        "controller_probe",
-    ]
-    for name in names:
+    for name in _INSTALL_PROC_NAMES:
         subprocess.run(
             ["taskkill", "/F", "/IM", f"{name}.exe"],
             capture_output=True,
@@ -107,6 +109,64 @@ def _stop_archstreamer_procs() -> None:
             text=True,
             check=False,
         )
+
+
+def _move_locked_install_exes_aside(install_bin: Path) -> None:
+    """Running images often cannot be overwritten but can be renamed aside."""
+    if not install_bin.is_dir():
+        return
+    for name in _INSTALL_PROC_NAMES:
+        exe = install_bin / f"{name}.exe"
+        if not exe.is_file():
+            continue
+        bak = install_bin / f"{name}.exe.old"
+        try:
+            if bak.exists():
+                bak.unlink()
+        except OSError:
+            pass
+        try:
+            exe.replace(bak)
+            print(f"Moved locked/previous {name}.exe -> {name}.exe.old")
+        except OSError as exc:
+            eprint(f"Could not move {exe} aside: {exc}")
+
+
+def _remove_obsolete_controller_probe(install_bin: Path) -> None:
+    """controller_probe is no longer installed on Windows; clear leftovers."""
+    obsolete = install_bin / "controller_probe.exe"
+    if not obsolete.is_file():
+        return
+    try:
+        obsolete.unlink()
+        print(f"Removed obsolete {obsolete} (no longer installed on Windows).")
+        return
+    except OSError:
+        pass
+    bak = install_bin / "controller_probe.exe.old"
+    try:
+        if bak.exists():
+            bak.unlink()
+        obsolete.replace(bak)
+        print("Moved obsolete controller_probe.exe aside (was locked).")
+    except OSError as exc:
+        eprint(f"Could not remove obsolete controller_probe.exe: {exc}")
+
+
+def _list_locked_install_exes(install_bin: Path) -> list[Path]:
+    locked: list[Path] = []
+    if not install_bin.is_dir():
+        return locked
+    for name in _INSTALL_PROC_NAMES:
+        exe = install_bin / f"{name}.exe"
+        if not exe.is_file():
+            continue
+        try:
+            with exe.open("r+b"):
+                pass
+        except OSError:
+            locked.append(exe)
+    return locked
 
 
 def main() -> int:
@@ -238,6 +298,8 @@ def main() -> int:
     install_bin = prefix / "bin"
     _stop_archstreamer_procs()
     time.sleep(0.5)
+    _move_locked_install_exes_aside(install_bin)
+    _remove_obsolete_controller_probe(install_bin)
 
     require_cmd("cmake")
     install_ok = False
@@ -260,23 +322,39 @@ def main() -> int:
             break
         eprint(
             f"cmake --install failed (attempt {attempt}/5). "
-            "Retrying after stopping processes again..."
+            "Retrying after unlock..."
         )
         _stop_archstreamer_procs()
         time.sleep(1)
+        _move_locked_install_exes_aside(install_bin)
 
     if not install_ok:
+        locked = _list_locked_install_exes(install_bin)
+        locked_msg = (
+            "Still locked:\n  - " + "\n  - ".join(str(p) for p in locked)
+            if locked
+            else "No specific locked bin detected (may be Admin / AV)."
+        )
         raise SystemExit(
             f"cmake --install failed (often permission denied on {install_bin}\\*.exe).\n"
             "\n"
+            f"{locked_msg}\n"
+            "\n"
             "Common causes:\n"
-            "  1. ArchStreamer / session_client still running — close them (Task Manager).\n"
+            "  1. ArchStreamer / session_client / controller_probe still running — "
+            "close them (Task Manager).\n"
             "  2. Not elevated — Program Files needs Admin PowerShell.\n"
             "  3. Antivirus briefly locking the new binaries — retry.\n"
             "\n"
             "Then re-run:\n"
             "  python deploy/update_and_install.py --skip-pull"
         )
+
+    for bak in install_bin.glob("*.exe.old") if install_bin.is_dir() else ():
+        try:
+            bak.unlink()
+        except OSError:
+            pass
 
     finish = root / "deploy" / "finish_install.py"
     finish_cmd: list[str | Path] = [

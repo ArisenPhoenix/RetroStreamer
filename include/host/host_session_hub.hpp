@@ -45,7 +45,9 @@ public:
     const std::vector<ActiveSessionSlot*>& slots_unsafe() const { return slots_; }
 
     LinkCoordinator& link_coordinator() { return link_coordinator_; }
+    const LinkCoordinator& link_coordinator() const { return link_coordinator_; }
     LinkCableBackend& link_cable() { return link_cable_; }
+    const LinkCableBackend& link_cable() const { return link_cable_; }
 
     std::vector<LinkOutbound> handle_link(
         ActiveSessionSlot& from_slot,

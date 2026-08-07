@@ -127,6 +127,39 @@ void ActiveSessionSlot::request_stop() {
     stop_requested_.store(true);
 }
 
+void ActiveSessionSlot::request_destroy(std::string reason) {
+    std::lock_guard lock(destroy_mutex_);
+    if (!request_destroy_reason_.has_value()) {
+        request_destroy_reason_ = std::move(reason);
+    }
+    stop_requested_.store(true);
+}
+
+SessionStatusSnapshot ActiveSessionSlot::status_snapshot() const {
+    SessionStatusSnapshot snap;
+    snap.session_id = config_.session_id;
+    snap.slot_index = config_.slot_index;
+    snap.mode = config_.plan.session_mode;
+    snap.game_id = config_.plan.selected_game_id;
+    snap.save_username = config_.plan.save_username;
+    snap.finished = finished_.load();
+    snap.phase = snap.finished ? SessionPhase::Finished
+        : (stop_requested_.load() ? SessionPhase::Stopping : SessionPhase::Running);
+    snap.seated_players = static_cast<std::uint8_t>(assigned_player_count(config_.plan.seats));
+    std::uint8_t connected = 0;
+    for (const auto& client : config_.plan.clients) {
+        if (client.connection_state == SessionConnectionState::Connected) {
+            ++connected;
+        }
+    }
+    snap.connected_clients = connected;
+    {
+        std::lock_guard lock(destroy_mutex_);
+        snap.request_destroy_reason = request_destroy_reason_;
+    }
+    return snap;
+}
+
 void ActiveSessionSlot::join() {
     if (worker_.joinable()) {
         worker_.join();

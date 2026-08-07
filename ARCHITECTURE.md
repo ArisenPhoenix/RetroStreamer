@@ -433,7 +433,17 @@ NDS prefers standalone melonDS when `/srv/emus/melonDS` (or managed/`ARCHSTREAME
 
 ## Concurrent sessions
 
-A persistent host lobby can run multiple singleplayer session slots. Each slot claims machine-wide exclusive resources through `SessionSlotLease` (display numbers, audio null-sink names, base media ports, uinput product-id offsets) so two simultaneous games do not steal each other's capture display or save/system paths. Multiplayer still uses one shared-emulator lobby.
+A persistent **Lobby** (`include/host/lobby.hpp`) owns the control-port admit path on its own thread:
+
+- **connected** bucket — catalog presence TCP clients
+- **multiplayer** bucket — MP gather / reconnect-hold players
+- **sessions** — live play via **SessionManager** (`session_id` keyed), each `ActiveSessionSlot` on its own thread
+
+HostApp applies Lobby commands (`StartSession`, `EnqueueJoin`, `DestroySession`, …) through SessionManager every tick (`Lobby::apply_to_sessions` / `run_until_stop`). Links (matchmaking + cable allocation) live on the Lobby’s `HostSessionHub`, not buried in a single `SessionPlan`, so two SinglePlayer sessions (or cross-mode peers) can share a link.
+
+Each session exposes a read-only `SessionStatusSnapshot` for diagnostics; a session may `request_destroy(reason)` for orchestrated teardown.
+
+Multiplayer still uses one shared-emulator session at a time; SinglePlayer may run multiple concurrent slots (lease-bounded).
 
 ## GUI layout
 

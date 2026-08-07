@@ -14,6 +14,7 @@
 #include "host/session_lobby.hpp"
 #include "host/session_runtime.hpp"
 #include "host/session_slot_lease.hpp"
+#include "host/session_types.hpp"
 #include "host/streaming_audio_sink.hpp"
 #include "host/session_audio_channel.hpp"
 #include "host/cadence_session_tracker.hpp"
@@ -46,6 +47,8 @@ struct ActiveSessionSlotConfig {
     int slot_index = 0;
     /** Holds slot_index against every other host process for the slot's lifetime. */
     SessionSlotLease slot_lease;
+    /** Lobby / SessionManager identity (distinct from cadence row until aligned). */
+    SessionId session_id;
     HostAppConfig host_config;
     SessionPlan plan;
     HostLaunchPlan launch_plan;
@@ -76,11 +79,21 @@ public:
     void join();
 
     int slot_index() const { return config_.slot_index; }
+    const SessionId& session_id() const { return config_.session_id; }
     SessionPlan& plan() { return config_.plan; }
     const SessionPlan& plan() const { return config_.plan; }
     bool is_multiplayer() const {
         return config_.plan.session_mode == GameSessionMode::Multiplayer;
     }
+
+    /** Read-only diagnostics for Lobby / HostApp / UI. */
+    SessionStatusSnapshot status_snapshot() const;
+
+    /**
+     * Ask the orchestrator to tear this session down (self-kill path).
+     * SessionManager / Lobby apply DestroySession when they see the reason.
+     */
+    void request_destroy(std::string reason);
 
     /** Queue an already-handshaken late viewer / reconnect stream for this slot. */
     void enqueue_join(TcpStream stream, ClientHello hello, bool is_reconnect);
@@ -129,6 +142,8 @@ private:
     std::thread worker_;
     std::atomic<bool> stop_requested_{false};
     std::atomic<bool> finished_{false};
+    mutable std::mutex destroy_mutex_;
+    std::optional<std::string> request_destroy_reason_;
 
     std::mutex join_mutex_;
     std::queue<PendingJoin> pending_joins_;

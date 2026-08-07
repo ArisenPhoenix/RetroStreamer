@@ -377,6 +377,73 @@ std::vector<SessionRecord> DbRuntimeStore::list_sessions(bool active_only) {
     }
 }
 
+bool DbRuntimeStore::upsert_connection(const ConnectionRecord& connection) {
+    std::lock_guard lock(mutex_);
+    std::string resp;
+    if (!request("upsert_connection", connection_to_json(connection).dump(), resp)) {
+        return false;
+    }
+    try {
+        return nlohmann::json::parse(resp).value("ok", false);
+    } catch (const nlohmann::json::exception&) {
+        return false;
+    }
+}
+
+bool DbRuntimeStore::end_connection(
+    const std::string& connection_id,
+    const std::string& end_reason) {
+    std::lock_guard lock(mutex_);
+    nlohmann::json body{{"connection_id", connection_id}, {"end_reason", end_reason}};
+    std::string resp;
+    if (!request("end_connection", body.dump(), resp)) {
+        return false;
+    }
+    try {
+        return nlohmann::json::parse(resp).value("ok", false);
+    } catch (const nlohmann::json::exception&) {
+        return false;
+    }
+}
+
+bool DbRuntimeStore::end_connections_for_host(
+    const std::string& host_id,
+    const std::string& end_reason) {
+    std::lock_guard lock(mutex_);
+    nlohmann::json body{{"host_id", host_id}, {"end_reason", end_reason}};
+    std::string resp;
+    if (!request("end_connections_for_host", body.dump(), resp)) {
+        return false;
+    }
+    try {
+        return nlohmann::json::parse(resp).value("ok", false);
+    } catch (const nlohmann::json::exception&) {
+        return false;
+    }
+}
+
+std::vector<ConnectionRecord> DbRuntimeStore::list_connections(bool live_only) {
+    std::lock_guard lock(mutex_);
+    nlohmann::json body{{"live_only", live_only}};
+    std::string resp;
+    if (!request("list_connections", body.dump(), resp)) {
+        return {};
+    }
+    try {
+        const auto j = nlohmann::json::parse(resp);
+        if (!j.value("ok", false) || !j.contains("connections")) {
+            return {};
+        }
+        std::vector<ConnectionRecord> out;
+        for (const auto& item : j["connections"]) {
+            out.push_back(connection_from_json(item));
+        }
+        return out;
+    } catch (const nlohmann::json::exception&) {
+        return {};
+    }
+}
+
 bool DbRuntimeStore::claim_resource(const ResourceClaim& claim) {
     std::lock_guard lock(mutex_);
     std::string resp;

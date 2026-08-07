@@ -34,6 +34,19 @@ struct SaveGameEntry {
     std::string display_name;
     std::filesystem::path primary_path;
     std::uint64_t bytes = 0;
+    /**
+     * When non-zero (PS2 memcard), Users tab shows size as bytes/capacity_bytes (x/y).
+     */
+    std::uint64_t capacity_bytes = 0;
+    /** Catalog id when this save resolves (exact or intent near-miss). */
+    std::string catalog_game_id;
+    /**
+     * Disk basename is a near-miss for catalog_game_id but not catalog_save_stem_for.
+     * Users tab warns; launch of that catalog game is refused for this user.
+     */
+    bool save_stem_mismatch = false;
+    /** Expected basename when save_stem_mismatch (ROM / catalog save stem). */
+    std::string expected_save_stem;
 };
 
 std::string save_system_label(std::string_view system_key);
@@ -85,5 +98,15 @@ void delete_save_game(
     const std::filesystem::path& save_root,
     const std::string& username,
     std::string_view game_key);
+
+/**
+ * True when username has a RetroArch-style save whose basename near-matches
+ * game_id but is not the expected catalog save stem (e.g. "Title v1.1" vs
+ * "Title (1.1)"). Catalog stays unlocked; refuse launch until renamed.
+ */
+bool user_has_mismatched_save_for_game(
+    const std::filesystem::path& save_root,
+    std::string_view username,
+    std::string_view game_id);
 
 } // namespace archstreamer

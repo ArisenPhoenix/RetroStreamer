@@ -26,6 +26,10 @@ namespace archstreamer {
  * - On-disk ROM stem must equal catalog_rom_stem_for(display_name, version)
  *   (same as catalog_label_for). Scan skips (locks) titles missing Meta or with a
  *   mismatched stem until fixed.
+ * - Per-user RetroArch/melonDS saves should use that same stem (or the lowercased
+ *   content_stem). A near-miss (e.g. "Title v1.1" instead of "Title (1.1)") does
+ *   not lock the catalog title, but the Users tab warns and launch is refused for
+ *   that user until the save is renamed.
  */
 
 /** Constituent fields that compose identity_key (and thus game_id). */
@@ -122,6 +126,21 @@ std::string catalog_rom_stem_for(std::string_view display_name, std::string_view
  * Save / Switch leaf key: lowercased catalog_rom_stem_for (derived, not hand-edited).
  */
 std::string catalog_content_stem_for(std::string_view display_name, std::string_view version);
+/**
+ * Expected RetroArch/melonDS save basename (no extension): same as ROM stem.
+ * On-disk saves may also use the lowercased content_stem form.
+ */
+std::string catalog_save_stem_for(std::string_view display_name, std::string_view version);
+/** True when disk_stem equals the ROM stem or the lowercased content_stem. */
+bool catalog_save_stem_matches(
+    std::string_view disk_stem,
+    std::string_view display_name,
+    std::string_view version);
+/**
+ * Intent-only rewrite for detecting misnamed saves: "Title v1.1" → "Title (1.1)".
+ * Does not make the disk name acceptable — use catalog_save_stem_matches for that.
+ */
+std::string catalog_normalize_save_stem_intent(std::string_view disk_stem);
 /**
  * Drop a trailing " (version)" from display_name when it matches @version
  * (hyphens ↔ dots / Title Case text tags). Keeps bookkeeping labels free of version clutter.

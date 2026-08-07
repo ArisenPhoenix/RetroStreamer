@@ -55,15 +55,26 @@ int run_concurrent_session_host(
         // Concurrent sessions use archstreamer-0..N only — drop the legacy
         // "archstreamer" sink and any higher slot leftovers from older runs.
         streaming_audio.prune_unused(static_cast<int>(max_slots), /*keep_legacy=*/false);
-        // Drop stale Users-tab "Active" markers from a previous host crash.
-        {
+        // Crash leftovers for Kick markers only. Presence lives in cadence SQL.
+        // Never wipe when another host_runner shares this save_root.
+        if (!other_host_runner_alive()) {
             std::error_code ec;
             const auto active_dir = active_save_sessions_directory(config.save_root);
             if (std::filesystem::is_directory(active_dir, ec)) {
                 for (const auto& entry : std::filesystem::directory_iterator(active_dir, ec)) {
-                    std::filesystem::remove(entry.path(), ec);
+                    const auto name = entry.path().filename().string();
+                    // Drop stale presence JSON from older builds; keep stop/disconnect markers.
+                    if (name.rfind("slot-", 0) == 0 && entry.path().extension() == ".json") {
+                        std::filesystem::remove(entry.path(), ec);
+                    } else if (name.rfind("connected-", 0) == 0) {
+                        std::filesystem::remove(entry.path(), ec);
+                    }
                 }
             }
+        } else {
+            std::cout
+                << "Keeping shared .archstreamer_active markers "
+                   "(another host_runner is already running).\n";
         }
         std::cout
             << "Concurrent session host on TCP " << *config.control_port
@@ -132,6 +143,9 @@ int run_concurrent_session_host(
                     erase_presence_at(i);
                     continue;
                 }
+                // Re-publish each tick so a sibling host_runner startup wipe
+                // (or manual delete) cannot leave Users/Remote permanently empty.
+                publish_lobby_presence(client);
                 // Drain keepalives / controls sync so the socket stays healthy.
                 try {
                     while (client.stream.readable()) {
@@ -383,7 +397,8 @@ int run_concurrent_session_host(
                             hub.allocate_client_id(),
                             std::move(hello),
                             std::move(stream),
-                            list);
+                            list,
+                            config.save_root);
                         handed_off = true;
                         start_slot(std::move(plan));
                     } catch (const std::exception& error) {

@@ -70,6 +70,15 @@ struct UserGameRecord {
     std::int64_t last_played_at = 0;
 };
 
+/** Per-user blocked catalog games (hidden from that user's GameList after auth). */
+struct UserGameBlockRecord {
+    std::string username;
+    std::string game_id;
+    std::string system_key;
+    std::string display_name;
+    std::int64_t created_at = 0;
+};
+
 /** Play modes / player limits from Meta JSON (modes.single/multi, min/max_players). */
 struct GamePlayModesRecord {
     std::string game_id;
@@ -103,6 +112,20 @@ inline std::string game_id_from_ps2_meta_key(std::string_view game_key) {
         return {};
     }
     return std::string(game_key.substr(7));
+}
+
+/** Meta-backed GameCube / Wii Users rows (same idea as PS2). */
+inline std::string gamecube_meta_game_key(std::string_view game_id) {
+    return std::string("gamecube:id:") + std::string(game_id);
+}
+inline std::string wii_meta_game_key(std::string_view game_id) {
+    return std::string("wii:id:") + std::string(game_id);
+}
+inline bool is_gamecube_meta_game_key(std::string_view game_key) {
+    return game_key.size() > 12 && game_key.substr(0, 12) == "gamecube:id:";
+}
+inline bool is_wii_meta_game_key(std::string_view game_key) {
+    return game_key.size() > 7 && game_key.substr(0, 7) == "wii:id:";
 }
 
 /**
@@ -224,6 +247,38 @@ public:
         std::string_view username = {},
         std::string_view system_key = {}) const;
 
+    /** Hide catalog game_id from username's GameList (after auth). Soft-fail callers OK. */
+    bool block_user_game(
+        std::string_view username,
+        std::string_view game_id,
+        std::string_view system_key = {});
+    bool unblock_user_game(std::string_view username, std::string_view game_id);
+    bool is_user_game_blocked(std::string_view username, std::string_view game_id) const;
+    std::vector<UserGameBlockRecord> list_user_game_blocks(std::string_view username = {}) const;
+    /** Blocked game_id list for wire CatalogUserBlocks (ids only). */
+    std::vector<GameId> list_blocked_game_ids(std::string_view username) const;
+    /** Content-hash-derived revision for this user's block list (stable when empty). */
+    std::uint64_t user_blocks_revision(std::string_view username) const;
+    /** Wire payload: full list or unchanged short-circuit vs client_blocks_revision. */
+    CatalogUserBlocks catalog_user_blocks_for(
+        std::string_view username,
+        std::uint64_t client_blocks_revision) const;
+
+    /**
+     * Rebuild the abridged client catalog snapshot (`catalog_offerings`) from a
+     * hosted GameList. Stores content hash + revision for GameListRequest matching.
+     */
+    bool rebuild_catalog_offerings(const GameList& list);
+    /** Load offerings as GameList (revision set from state). Empty if none. */
+    GameList load_catalog_offerings() const;
+    std::uint64_t catalog_offerings_revision() const;
+    std::string catalog_offerings_content_hash() const;
+
+    std::size_t migrate_user_game_blocks_game_id(
+        std::string_view old_game_id,
+        std::string_view new_game_id);
+    std::size_t remove_user_game_blocks_for_game_id(std::string_view game_id);
+
     /** Upsert Meta JSON / catalog play-mode fields for a game_id. */
     bool upsert_play_modes(const GamePlayModesRecord& row);
     std::optional<GamePlayModesRecord> find_play_modes(std::string_view game_id) const;
@@ -260,5 +315,18 @@ void record_user_game_played(
     std::string_view username,
     std::string_view game_id,
     std::string_view system_key);
+
+/**
+ * Drop blocked titles from a catalog copy for username.
+ * Empty username → unchanged. Soft-fail (DB down) → unchanged.
+ * Prefer CatalogUserBlocks on the wire; clients apply blocks locally.
+ */
+GameList filter_game_list_for_user(GameList list, std::string_view username);
+
+/** Soft-fail rebuild of catalog_offerings after a host scan. */
+void rebuild_catalog_offerings_from_list(const GameList& list);
+
+/** Remove blocked ids from list (in-place). */
+void apply_blocked_game_ids(GameList& list, const std::vector<GameId>& blocked_game_ids);
 
 } // namespace archstreamer

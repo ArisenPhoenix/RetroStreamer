@@ -2,6 +2,10 @@
 
 namespace archstreamer {
 
+bool other_host_runner_alive() {
+    return false;
+}
+
 // Windows hosts launch Yuzu directly without gamescope/setsid session trees, and
 // WindowsRetroArchProcess uses job-object teardown, so there is nothing to reap.
 int reap_orphaned_emulator_processes() {

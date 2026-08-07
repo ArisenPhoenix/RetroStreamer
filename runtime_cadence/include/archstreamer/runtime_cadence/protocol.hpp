@@ -23,6 +23,9 @@ ControlsRecord controls_from_json(const nlohmann::json& j);
 nlohmann::json session_to_json(const SessionRecord& session);
 SessionRecord session_from_json(const nlohmann::json& j);
 
+nlohmann::json connection_to_json(const ConnectionRecord& connection);
+ConnectionRecord connection_from_json(const nlohmann::json& j);
+
 nlohmann::json claim_to_json(const ResourceClaim& claim);
 ResourceClaim claim_from_json(const nlohmann::json& j);
 

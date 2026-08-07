@@ -175,6 +175,7 @@ object PacketCodec {
         wantsAudio: Boolean = true,
         displayLayout: Int = DisplayLayoutPreference.Auto.id,
         password: String = "",
+        clientBlocksRevision: Long = 0L,
     ): ByteArray {
         val payload = WireWriter().apply {
             writeString(username)
@@ -194,6 +195,7 @@ object PacketCodec {
             writeBool(wantsAudio)
             writeU8(displayLayout)
             writeString(password)
+            writeU64(clientBlocksRevision)
         }.toByteArray()
         return wrap(PacketType.ClientHello, payload)
     }
@@ -319,10 +321,15 @@ object PacketCodec {
         return wrap(PacketType.PasswordChange, payload)
     }
 
-    fun lobbyPresence(username: String, password: String): ByteArray {
+    fun lobbyPresence(
+        username: String,
+        password: String,
+        clientBlocksRevision: Long = 0L,
+    ): ByteArray {
         val payload = WireWriter().apply {
             writeString(username)
             writeString(password)
+            writeU64(clientBlocksRevision)
         }.toByteArray()
         return wrap(PacketType.LobbyPresence, payload)
     }
@@ -399,6 +406,7 @@ object PacketCodec {
         showFramecount: Boolean = false,
         wantedSize: Int = MediaStreamSize.P540.id,
         displayLayout: Int = DisplayLayoutPreference.Auto.id,
+        wantedFeel: Int = MediaStreamFeel.LowLatency.id,
     ): ByteArray {
         val payload = WireWriter().apply {
             writeU8(clientId)
@@ -410,6 +418,7 @@ object PacketCodec {
             writeBool(showFramecount)
             writeU8(wantedSize)
             writeU8(displayLayout)
+            writeU8(wantedFeel)
         }.toByteArray()
         return wrap(PacketType.ViewerHeartbeat, payload)
     }
@@ -561,6 +570,11 @@ object PacketCodec {
                 username = reader.readString(),
                 ok = reader.readBool(),
                 message = reader.readString(),
+            )
+            PacketType.CatalogUserBlocks -> IncomingPacket.CatalogBlocks(
+                blocksRevision = reader.readU64(),
+                full = reader.readBool(),
+                blockedGameIds = List(reader.readU16()) { reader.readString() },
             )
             else -> IncomingPacket.Unknown(type)
         }

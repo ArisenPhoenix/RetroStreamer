@@ -214,6 +214,7 @@ endif()
 
 add_library(archstreamer_client
     src/client/catalog_cache.cpp
+    src/client/catalog_blocks_cache.cpp
     src/client/client_app.cpp
     src/client/client_media_playback.cpp
     src/client/controller_manager.cpp
@@ -291,6 +292,7 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/retroarch_netcmd.cpp
         src/host/save_profile.cpp
         src/host/save_manager.cpp
+        src/host/ps2_memcard.cpp
         src/host/save_active_sessions.cpp
         src/host/game_meta_store.cpp
         src/host/game_meta_edit_log.cpp

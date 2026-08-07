@@ -17,7 +17,10 @@ cadence (auth / sessions / events).
 - **Directory consumer:** catalog scan discovers ROMs and new titles only. For known
   files it binds by `content_path` / scanned id / stem aliases and refreshes
   `content_path` (and launch metadata) without changing edited identity fields.
-- Wire `GameInfo` is unchanged; clients still receive titles on `GameList`.
+- Wire `GameInfo` is unchanged; clients receive titles on `GameList` from the
+  abridged `catalog_offerings` snapshot (hash/revision matched). After auth the
+  host sends `CatalogUserBlocks` (blocked ids only); clients hide those locally
+  without rewriting the shared catalog cache.
 
 ## Schema
 
@@ -54,8 +57,44 @@ Per-user catalog associations (primary for PS2 Users rows):
 | `system_key` | e.g. `ps2` |
 | `last_played_at` | Updated when a session starts |
 
-PS2 save-browser keys look like `ps2:id:<catalog_game_id>`. Memcard files are no
-longer listed as games.
+PS2 save-browser keys look like `ps2:id:<catalog_game_id>`. Memcard files are not
+listed as games; listing still comes from `user_games`. When `Mcd001.ps2` /
+`Mcd002.ps2` are readable, the Users size column shows **game / card capacity**
+(`x/y`) from a read-only in-process parse (file payloads + `icon.sys` titles for
+matching). Soft-fail if the image is missing or unreadable.
+
+GameCube / Wii Users rows come from Dolphin under `saves/dolphin-emu/User/`:
+- **GameCube:** `.gci` files on virtual memcards (`User/GC/…`). Shared `SRAM.raw` is
+  ignored (console state, not a game). Keys: `gamecube:gci:<GAMECODE>`.
+- **Wii:** NAND title dirs `User/Wii/title/<high>/<low>/` when present. Keys:
+  `wii:title:<high>/<low>`.
+- Both also surface `user_games` associations (`gamecube:id:…` / `wii:id:…`) after play,
+  same pattern as PS2.
+
+### `user_game_blocks`
+
+Per-user catalog hides (Users tab → Block game). Host query is
+`SELECT game_id FROM user_game_blocks WHERE username=?`. After auth the host sends
+`CatalogUserBlocks` with a content-hash revision: matching client revision → empty
+unchanged reply; mismatch → full id list. Clients cache blocks separately from
+`catalog_offerings` so each side only ships when its own hash changes. A crafted
+join of a blocked id is still rejected on the host.
+
+| Column | Meaning |
+|--------|---------|
+| `username` + `game_id` | Primary key |
+| `system_key` | Cached system (optional) |
+| `created_at` | When the block was written |
+
+### `catalog_offerings` / `catalog_offerings_state`
+
+Abridged client catalog snapshot rebuilt at host start from the hosted scan list.
+`GameListRequest` with a matching `client_catalog_revision` gets an empty
+unchanged reply (`full=false`); otherwise the host sends the full offerings rows.
+`content_hash` (sha256 of the canonical wire payload) drives `revision`.
+
+Use `filter_game_list_for_user` / `block_user_game` / `unblock_user_game`. A crafted
+join of a blocked id is treated like an unknown game.
 
 ## API
 
@@ -109,8 +148,7 @@ remain a last resort for system key when no alias exists.
 
 ## Follow-ups
 
-1. **PS2 memcard scrape:** not required for Users titles/Active. Listing uses
-   `user_games` + catalog meta; Active is the live `username` + catalog `game_id`
-   pair (recorded on session start). Memcards remain on disk for emulator I/O only.
+1. Optional: PS2 `serial` / `ps2_product` aliases from ISO/CHD metadata (sizes already
+   match via `icon.sys` titles when aliases are absent).
 2. **Gamecube/Wii SRAM:** clean up noisy SRAM rows in the Users tree (deferred).
-3. Optional: PS2 `serial` / `ps2_product` aliases if ISO/product codes are needed later.
+3. Optional: sniff Dolphin virtual memcard capacity for GameCube `x/y` like PS2.

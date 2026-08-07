@@ -1,12 +1,12 @@
 package com.archstreamer.client.protocol
 
 /**
- * Wire types matching include/common/protocol.hpp (ProtocolVersion 25).
+ * Wire types matching include/common/protocol.hpp (ProtocolVersion 27).
  * Keep field order identical to the C++ serializers.
  */
 object Protocol {
     const val MAGIC: Int = 0x41525354 // "ARST"
-    const val VERSION: Int = 25
+    const val VERSION: Int = 27
     const val HEADER_SIZE: Int = 11 // u32 + u16 + u8 + u32, little-endian, no padding
 
     const val DEFAULT_CONTROL_PORT: Int = 45555
@@ -56,7 +56,9 @@ enum class PacketType(val id: Int) {
     ControlsDbPull(36),
     ControlsDbResponse(37),
     ControlsDbPush(38),
-    ControlsDbAck(39);
+    ControlsDbAck(39),
+    /** Per-user blocked game ids after auth (shared catalog stays unfiltered). */
+    CatalogUserBlocks(40);
 
     companion object {
         fun fromId(id: Int): PacketType =
@@ -100,6 +102,13 @@ data class GameList(
     val full: Boolean,
     val games: List<GameInfo>,
     val deletedGameIds: List<String>,
+)
+
+/** Host → client after auth: titles this user cannot play. */
+data class CatalogUserBlocks(
+    val blocksRevision: Long,
+    val full: Boolean,
+    val blockedGameIds: List<String>,
 )
 
 data class HostWelcome(
@@ -220,6 +229,13 @@ enum class MediaStreamSize(val id: Int) {
     P720(2),
     P1080(3),
     P1440(4),
+}
+
+/** Matches MediaStreamFeel in protocol.hpp — queue depth + NVENC preset tradeoff. */
+enum class MediaStreamFeel(val id: Int) {
+    LowLatency(0),
+    Balanced(1),
+    Smooth(2),
 }
 
 /** Matches DisplayLayoutPreference in protocol.hpp — DS Hybrid vs Top/Bottom.
@@ -408,6 +424,11 @@ sealed class IncomingPacket {
     data class Media(val value: MediaEndpoint) : IncomingPacket()
     data class VideoPending(val videoUri: String) : IncomingPacket()
     data class Catalog(val value: GameList) : IncomingPacket()
+    data class CatalogBlocks(
+        val blocksRevision: Long,
+        val full: Boolean,
+        val blockedGameIds: List<String>,
+    ) : IncomingPacket()
     data class SoftKeyboard(val value: SoftKeyboardRequest) : IncomingPacket()
     data class DsScreens(val value: DsScreenLayout) : IncomingPacket()
     data class DiscControl(val value: DiscControlResponse) : IncomingPacket()

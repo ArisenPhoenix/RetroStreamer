@@ -34,6 +34,15 @@ public:
     std::optional<SessionRecord> find_session(const std::string& session_id) override;
     std::vector<SessionRecord> list_sessions(bool active_only) override;
 
+    bool upsert_connection(const ConnectionRecord& connection) override;
+    bool end_connection(
+        const std::string& connection_id,
+        const std::string& end_reason) override;
+    bool end_connections_for_host(
+        const std::string& host_id,
+        const std::string& end_reason) override;
+    std::vector<ConnectionRecord> list_connections(bool live_only) override;
+
     bool claim_resource(const ResourceClaim& claim) override;
     bool release_resource(
         const std::string& session_id,
@@ -57,6 +66,7 @@ private:
     std::filesystem::path users_path() const;
     std::filesystem::path controls_path() const;
     std::filesystem::path sessions_path() const;
+    std::filesystem::path connections_path() const;
     std::filesystem::path claims_path() const;
     std::filesystem::path events_path(const std::string& day) const;
 

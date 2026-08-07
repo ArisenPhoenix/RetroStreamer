@@ -34,7 +34,7 @@ GameList GameCatalog::list() const {
 
 GameList GameCatalog::delta_since(std::uint64_t client_catalog_revision) const {
     (void)client_catalog_revision;
-    // Same rationale as catalog_delta_for_request: always full replace.
+    // Prefer catalog_delta_for_request / catalog_offerings for live lobby replies.
     return list();
 }
 

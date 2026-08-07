@@ -1,17 +1,23 @@
 #include "host/game_meta_store.hpp"
 
+#include "common/game_identity.hpp"
 #include "common/platform/paths.hpp"
+#include "common/serialization.hpp"
+#include "common/sha256.hpp"
 #include "host/game_catalog_scanner.hpp"
 #include "host/switch_save_share.hpp"
 
 #include <nlohmann/json.hpp>
 #include <sqlite3.h>
 
+#include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <system_error>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -291,6 +297,16 @@ bool GameMetaStore::ensure_schema() {
         return false;
     }
     if (!exec(
+            "CREATE TABLE IF NOT EXISTS user_game_blocks ("
+            "  username TEXT NOT NULL,"
+            "  game_id TEXT NOT NULL,"
+            "  system_key TEXT NOT NULL DEFAULT '',"
+            "  created_at INTEGER NOT NULL DEFAULT 0,"
+            "  PRIMARY KEY (username, game_id)"
+            ");")) {
+        return false;
+    }
+    if (!exec(
             "CREATE TABLE IF NOT EXISTS game_play_modes ("
             "  game_id TEXT PRIMARY KEY NOT NULL,"
             "  supports_single INTEGER NOT NULL DEFAULT 1,"
@@ -313,6 +329,41 @@ bool GameMetaStore::ensure_schema() {
     (void)exec_quiet(
         "CREATE INDEX IF NOT EXISTS idx_user_games_user_system"
         " ON user_games(username, system_key);");
+    (void)exec_quiet(
+        "CREATE INDEX IF NOT EXISTS idx_user_game_blocks_user"
+        " ON user_game_blocks(username);");
+    if (!exec(
+            "CREATE TABLE IF NOT EXISTS catalog_offerings ("
+            "  game_id TEXT PRIMARY KEY NOT NULL,"
+            "  identity_key TEXT NOT NULL DEFAULT '',"
+            "  asset_key TEXT NOT NULL DEFAULT '',"
+            "  display_name TEXT NOT NULL DEFAULT '',"
+            "  system_name TEXT NOT NULL DEFAULT '',"
+            "  system_key TEXT NOT NULL DEFAULT '',"
+            "  core_name TEXT NOT NULL DEFAULT '',"
+            "  canonical_name TEXT NOT NULL DEFAULT '',"
+            "  version TEXT NOT NULL DEFAULT '',"
+            "  language TEXT NOT NULL DEFAULT '',"
+            "  region TEXT NOT NULL DEFAULT '',"
+            "  supports_single INTEGER NOT NULL DEFAULT 1,"
+            "  supports_multi INTEGER NOT NULL DEFAULT 1,"
+            "  min_players INTEGER NOT NULL DEFAULT 1,"
+            "  max_players INTEGER NOT NULL DEFAULT 2,"
+            "  updated_at INTEGER NOT NULL DEFAULT 0,"
+            "  playlist_discs_json TEXT NOT NULL DEFAULT '[]'"
+            ");")) {
+        return false;
+    }
+    if (!exec(
+            "CREATE TABLE IF NOT EXISTS catalog_offerings_state ("
+            "  id INTEGER PRIMARY KEY CHECK (id = 1),"
+            "  content_hash TEXT NOT NULL DEFAULT '',"
+            "  revision INTEGER NOT NULL DEFAULT 0,"
+            "  game_count INTEGER NOT NULL DEFAULT 0,"
+            "  rebuilt_at INTEGER NOT NULL DEFAULT 0"
+            ");")) {
+        return false;
+    }
     return true;
 }
 
@@ -559,10 +610,112 @@ std::optional<GameMetaRecord> GameMetaStore::resolve(
         return std::nullopt;
     };
 
+    // Empty / fallback scope: alias value in any system (not only system_key='').
+    auto try_kinds_any_system = [&]() -> std::optional<GameMetaRecord> {
+        if (db_ == nullptr) {
+            return std::nullopt;
+        }
+        static constexpr std::string_view kKinds[] = {
+            game_meta_alias::kCatalogId,
+            game_meta_alias::kTitleId,
+            game_meta_alias::kSerial,
+            game_meta_alias::kPs2Product,
+            game_meta_alias::kContentStem,
+            game_meta_alias::kCanonical,
+            game_meta_alias::kDisplayName,
+        };
+        const auto value = to_lower_copy(fold_common_latin_accents(std::string(key)));
+        const auto title = normalize_switch_title_id(key);
+        auto lookup_value = [&](std::string_view kind, const std::string& needle)
+            -> std::optional<GameMetaRecord> {
+            if (needle.empty()) {
+                return std::nullopt;
+            }
+            // Prefer rows whose system_key is non-empty (real catalog aliases).
+            constexpr const char* kSql =
+                "SELECT game_id FROM game_aliases"
+                " WHERE alias_kind=? AND alias_value=?"
+                " ORDER BY CASE WHEN system_key='' THEN 1 ELSE 0 END"
+                " LIMIT 1;";
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr) != SQLITE_OK) {
+                return std::nullopt;
+            }
+            const auto kind_s = std::string(kind);
+            sqlite3_bind_text(stmt, 1, kind_s.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt, 2, needle.c_str(), -1, SQLITE_TRANSIENT);
+            std::optional<std::string> game_id;
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                game_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            }
+            sqlite3_finalize(stmt);
+            if (!game_id) {
+                return std::nullopt;
+            }
+            return find_by_id(*game_id);
+        };
+        for (const auto kind : kKinds) {
+            const auto normalized = normalize_alias_value(kind, key);
+            if (auto hit = lookup_value(kind, normalized)) {
+                return hit;
+            }
+            if (!title.empty() && title != normalized) {
+                if (auto hit = lookup_value(kind, title)) {
+                    return hit;
+                }
+            }
+        }
+        constexpr const char* kAny =
+            "SELECT game_id FROM game_aliases WHERE alias_value=?"
+            " ORDER BY CASE WHEN system_key='' THEN 1 ELSE 0 END LIMIT 1;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, kAny, -1, &stmt, nullptr) != SQLITE_OK) {
+            return std::nullopt;
+        }
+        sqlite3_bind_text(stmt, 1, value.c_str(), -1, SQLITE_TRANSIENT);
+        std::optional<std::string> game_id;
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            game_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        }
+        sqlite3_finalize(stmt);
+        if (!game_id && !title.empty() && title != value) {
+            if (sqlite3_prepare_v2(db_, kAny, -1, &stmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_text(stmt, 1, title.c_str(), -1, SQLITE_TRANSIENT);
+                if (sqlite3_step(stmt) == SQLITE_ROW) {
+                    game_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+                }
+                sqlite3_finalize(stmt);
+            }
+        }
+        if (game_id) {
+            return find_by_id(*game_id);
+        }
+        return std::nullopt;
+    };
+
+    // Users-tab / save browser folds gb+gbc into "gb-gbc"; aliases stay on gb or gbc.
+    auto try_system_scopes = [&](std::string_view scope) -> std::optional<GameMetaRecord> {
+        if (scope == "gb-gbc") {
+            static constexpr std::string_view kGbScopes[] = {"gb", "gbc", "gb-gbc"};
+            for (const auto candidate : kGbScopes) {
+                if (auto hit = try_kinds(candidate)) {
+                    return hit;
+                }
+            }
+            return std::nullopt;
+        }
+        return try_kinds(scope);
+    };
+
     if (!system_key.empty()) {
-        if (auto scoped = try_kinds(system_key)) {
+        if (auto scoped = try_system_scopes(system_key)) {
             return scoped;
         }
+    }
+    // Global fallback: alias value in any system. Empty system_key used to only hit
+    // aliases stored with system_key='' (almost never content_stem / display_name).
+    if (auto any = try_kinds_any_system()) {
+        return any;
     }
     return try_kinds({});
 }
@@ -1617,6 +1770,522 @@ void record_user_game_played(
     } catch (...) {
         // Soft-fail.
     }
+}
+
+bool GameMetaStore::block_user_game(
+    std::string_view username,
+    std::string_view game_id,
+    std::string_view system_key) {
+    if (db_ == nullptr || username.empty() || game_id.empty()) {
+        return false;
+    }
+    std::string system_s{system_key};
+    if (system_s.empty()) {
+        if (const auto row = find_by_id(game_id)) {
+            system_s = row->system_key;
+        }
+    }
+    constexpr const char* kSql =
+        "INSERT INTO user_game_blocks (username, game_id, system_key, created_at)"
+        " VALUES (?,?,?,?)"
+        " ON CONFLICT(username, game_id) DO UPDATE SET"
+        "  system_key=excluded.system_key;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    const auto user_s = std::string(username);
+    const auto game_s = std::string(game_id);
+    const auto now = now_epoch_seconds();
+    sqlite3_bind_text(stmt, 1, user_s.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, game_s.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, system_s.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 4, now);
+    const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+    sqlite3_finalize(stmt);
+    return ok;
+}
+
+bool GameMetaStore::unblock_user_game(std::string_view username, std::string_view game_id) {
+    if (db_ == nullptr || username.empty() || game_id.empty()) {
+        return false;
+    }
+    constexpr const char* kSql = "DELETE FROM user_game_blocks WHERE username=? AND game_id=?;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    const auto user_s = std::string(username);
+    const auto game_s = std::string(game_id);
+    sqlite3_bind_text(stmt, 1, user_s.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, game_s.c_str(), -1, SQLITE_TRANSIENT);
+    const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+    sqlite3_finalize(stmt);
+    return ok;
+}
+
+bool GameMetaStore::is_user_game_blocked(
+    std::string_view username,
+    std::string_view game_id) const {
+    if (db_ == nullptr || username.empty() || game_id.empty()) {
+        return false;
+    }
+    constexpr const char* kSql =
+        "SELECT 1 FROM user_game_blocks WHERE username=? AND game_id=? LIMIT 1;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    const auto user_s = std::string(username);
+    const auto game_s = std::string(game_id);
+    sqlite3_bind_text(stmt, 1, user_s.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, game_s.c_str(), -1, SQLITE_TRANSIENT);
+    const bool blocked = sqlite3_step(stmt) == SQLITE_ROW;
+    sqlite3_finalize(stmt);
+    return blocked;
+}
+
+std::vector<UserGameBlockRecord> GameMetaStore::list_user_game_blocks(
+    std::string_view username) const {
+    std::vector<UserGameBlockRecord> out;
+    if (db_ == nullptr) {
+        return out;
+    }
+    const char* sql = username.empty()
+        ? "SELECT b.username, b.game_id, b.system_key, b.created_at,"
+          " COALESCE(NULLIF(m.display_name,''), NULLIF(m.canonical_name,''), b.game_id)"
+          " FROM user_game_blocks b"
+          " LEFT JOIN game_meta m ON m.game_id=b.game_id"
+          " ORDER BY b.username COLLATE NOCASE, 5 COLLATE NOCASE;"
+        : "SELECT b.username, b.game_id, b.system_key, b.created_at,"
+          " COALESCE(NULLIF(m.display_name,''), NULLIF(m.canonical_name,''), b.game_id)"
+          " FROM user_game_blocks b"
+          " LEFT JOIN game_meta m ON m.game_id=b.game_id"
+          " WHERE b.username=?"
+          " ORDER BY 5 COLLATE NOCASE;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return out;
+    }
+    if (!username.empty()) {
+        const auto user_s = std::string(username);
+        sqlite3_bind_text(stmt, 1, user_s.c_str(), -1, SQLITE_TRANSIENT);
+    }
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        UserGameBlockRecord row;
+        const auto* user = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        const auto* id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        const auto* system = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        row.created_at = sqlite3_column_int64(stmt, 3);
+        const auto* display = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+        row.username = user != nullptr ? user : "";
+        row.game_id = id != nullptr ? id : "";
+        row.system_key = system != nullptr ? system : "";
+        row.display_name = display != nullptr ? display : row.game_id;
+        out.push_back(std::move(row));
+    }
+    sqlite3_finalize(stmt);
+    return out;
+}
+
+std::size_t GameMetaStore::migrate_user_game_blocks_game_id(
+    std::string_view old_game_id,
+    std::string_view new_game_id) {
+    if (db_ == nullptr || old_game_id.empty() || new_game_id.empty()
+        || old_game_id == new_game_id) {
+        return 0;
+    }
+    constexpr const char* kDeleteDup =
+        "DELETE FROM user_game_blocks WHERE game_id=? AND username IN ("
+        " SELECT username FROM ("
+        "  SELECT username FROM user_game_blocks WHERE game_id=?"
+        " )"
+        ");";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, kDeleteDup, -1, &stmt, nullptr) == SQLITE_OK) {
+        const auto old_s = std::string(old_game_id);
+        const auto new_s = std::string(new_game_id);
+        sqlite3_bind_text(stmt, 1, old_s.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, new_s.c_str(), -1, SQLITE_TRANSIENT);
+        (void)sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
+    constexpr const char* kUpdate = "UPDATE user_game_blocks SET game_id=? WHERE game_id=?;";
+    if (sqlite3_prepare_v2(db_, kUpdate, -1, &stmt, nullptr) != SQLITE_OK) {
+        return 0;
+    }
+    const auto new_s = std::string(new_game_id);
+    const auto old_s = std::string(old_game_id);
+    sqlite3_bind_text(stmt, 1, new_s.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, old_s.c_str(), -1, SQLITE_TRANSIENT);
+    const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+    const auto changes = ok ? static_cast<std::size_t>(sqlite3_changes(db_)) : 0;
+    sqlite3_finalize(stmt);
+    return changes;
+}
+
+std::size_t GameMetaStore::remove_user_game_blocks_for_game_id(std::string_view game_id) {
+    if (db_ == nullptr || game_id.empty()) {
+        return 0;
+    }
+    constexpr const char* kSql = "DELETE FROM user_game_blocks WHERE game_id=?;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return 0;
+    }
+    const auto game_s = std::string(game_id);
+    sqlite3_bind_text(stmt, 1, game_s.c_str(), -1, SQLITE_TRANSIENT);
+    const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+    const auto changes = ok ? static_cast<std::size_t>(sqlite3_changes(db_)) : 0;
+    sqlite3_finalize(stmt);
+    return changes;
+}
+
+namespace {
+
+std::uint64_t revision_from_content_hash(std::string_view hash) {
+    // hash is "sha256:" + 64 hex digits — fold the first 16 nibbles into a u64.
+    constexpr std::string_view kPrefix = "sha256:";
+    if (hash.size() <= kPrefix.size() || hash.substr(0, kPrefix.size()) != kPrefix) {
+        return 1;
+    }
+    const auto hex = hash.substr(kPrefix.size());
+    std::uint64_t value = 0;
+    const auto take = std::min<std::size_t>(16, hex.size());
+    for (std::size_t i = 0; i < take; ++i) {
+        const auto c = static_cast<unsigned char>(hex[i]);
+        std::uint8_t nibble = 0;
+        if (c >= '0' && c <= '9') {
+            nibble = static_cast<std::uint8_t>(c - '0');
+        } else if (c >= 'a' && c <= 'f') {
+            nibble = static_cast<std::uint8_t>(10 + c - 'a');
+        } else if (c >= 'A' && c <= 'F') {
+            nibble = static_cast<std::uint8_t>(10 + c - 'A');
+        } else {
+            continue;
+        }
+        value = (value << 4) | nibble;
+    }
+    return value == 0 ? 1 : value;
+}
+
+std::string playlist_discs_to_json(const std::vector<std::string>& discs) {
+    nlohmann::json arr = nlohmann::json::array();
+    for (const auto& disc : discs) {
+        arr.push_back(disc);
+    }
+    return arr.dump();
+}
+
+std::vector<std::string> playlist_discs_from_json(std::string_view json_text) {
+    std::vector<std::string> out;
+    if (json_text.empty()) {
+        return out;
+    }
+    try {
+        const auto parsed = nlohmann::json::parse(json_text);
+        if (!parsed.is_array()) {
+            return out;
+        }
+        for (const auto& item : parsed) {
+            if (item.is_string()) {
+                out.push_back(item.get<std::string>());
+            }
+        }
+    } catch (...) {
+    }
+    return out;
+}
+
+} // namespace
+
+std::vector<GameId> GameMetaStore::list_blocked_game_ids(std::string_view username) const {
+    std::vector<GameId> out;
+    if (db_ == nullptr || username.empty()) {
+        return out;
+    }
+    constexpr const char* kSql =
+        "SELECT game_id FROM user_game_blocks WHERE username=? ORDER BY game_id;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return out;
+    }
+    const auto user_s = std::string(username);
+    sqlite3_bind_text(stmt, 1, user_s.c_str(), -1, SQLITE_TRANSIENT);
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const auto* text = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        if (text != nullptr && text[0] != '\0') {
+            out.emplace_back(text);
+        }
+    }
+    sqlite3_finalize(stmt);
+    return out;
+}
+
+std::uint64_t GameMetaStore::user_blocks_revision(std::string_view username) const {
+    const auto ids = list_blocked_game_ids(username);
+    std::string blob;
+    blob.reserve(ids.size() * 64);
+    for (const auto& id : ids) {
+        blob.append(id);
+        blob.push_back('\n');
+    }
+    return revision_from_content_hash(sha256_hex(blob));
+}
+
+CatalogUserBlocks GameMetaStore::catalog_user_blocks_for(
+    std::string_view username,
+    std::uint64_t client_blocks_revision) const {
+    CatalogUserBlocks blocks;
+    const auto ids = list_blocked_game_ids(username);
+    std::string blob;
+    blob.reserve(ids.size() * 64);
+    for (const auto& id : ids) {
+        blob.append(id);
+        blob.push_back('\n');
+    }
+    blocks.blocks_revision = revision_from_content_hash(sha256_hex(blob));
+    if (client_blocks_revision != 0 && client_blocks_revision == blocks.blocks_revision) {
+        blocks.full = false;
+        return blocks;
+    }
+    blocks.full = true;
+    blocks.blocked_game_ids = ids;
+    return blocks;
+}
+
+bool GameMetaStore::rebuild_catalog_offerings(const GameList& list) {
+    if (db_ == nullptr) {
+        return false;
+    }
+
+    GameList canonical = list;
+    canonical.full = true;
+    canonical.deleted_game_ids.clear();
+    std::sort(canonical.games.begin(), canonical.games.end(), [](const GameInfo& a, const GameInfo& b) {
+        return a.id < b.id;
+    });
+    for (auto& game : canonical.games) {
+        game.version = catalog_version_display_token(game.version);
+    }
+    // Hash must not include revision (revision is derived from the hash).
+    canonical.catalog_revision = 0;
+    const auto payload_bytes = serialize_payload(canonical);
+    const auto content_hash = sha256_hex(
+        std::string_view(
+            reinterpret_cast<const char*>(payload_bytes.data()),
+            payload_bytes.size()));
+    const auto revision = revision_from_content_hash(content_hash);
+    canonical.catalog_revision = revision;
+
+    if (!exec("BEGIN IMMEDIATE;")) {
+        return false;
+    }
+    if (!exec("DELETE FROM catalog_offerings;")) {
+        (void)exec("ROLLBACK;");
+        return false;
+    }
+
+    constexpr const char* kInsert =
+        "INSERT INTO catalog_offerings ("
+        "  game_id, identity_key, asset_key, display_name, system_name, system_key,"
+        "  core_name, canonical_name, version, language, region,"
+        "  supports_single, supports_multi, min_players, max_players, updated_at,"
+        "  playlist_discs_json"
+        ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);";
+    sqlite3_stmt* insert = nullptr;
+    if (sqlite3_prepare_v2(db_, kInsert, -1, &insert, nullptr) != SQLITE_OK) {
+        (void)exec("ROLLBACK;");
+        return false;
+    }
+    for (const auto& game : canonical.games) {
+        sqlite3_reset(insert);
+        sqlite3_clear_bindings(insert);
+        const auto discs_json = playlist_discs_to_json(game.playlist_discs);
+        sqlite3_bind_text(insert, 1, game.id.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(insert, 2, game.identity_key.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(insert, 3, game.asset_key.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(insert, 4, game.display_name.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(insert, 5, game.system_name.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(insert, 6, game.system_key.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(insert, 7, game.core_name.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(insert, 8, game.canonical_name.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(insert, 9, game.version.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(insert, 10, game.language.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(insert, 11, game.region.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(insert, 12, game.supports_singleplayer ? 1 : 0);
+        sqlite3_bind_int(insert, 13, game.supports_multiplayer ? 1 : 0);
+        sqlite3_bind_int(insert, 14, game.min_players);
+        sqlite3_bind_int(insert, 15, game.max_players);
+        sqlite3_bind_int64(insert, 16, static_cast<sqlite3_int64>(game.updated_at));
+        sqlite3_bind_text(insert, 17, discs_json.c_str(), -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(insert) != SQLITE_DONE) {
+            sqlite3_finalize(insert);
+            (void)exec("ROLLBACK;");
+            return false;
+        }
+    }
+    sqlite3_finalize(insert);
+
+    constexpr const char* kState =
+        "INSERT INTO catalog_offerings_state (id, content_hash, revision, game_count, rebuilt_at)"
+        " VALUES (1, ?, ?, ?, ?)"
+        " ON CONFLICT(id) DO UPDATE SET"
+        "  content_hash=excluded.content_hash,"
+        "  revision=excluded.revision,"
+        "  game_count=excluded.game_count,"
+        "  rebuilt_at=excluded.rebuilt_at;";
+    sqlite3_stmt* state = nullptr;
+    if (sqlite3_prepare_v2(db_, kState, -1, &state, nullptr) != SQLITE_OK) {
+        (void)exec("ROLLBACK;");
+        return false;
+    }
+    const auto now = static_cast<sqlite3_int64>(
+        std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count());
+    sqlite3_bind_text(state, 1, content_hash.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(state, 2, static_cast<sqlite3_int64>(revision));
+    sqlite3_bind_int64(state, 3, static_cast<sqlite3_int64>(canonical.games.size()));
+    sqlite3_bind_int64(state, 4, now);
+    const bool state_ok = sqlite3_step(state) == SQLITE_DONE;
+    sqlite3_finalize(state);
+    if (!state_ok) {
+        (void)exec("ROLLBACK;");
+        return false;
+    }
+    if (!exec("COMMIT;")) {
+        (void)exec("ROLLBACK;");
+        return false;
+    }
+    std::cout
+        << "game_meta: catalog_offerings rebuilt ("
+        << canonical.games.size() << " game(s), rev " << revision << ")\n";
+    return true;
+}
+
+GameList GameMetaStore::load_catalog_offerings() const {
+    GameList out;
+    out.full = true;
+    if (db_ == nullptr) {
+        return out;
+    }
+    out.catalog_revision = catalog_offerings_revision();
+    constexpr const char* kSql =
+        "SELECT game_id, identity_key, asset_key, display_name, system_name, system_key,"
+        " core_name, canonical_name, version, language, region,"
+        " supports_single, supports_multi, min_players, max_players, updated_at,"
+        " playlist_discs_json"
+        " FROM catalog_offerings ORDER BY game_id;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return out;
+    }
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        GameInfo game;
+        auto text_at = [&](int col) -> std::string {
+            const auto* text = reinterpret_cast<const char*>(sqlite3_column_text(stmt, col));
+            return text != nullptr ? std::string(text) : std::string{};
+        };
+        game.id = text_at(0);
+        game.identity_key = text_at(1);
+        game.asset_key = text_at(2);
+        game.display_name = text_at(3);
+        game.system_name = text_at(4);
+        game.system_key = text_at(5);
+        game.core_name = text_at(6);
+        game.canonical_name = text_at(7);
+        game.version = text_at(8);
+        game.language = text_at(9);
+        game.region = text_at(10);
+        game.supports_singleplayer = sqlite3_column_int(stmt, 11) != 0;
+        game.supports_multiplayer = sqlite3_column_int(stmt, 12) != 0;
+        game.min_players = static_cast<std::uint8_t>(sqlite3_column_int(stmt, 13));
+        game.max_players = static_cast<std::uint8_t>(sqlite3_column_int(stmt, 14));
+        game.updated_at = static_cast<std::uint64_t>(sqlite3_column_int64(stmt, 15));
+        game.playlist_discs = playlist_discs_from_json(text_at(16));
+        out.games.push_back(std::move(game));
+    }
+    sqlite3_finalize(stmt);
+    return out;
+}
+
+std::uint64_t GameMetaStore::catalog_offerings_revision() const {
+    if (db_ == nullptr) {
+        return 0;
+    }
+    constexpr const char* kSql = "SELECT revision FROM catalog_offerings_state WHERE id=1;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return 0;
+    }
+    std::uint64_t revision = 0;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        revision = static_cast<std::uint64_t>(sqlite3_column_int64(stmt, 0));
+    }
+    sqlite3_finalize(stmt);
+    return revision;
+}
+
+std::string GameMetaStore::catalog_offerings_content_hash() const {
+    if (db_ == nullptr) {
+        return {};
+    }
+    constexpr const char* kSql = "SELECT content_hash FROM catalog_offerings_state WHERE id=1;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return {};
+    }
+    std::string hash;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        const auto* text = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        if (text != nullptr) {
+            hash = text;
+        }
+    }
+    sqlite3_finalize(stmt);
+    return hash;
+}
+
+GameList filter_game_list_for_user(GameList list, std::string_view username) {
+    if (username.empty() || list.games.empty()) {
+        return list;
+    }
+    try {
+        GameMetaStore store;
+        if (!store.ready()) {
+            return list;
+        }
+        apply_blocked_game_ids(list, store.list_blocked_game_ids(username));
+    } catch (...) {
+        // Soft-fail: return unfiltered.
+    }
+    return list;
+}
+
+void rebuild_catalog_offerings_from_list(const GameList& list) {
+    try {
+        GameMetaStore store;
+        if (!store.ready()) {
+            return;
+        }
+        (void)store.rebuild_catalog_offerings(list);
+    } catch (...) {
+    }
+}
+
+void apply_blocked_game_ids(GameList& list, const std::vector<GameId>& blocked_game_ids) {
+    if (blocked_game_ids.empty() || list.games.empty()) {
+        return;
+    }
+    std::unordered_set<std::string> blocked(
+        blocked_game_ids.begin(), blocked_game_ids.end());
+    list.games.erase(
+        std::remove_if(
+            list.games.begin(),
+            list.games.end(),
+            [&](const GameInfo& game) { return blocked.contains(game.id); }),
+        list.games.end());
 }
 
 } // namespace archstreamer

@@ -105,6 +105,23 @@ bool SidecarDb::ensure_schema() {
     }
 
     if (!exec(
+            "CREATE TABLE IF NOT EXISTS connections ("
+            "  connection_id TEXT PRIMARY KEY NOT NULL,"
+            "  host_id TEXT NOT NULL DEFAULT '',"
+            "  client_id INTEGER NOT NULL DEFAULT 0,"
+            "  slot INTEGER NOT NULL DEFAULT -1,"
+            "  username TEXT NOT NULL DEFAULT '',"
+            "  game_key TEXT NOT NULL DEFAULT '',"
+            "  phase TEXT NOT NULL DEFAULT '',"
+            "  seated INTEGER NOT NULL DEFAULT 0,"
+            "  connected_at INTEGER NOT NULL DEFAULT 0,"
+            "  disconnected_at INTEGER NOT NULL DEFAULT 0,"
+            "  end_reason TEXT NOT NULL DEFAULT ''"
+            ");")) {
+        return false;
+    }
+
+    if (!exec(
             "CREATE TABLE IF NOT EXISTS resource_claims ("
             "  resource_type TEXT NOT NULL,"
             "  resource_name TEXT NOT NULL,"
@@ -500,6 +517,122 @@ std::vector<SessionRecord> SidecarDb::list_sessions(bool active_only) {
     return out;
 }
 
+bool SidecarDb::upsert_connection(const ConnectionRecord& connection) {
+    if (connection.connection_id.empty() || db_ == nullptr) {
+        return false;
+    }
+    std::lock_guard lock(mutex_);
+    ConnectionRecord stored = connection;
+    if (stored.connected_at <= 0) {
+        stored.connected_at = now_epoch_seconds();
+    }
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql =
+        "INSERT INTO connections(connection_id, host_id, client_id, slot, username, game_key, "
+        "phase, seated, connected_at, disconnected_at, end_reason) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(connection_id) DO UPDATE SET "
+        "host_id=excluded.host_id, client_id=excluded.client_id, slot=excluded.slot, "
+        "username=excluded.username, game_key=excluded.game_key, phase=excluded.phase, "
+        "seated=excluded.seated, connected_at=excluded.connected_at, "
+        "disconnected_at=excluded.disconnected_at, end_reason=excluded.end_reason;";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    sqlite3_bind_text(stmt, 1, stored.connection_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, stored.host_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 3, static_cast<sqlite3_int64>(stored.client_id));
+    sqlite3_bind_int(stmt, 4, stored.slot);
+    sqlite3_bind_text(stmt, 5, stored.username.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 6, stored.game_key.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 7, stored.phase.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 8, stored.seated ? 1 : 0);
+    sqlite3_bind_int64(stmt, 9, stored.connected_at);
+    sqlite3_bind_int64(stmt, 10, stored.disconnected_at);
+    sqlite3_bind_text(stmt, 11, stored.end_reason.c_str(), -1, SQLITE_TRANSIENT);
+    const int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return rc == SQLITE_DONE;
+}
+
+bool SidecarDb::end_connection(const std::string& connection_id, const std::string& end_reason) {
+    if (connection_id.empty() || db_ == nullptr) {
+        return false;
+    }
+    std::lock_guard lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql =
+        "UPDATE connections SET disconnected_at=?, end_reason=? "
+        "WHERE connection_id=? AND disconnected_at=0;";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    sqlite3_bind_int64(stmt, 1, now_epoch_seconds());
+    sqlite3_bind_text(stmt, 2, end_reason.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, connection_id.c_str(), -1, SQLITE_TRANSIENT);
+    const int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return rc == SQLITE_DONE;
+}
+
+bool SidecarDb::end_connections_for_host(
+    const std::string& host_id,
+    const std::string& end_reason) {
+    if (host_id.empty() || db_ == nullptr) {
+        return false;
+    }
+    std::lock_guard lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql =
+        "UPDATE connections SET disconnected_at=?, end_reason=? "
+        "WHERE host_id=? AND disconnected_at=0;";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    sqlite3_bind_int64(stmt, 1, now_epoch_seconds());
+    sqlite3_bind_text(stmt, 2, end_reason.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, host_id.c_str(), -1, SQLITE_TRANSIENT);
+    const int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return rc == SQLITE_DONE;
+}
+
+std::vector<ConnectionRecord> SidecarDb::list_connections(bool live_only) {
+    if (db_ == nullptr) {
+        return {};
+    }
+    std::lock_guard lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = live_only
+        ? "SELECT connection_id, host_id, client_id, slot, username, game_key, phase, seated, "
+          "connected_at, disconnected_at, end_reason FROM connections "
+          "WHERE disconnected_at=0 ORDER BY connected_at DESC;"
+        : "SELECT connection_id, host_id, client_id, slot, username, game_key, phase, seated, "
+          "connected_at, disconnected_at, end_reason FROM connections "
+          "ORDER BY connected_at DESC;";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return {};
+    }
+    std::vector<ConnectionRecord> out;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        ConnectionRecord connection;
+        connection.connection_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        connection.host_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        connection.client_id = static_cast<std::uint32_t>(sqlite3_column_int64(stmt, 2));
+        connection.slot = sqlite3_column_int(stmt, 3);
+        connection.username = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+        connection.game_key = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
+        connection.phase = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+        connection.seated = sqlite3_column_int(stmt, 7) != 0;
+        connection.connected_at = sqlite3_column_int64(stmt, 8);
+        connection.disconnected_at = sqlite3_column_int64(stmt, 9);
+        connection.end_reason = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 10));
+        out.push_back(std::move(connection));
+    }
+    sqlite3_finalize(stmt);
+    return out;
+}
+
 bool SidecarDb::claim_resource(const ResourceClaim& claim) {
     if (claim.session_id.empty() || claim.resource_type.empty() ||
         claim.resource_name.empty() || db_ == nullptr) {
@@ -810,6 +943,32 @@ std::string SidecarDb::handle_request_json(const std::string& request_json) {
             }
             resp["ok"] = true;
             resp["sessions"] = std::move(arr);
+            return resp.dump();
+        }
+        if (op == "upsert_connection") {
+            resp["ok"] = upsert_connection(connection_from_json(req));
+            return resp.dump();
+        }
+        if (op == "end_connection") {
+            resp["ok"] = end_connection(
+                req.value("connection_id", ""),
+                req.value("end_reason", ""));
+            return resp.dump();
+        }
+        if (op == "end_connections_for_host") {
+            resp["ok"] = end_connections_for_host(
+                req.value("host_id", ""),
+                req.value("end_reason", ""));
+            return resp.dump();
+        }
+        if (op == "list_connections") {
+            auto connections = list_connections(req.value("live_only", true));
+            nlohmann::json arr = nlohmann::json::array();
+            for (const auto& c : connections) {
+                arr.push_back(connection_to_json(c));
+            }
+            resp["ok"] = true;
+            resp["connections"] = std::move(arr);
             return resp.dump();
         }
         if (op == "claim_resource") {

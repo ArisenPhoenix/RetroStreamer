@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -85,6 +86,8 @@ private:
     QString self_update_script_path(const QString& repo) const;
     void ensure_remote_host();
     void stop_remote_host();
+    void refresh_remote_users();
+    void kick_remote_user();
     void set_remote_status(const QString& text);
     void refresh_game_options_ui();
     void sync_controller_map_editor_ui();
@@ -136,6 +139,11 @@ private:
     void saves_remove_system();
     void saves_remove_game();
     void saves_kick_user();
+    void saves_block_selected_game();
+    void saves_unblock_selected_blocked_game();
+    void refresh_saves_blocked_list();
+    QString saves_selected_username() const;
+    std::optional<std::string> saves_selected_catalog_game_id() const;
     SaveNameHints saves_name_hints() const;
     void refresh_catalog_browser();
 #endif
@@ -232,6 +240,13 @@ private:
 #endif
 
     QLineEdit* client_host_ = nullptr;
+    /** Optional backup IP (WireGuard, etc.); tried when Host is unreachable. */
+    QLineEdit* client_alt_host_ = nullptr;
+    /**
+     * Reachable host used after a successful Connect (may be Alt IP).
+     * Not persisted — Host / Alt IP fields remain the saved preferences.
+     */
+    QString client_session_host_;
     QLabel* client_host_summary_ = nullptr;
     /** Session-only join password (Client tab; not persisted). */
     QLineEdit* client_password_ = nullptr;
@@ -249,6 +264,9 @@ private:
     QSpinBox* remote_base_input_port_ = nullptr;
     QLineEdit* remote_gpu_ = nullptr;
     QLabel* remote_status_ = nullptr;
+    QListWidget* remote_users_ = nullptr;
+    QPushButton* remote_users_refresh_ = nullptr;
+    QPushButton* remote_users_kick_ = nullptr;
     QPlainTextEdit* remote_log_ = nullptr;
     bool remote_busy_ = false;
     int remote_tracked_control_port_ = 0;
@@ -333,13 +351,17 @@ private:
     QComboBox* saves_system_ = nullptr;
     QLineEdit* saves_filter_ = nullptr;
     QTreeWidget* saves_tree_ = nullptr;
+    QListWidget* saves_blocked_list_ = nullptr;
+    QLabel* saves_blocked_label_ = nullptr;
     QLabel* saves_status_ = nullptr;
     QPushButton* saves_refresh_ = nullptr;
-    QPushButton* saves_kick_ = nullptr;
     QAction* saves_add_user_action_ = nullptr;
     QAction* saves_remove_user_action_ = nullptr;
     QAction* saves_remove_system_action_ = nullptr;
     QAction* saves_remove_game_action_ = nullptr;
+    QAction* saves_kick_action_ = nullptr;
+    QAction* saves_block_game_action_ = nullptr;
+    QAction* saves_unblock_game_action_ = nullptr;
     SaveNameHints saves_hints_;
     QTimer* saves_refresh_timer_ = nullptr;
     /** Skip tree rebuilds while the Users context menu is open (shared actions gray out otherwise). */

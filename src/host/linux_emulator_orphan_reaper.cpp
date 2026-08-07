@@ -229,6 +229,10 @@ std::string read_environ_token(const std::filesystem::path& environ_path) {
 
 } // namespace
 
+bool other_host_runner_alive() {
+    return any_other_live_host(snapshot_processes(), getpid());
+}
+
 int reap_orphaned_emulator_processes() {
     const auto data_root = default_archstreamer_data_root().string();
     if (data_root.empty()) {

@@ -121,6 +121,8 @@ SessionControlMonitor::SessionControlMonitor(
         client.wanted_tier = MediaQualityTier::Auto;
         client.applied_size = MediaStreamSize::P720;
         client.wanted_size = MediaStreamSize::Auto;
+        client.applied_feel = MediaStreamFeel::LowLatency;
+        client.wanted_feel = MediaStreamFeel::LowLatency;
     }
 }
 
@@ -337,6 +339,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
                     client.pending_video_uri.reset();
                     client.pending_tier.reset();
                     client.pending_size.reset();
+                    client.pending_feel.reset();
                     client.video_cutover_started = {};
                 } else if (client.pending_video_uri.has_value() &&
                     video_ready->video_uri == *client.pending_video_uri) {
@@ -348,6 +351,9 @@ std::optional<std::string> SessionControlMonitor::poll() {
                         }
                         if (client.pending_size.has_value()) {
                             client.applied_size = *client.pending_size;
+                        }
+                        if (client.pending_feel.has_value()) {
+                            client.applied_feel = *client.pending_feel;
                         }
                         client.video_cutover_failures = 0;
                         client.video_cutover_suppressed = false;
@@ -362,7 +368,8 @@ std::optional<std::string> SessionControlMonitor::poll() {
                         std::cout
                             << "Video cutover ready from " << client_label(client)
                             << " -> " << media_stream_size_name(client.applied_size)
-                            << "/" << media_quality_tier_name(client.applied_tier) << '\n';
+                            << "/" << media_quality_tier_name(client.applied_tier)
+                            << "/" << media_stream_feel_name(client.applied_feel) << '\n';
                     } else {
                         media_server_.abort_video_tier_cutover(client.client_id);
                         std::cerr
@@ -372,6 +379,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
                     client.pending_video_uri.reset();
                     client.pending_tier.reset();
                     client.pending_size.reset();
+                    client.pending_feel.reset();
                     client.video_cutover_started = {};
                 }
             } else if (const auto* link_request = std::get_if<LinkRequest>(&payload);
@@ -522,6 +530,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
             client.pending_video_uri.reset();
             client.pending_tier.reset();
             client.pending_size.reset();
+            client.pending_feel.reset();
             client.video_cutover_started = {};
             client.last_video_reconfigure = now;
         }
@@ -585,6 +594,7 @@ void SessionControlMonitor::handle_heartbeat(
     client.last_seen = now;
     client.wanted_tier = heartbeat.wanted_tier;
     client.wanted_size = heartbeat.wanted_size;
+    client.wanted_feel = heartbeat.wanted_feel;
     client.max_bitrate_kbps = heartbeat.max_bitrate_kbps;
     client.show_framecount = heartbeat.show_framecount;
 
@@ -614,31 +624,42 @@ void SessionControlMonitor::handle_heartbeat(
         heartbeat.wanted_size == MediaStreamSize::Auto
             ? client.applied_size
             : heartbeat.wanted_size;
+    const MediaStreamFeel resolved_feel = heartbeat.wanted_feel;
 
     if (heartbeat.wanted_tier != MediaQualityTier::Auto) {
         const auto resolved = select_video_tier(
             heartbeat.wanted_tier,
             client.applied_tier,
             client.max_bitrate_kbps);
-        if (resolved != client.applied_tier || resolved_size != client.applied_size) {
+        if (resolved != client.applied_tier ||
+            resolved_size != client.applied_size ||
+            resolved_feel != client.applied_feel) {
             apply_video_encode(
                 client,
                 resolved_size,
                 resolved,
-                "client requested size/quality");
+                resolved_feel,
+                resolved_feel != client.applied_feel &&
+                        resolved == client.applied_tier &&
+                        resolved_size == client.applied_size
+                    ? "client requested stream feel"
+                    : "client requested size/quality");
         }
         client.bad_health_streak = 0;
         client.good_health_streak = 0;
         return;
     }
 
-    // Size can still change under Auto quality (display preference).
-    if (resolved_size != client.applied_size) {
+    // Size / feel can still change under Auto quality.
+    if (resolved_size != client.applied_size || resolved_feel != client.applied_feel) {
         apply_video_encode(
             client,
             resolved_size,
             client.applied_tier,
-            "client requested size");
+            resolved_feel,
+            resolved_feel != client.applied_feel && resolved_size == client.applied_size
+                ? "client requested stream feel"
+                : "client requested size");
         return;
     }
 
@@ -659,6 +680,7 @@ void SessionControlMonitor::handle_heartbeat(
             client,
             client.applied_size,
             kAutoMaxTier,
+            client.applied_feel,
             "auto ceiling (cap High/Very-High)");
         return;
     }
@@ -682,7 +704,12 @@ void SessionControlMonitor::handle_heartbeat(
             const auto previous = client.applied_tier;
             const auto next = step_quality_tier_down(client.applied_tier);
             if (next != client.applied_tier) {
-                apply_video_encode(client, client.applied_size, next, "auto step-down (loss)");
+                apply_video_encode(
+                    client,
+                    client.applied_size,
+                    next,
+                    client.applied_feel,
+                    "auto step-down (loss)");
                 if (previous == MediaQualityTier::High ||
                     previous == MediaQualityTier::VeryHigh ||
                     previous == MediaQualityTier::MediumHigh) {
@@ -730,7 +757,12 @@ void SessionControlMonitor::handle_heartbeat(
 
     ++client.good_health_streak;
     if (client.good_health_streak >= good_needed) {
-        apply_video_encode(client, client.applied_size, next, "auto step-up (healthy)");
+        apply_video_encode(
+            client,
+            client.applied_size,
+            next,
+            client.applied_feel,
+            "auto step-up (healthy)");
         client.good_health_streak = 0;
     }
 }
@@ -739,6 +771,7 @@ void SessionControlMonitor::apply_video_encode(
     SessionClientConnection& client,
     MediaStreamSize size,
     MediaQualityTier tier,
+    MediaStreamFeel feel,
     std::string_view reason) {
     const auto now = std::chrono::steady_clock::now();
     if (client.video_cutover_suppressed) {
@@ -758,7 +791,7 @@ void SessionControlMonitor::apply_video_encode(
     }
     const auto resolved = select_video_tier(tier, client.applied_tier, client.max_bitrate_kbps);
     const auto settings =
-        video_encode_settings(size, resolved, capture_width_, capture_height_);
+        video_encode_settings(size, resolved, capture_width_, capture_height_, feel);
     const auto staging_uri = media_server_.begin_video_tier_cutover(client.client_id, settings);
     if (!staging_uri.has_value()) {
         return;
@@ -766,6 +799,7 @@ void SessionControlMonitor::apply_video_encode(
 
     client.pending_tier = resolved;
     client.pending_size = size;
+    client.pending_feel = feel;
     client.pending_video_uri = *staging_uri;
     client.video_cutover_started = now;
     client.bad_health_streak = 0;
@@ -778,6 +812,7 @@ void SessionControlMonitor::apply_video_encode(
             media_server_.abort_video_tier_cutover(client.client_id);
             client.pending_tier.reset();
             client.pending_size.reset();
+            client.pending_feel.reset();
             client.pending_video_uri.reset();
             client.video_cutover_started = {};
             return;
@@ -787,12 +822,16 @@ void SessionControlMonitor::apply_video_encode(
         << "Staging video for " << client_label(client)
         << " -> " << media_stream_size_name(size)
         << "/" << media_quality_tier_name(resolved)
+        << "/" << media_stream_feel_name(feel)
         << " (" << settings.bitrate_kbps << " kbps, "
         << static_cast<int>(settings.framerate) << " fps";
     if (settings.width > 0 && settings.height > 0) {
         std::cerr << ", " << settings.width << "x" << settings.height;
     }
-    std::cerr << "): " << reason << '\n';
+    std::cerr
+        << ", queue=" << static_cast<int>(settings.queue_buffers)
+        << ", nvenc=" << (settings.nvenc_high_quality ? "hq" : "hp")
+        << "): " << reason << '\n';
 }
 
 bool SessionControlMonitor::remove_viewer(std::size_t index, std::string_view reason) {
@@ -841,6 +880,7 @@ void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& cl
     client.disconnect_reason = std::string(reason);
     client.pending_tier.reset();
     client.pending_size.reset();
+    client.pending_feel.reset();
     client.pending_video_uri.reset();
     client.video_cutover_started = {};
     input_router_.neutralize_client(client.client_id);

@@ -67,6 +67,46 @@ struct SessionRecord {
 };
 
 /**
+ * Authenticated control TCP presence (LobbyPresence catalog wait or in-session).
+ * Source of truth for Users/Remote "Connected" rows. Active play uses SessionRecord.
+ */
+struct ConnectionRecord {
+    std::string connection_id;
+    std::string host_id;
+    std::uint32_t client_id = 0;
+    /** −1 = lobby/catalog (not in a live slot). */
+    int slot = -1;
+    std::string username;
+    std::string game_key;
+    /** "catalog" / "lobby" / "session". */
+    std::string phase;
+    bool seated = false;
+    std::int64_t connected_at = 0;
+    /** 0 = still connected. */
+    std::int64_t disconnected_at = 0;
+    std::string end_reason;
+};
+
+/** Stable primary key for ConnectionRecord. */
+inline std::string make_connection_id(
+    std::string_view host_id,
+    std::uint32_t client_id,
+    int slot) {
+    std::string out;
+    out.reserve(host_id.size() + 32);
+    out.append(host_id);
+    if (slot < 0) {
+        out.append("-lobby-");
+    } else {
+        out.append("-slot-");
+        out.append(std::to_string(slot));
+        out.push_back('-');
+    }
+    out.append(std::to_string(client_id));
+    return out;
+}
+
+/**
  * A shared machine resource held by a session (sink, display, port, pid, …).
  * Primary lookup key is (resource_type, resource_name); at most one held claim.
  */

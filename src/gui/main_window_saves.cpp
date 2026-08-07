@@ -12,12 +12,15 @@
 #include "host/save_active_sessions.hpp"
 #include "host/save_manager.hpp"
 #include "host/save_profile.hpp"
+#include "host/ps2_memcard.hpp"
 #endif
 
 #include <QAbstractItemView>
 #include <QAction>
 #include <QApplication>
+#include <QBrush>
 #include <QClipboard>
+#include <QColor>
 #include <QComboBox>
 #include <QDir>
 #include <QFormLayout>
@@ -28,12 +31,15 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMenu>
 #include <QMessageBox>
 #include <QProcess>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSet>
 #include <QSignalBlocker>
+#include <QSplitter>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -61,6 +67,8 @@ constexpr int kUserRoleSlot = Qt::UserRole + 3;
 constexpr int kUserRoleSynthetic = Qt::UserRole + 4;
 constexpr int kUserRoleNodeKind = Qt::UserRole + 5;
 constexpr int kUserRoleSortBytes = Qt::UserRole + 6;
+constexpr int kUserRoleCatalogGameId = Qt::UserRole + 7;
+constexpr int kBlockedRoleGameId = Qt::UserRole;
 
 enum class SavesNodeKind { User = 0, System = 1, Game = 2 };
 
@@ -236,17 +244,10 @@ SaveNameHints hints_from_meta_store() {
 
 /**
  * Active play sessions for the Users tab.
- * Prefer cadence DB rows; enrich display/content from .archstreamer_active side files.
+ * Cadence `sessions` (ended_at=0) is the source of truth.
  */
 std::vector<ActiveSaveSession> load_users_active_sessions(
     const std::filesystem::path& save_root) {
-    std::unordered_map<int, ActiveSaveSession> by_slot;
-    for (auto& side : list_active_save_sessions(save_root)) {
-        if (side.slot_index >= 0) {
-            by_slot[side.slot_index] = side;
-        }
-    }
-
     std::vector<ActiveSaveSession> out;
     try {
         auto store = cadence::make_runtime_store();
@@ -260,41 +261,19 @@ std::vector<ActiveSaveSession> load_users_active_sessions(
                 active.game_id = session.game_key;
                 active.system_key = session.system_key;
                 active.slot_index = session.slot;
-                if (const auto it = by_slot.find(session.slot); it != by_slot.end()) {
-                    if (active.game_id.empty()) {
-                        active.game_id = it->second.game_id;
-                    }
-                    if (active.system_key.empty()) {
-                        active.system_key = it->second.system_key;
-                    }
-                    active.display_name = it->second.display_name;
-                    active.content_path = it->second.content_path;
-                }
-                if (active.display_name.empty()) {
-                    active.display_name = active.game_id;
-                }
+                active.display_name = session.game_key;
                 out.push_back(std::move(active));
             }
         }
     } catch (...) {
-        // Fall through to side-channel only.
     }
 
     if (!out.empty()) {
         return out;
     }
 
-    // Cadence unavailable — still show what the host published to the save root.
-    for (auto& [_, side] : by_slot) {
-        out.push_back(std::move(side));
-    }
-    std::sort(out.begin(), out.end(), [](const ActiveSaveSession& a, const ActiveSaveSession& b) {
-        if (a.username != b.username) {
-            return a.username < b.username;
-        }
-        return a.slot_index < b.slot_index;
-    });
-    return out;
+    // Legacy fallback: older hosts may still have side JSON only.
+    return list_active_save_sessions(save_root);
 }
 
 QString resolve_active_display_name(
@@ -352,9 +331,9 @@ QWidget* MainWindow::build_saves_tab() {
 
     auto* intro = new QLabel(
         "Per-user save profiles under the host save root, grouped User → System → Game. "
-        "Right-click for Add / Remove. "
+        "Right-click for Add / Remove / Kick / Block. "
         "Status sits on the user (Connected) or game (Active). "
-        "Kick ends a live slot or disconnects a connection (existing session rules still apply).",
+        "Blocked games are hidden from that user's catalog after they connect.",
         page);
     intro->setWordWrap(true);
     root->addWidget(intro);
@@ -376,19 +355,17 @@ QWidget* MainWindow::build_saves_tab() {
     saves_refresh_ = new QPushButton("Refresh", page);
     auto* saves_expand_all = new QPushButton("Expand all", page);
     auto* saves_collapse_all = new QPushButton("Collapse all", page);
-    saves_kick_ = new QPushButton("Kick…", page);
-    saves_kick_->setToolTip(
-        "List Active sessions and Connected clients; kick a session or disconnect a link.");
     saves_expand_all->setToolTip("Expand every user and system in the list.");
     saves_collapse_all->setToolTip("Collapse every user and system in the list.");
     actions->addWidget(saves_refresh_);
     actions->addWidget(saves_expand_all);
     actions->addWidget(saves_collapse_all);
-    actions->addWidget(saves_kick_);
     actions->addStretch();
     root->addLayout(actions);
 
-    saves_tree_ = new QTreeWidget(page);
+    auto* split = new QSplitter(Qt::Horizontal, page);
+
+    saves_tree_ = new QTreeWidget(split);
     saves_tree_->setColumnCount(3);
     saves_tree_->setHeaderLabels({"Name", "Size", "Status"});
     saves_tree_->setSelectionMode(QAbstractItemView::ExtendedSelection);
@@ -406,7 +383,6 @@ QWidget* MainWindow::build_saves_tab() {
         header->setStretchLastSection(false);
         header->setCascadingSectionResizes(false);
         header->setMinimumSectionSize(72);
-        // Name fills leftover width; Size/Status keep a stable interactive width.
         header->setSectionResizeMode(0, QHeaderView::Stretch);
         header->setSectionResizeMode(1, QHeaderView::Interactive);
         header->setSectionResizeMode(2, QHeaderView::Interactive);
@@ -414,10 +390,27 @@ QWidget* MainWindow::build_saves_tab() {
         header->resizeSection(2, 120);
     }
     saves_tree_->sortByColumn(0, Qt::AscendingOrder);
-    root->addWidget(saves_tree_, 1);
+
+    auto* blocked_panel = new QWidget(split);
+    auto* blocked_layout = new QVBoxLayout(blocked_panel);
+    blocked_layout->setContentsMargins(0, 0, 0, 0);
+    saves_blocked_label_ = new QLabel("Blocked games", blocked_panel);
+    saves_blocked_label_->setWordWrap(true);
+    saves_blocked_list_ = new QListWidget(blocked_panel);
+    saves_blocked_list_->setAlternatingRowColors(true);
+    saves_blocked_list_->setSelectionMode(QAbstractItemView::SingleSelection);
+    saves_blocked_list_->setContextMenuPolicy(Qt::CustomContextMenu);
+    blocked_layout->addWidget(saves_blocked_label_);
+    blocked_layout->addWidget(saves_blocked_list_, 1);
+
+    split->addWidget(saves_tree_);
+    split->addWidget(blocked_panel);
+    split->setStretchFactor(0, 3);
+    split->setStretchFactor(1, 1);
+    root->addWidget(split, 1);
 
     saves_status_ = new QLabel(
-        "Right-click for Add / Remove. Kick lists Active and Connected targets.",
+        "Right-click a game to Block it for that user. Kick is also on the context menu.",
         page);
     saves_status_->setWordWrap(true);
     root->addWidget(saves_status_);
@@ -426,6 +419,9 @@ QWidget* MainWindow::build_saves_tab() {
     saves_remove_user_action_ = new QAction("User…", page);
     saves_remove_system_action_ = new QAction("System…", page);
     saves_remove_game_action_ = new QAction("Game…", page);
+    saves_kick_action_ = new QAction("Kick…", page);
+    saves_block_game_action_ = new QAction("Block game for user", page);
+    saves_unblock_game_action_ = new QAction("Unblock game", page);
     auto* saves_copy_action = new QAction("Copy", page);
     saves_copy_action->setShortcut(QKeySequence::Copy);
     saves_copy_action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
@@ -442,10 +438,10 @@ QWidget* MainWindow::build_saves_tab() {
             saves_tree_->collapseAll();
         }
     });
-    connect(saves_kick_, &QPushButton::clicked, this, [this] { saves_kick_user(); });
     connect(saves_user_, &QComboBox::currentIndexChanged, this, [this] {
         refresh_saves_system_combo();
         refresh_saves_browser_list();
+        refresh_saves_blocked_list();
     });
     connect(saves_system_, &QComboBox::currentIndexChanged, this, [this] {
         refresh_saves_browser_list();
@@ -453,15 +449,41 @@ QWidget* MainWindow::build_saves_tab() {
     connect(saves_filter_, &QLineEdit::textChanged, this, [this] { refresh_saves_browser_list(); });
     connect(saves_tree_, &QTreeWidget::itemSelectionChanged, this, [this] {
         update_saves_action_enabled();
+        refresh_saves_blocked_list();
     });
     connect(saves_tree_, &QTreeWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
         saves_show_context_menu(pos);
+    });
+    connect(saves_blocked_list_, &QListWidget::itemSelectionChanged, this, [this] {
+        update_saves_action_enabled();
+    });
+    connect(saves_blocked_list_, &QListWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
+        if (saves_blocked_list_ == nullptr) {
+            return;
+        }
+        if (auto* under = saves_blocked_list_->itemAt(pos)) {
+            saves_blocked_list_->setCurrentItem(under);
+        }
+        update_saves_action_enabled();
+        saves_context_menu_open_ = true;
+        QMenu menu(saves_blocked_list_);
+        connect(&menu, &QMenu::aboutToHide, this, [this] { saves_context_menu_open_ = false; });
+        menu.addAction(saves_unblock_game_action_);
+        menu.exec(saves_blocked_list_->viewport()->mapToGlobal(pos));
+        saves_context_menu_open_ = false;
     });
     connect(saves_copy_action, &QAction::triggered, this, [this] { saves_copy_selection(); });
     connect(saves_add_user_action_, &QAction::triggered, this, [this] { saves_add_user(); });
     connect(saves_remove_user_action_, &QAction::triggered, this, [this] { saves_remove_user(); });
     connect(saves_remove_system_action_, &QAction::triggered, this, [this] { saves_remove_system(); });
     connect(saves_remove_game_action_, &QAction::triggered, this, [this] { saves_remove_game(); });
+    connect(saves_kick_action_, &QAction::triggered, this, [this] { saves_kick_user(); });
+    connect(saves_block_game_action_, &QAction::triggered, this, [this] {
+        saves_block_selected_game();
+    });
+    connect(saves_unblock_game_action_, &QAction::triggered, this, [this] {
+        saves_unblock_selected_blocked_game();
+    });
 
     saves_refresh_timer_ = new QTimer(page);
     saves_refresh_timer_->setInterval(3000);
@@ -479,7 +501,21 @@ QWidget* MainWindow::build_saves_tab() {
     });
     saves_refresh_timer_->start();
 
-    QTimer::singleShot(0, this, [this] { refresh_saves_browser(); });
+    // Users is never the startup tab; open the gate for the one-shot PS2 scan here.
+    // Re-entry still refreshes Connected/Active (PS2 parse stays one-shot via its flags).
+    if (tabs_ != nullptr) {
+        connect(tabs_, &QTabWidget::currentChanged, this, [this](int index) {
+            if (tabs_ == nullptr || tabs_->tabText(index) != QLatin1String("Users")) {
+                return;
+            }
+            if (!ps2_memcard_users_tab_opened()) {
+                ps2_memcard_set_users_tab_opened(true);
+                refresh_saves_browser();
+                return;
+            }
+            refresh_saves_browser_list();
+        });
+    }
     return page;
 }
 
@@ -519,6 +555,9 @@ void MainWindow::saves_show_context_menu(const QPoint& pos) {
     remove_menu->addAction(saves_remove_user_action_);
     remove_menu->addAction(saves_remove_system_action_);
     remove_menu->addAction(saves_remove_game_action_);
+    menu.addSeparator();
+    menu.addAction(saves_block_game_action_);
+    menu.addAction(saves_kick_action_);
     menu.exec(saves_tree_->viewport()->mapToGlobal(pos));
     saves_context_menu_open_ = false;
 }
@@ -667,6 +706,10 @@ void MainWindow::refresh_saves_browser_list() {
     const auto filter = saves_filter_->text().trimmed().toLower();
     const auto previously_expanded = collect_expanded_saves_keys(saves_tree_);
     const auto previously_selected = collect_selected_saves_identity(saves_tree_);
+    const int previous_vscroll =
+        saves_tree_->verticalScrollBar() != nullptr ? saves_tree_->verticalScrollBar()->value() : 0;
+    const int previous_hscroll =
+        saves_tree_->horizontalScrollBar() != nullptr ? saves_tree_->horizontalScrollBar()->value() : 0;
 
     const auto games = list_save_games(root, user, system, saves_hints_);
     const auto active_sessions = load_users_active_sessions(root);
@@ -717,12 +760,15 @@ void MainWindow::refresh_saves_browser_list() {
         QString system_key;
         QString system_label;
         QString game_key;
+        QString catalog_game_id;
         QString display_name;
         QString size_text;
         std::uint64_t bytes = 0;
         QString path_tip;
         bool active = false;
         bool synthetic = false;
+        bool save_stem_mismatch = false;
+        QString expected_save_stem;
         int slot = -1;
         QString status_tip;
     };
@@ -742,10 +788,26 @@ void MainWindow::refresh_saves_browser_list() {
         row.system_key = QString::fromStdString(game.system_key);
         row.system_label = system_label_q;
         row.game_key = QString::fromStdString(game.game_key);
+        if (!game.catalog_game_id.empty()) {
+            row.catalog_game_id = QString::fromStdString(game.catalog_game_id);
+        } else if (is_ps2_meta_game_key(game.game_key)) {
+            row.catalog_game_id = QString::fromStdString(game_id_from_ps2_meta_key(game.game_key));
+        }
+        row.save_stem_mismatch = game.save_stem_mismatch;
+        row.expected_save_stem = QString::fromStdString(game.expected_save_stem);
         row.display_name = name;
-        row.size_text = format_bytes(game.bytes);
+        row.size_text = game.capacity_bytes > 0
+            ? QStringLiteral("%1 / %2")
+                  .arg(format_bytes(game.bytes), format_bytes(game.capacity_bytes))
+            : format_bytes(game.bytes);
         row.bytes = game.bytes;
         row.path_tip = QString::fromStdString(game.primary_path.string());
+        if (game.save_stem_mismatch && !game.expected_save_stem.empty()) {
+            row.path_tip += QStringLiteral(
+                "\n\nSave name mismatch: rename to \"%1\" (same rules as ROM stems). "
+                "Play is blocked for this user until fixed.")
+                .arg(QString::fromStdString(game.expected_save_stem));
+        }
         const auto map_key = game.username + '\n' + game.game_key;
         if (active_user_games.contains(map_key)) {
             row.active = true;
@@ -757,6 +819,12 @@ void MainWindow::refresh_saves_browser_list() {
             } else {
                 row.status_tip = QStringLiteral("Live host session on this save.");
             }
+        }
+        if (row.save_stem_mismatch) {
+            row.status_tip = QStringLiteral(
+                "Save basename does not match catalog stem \"%1\". "
+                "Rename the file; play is blocked for this user.")
+                .arg(row.expected_save_stem);
         }
         pending.push_back(std::move(row));
     }
@@ -793,6 +861,7 @@ void MainWindow::refresh_saves_browser_list() {
         row.active = true;
         row.synthetic = true;
         row.slot = active.slot_index;
+        row.catalog_game_id = QString::fromStdString(active.game_id);
         row.status_tip = QStringLiteral("Live host session (slot %1).").arg(active.slot_index);
         pending.push_back(std::move(row));
     }
@@ -934,10 +1003,22 @@ void MainWindow::refresh_saves_browser_list() {
             row.game_key,
             row.synthetic,
             row.slot);
+        if (!row.catalog_game_id.isEmpty()) {
+            game_item->setData(0, kUserRoleCatalogGameId, row.catalog_game_id);
+        }
         if (!row.path_tip.isEmpty()) {
             game_item->setToolTip(0, row.path_tip);
         }
-        if (row.active) {
+        if (row.save_stem_mismatch) {
+            const auto warn = row.expected_save_stem.isEmpty()
+                ? QStringLiteral("bad save name")
+                : QStringLiteral("bad save name → %1").arg(row.expected_save_stem);
+            game_item->setText(0, QStringLiteral("%1  (%2)").arg(row.display_name, warn));
+            game_item->setText(2, QStringLiteral("Bad name"));
+            game_item->setToolTip(2, row.status_tip);
+            game_item->setForeground(0, QBrush(QColor(160, 90, 20)));
+            game_item->setForeground(2, QBrush(QColor(160, 90, 20)));
+        } else if (row.active) {
             game_item->setText(2, QStringLiteral("Active"));
             game_item->setToolTip(2, row.status_tip);
             ++active_shown;
@@ -947,7 +1028,16 @@ void MainWindow::refresh_saves_browser_list() {
 
     saves_tree_->sortByColumn(sort_column, sort_order);
     saves_tree_->setSortingEnabled(true);
-    restore_selected_saves_identity(saves_tree_, previously_selected);
+    {
+        const QSignalBlocker block(saves_tree_);
+        restore_selected_saves_identity(saves_tree_, previously_selected);
+        if (saves_tree_->verticalScrollBar() != nullptr) {
+            saves_tree_->verticalScrollBar()->setValue(previous_vscroll);
+        }
+        if (saves_tree_->horizontalScrollBar() != nullptr) {
+            saves_tree_->horizontalScrollBar()->setValue(previous_hscroll);
+        }
+    }
     QString status = QStringLiteral("%1 user(s), %2 game(s) under %3")
         .arg(saves_tree_->topLevelItemCount())
         .arg(game_shown)
@@ -959,6 +1049,7 @@ void MainWindow::refresh_saves_browser_list() {
     }
     saves_status_->setText(status);
     update_saves_action_enabled();
+    refresh_saves_blocked_list();
 }
 
 void MainWindow::update_saves_action_enabled() {
@@ -988,8 +1079,16 @@ void MainWindow::update_saves_action_enabled() {
     if (saves_remove_game_action_ != nullptr) {
         saves_remove_game_action_->setEnabled(has_game);
     }
-    if (saves_kick_ != nullptr) {
-        saves_kick_->setEnabled(true);
+    if (saves_kick_action_ != nullptr) {
+        saves_kick_action_->setEnabled(true);
+    }
+    if (saves_block_game_action_ != nullptr) {
+        saves_block_game_action_->setEnabled(saves_selected_catalog_game_id().has_value());
+    }
+    if (saves_unblock_game_action_ != nullptr) {
+        const bool has_blocked =
+            saves_blocked_list_ != nullptr && saves_blocked_list_->currentItem() != nullptr;
+        saves_unblock_game_action_->setEnabled(has_blocked);
     }
 }
 
@@ -1124,7 +1223,16 @@ void MainWindow::saves_remove_game() {
     }
     const auto username = item->data(0, kUserRoleUsername).toString();
     const auto game_key = item->data(0, kUserRoleGameKey).toString();
-    const auto label = item->text(2);
+    // Name is column 0; column 2 is Status (Active / Bad name) and is often empty.
+    auto label = item->text(0).trimmed();
+    const auto bad_marker = QStringLiteral("  (bad save name");
+    const int bad_at = label.indexOf(bad_marker);
+    if (bad_at >= 0) {
+        label = label.left(bad_at).trimmed();
+    }
+    if (label.isEmpty()) {
+        label = item->data(0, kUserRoleGameKey).toString();
+    }
     if (username.isEmpty() || game_key.isEmpty()) {
         QMessageBox::information(this, "Remove Game", "Select a saved game row first.");
         return;
@@ -1285,6 +1393,201 @@ void MainWindow::saves_kick_user() {
                 .arg(target.client.client_id));
     }
     QTimer::singleShot(800, this, [this] { refresh_saves_browser_list(); });
+}
+
+QString MainWindow::saves_selected_username() const {
+    if (saves_tree_ != nullptr) {
+        if (const auto* item = saves_tree_->currentItem()) {
+            const auto username = item->data(0, kUserRoleUsername).toString().trimmed();
+            if (!username.isEmpty()) {
+                return username;
+            }
+        }
+    }
+    if (saves_user_ != nullptr) {
+        return saves_user_->currentData().toString().trimmed();
+    }
+    return {};
+}
+
+std::optional<std::string> MainWindow::saves_selected_catalog_game_id() const {
+    if (saves_tree_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto* item = saves_tree_->currentItem();
+    if (item == nullptr) {
+        return std::nullopt;
+    }
+    if (item->data(0, kUserRoleNodeKind).toInt() != static_cast<int>(SavesNodeKind::Game)) {
+        return std::nullopt;
+    }
+    const auto id = item->data(0, kUserRoleCatalogGameId).toString().trimmed();
+    if (id.isEmpty()) {
+        return std::nullopt;
+    }
+    return id.toStdString();
+}
+
+void MainWindow::refresh_saves_blocked_list() {
+    if (saves_blocked_list_ == nullptr) {
+        return;
+    }
+    const auto username = saves_selected_username();
+    const QString previous_id =
+        saves_blocked_list_->currentItem() != nullptr
+            ? saves_blocked_list_->currentItem()->data(kBlockedRoleGameId).toString()
+            : QString();
+
+    const QSignalBlocker block(saves_blocked_list_);
+    saves_blocked_list_->clear();
+    if (saves_blocked_label_ != nullptr) {
+        if (username.isEmpty()) {
+            saves_blocked_label_->setText(QStringLiteral("Blocked games"));
+        } else {
+            saves_blocked_label_->setText(
+                QStringLiteral("Blocked games for %1").arg(username));
+        }
+    }
+    if (username.isEmpty()) {
+        update_saves_action_enabled();
+        return;
+    }
+
+    try {
+        GameMetaStore meta;
+        if (!meta.ready()) {
+            update_saves_action_enabled();
+            return;
+        }
+        QListWidgetItem* restore = nullptr;
+        for (const auto& row : meta.list_user_game_blocks(username.toStdString())) {
+            const auto title = row.display_name.empty() ? row.game_id : row.display_name;
+            auto* item = new QListWidgetItem(QString::fromStdString(title));
+            item->setData(kBlockedRoleGameId, QString::fromStdString(row.game_id));
+            item->setToolTip(QString::fromStdString(row.game_id));
+            saves_blocked_list_->addItem(item);
+            if (!previous_id.isEmpty() && previous_id.toStdString() == row.game_id) {
+                restore = item;
+            }
+        }
+        if (restore != nullptr) {
+            saves_blocked_list_->setCurrentItem(restore);
+        }
+    } catch (...) {
+    }
+    update_saves_action_enabled();
+}
+
+void MainWindow::saves_block_selected_game() {
+    const auto username = saves_selected_username();
+    const auto game_id = saves_selected_catalog_game_id();
+    if (username.isEmpty() || !game_id.has_value()) {
+        QMessageBox::information(
+            this,
+            "Block game",
+            "Select a catalog-backed game row for a user first.\n\n"
+            "Blocked titles are omitted from that user's game list after they connect.");
+        return;
+    }
+
+    QString system_key;
+    QString label;
+    if (const auto* item = saves_tree_->currentItem()) {
+        system_key = item->data(0, kUserRoleSystemKey).toString();
+        label = item->text(0);
+    }
+    if (label.isEmpty()) {
+        label = QString::fromStdString(*game_id);
+    }
+
+    if (QMessageBox::question(
+            this,
+            "Block game",
+            QStringLiteral("Hide “%1” from %2's game list?\n\n"
+                           "They will not see this title after connecting "
+                           "(reconnect to apply if already connected).")
+                .arg(label, username),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No)
+        != QMessageBox::Yes) {
+        return;
+    }
+
+    try {
+        GameMetaStore meta;
+        if (!meta.ready()) {
+            QMessageBox::warning(this, "Block game", "Game meta database is not available.");
+            return;
+        }
+        if (!meta.block_user_game(
+                username.toStdString(),
+                *game_id,
+                system_key.toStdString())) {
+            QMessageBox::warning(this, "Block game", "Could not write the block.");
+            return;
+        }
+        saves_status_->setText(
+            QStringLiteral("Blocked “%1” for %2 (hidden from their catalog).")
+                .arg(label, username));
+        append_log(
+            host_log_,
+            QStringLiteral("[users] block game %1 for %2")
+                .arg(QString::fromStdString(*game_id), username));
+        refresh_saves_blocked_list();
+    } catch (const std::exception& error) {
+        QMessageBox::warning(this, "Block game", error.what());
+    }
+}
+
+void MainWindow::saves_unblock_selected_blocked_game() {
+    const auto username = saves_selected_username();
+    if (username.isEmpty() || saves_blocked_list_ == nullptr) {
+        QMessageBox::information(this, "Unblock game", "Select a user and a blocked game first.");
+        return;
+    }
+    const auto* item = saves_blocked_list_->currentItem();
+    if (item == nullptr) {
+        QMessageBox::information(this, "Unblock game", "Select a blocked game first.");
+        return;
+    }
+    const auto game_id = item->data(kBlockedRoleGameId).toString().trimmed();
+    const auto label = item->text().trimmed();
+    if (game_id.isEmpty()) {
+        return;
+    }
+
+    if (QMessageBox::question(
+            this,
+            "Unblock game",
+            QStringLiteral("Show “%1” again in %2's game list?")
+                .arg(label.isEmpty() ? game_id : label, username),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No)
+        != QMessageBox::Yes) {
+        return;
+    }
+
+    try {
+        GameMetaStore meta;
+        if (!meta.ready()) {
+            QMessageBox::warning(this, "Unblock game", "Game meta database is not available.");
+            return;
+        }
+        if (!meta.unblock_user_game(username.toStdString(), game_id.toStdString())) {
+            QMessageBox::warning(this, "Unblock game", "Could not remove the block.");
+            return;
+        }
+        saves_status_->setText(
+            QStringLiteral("Unblocked “%1” for %2.").arg(
+                label.isEmpty() ? game_id : label,
+                username));
+        append_log(
+            host_log_,
+            QStringLiteral("[users] unblock game %1 for %2").arg(game_id, username));
+        refresh_saves_blocked_list();
+    } catch (const std::exception& error) {
+        QMessageBox::warning(this, "Unblock game", error.what());
+    }
 }
 
 #endif // ARCHSTREAMER_HAS_HOST

@@ -66,12 +66,20 @@ class RtpVideoPlayer(
         } else {
             0
         }
-        val loss = if (pipelineDead.get() || !running.get()) {
+        val dead = pipelineDead.get() || !running.get()
+        val loss = if (dead) {
             1000
         } else {
             rtpLoss
         }
-        return HeartbeatStats(framesDecodedDelta = frames, lossPermille = loss)
+        return HeartbeatStats(
+            framesDecodedDelta = frames,
+            lossPermille = loss,
+            packetsReceived = packets.received,
+            packetsLost = packets.lost,
+            sequenceGaps = packets.sequenceGaps,
+            pipelineDead = dead,
+        )
     }
 
     /** True once RTP has delivered at least one H.264 access unit (no Surface needed). */
@@ -314,6 +322,10 @@ class RtpVideoPlayer(
     data class HeartbeatStats(
         val framesDecodedDelta: Int,
         val lossPermille: Int,
+        val packetsReceived: Long = 0,
+        val packetsLost: Long = 0,
+        val sequenceGaps: Long = 0,
+        val pipelineDead: Boolean = false,
     )
 
     companion object {

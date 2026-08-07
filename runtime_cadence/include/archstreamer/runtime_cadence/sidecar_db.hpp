@@ -37,6 +37,11 @@ public:
     std::optional<SessionRecord> find_session(const std::string& session_id);
     std::vector<SessionRecord> list_sessions(bool active_only);
 
+    bool upsert_connection(const ConnectionRecord& connection);
+    bool end_connection(const std::string& connection_id, const std::string& end_reason);
+    bool end_connections_for_host(const std::string& host_id, const std::string& end_reason);
+    std::vector<ConnectionRecord> list_connections(bool live_only);
+
     bool claim_resource(const ResourceClaim& claim);
     bool release_resource(
         const std::string& session_id,

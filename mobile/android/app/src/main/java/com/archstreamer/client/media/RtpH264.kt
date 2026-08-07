@@ -19,12 +19,15 @@ class RtpH264Depayloader {
     private var dropUntilIdr = false
     private val packetsReceived = AtomicLong(0)
     private val packetsLost = AtomicLong(0)
+    /** Times an RTP sequence gap forced drop-until-IDR (green/tile risk until next keyframe). */
+    private val sequenceGaps = AtomicLong(0)
 
     /** Packets accepted since the last [takePacketStats] call. */
     fun takePacketStats(): PacketStats {
         val received = packetsReceived.getAndSet(0)
         val lost = packetsLost.getAndSet(0)
-        return PacketStats(received = received, lost = lost)
+        val gaps = sequenceGaps.getAndSet(0)
+        return PacketStats(received = received, lost = lost, sequenceGaps = gaps)
     }
 
     fun push(packet: ByteArray, length: Int): ByteArray? {
@@ -110,6 +113,7 @@ class RtpH264Depayloader {
         if (gap in 1..4095) {
             packetsLost.addAndGet(gap.toLong())
         }
+        sequenceGaps.incrementAndGet()
         if (fuActive) {
             fuActive = false
             fuBuffer.reset()
@@ -142,7 +146,7 @@ class RtpH264Depayloader {
         return out
     }
 
-    data class PacketStats(val received: Long, val lost: Long)
+    data class PacketStats(val received: Long, val lost: Long, val sequenceGaps: Long = 0)
 }
 
 object MediaUris {

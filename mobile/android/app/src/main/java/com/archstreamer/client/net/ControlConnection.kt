@@ -105,6 +105,9 @@ class ControlConnection(
             is IncomingPacket.PasswordChangeRequired -> "PasswordChangeRequired"
             is IncomingPacket.SoftKeyboard -> "SoftKeyboardRequest"
             is IncomingPacket.Catalog -> "GameList games=${packet.value.games.size}"
+            is IncomingPacket.CatalogBlocks ->
+                "CatalogUserBlocks rev=${packet.blocksRevision} full=${packet.full} " +
+                    "blocked=${packet.blockedGameIds.size}"
             else -> packet::class.simpleName ?: "packet"
         }
         // Heartbeats are client→host only; skip high-frequency noise if any.

@@ -16,6 +16,7 @@ import com.archstreamer.client.protocol.IncomingPacket
 import com.archstreamer.client.protocol.LinkAction
 import com.archstreamer.client.protocol.MediaEndpoint
 import com.archstreamer.client.protocol.MediaQualityTier
+import com.archstreamer.client.protocol.MediaStreamFeel
 import com.archstreamer.client.protocol.MediaStreamSize
 import com.archstreamer.client.protocol.PacketCodec
 import com.archstreamer.client.protocol.Protocol
@@ -37,8 +38,16 @@ import java.util.concurrent.atomic.AtomicReference
 data class CatalogResult(
     val host: String,
     val controlPort: Int,
+    /** Games to show in the UI (may have per-user blocks applied). */
     val games: List<GameInfo>,
     val catalogRevision: Long,
+    /**
+     * Unfiltered offerings snapshot for the next GameListRequest cache hit.
+     * Must not include per-user blocks or a later unchanged reply will stay incomplete.
+     */
+    val cacheGames: List<GameInfo> = games,
+    val blocksRevision: Long = 0L,
+    val blockedGameIds: List<String> = emptyList(),
 )
 
 /**
@@ -50,10 +59,11 @@ object CatalogFetcher {
         host: String,
         controlPort: Int = Protocol.DEFAULT_CONTROL_PORT,
         knownRevision: Long = 0L,
+        knownGames: List<GameInfo> = emptyList(),
     ): CatalogResult {
         ControlConnection(host, controlPort).use { conn ->
             conn.connect()
-            return fetchOn(conn, host, controlPort, knownRevision)
+            return fetchOn(conn, host, controlPort, knownRevision, knownGames)
         }
     }
 
@@ -67,18 +77,59 @@ object CatalogFetcher {
         username: String,
         password: String,
         knownRevision: Long = 0L,
+        knownGames: List<GameInfo> = emptyList(),
+        knownBlocksRevision: Long = 0L,
+        knownBlockedIds: List<String> = emptyList(),
     ): Pair<CatalogResult, ControlConnection> {
         val conn = ControlConnection(host, controlPort)
         try {
             conn.connect()
-            val catalog = fetchOn(conn, host, controlPort, knownRevision)
-            conn.send(PacketCodec.lobbyPresence(username, password))
-            when (val ack = conn.receive()) {
-                is IncomingPacket.LobbyPresenceAck -> Unit
-                is IncomingPacket.Error -> error(ack.value.message)
-                else -> error("expected LobbyPresenceAck, got $ack")
+            val catalog = fetchOn(conn, host, controlPort, knownRevision, knownGames)
+            conn.send(
+                PacketCodec.lobbyPresence(
+                    username,
+                    password,
+                    clientBlocksRevision = knownBlocksRevision,
+                ),
+            )
+            var blocksRevision = knownBlocksRevision
+            var blockedIds = knownBlockedIds
+            var legacyFiltered: List<GameInfo>? = null
+            while (true) {
+                when (val ack = conn.receive()) {
+                    is IncomingPacket.CatalogBlocks -> {
+                        blocksRevision = ack.blocksRevision
+                        if (ack.full) {
+                            blockedIds = ack.blockedGameIds
+                        }
+                    }
+                    is IncomingPacket.Catalog -> {
+                        // Legacy host resent a user-filtered catalog after auth.
+                        legacyFiltered = ack.value.games.sortedWith(
+                            compareBy(
+                                { it.systemName.lowercase() },
+                                { it.title().lowercase() },
+                                { it.version.lowercase() },
+                            ),
+                        )
+                    }
+                    is IncomingPacket.LobbyPresenceAck -> break
+                    is IncomingPacket.Error -> error(ack.value.message)
+                    else -> error("expected LobbyPresenceAck, got $ack")
+                }
             }
-            return catalog to conn
+            val blocked = blockedIds.toSet()
+            val filteredGames = legacyFiltered
+                ?: catalog.games.filterNot { it.id in blocked }
+            return CatalogResult(
+                host = host,
+                controlPort = controlPort,
+                games = filteredGames,
+                catalogRevision = catalog.catalogRevision,
+                cacheGames = catalog.cacheGames,
+                blocksRevision = blocksRevision,
+                blockedGameIds = blockedIds,
+            ) to conn
         } catch (t: Throwable) {
             runCatching { conn.close() }
             throw t
@@ -90,18 +141,53 @@ object CatalogFetcher {
         host: String,
         controlPort: Int,
         knownRevision: Long,
+        knownGames: List<GameInfo>,
     ): CatalogResult {
-        conn.send(PacketCodec.gameListRequest(knownRevision))
-        when (val packet = conn.receive()) {
-            is IncomingPacket.Catalog -> {
-                val games = packet.value.games.sortedWith(
-                    compareBy(
-                        { it.systemName.lowercase() },
-                        { it.title().lowercase() },
-                        { it.version.lowercase() },
-                    ),
+        fun request(revision: Long): IncomingPacket {
+            conn.send(PacketCodec.gameListRequest(revision))
+            return conn.receive()
+        }
+
+        fun fromPacket(packet: IncomingPacket.Catalog, fallbackGames: List<GameInfo>): CatalogResult {
+            if (!packet.value.full && packet.value.games.isEmpty()) {
+                return CatalogResult(
+                    host = host,
+                    controlPort = controlPort,
+                    games = fallbackGames,
+                    catalogRevision = packet.value.catalogRevision,
+                    cacheGames = fallbackGames,
                 )
-                return CatalogResult(host, controlPort, games, packet.value.catalogRevision)
+            }
+            val games = packet.value.games.sortedWith(
+                compareBy(
+                    { it.systemName.lowercase() },
+                    { it.title().lowercase() },
+                    { it.version.lowercase() },
+                ),
+            )
+            return CatalogResult(
+                host = host,
+                controlPort = controlPort,
+                games = games,
+                catalogRevision = packet.value.catalogRevision,
+                cacheGames = games,
+            )
+        }
+
+        when (val packet = request(knownRevision)) {
+            is IncomingPacket.Catalog -> {
+                // Unchanged reply with no local cache → ask for a full replace.
+                if (!packet.value.full &&
+                    packet.value.games.isEmpty() &&
+                    knownGames.isEmpty()
+                ) {
+                    when (val full = request(0L)) {
+                        is IncomingPacket.Catalog -> return fromPacket(full, emptyList())
+                        is IncomingPacket.Error -> error(full.value.message)
+                        else -> error("expected GameList, got $full")
+                    }
+                }
+                return fromPacket(packet, knownGames)
             }
             is IncomingPacket.Error -> error(packet.value.message)
             else -> error("expected GameList, got $packet")
@@ -119,7 +205,7 @@ data class JoinedPlaySession(
     val starting: SessionStarting?,
     val media: MediaEndpoint?,
     @Volatile var videoPlayer: RtpVideoPlayer?,
-    val audioPlayer: RtpOpusPlayer?,
+    @Volatile var audioPlayer: RtpOpusPlayer?,
     private val control: ControlConnection,
     private val inputSocket: DatagramSocket,
     private val inputAddress: InetAddress,
@@ -147,6 +233,9 @@ data class JoinedPlaySession(
 
     @Volatile
     var wantedSize: Int = MediaStreamSize.P540.id
+
+    @Volatile
+    var wantedFeel: Int = MediaStreamFeel.LowLatency.id
 
     @Volatile
     var displayLayout: Int = DisplayLayoutPreference.Landscape.id
@@ -222,6 +311,17 @@ data class JoinedPlaySession(
         val stats = videoPlayer?.takeHeartbeatStats()
         val frames = stats?.framesDecodedDelta ?: 0
         val loss = stats?.lossPermille ?: 0
+        if (ClientFileLog.logConnections && stats != null) {
+            // One line per second while Debug → Log connections is on.
+            // lost/gaps > 0 correlates with green tiles; frames=0 is a video stall.
+            ClientFileLog.conn(
+                "net video port=${videoPlayer?.port} " +
+                    "rx=${stats.packetsReceived} lost=${stats.packetsLost} " +
+                    "gaps=${stats.sequenceGaps} frames=$frames " +
+                    "loss=${stats.lossPermille}‰" +
+                    if (stats.pipelineDead) " dead=true" else "",
+            )
+        }
         control.send(
             PacketCodec.viewerHeartbeat(
                 clientId = welcome.clientId,
@@ -231,6 +331,7 @@ data class JoinedPlaySession(
                 wantedTier = wantedTier,
                 wantedSize = wantedSize,
                 displayLayout = displayLayout,
+                wantedFeel = wantedFeel,
             ),
         )
         return frames
@@ -256,8 +357,38 @@ data class JoinedPlaySession(
         val player = audioPlayer ?: return false
         ClientFileLog.conn("audio resync restart begin clientId=${welcome.clientId}")
         val ok = runCatching { player.restart() }.getOrDefault(false)
+        // Preserve mute across resync (Receive audio toggle).
+        if (ok && player.isMuted()) {
+            player.setMuted(true)
+        }
         ClientFileLog.conn("audio resync restart ${if (ok) "ok" else "failed"}")
         return ok
+    }
+
+    /**
+     * Live Receive audio toggle: mute/unmute local Opus playback.
+     * Does not ask the host to stop encoding (other clients / watch-local may still need it).
+     */
+    fun setReceiveAudio(enabled: Boolean) {
+        val player = audioPlayer
+        if (player != null) {
+            player.setMuted(!enabled)
+            ClientFileLog.conn(
+                "receive audio ${if (enabled) "on" else "muted"} clientId=${welcome.clientId}",
+            )
+            return
+        }
+        if (!enabled) {
+            return
+        }
+        val uri = media?.audioUri.orEmpty()
+        if (uri.isBlank()) {
+            ClientFileLog.conn("receive audio on: no audio URI from host (joined without audio)")
+            return
+        }
+        val port = MediaUris.portFrom(uri, MediaUris.OPUS_SCHEME)
+        audioPlayer = RtpOpusPlayer(port).also { it.start() }
+        ClientFileLog.conn("receive audio on: started Opus :$port")
     }
 
     fun sendSoftKeyboardResponse(response: SoftKeyboardResponse) {
@@ -495,6 +626,8 @@ object SessionJoiner {
         displayLayout: Int = DisplayLayoutPreference.Landscape.id,
         controllerName: String = "Android Touch Pad",
         controllerGuid: String = "android-touch-0",
+        knownCatalogRevision: Long = 0L,
+        knownBlocksRevision: Long = 0L,
         onPasswordChangeRequired: (() -> String)? = null,
     ): JoinedPlaySession {
         ClientFileLog.conn(
@@ -507,9 +640,9 @@ object SessionJoiner {
         try {
             control.connect()
 
-            control.send(PacketCodec.gameListRequest(revision = 0L))
+            control.send(PacketCodec.gameListRequest(revision = knownCatalogRevision))
             when (val catalog = control.receive()) {
-                is IncomingPacket.Catalog -> { /* ok */ }
+                is IncomingPacket.Catalog -> { /* ok — may be unchanged */ }
                 is IncomingPacket.Error -> error(catalog.value.message)
                 else -> error("expected GameList before hello, got $catalog")
             }
@@ -534,6 +667,7 @@ object SessionJoiner {
                     wantsAudio = receiveAudio,
                     displayLayout = displayLayout,
                     password = sessionPassword,
+                    clientBlocksRevision = knownBlocksRevision,
                 ),
             )
 
@@ -543,6 +677,13 @@ object SessionJoiner {
             while (welcome == null) {
                 when (val p = control.receive()) {
                     is IncomingPacket.Welcome -> welcome = p.value
+                    is IncomingPacket.CatalogBlocks -> {
+                        // Blocks refresh for this user — join already chose a game; host
+                        // still rejects blocked titles on hello.
+                    }
+                    is IncomingPacket.Catalog -> {
+                        // Legacy filtered catalog after auth — ignore on join.
+                    }
                     is IncomingPacket.PasswordChangeRequired -> {
                         val changer = onPasswordChangeRequired
                             ?: error("host requires a password change")

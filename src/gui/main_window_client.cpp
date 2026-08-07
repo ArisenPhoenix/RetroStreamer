@@ -8,6 +8,7 @@
 #include "common/catalog_paths.hpp"
 #include "common/catalog_presenter.hpp"
 #include "common/addresses.hpp"
+#include "common/host_addresses.hpp"
 #include "common/client_debug_log.hpp"
 #include "common/client_logs.hpp"
 #include "common/discovery.hpp"
@@ -27,6 +28,7 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QInputDialog>
+#include <exception>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -139,7 +141,11 @@ void MainWindow::refresh_filtered_client_games() {
 
 archstreamer::ClientAppConfig MainWindow::client_config_from_fields() const {
     archstreamer::ClientAppConfig config;
-    config.host = client_host_->text().toStdString();
+    if (!client_session_host_.trimmed().isEmpty()) {
+        config.host = client_session_host_.trimmed().toStdString();
+    } else {
+        config.host = client_host_->text().trimmed().toStdString();
+    }
     config.control_port = static_cast<std::uint16_t>(client_port_->value());
     config.input_port = static_cast<std::uint16_t>(client_input_port_->value());
     config.username = profile_client_username();
@@ -200,6 +206,7 @@ void MainWindow::apply_client_host(const QString& address, int control_port, int
     client_port_->setValue(control_port);
     client_input_port_->setValue(input_port);
     client_host_label_ = label;
+    client_session_host_.clear();
     update_client_host_summary(label);
     if (changed) {
         append_log(client_log_, QString("Selected host %1 (control %2, input %3)")
@@ -344,6 +351,16 @@ void MainWindow::connect_client() {
         return;
     }
     const auto host_text = client_host_->text().trimmed();
+    const auto alt_text = client_alt_host_ != nullptr
+        ? client_alt_host_->text().trimmed()
+        : QString();
+    if (!alt_text.isEmpty() && !archstreamer::looks_like_ip_address(alt_text.toStdString())) {
+        append_log(
+            client_log_,
+            "Alt IP must look like an IP address (e.g. 10.6.0.2), or leave it blank.",
+            GuiLogLevel::Quiet);
+        return;
+    }
     if (host_text == QStringLiteral("127.0.0.1") || host_text.startsWith(QStringLiteral("127."))) {
         append_log(
             client_log_,
@@ -369,19 +386,67 @@ void MainWindow::connect_client() {
     }
 
     auto config = client_config_from_fields();
+    const auto candidates = archstreamer::host_connect_candidates(
+        config.host,
+        alt_text.toStdString());
     append_log(client_log_, QString("Connecting to %1:%2...")
         .arg(QString::fromStdString(config.host))
         .arg(config.control_port));
     client_catalog_status_->setText("Connecting...");
     client_connecting_ = true;
 
-    client_connect_thread_ = std::thread([this, config = std::move(config)] {
+    client_connect_thread_ = std::thread([this, config = std::move(config), candidates]() mutable {
         try {
-            const auto catalog = client_app_.fetch_catalog(config);
+            std::exception_ptr last_error;
+            archstreamer::ClientCatalogView catalog;
+            std::string used_host = config.host;
+            bool connected = false;
+            for (std::size_t i = 0; i < candidates.size(); ++i) {
+                config.host = candidates[i];
+                if (i > 0) {
+                    QMetaObject::invokeMethod(
+                        this,
+                        [this, host = QString::fromStdString(config.host)] {
+                            append_log(
+                                client_log_,
+                                QString("Host unreachable; trying Alt IP %1…").arg(host));
+                            client_catalog_status_->setText(
+                                QString("Trying Alt IP %1…").arg(host));
+                        },
+                        Qt::QueuedConnection);
+                }
+                try {
+                    catalog = client_app_.fetch_catalog(config);
+                    used_host = config.host;
+                    connected = true;
+                    break;
+                } catch (const std::exception& error) {
+                    last_error = std::current_exception();
+                    if (i + 1 >= candidates.size() ||
+                        !archstreamer::is_tcp_reachability_failure_message(error.what())) {
+                        throw;
+                    }
+                }
+            }
+            if (!connected) {
+                if (last_error) {
+                    std::rethrow_exception(last_error);
+                }
+                throw std::runtime_error("Connect failed");
+            }
             QMetaObject::invokeMethod(
                 this,
                 [this, full = std::move(catalog.full_catalog),
-                 art_cache = std::move(catalog.art_cache_root)]() mutable {
+                 art_cache = std::move(catalog.art_cache_root),
+                 used_host = QString::fromStdString(used_host)]() mutable {
+                    // Keep Host / Alt IP fields as saved prefs; session uses the reachable one.
+                    client_session_host_ = used_host;
+                    if (client_host_ != nullptr &&
+                        client_host_->text().trimmed() != used_host) {
+                        append_log(
+                            client_log_,
+                            QString("Connected via Alt IP %1").arg(used_host));
+                    }
                     client_full_catalog_ = std::move(full);
                     client_catalog_loaded_ = true;
                     if (!art_cache.empty()) {
@@ -784,27 +849,67 @@ void MainWindow::send_client_logs_to_host() {
     bundle.session_count = sessions;
     bundle.text.assign(text.begin(), text.end());
 
-    try {
-        auto stream = archstreamer::TcpStream::connect_to(
-            host.toStdString(),
-            static_cast<std::uint16_t>(client_port_->value()));
-        stream.send_packet(archstreamer::serialize_packet(bundle));
-        const auto reply = stream.receive_packet();
-        if (!reply.has_value()) {
-            append_log(log, "Send logs: host closed without ack.", GuiLogLevel::Quiet);
+    const auto alt = client_alt_host_ != nullptr
+        ? client_alt_host_->text().trimmed()
+        : QString();
+    if (!alt.isEmpty() && !archstreamer::looks_like_ip_address(alt.toStdString())) {
+        append_log(log, "Send logs: Alt IP must look like an IP address, or leave it blank.", GuiLogLevel::Quiet);
+        return;
+    }
+    const auto candidates = archstreamer::host_connect_candidates(
+        host.toStdString(),
+        alt.toStdString());
+    if (candidates.empty()) {
+        append_log(log, "Send logs: select a host first (Client tab).", GuiLogLevel::Quiet);
+        return;
+    }
+
+    std::exception_ptr last_error;
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        try {
+            if (i > 0) {
+                append_log(
+                    log,
+                    QString("Send logs: Host unreachable; trying Alt IP %1…")
+                        .arg(QString::fromStdString(candidates[i])));
+            }
+            auto stream = archstreamer::TcpStream::connect_to(
+                candidates[i],
+                static_cast<std::uint16_t>(client_port_->value()));
+            stream.send_packet(archstreamer::serialize_packet(bundle));
+            const auto reply = stream.receive_packet();
+            if (!reply.has_value()) {
+                append_log(log, "Send logs: host closed without ack.", GuiLogLevel::Quiet);
+                return;
+            }
+            const auto payload = archstreamer::deserialize_packet(*reply);
+            if (const auto* err = std::get_if<archstreamer::ErrorPacket>(&payload); err != nullptr) {
+                append_log(log, QString("Send logs: %1").arg(QString::fromStdString(err->message)));
+                return;
+            }
+            append_log(log, "Send logs: unexpected host reply.");
             return;
+        } catch (const std::exception& error) {
+            last_error = std::current_exception();
+            if (i + 1 >= candidates.size() ||
+                !archstreamer::is_tcp_reachability_failure_message(error.what())) {
+                append_log(
+                    log,
+                    QString("Send logs failed: %1").arg(QString::fromUtf8(error.what())),
+                    GuiLogLevel::Quiet);
+                return;
+            }
         }
-        const auto payload = archstreamer::deserialize_packet(*reply);
-        if (const auto* err = std::get_if<archstreamer::ErrorPacket>(&payload); err != nullptr) {
-            append_log(log, QString("Send logs: %1").arg(QString::fromStdString(err->message)));
-            return;
+    }
+    if (last_error) {
+        try {
+            std::rethrow_exception(last_error);
+        } catch (const std::exception& error) {
+            append_log(
+                log,
+                QString("Send logs failed: %1").arg(QString::fromUtf8(error.what())),
+                GuiLogLevel::Quiet);
         }
-        append_log(log, "Send logs: unexpected host reply.");
-    } catch (const std::exception& error) {
-        append_log(
-            log,
-            QString("Send logs failed: %1").arg(QString::fromUtf8(error.what())),
-            GuiLogLevel::Quiet);
     }
 }
 
@@ -877,41 +982,80 @@ void MainWindow::change_profile_password_on_host() {
     change.current_password = current.toStdString();
     change.new_password = new_pw.toStdString();
 
-    try {
-        auto stream = archstreamer::TcpStream::connect_to(
-            host.toStdString(),
-            static_cast<std::uint16_t>(client_port_->value()));
-        stream.send_packet(archstreamer::serialize_packet(change));
-        const auto reply = stream.receive_packet();
-        if (!reply.has_value()) {
-            append_log(log, "Change password: host closed without ack.", GuiLogLevel::Quiet);
-            return;
-        }
-        const auto payload = archstreamer::deserialize_packet(*reply);
-        if (const auto* err = std::get_if<archstreamer::ErrorPacket>(&payload); err != nullptr) {
-            append_log(log, QString("Change password: %1").arg(QString::fromStdString(err->message)));
-            if (err->message == "password updated") {
-                if (client_password_ != nullptr) {
-                    client_password_->setText(new_pw);
-                }
-                if (profile_change_current_password_ != nullptr) {
-                    profile_change_current_password_->clear();
-                }
-                if (profile_new_password_ != nullptr) {
-                    profile_new_password_->clear();
-                }
-                if (profile_confirm_password_ != nullptr) {
-                    profile_confirm_password_->clear();
-                }
+    const auto alt = client_alt_host_ != nullptr
+        ? client_alt_host_->text().trimmed()
+        : QString();
+    if (!alt.isEmpty() && !archstreamer::looks_like_ip_address(alt.toStdString())) {
+        append_log(log, "Change password: Alt IP must look like an IP address, or leave it blank.", GuiLogLevel::Quiet);
+        return;
+    }
+    const auto primary = !client_session_host_.trimmed().isEmpty()
+        ? client_session_host_.trimmed()
+        : host;
+    const auto candidates = archstreamer::host_connect_candidates(
+        primary.toStdString(),
+        alt.toStdString());
+
+    std::exception_ptr last_error;
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        try {
+            if (i > 0) {
+                append_log(
+                    log,
+                    QString("Change password: Host unreachable; trying Alt IP %1…")
+                        .arg(QString::fromStdString(candidates[i])));
             }
+            auto stream = archstreamer::TcpStream::connect_to(
+                candidates[i],
+                static_cast<std::uint16_t>(client_port_->value()));
+            stream.send_packet(archstreamer::serialize_packet(change));
+            const auto reply = stream.receive_packet();
+            if (!reply.has_value()) {
+                append_log(log, "Change password: host closed without ack.", GuiLogLevel::Quiet);
+                return;
+            }
+            const auto payload = archstreamer::deserialize_packet(*reply);
+            if (const auto* err = std::get_if<archstreamer::ErrorPacket>(&payload); err != nullptr) {
+                append_log(log, QString("Change password: %1").arg(QString::fromStdString(err->message)));
+                if (err->message == "password updated") {
+                    if (client_password_ != nullptr) {
+                        client_password_->setText(new_pw);
+                    }
+                    if (profile_change_current_password_ != nullptr) {
+                        profile_change_current_password_->clear();
+                    }
+                    if (profile_new_password_ != nullptr) {
+                        profile_new_password_->clear();
+                    }
+                    if (profile_confirm_password_ != nullptr) {
+                        profile_confirm_password_->clear();
+                    }
+                }
+                return;
+            }
+            append_log(log, "Change password: unexpected host reply.");
             return;
+        } catch (const std::exception& error) {
+            last_error = std::current_exception();
+            if (i + 1 >= candidates.size() ||
+                !archstreamer::is_tcp_reachability_failure_message(error.what())) {
+                append_log(
+                    log,
+                    QString("Change password failed: %1").arg(QString::fromUtf8(error.what())),
+                    GuiLogLevel::Quiet);
+                return;
+            }
         }
-        append_log(log, "Change password: unexpected host reply.");
-    } catch (const std::exception& error) {
-        append_log(
-            log,
-            QString("Change password failed: %1").arg(QString::fromUtf8(error.what())),
-            GuiLogLevel::Quiet);
+    }
+    if (last_error) {
+        try {
+            std::rethrow_exception(last_error);
+        } catch (const std::exception& error) {
+            append_log(
+                log,
+                QString("Change password failed: %1").arg(QString::fromUtf8(error.what())),
+                GuiLogLevel::Quiet);
+        }
     }
 }
 

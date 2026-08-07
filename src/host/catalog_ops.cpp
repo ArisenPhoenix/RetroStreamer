@@ -417,6 +417,10 @@ CatalogOpResult apply_game_meta_edit(
             store.migrate_user_games_game_id(existing->game_id, next.game_id);
         result.effects.push_back(
             "migrated " + std::to_string(users_moved) + " user_games row(s)");
+        const auto blocks_moved =
+            store.migrate_user_game_blocks_game_id(existing->game_id, next.game_id);
+        result.effects.push_back(
+            "migrated " + std::to_string(blocks_moved) + " user_game_blocks row(s)");
         if (store.migrate_play_modes_game_id(existing->game_id, next.game_id)) {
             result.effects.push_back("migrated game_play_modes row");
         }
@@ -663,6 +667,9 @@ CatalogOpResult delete_game_meta_entry(
     if (remove_user_games) {
         const auto users = store.remove_user_games_for_game_id(game_id);
         result.effects.push_back("deleted " + std::to_string(users) + " user_games row(s)");
+        const auto blocks = store.remove_user_game_blocks_for_game_id(game_id);
+        result.effects.push_back(
+            "deleted " + std::to_string(blocks) + " user_game_blocks row(s)");
     }
     if (store.delete_play_modes(game_id)) {
         result.effects.push_back("deleted game_play_modes row");

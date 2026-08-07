@@ -37,6 +37,17 @@ public:
     /** active_only: ended_at == 0. */
     virtual std::vector<SessionRecord> list_sessions(bool active_only) = 0;
 
+    virtual bool upsert_connection(const ConnectionRecord& connection) = 0;
+    virtual bool end_connection(
+        const std::string& connection_id,
+        const std::string& end_reason) = 0;
+    /** End every still-live connection for host_id (stale host reap). */
+    virtual bool end_connections_for_host(
+        const std::string& host_id,
+        const std::string& end_reason) = 0;
+    /** live_only: disconnected_at == 0. */
+    virtual std::vector<ConnectionRecord> list_connections(bool live_only) = 0;
+
     /**
      * Take (or steal) a resource for a session. Clears any prior held claim
      * on the same (type, name) so inventory stays unique.

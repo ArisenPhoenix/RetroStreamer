@@ -194,6 +194,7 @@ ByteBuffer serialize_payload(const ClientHello& payload) {
     writer.write_bool(payload.wants_audio);
     writer.write_pod<std::uint8_t>(static_cast<std::uint8_t>(payload.display_layout));
     writer.write_string(payload.password);
+    writer.write_pod<std::uint64_t>(payload.client_blocks_revision);
     return writer.take();
 }
 
@@ -297,6 +298,7 @@ ByteBuffer serialize_payload(const ViewerHeartbeat& payload) {
     writer.write_bool(payload.show_framecount);
     writer.write_pod<std::uint8_t>(static_cast<std::uint8_t>(payload.wanted_size));
     writer.write_pod<std::uint8_t>(static_cast<std::uint8_t>(payload.display_layout));
+    writer.write_pod<std::uint8_t>(static_cast<std::uint8_t>(payload.wanted_feel));
     return writer.take();
 }
 
@@ -529,6 +531,7 @@ ByteBuffer serialize_payload(const LobbyPresence& payload) {
     Writer writer;
     writer.write_string(payload.username);
     writer.write_string(payload.password);
+    writer.write_pod<std::uint64_t>(payload.client_blocks_revision);
     return writer.take();
 }
 
@@ -564,6 +567,21 @@ ByteBuffer serialize_payload(const ControlsDbAck& payload) {
     writer.write_string(payload.username);
     writer.write_bool(payload.ok);
     writer.write_string(payload.message);
+    return writer.take();
+}
+
+ByteBuffer serialize_payload(const CatalogUserBlocks& payload) {
+    if (payload.blocked_game_ids.size() > UINT16_MAX) {
+        throw std::runtime_error("too many blocked games for protocol packet");
+    }
+    Writer writer;
+    writer.write_pod<std::uint64_t>(payload.blocks_revision);
+    writer.write_bool(payload.full);
+    writer.write_pod<std::uint16_t>(
+        static_cast<std::uint16_t>(payload.blocked_game_ids.size()));
+    for (const auto& game_id : payload.blocked_game_ids) {
+        writer.write_string(game_id);
+    }
     return writer.take();
 }
 
@@ -606,6 +624,7 @@ PacketType packet_type_for(const ControlsDbPull&) { return PacketType::ControlsD
 PacketType packet_type_for(const ControlsDbResponse&) { return PacketType::ControlsDbResponse; }
 PacketType packet_type_for(const ControlsDbPush&) { return PacketType::ControlsDbPush; }
 PacketType packet_type_for(const ControlsDbAck&) { return PacketType::ControlsDbAck; }
+PacketType packet_type_for(const CatalogUserBlocks&) { return PacketType::CatalogUserBlocks; }
 
 template <typename Payload>
 ByteBuffer serialize_packet_impl(const Payload& payload) {
@@ -778,6 +797,10 @@ ByteBuffer serialize_packet(const ControlsDbAck& payload) {
     return serialize_packet_impl(payload);
 }
 
+ByteBuffer serialize_packet(const CatalogUserBlocks& payload) {
+    return serialize_packet_impl(payload);
+}
+
 ClientHello read_client_hello(Reader& reader) {
     ClientHello payload;
     payload.username = reader.read_string();
@@ -794,6 +817,9 @@ ClientHello read_client_hello(Reader& reader) {
     }
     if (reader.remaining() > 0) {
         payload.password = reader.read_string();
+    }
+    if (reader.remaining() >= sizeof(std::uint64_t)) {
+        payload.client_blocks_revision = reader.read_pod<std::uint64_t>();
     }
     return payload;
 }
@@ -899,6 +925,9 @@ ViewerHeartbeat read_viewer_heartbeat(Reader& reader) {
     if (reader.remaining() >= 1) {
         payload.display_layout =
             static_cast<DisplayLayoutPreference>(reader.read_pod<std::uint8_t>());
+    }
+    if (reader.remaining() >= 1) {
+        payload.wanted_feel = static_cast<MediaStreamFeel>(reader.read_pod<std::uint8_t>());
     }
     return payload;
 }
@@ -1122,6 +1151,9 @@ LobbyPresence read_lobby_presence(Reader& reader) {
     LobbyPresence payload;
     payload.username = reader.read_string();
     payload.password = reader.read_string();
+    if (reader.remaining() >= sizeof(std::uint64_t)) {
+        payload.client_blocks_revision = reader.read_pod<std::uint64_t>();
+    }
     return payload;
 }
 
@@ -1155,6 +1187,18 @@ ControlsDbAck read_controls_db_ack(Reader& reader) {
     payload.username = reader.read_string();
     payload.ok = reader.read_bool();
     payload.message = reader.read_string();
+    return payload;
+}
+
+CatalogUserBlocks read_catalog_user_blocks(Reader& reader) {
+    CatalogUserBlocks payload;
+    payload.blocks_revision = reader.read_pod<std::uint64_t>();
+    payload.full = reader.read_bool();
+    const auto count = reader.read_pod<std::uint16_t>();
+    payload.blocked_game_ids.reserve(count);
+    for (std::uint16_t i = 0; i < count; ++i) {
+        payload.blocked_game_ids.push_back(reader.read_string());
+    }
     return payload;
 }
 
@@ -1257,6 +1301,8 @@ PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
             return read_controls_db_push(payload_reader);
         case PacketType::ControlsDbAck:
             return read_controls_db_ack(payload_reader);
+        case PacketType::CatalogUserBlocks:
+            return read_catalog_user_blocks(payload_reader);
     }
 
     throw std::runtime_error("unknown packet type");

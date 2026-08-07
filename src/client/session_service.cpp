@@ -1,11 +1,15 @@
 #include "client/session_service.hpp"
 
+#include "client/catalog_blocks_cache.hpp"
 #include "client/catalog_cache.hpp"
 #include "common/art_transfer.hpp"
 #include "common/client_debug_log.hpp"
 #include "common/serialization.hpp"
 
+#include <algorithm>
+#include <fstream>
 #include <stdexcept>
+#include <unordered_set>
 #include <utility>
 
 namespace archstreamer {
@@ -21,17 +25,96 @@ PacketPayload receive_client_control_payload(TcpStream& stream) {
 
 namespace {
 
-void sync_art_for_catalog(TcpStream& stream, const GameList& catalog, const std::filesystem::path& art_cache_root) {
+void apply_blocks_to_pending(GameList& list, const std::vector<GameId>& blocked_game_ids) {
+    if (blocked_game_ids.empty() || list.games.empty()) {
+        return;
+    }
+    std::unordered_set<std::string> blocked(blocked_game_ids.begin(), blocked_game_ids.end());
+    list.games.erase(
+        std::remove_if(
+            list.games.begin(),
+            list.games.end(),
+            [&](const GameInfo& game) { return blocked.contains(game.id); }),
+        list.games.end());
+}
+
+// Picker-facing roles only — full kDisplayArtRoles is overkill for catalog sync.
+constexpr std::string_view kCatalogArtRoles[] = {
+    "boxart",
+    "grid",
+    "icon",
+};
+
+std::uint64_t read_art_sync_revision(const std::filesystem::path& art_cache_root) {
+    std::ifstream file(art_cache_root / ".art_sync_catalog_revision");
+    if (!file) {
+        return 0;
+    }
+    std::uint64_t revision = 0;
+    file >> revision;
+    return revision;
+}
+
+void write_art_sync_revision(
+    const std::filesystem::path& art_cache_root,
+    std::uint64_t catalog_revision) {
+    std::ofstream file(art_cache_root / ".art_sync_catalog_revision", std::ios::trunc);
+    if (file) {
+        file << catalog_revision << '\n';
+    }
+}
+
+// Art files live under art_cache_root (same layout as host Art/). Sync is gated on the
+// catalog offerings revision — unchanged catalog → zero art TCP. When needed, one
+// control connection does GameList then all missing ArtAssetRequests (host accepts
+// ArtAsset after GameList on the same socket).
+void sync_art_for_catalog(
+    const std::string& host,
+    std::uint16_t control_port,
+    const GameList& catalog,
+    const std::filesystem::path& art_cache_root) {
     std::filesystem::create_directories(art_cache_root);
+    if (catalog.catalog_revision != 0 &&
+        read_art_sync_revision(art_cache_root) == catalog.catalog_revision) {
+        return;
+    }
+
+    bool need_fetch = false;
     for (const auto& game : catalog.games) {
         if (game.asset_key.empty()) {
             continue;
         }
-        for (const auto role : kDisplayArtRoles) {
+        for (const auto role : kCatalogArtRoles) {
+            if (!art_asset_exists_locally(art_cache_root, game.asset_key, role)) {
+                need_fetch = true;
+                break;
+            }
+        }
+        if (need_fetch) {
+            break;
+        }
+    }
+    if (!need_fetch) {
+        write_art_sync_revision(art_cache_root, catalog.catalog_revision);
+        return;
+    }
+
+    auto stream = TcpStream::connect_to(host, control_port);
+    stream.send_packet(serialize_packet(GameListRequest{catalog.catalog_revision}));
+    (void)receive_client_control_payload(stream);
+
+    for (const auto& game : catalog.games) {
+        if (game.asset_key.empty()) {
+            continue;
+        }
+        for (const auto role : kCatalogArtRoles) {
+            if (art_asset_exists_locally(art_cache_root, game.asset_key, role)) {
+                continue;
+            }
             ArtAssetRequest request{
                 game.asset_key,
                 std::string(role),
-                local_art_asset_sha256(art_cache_root, game.asset_key, role),
+                {},
             };
             stream.send_packet(serialize_packet(request));
             const auto payload = receive_client_control_payload(stream);
@@ -42,6 +125,7 @@ void sync_art_for_catalog(TcpStream& stream, const GameList& catalog, const std:
             write_art_asset_to_cache(art_cache_root, *response);
         }
     }
+    write_art_sync_revision(art_cache_root, catalog.catalog_revision);
 }
 
 } // namespace
@@ -76,19 +160,68 @@ PendingSession ClientSessionService::begin() const {
     save_catalog_cache(catalog_cache_path_, cached_game_list);
     session.apply_game_list(cached_game_list);
 
-    const auto art_cache_root = host_art_cache_root(sanitize_host_cache_id("host", host_));
-    try {
-        sync_art_for_catalog(stream, cached_game_list, art_cache_root);
-    } catch (const std::exception&) {
-        // Older hosts without art protocol still return a usable catalog.
-    }
-
     return PendingSession{
         std::move(session),
         std::move(stream),
         std::move(cached_game_list),
-        art_cache_root,
+        host_art_cache_root(sanitize_host_cache_id("host", host_)),
     };
+}
+
+void ClientSessionService::sync_catalog_art(const PendingSession& pending) const {
+    try {
+        sync_art_for_catalog(host_, control_port_, pending.game_list, pending.art_cache_root);
+    } catch (const std::exception&) {
+        // Older hosts without art protocol still return a usable catalog.
+    }
+}
+
+void ClientSessionService::apply_authenticated_catalog_filter(
+    PendingSession& pending,
+    std::string_view username,
+    std::string_view password) const {
+    if (!valid_username(username) || password.empty()) {
+        return;
+    }
+    const auto blocks_path = default_catalog_blocks_cache_path();
+    auto blocks_cache = load_catalog_blocks_cache(
+        blocks_path, host_, control_port_, username);
+
+    LobbyPresence presence;
+    presence.username = std::string(username);
+    presence.password = std::string(password);
+    presence.client_blocks_revision = blocks_cache.blocks_revision;
+    pending.stream.send_packet(serialize_packet(presence));
+    while (true) {
+        const auto payload = receive_client_control_payload(pending.stream);
+        if (const auto* blocks = std::get_if<CatalogUserBlocks>(&payload); blocks != nullptr) {
+            merge_catalog_blocks_cache(blocks_cache, *blocks);
+            try {
+                save_catalog_blocks_cache(
+                    blocks_path, host_, control_port_, username, blocks_cache);
+            } catch (const std::exception&) {
+            }
+            pending.blocks_revision = blocks_cache.blocks_revision;
+            pending.blocked_game_ids = blocks_cache.blocked_game_ids;
+            apply_blocks_to_pending(pending.game_list, pending.blocked_game_ids);
+            pending.session.apply_game_list(pending.game_list);
+            continue;
+        }
+        if (const auto* catalog = std::get_if<GameList>(&payload); catalog != nullptr) {
+            // Legacy hosts resent a filtered catalog after auth.
+            pending.game_list = *catalog;
+            pending.session.apply_game_list(pending.game_list);
+            continue;
+        }
+        if (std::get_if<LobbyPresenceAck>(&payload) != nullptr) {
+            return;
+        }
+        if (const auto* error = std::get_if<ErrorPacket>(&payload); error != nullptr) {
+            throw std::runtime_error(
+                error->message.empty() ? "lobby presence failed" : error->message);
+        }
+        throw std::runtime_error("expected LobbyPresenceAck from host");
+    }
 }
 
 ActiveSessionInfo ClientSessionService::active_session_info() const {
@@ -112,31 +245,62 @@ JoinedSession ClientSessionService::finish_join(
     ClientHello hello,
     const std::function<std::string(const std::string& current_password)>&
         on_password_change_required) const {
+    const auto blocks_path = default_catalog_blocks_cache_path();
+    auto blocks_cache = load_catalog_blocks_cache(
+        blocks_path, host_, control_port_, hello.username);
+    if (hello.client_blocks_revision == 0) {
+        hello.client_blocks_revision = blocks_cache.blocks_revision;
+    }
+    if (pending.blocked_game_ids.empty()) {
+        pending.blocked_game_ids = blocks_cache.blocked_game_ids;
+        pending.blocks_revision = blocks_cache.blocks_revision;
+    }
     pending.stream.send_packet(serialize_packet(hello));
 
     auto welcome_payload = receive_client_control_payload(pending.stream);
-    if (const auto* error = std::get_if<ErrorPacket>(&welcome_payload); error != nullptr) {
-        throw std::runtime_error("host rejected session: " + error->message);
-    }
-    if (std::holds_alternative<PasswordChangeRequired>(welcome_payload)) {
-        if (!on_password_change_required) {
-            throw std::runtime_error("host requires a password change");
-        }
-        const auto new_password = on_password_change_required(hello.password);
-        if (new_password.empty()) {
-            throw std::runtime_error("password change cancelled");
-        }
-        PasswordChange change;
-        change.username = hello.username;
-        change.current_password = hello.password;
-        change.new_password = new_password;
-        pending.stream.send_packet(serialize_packet(change));
-        hello.password = new_password;
-
-        welcome_payload = receive_client_control_payload(pending.stream);
+    while (true) {
         if (const auto* error = std::get_if<ErrorPacket>(&welcome_payload); error != nullptr) {
             throw std::runtime_error("host rejected session: " + error->message);
         }
+        if (const auto* blocks = std::get_if<CatalogUserBlocks>(&welcome_payload);
+            blocks != nullptr) {
+            merge_catalog_blocks_cache(blocks_cache, *blocks);
+            try {
+                save_catalog_blocks_cache(
+                    blocks_path, host_, control_port_, hello.username, blocks_cache);
+            } catch (const std::exception&) {
+            }
+            pending.blocks_revision = blocks_cache.blocks_revision;
+            pending.blocked_game_ids = blocks_cache.blocked_game_ids;
+            apply_blocks_to_pending(pending.game_list, pending.blocked_game_ids);
+            welcome_payload = receive_client_control_payload(pending.stream);
+            continue;
+        }
+        if (const auto* catalog = std::get_if<GameList>(&welcome_payload); catalog != nullptr) {
+            // Legacy: host resent a user-filtered catalog after auth.
+            pending.game_list = *catalog;
+            welcome_payload = receive_client_control_payload(pending.stream);
+            continue;
+        }
+        if (std::holds_alternative<PasswordChangeRequired>(welcome_payload)) {
+            if (!on_password_change_required) {
+                throw std::runtime_error("host requires a password change");
+            }
+            const auto new_password = on_password_change_required(hello.password);
+            if (new_password.empty()) {
+                throw std::runtime_error("password change cancelled");
+            }
+            PasswordChange change;
+            change.username = hello.username;
+            change.current_password = hello.password;
+            change.new_password = new_password;
+            pending.stream.send_packet(serialize_packet(change));
+            hello.password = new_password;
+
+            welcome_payload = receive_client_control_payload(pending.stream);
+            continue;
+        }
+        break;
     }
     const auto* welcome = std::get_if<HostWelcome>(&welcome_payload);
     if (welcome == nullptr) {

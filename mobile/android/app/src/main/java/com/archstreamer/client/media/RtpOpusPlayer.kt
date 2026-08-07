@@ -20,6 +20,7 @@ class RtpOpusPlayer(
     private val listenPort: Int,
 ) : AutoCloseable {
     private val running = AtomicBoolean(false)
+    private val muted = AtomicBoolean(false)
     private val packetsReceived = AtomicLong(0)
     private val framesDecoded = AtomicLong(0)
 
@@ -31,6 +32,21 @@ class RtpOpusPlayer(
     val port: Int get() = listenPort
     fun packetsReceived(): Long = packetsReceived.get()
     fun framesDecoded(): Long = framesDecoded.get()
+    fun isMuted(): Boolean = muted.get()
+
+    /**
+     * Silence local playback without tearing down the RTP socket.
+     * Host keep streaming; unchecking Receive audio just mutes this client.
+     */
+    fun setMuted(value: Boolean) {
+        muted.set(value)
+        applyTrackVolume()
+    }
+
+    private fun applyTrackVolume() {
+        val volume = if (muted.get()) 0f else 1f
+        runCatching { track?.setVolume(volume) }
+    }
 
     fun start() {
         if (!running.compareAndSet(false, true)) return
@@ -71,6 +87,7 @@ class RtpOpusPlayer(
                 .build()
             audioTrack.play()
             track = audioTrack
+            applyTrackVolume()
 
             socket = DatagramSocket(null).apply {
                 reuseAddress = true

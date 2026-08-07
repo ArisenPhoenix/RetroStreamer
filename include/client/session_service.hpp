@@ -24,6 +24,9 @@ struct PendingSession {
     TcpStream stream;
     GameList game_list;
     std::filesystem::path art_cache_root;
+    /** Per-user blocks cache (revision matched independently of catalog offerings). */
+    std::uint64_t blocks_revision = 0;
+    std::vector<GameId> blocked_game_ids;
 };
 
 struct SessionStart {
@@ -36,7 +39,26 @@ public:
     ClientSessionService(std::string host, std::uint16_t control_port);
     ClientSessionService(std::string host, std::uint16_t control_port, std::filesystem::path catalog_cache_path);
 
+    /** Open control TCP, exchange GameList only (no art, no presence). */
     PendingSession begin() const;
+    /**
+     * Prefetch box/grid/etc. art on short-lived sockets (ArtAssetRequest first).
+     * Call only after the GameList handshake socket has moved on (LobbyPresence,
+     * ClientHello, or closed) — never while the host is still blocked waiting for
+     * the next packet on that connection.
+     */
+    void sync_catalog_art(const PendingSession& pending) const;
+/**
+ * After begin()'s unauthenticated GameList: announce LobbyPresence so the host
+ * can send CatalogUserBlocks (titles this user cannot play). Does not persist
+ * blocks into the shared catalog cache.
+ * Do not call this on a socket that will later send ClientHello — presence
+ * holds the stream and the lobby discards a subsequent Hello.
+ */
+    void apply_authenticated_catalog_filter(
+        PendingSession& pending,
+        std::string_view username,
+        std::string_view password) const;
     ActiveSessionInfo active_session_info() const;
     /**
      * Send ClientHello and complete Welcome/Seats/Ready.

@@ -5,6 +5,7 @@
 #include "common/catalog_paths.hpp"
 #include "common/serialization.hpp"
 #include "host/controls_db_sync.hpp"
+#include "host/game_meta_store.hpp"
 #include "host/host_app_config.hpp"
 #include "host/host_launch_planner.hpp"
 #include "host/session_lobby.hpp"
@@ -22,6 +23,24 @@
 #include <vector>
 
 namespace archstreamer {
+namespace {
+
+void send_user_catalog_blocks(
+    TcpStream& stream,
+    std::string_view username,
+    std::uint64_t client_blocks_revision) {
+    CatalogUserBlocks blocks;
+    try {
+        GameMetaStore store;
+        if (store.ready()) {
+            blocks = store.catalog_user_blocks_for(username, client_blocks_revision);
+        }
+    } catch (...) {
+    }
+    stream.send_packet(serialize_packet(blocks));
+}
+
+} // namespace
 
 ClientId next_session_client_id(const SessionPlan& plan) {
     auto next_id = ClientId{1};
@@ -208,6 +227,10 @@ void poll_active_session_joins(
             throw std::runtime_error("active-session client supplied an invalid username");
         }
         authenticate_client_hello(*stream, config.save_root, authenticated_hello, config.allow_new_users);
+        send_user_catalog_blocks(
+            *stream,
+            authenticated_hello.username,
+            authenticated_hello.client_blocks_revision);
         if (!authenticated_hello.selected_game_id.has_value() ||
             *authenticated_hello.selected_game_id != plan.selected_game_id) {
             throw std::runtime_error("active-session client selected a different game");
@@ -276,8 +299,10 @@ void poll_active_session_joins(
             reconnected_player->disconnect_reason.clear();
             reconnected_player->applied_tier = MediaQualityTier::Medium;
             reconnected_player->applied_size = MediaStreamSize::P720;
+            reconnected_player->applied_feel = MediaStreamFeel::LowLatency;
             reconnected_player->pending_tier.reset();
             reconnected_player->pending_size.reset();
+            reconnected_player->pending_feel.reset();
             reconnected_player->pending_video_uri.reset();
             reconnected_player->video_cutover_started = {};
             reconnected_player->video_cutover_failures = 0;
@@ -416,6 +441,11 @@ std::optional<AcceptedControlHello> try_accept_control_hello(
             if (auth != UserAuthResult::Ok && auth != UserAuthResult::MustChange) {
                 throw std::runtime_error("lobby presence authentication failed");
             }
+            // Per-user blocks (hash-matched); shared catalog offerings stay complete.
+            send_user_catalog_blocks(
+                *stream,
+                presence->username,
+                presence->client_blocks_revision);
             AcceptedControlHello accepted;
             accepted.have_presence = true;
             accepted.presence = *presence;
@@ -441,6 +471,10 @@ std::optional<AcceptedControlHello> try_accept_control_hello(
         if (!authenticated_hello.selected_game_id.has_value()) {
             throw std::runtime_error("control client did not select a game");
         }
+        send_user_catalog_blocks(
+            *stream,
+            authenticated_hello.username,
+            authenticated_hello.client_blocks_revision);
 
         AcceptedControlHello accepted;
         accepted.have_hello = true;

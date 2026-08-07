@@ -15,7 +15,7 @@
 namespace archstreamer {
 
 constexpr std::uint32_t ProtocolMagic = 0x41525354; // "ARST"
-constexpr std::uint16_t ProtocolVersion = 25;
+constexpr std::uint16_t ProtocolVersion = 27;
 constexpr std::uint8_t MaxRemoteClients = 2;
 constexpr std::uint8_t MaxPlayersPerClient = 2;
 constexpr std::uint8_t MaxRetroArchPorts = 5; // Ports 0-3 plus a host player if desired.
@@ -83,6 +83,8 @@ enum class PacketType : std::uint8_t {
     ControlsDbPush = 38,
     // Host → client: push result.
     ControlsDbAck = 39,
+    /** Per-user blocked game ids after auth (shared catalog stays unfiltered). */
+    CatalogUserBlocks = 40,
 };
 
 enum class ClientRole : std::uint8_t {
@@ -198,6 +200,8 @@ struct ClientHello {
     DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto;
     // Required at protocol v18 — host verifies / creates cadence user credentials.
     std::string password;
+    // Trailing v27 — cached CatalogUserBlocks revision (0 = unknown / full send).
+    std::uint64_t client_blocks_revision = 0;
 };
 
 struct HostWelcome {
@@ -343,6 +347,16 @@ enum class MediaStreamSize : std::uint8_t {
     P1440 = 4,
 };
 
+/**
+ * Pre-encode queue depth + NVENC preset tradeoff (independent of size/quality).
+ * Trailing on ViewerHeartbeat — older peers omit → LowLatency.
+ */
+enum class MediaStreamFeel : std::uint8_t {
+    LowLatency = 0, // queue=1, nvenc hp (current default)
+    Balanced = 1,   // queue=2, nvenc hp
+    Smooth = 2,     // queue=4, nvenc hq (pre-d5edd11 smoother feel)
+};
+
 struct VideoEncodeSettings {
     std::uint16_t bitrate_kbps = 1500;
     std::uint8_t framerate = 30;
@@ -350,13 +364,19 @@ struct VideoEncodeSettings {
     // 0 = encode at capture resolution (no videoscale).
     std::uint16_t width = 0;
     std::uint16_t height = 0;
+    // Pre-encode queue depth (0 → treat as 1 in gst builder).
+    std::uint8_t queue_buffers = 1;
+    // Prefer NVENC low-latency-hq over low-latency-hp.
+    bool nvenc_high_quality = false;
 
     friend bool operator==(const VideoEncodeSettings& a, const VideoEncodeSettings& b) {
         return a.bitrate_kbps == b.bitrate_kbps &&
             a.framerate == b.framerate &&
             a.key_int_max == b.key_int_max &&
             a.width == b.width &&
-            a.height == b.height;
+            a.height == b.height &&
+            a.queue_buffers == b.queue_buffers &&
+            a.nvenc_high_quality == b.nvenc_high_quality;
     }
 
     friend bool operator!=(const VideoEncodeSettings& a, const VideoEncodeSettings& b) {
@@ -427,11 +447,30 @@ inline VideoEncodeSettings video_encode_settings_for_quality(MediaQualityTier qu
     }
 }
 
+inline void apply_media_stream_feel(VideoEncodeSettings& settings, MediaStreamFeel feel) {
+    switch (feel) {
+    case MediaStreamFeel::Balanced:
+        settings.queue_buffers = 2;
+        settings.nvenc_high_quality = false;
+        break;
+    case MediaStreamFeel::Smooth:
+        settings.queue_buffers = 4;
+        settings.nvenc_high_quality = true;
+        break;
+    case MediaStreamFeel::LowLatency:
+    default:
+        settings.queue_buffers = 1;
+        settings.nvenc_high_quality = false;
+        break;
+    }
+}
+
 inline VideoEncodeSettings video_encode_settings(
     MediaStreamSize size,
     MediaQualityTier quality,
     std::uint16_t capture_width = 1920,
-    std::uint16_t capture_height = 1080) {
+    std::uint16_t capture_height = 1080,
+    MediaStreamFeel feel = MediaStreamFeel::LowLatency) {
     auto settings = video_encode_settings_for_quality(quality);
     if (size == MediaStreamSize::Auto) {
         size = MediaStreamSize::P720;
@@ -458,6 +497,7 @@ inline VideoEncodeSettings video_encode_settings(
     height = static_cast<std::uint16_t>(height & ~1u);
     settings.width = static_cast<std::uint16_t>(width);
     settings.height = height;
+    apply_media_stream_feel(settings, feel);
     return settings;
 }
 
@@ -588,6 +628,18 @@ inline const char* media_stream_size_name(MediaStreamSize size) {
     return "unknown";
 }
 
+inline const char* media_stream_feel_name(MediaStreamFeel feel) {
+    switch (feel) {
+    case MediaStreamFeel::LowLatency:
+        return "low-latency";
+    case MediaStreamFeel::Balanced:
+        return "balanced";
+    case MediaStreamFeel::Smooth:
+        return "smooth";
+    }
+    return "unknown";
+}
+
 /** Parse "WxH" capture resolution; returns false and leaves outs unchanged on failure. */
 inline bool parse_video_resolution(
     std::string_view text,
@@ -629,6 +681,8 @@ struct ViewerHeartbeat {
     MediaStreamSize wanted_size = MediaStreamSize::Auto;
     // Trailing — older peers omit (Auto). DS host uses Landscape→Hybrid, Portrait→Top/Bottom.
     DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto;
+    // Trailing — older peers omit → LowLatency (current encode defaults).
+    MediaStreamFeel wanted_feel = MediaStreamFeel::LowLatency;
 };
 
 struct ErrorPacket {
@@ -749,6 +803,8 @@ struct PasswordChange {
 struct LobbyPresence {
     std::string username;
     std::string password;
+    // Trailing v27 — cached CatalogUserBlocks revision (0 = unknown / full send).
+    std::uint64_t client_blocks_revision = 0;
 };
 
 /** Host → client: presence registered; keep the control connection open. */
@@ -779,6 +835,13 @@ struct ControlsDbAck {
     std::string username;
     bool ok = false;
     std::string message;
+};
+
+/** Host → client after LobbyPresence / ClientHello auth: titles this user cannot play. */
+struct CatalogUserBlocks {
+    std::uint64_t blocks_revision = 0;
+    bool full = true;
+    std::vector<GameId> blocked_game_ids;
 };
 
 using PacketPayload = std::variant<
@@ -820,7 +883,8 @@ using PacketPayload = std::variant<
     ControlsDbPull,
     ControlsDbResponse,
     ControlsDbPush,
-    ControlsDbAck>;
+    ControlsDbAck,
+    CatalogUserBlocks>;
 
 ClientRole role_for_player_count(std::uint8_t requested_players);
 bool valid_player_count(std::uint8_t requested_players);

@@ -8,6 +8,7 @@
 #include "common/catalog_paths.hpp"
 #include "common/catalog_presenter.hpp"
 #include "common/addresses.hpp"
+#include "common/host_addresses.hpp"
 #include "common/discovery.hpp"
 #include "common/game_assets.hpp"
 #include "common/platform/paths.hpp"
@@ -226,6 +227,26 @@ QWidget* MainWindow::build_client_tab() {
     });
 
     form->addRow("Host", host_row);
+    client_alt_host_ = new QLineEdit(form_box);
+    client_alt_host_->setPlaceholderText("optional — e.g. WireGuard 10.6.0.x");
+    client_alt_host_->setToolTip(
+        "Alt IP: tried when Host is unreachable (connection refused / timeout).\n"
+        "Must look like an IP address. Persisted in settings.");
+    connect(client_alt_host_, &QLineEdit::editingFinished, this, [this] {
+        if (client_alt_host_ == nullptr) {
+            return;
+        }
+        client_session_host_.clear();
+        const auto text = client_alt_host_->text().trimmed();
+        if (!text.isEmpty() && !archstreamer::looks_like_ip_address(text.toStdString())) {
+            append_log(
+                client_log_,
+                "Alt IP must look like an IP address (e.g. 10.6.0.2), or leave it blank.",
+                GuiLogLevel::Quiet);
+        }
+        persist_settings_if_idle();
+    });
+    form->addRow("Alt IP", client_alt_host_);
     form->addRow("Control port", client_port_);
     form->addRow("Input port", client_input_port_);
 

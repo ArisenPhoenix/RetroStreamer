@@ -58,8 +58,10 @@ std::string resolve_switch_title_id_for_catalog(
     const std::filesystem::path& content_path = {});
 
 /**
- * Pre-launch: ensure stem save (+ claim), then replace Ryujinx BIS / Yuzu link for
- * title_id with this stem only (empty stem clears the title banks — no leftover merge).
+ * Pre-launch: snapshot stem (and empty-stem BIS rescue) under
+ *   <user>/switch/saves/.prelaunch/<content_stem>/,
+ * then replace Ryujinx BIS / Yuzu link for title_id with this stem only
+ * (empty stem clears the title banks — no leftover merge).
  * Returns a short status token (stem) for logging.
  */
 std::string sync_catalog_switch_save_for_launch(

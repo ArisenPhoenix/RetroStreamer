@@ -279,6 +279,107 @@ object RemoteHost {
         return parts.joinToString("; ")
     }
 
+    data class PresenceRow(
+        val kind: String, // "active" | "connected"
+        val username: String,
+        val clientId: Int = 0,
+        val slotIndex: Int = -1,
+        val phase: String = "",
+        val displayName: String = "",
+        val gameId: String = "",
+        val seated: Boolean = false,
+    ) {
+        fun label(): String = when (kind) {
+            "active" -> {
+                val game = displayName.ifBlank { gameId }.ifBlank { "?" }
+                "Active — $username — $game (slot $slotIndex)"
+            }
+            else -> {
+                val p = phase.ifBlank { if (slotIndex < 0) "lobby" else "session" }
+                "Connected — $username (client $clientId, $p)"
+            }
+        }
+    }
+
+    fun listPresenceShell(dbPath: String = ""): String {
+        val dbArg = if (dbPath.isBlank()) {
+            "\"\${XDG_DATA_HOME:-\$HOME/.local/share}/archstreamer/cadence/cadence.sqlite\""
+        } else {
+            shellSingleQuote(dbPath)
+        }
+        return "DB=$dbArg; if [ ! -f \"\$DB\" ]; then exit 0; fi; " +
+            "sqlite3 -separator \$'\\t' \"\$DB\" " +
+            "\"SELECT 'A', username, slot, " +
+            "CASE WHEN game_key!='' THEN game_key ELSE '' END, game_key " +
+            "FROM sessions WHERE ended_at=0 AND username!='' " +
+            "ORDER BY started_at DESC;\" 2>/dev/null; " +
+            "sqlite3 -separator \$'\\t' \"\$DB\" " +
+            "\"SELECT 'C', username, client_id, slot, " +
+            "CASE WHEN phase!='' THEN phase ELSE " +
+            "CASE WHEN slot<0 THEN 'lobby' ELSE 'session' END END, " +
+            "CASE WHEN seated!=0 THEN 1 ELSE 0 END " +
+            "FROM connections WHERE disconnected_at=0 AND username!='' AND client_id!=0 " +
+            "ORDER BY connected_at DESC;\" 2>/dev/null"
+    }
+
+    fun parsePresenceOutput(output: String): List<PresenceRow> {
+        val out = mutableListOf<PresenceRow>()
+        for (raw in output.lineSequence()) {
+            val line = raw.trimEnd('\r')
+            if (line.isBlank()) continue
+            val cols = line.split('\t')
+            when (cols.getOrNull(0)) {
+                "A" -> if (cols.size >= 3) {
+                    out += PresenceRow(
+                        kind = "active",
+                        username = cols[1],
+                        slotIndex = cols[2].toIntOrNull() ?: continue,
+                        displayName = cols.getOrNull(3).orEmpty(),
+                        gameId = cols.getOrNull(4).orEmpty(),
+                    )
+                }
+                "C" -> if (cols.size >= 4) {
+                    out += PresenceRow(
+                        kind = "connected",
+                        username = cols[1],
+                        clientId = cols[2].toIntOrNull() ?: continue,
+                        slotIndex = cols[3].toIntOrNull() ?: continue,
+                        phase = cols.getOrNull(4).orEmpty(),
+                        seated = cols.getOrNull(5) == "1",
+                    )
+                }
+            }
+        }
+        return out
+    }
+
+    fun kickConnectedShell(clientId: Int, slotIndex: Int, savesRoot: String = ""): String {
+        val key = if (slotIndex < 0) {
+            "lobby-$clientId"
+        } else {
+            "slot-$slotIndex-$clientId"
+        }
+        val json = """{"reason":"kicked","client_id":$clientId,"slot_index":$slotIndex}"""
+        val root = if (savesRoot.isBlank()) {
+            "\"\${XDG_DATA_HOME:-\$HOME/.local/share}/archstreamer/saves\""
+        } else {
+            shellSingleQuote(savesRoot)
+        }
+        return "set -e; root=$root; dir=\"\$root/.archstreamer_active\"; mkdir -p \"\$dir\"; " +
+            "printf '%s\\n' ${shellSingleQuote(json)} > \"\$dir/disconnect-$key\""
+    }
+
+    fun kickActiveShell(slotIndex: Int, savesRoot: String = ""): String {
+        val json = """{"reason":"kicked","slot_index":$slotIndex}"""
+        val root = if (savesRoot.isBlank()) {
+            "\"\${XDG_DATA_HOME:-\$HOME/.local/share}/archstreamer/saves\""
+        } else {
+            shellSingleQuote(savesRoot)
+        }
+        return "set -e; root=$root; dir=\"\$root/.archstreamer_active\"; mkdir -p \"\$dir\"; " +
+            "printf '%s\\n' ${shellSingleQuote(json)} > \"\$dir/stop-slot-$slotIndex\""
+    }
+
     fun shellSingleQuote(value: String): String =
         "'" + value.replace("'", "'\\''") + "'"
 

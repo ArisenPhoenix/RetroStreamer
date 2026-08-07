@@ -121,12 +121,13 @@ region=<region>
 
 `game_id` is `sha256:<hex>` of that identity key. `language` defaults to `en`; `version` and `region` default to `unknown`. Metadata can override `system_key`, `canonical_name`, `version`, `language`, and `region`. This keeps ids stable across ROM path changes, while still allowing the client to inspect/filter the readable identity fields.
 
-Catalog sync is revision-aware in the protocol (`GameListRequest.client_catalog_revision`,
-`GameList.catalog_revision` / `full` / `deleted_game_ids`), but **the live host path always
-full-replaces**: every reply sets `full=true` and clears `deleted_game_ids`. Incremental
-deltas are a TODO — catalogs are small enough that replace-all is correct and avoids stale
-entries after membership shrinks. Clients still cache the catalog locally and send their
-cached revision; the host currently ignores it for filtering.
+Catalog sync uses two independent revisions:
+- `catalog_offerings` → `GameListRequest.client_catalog_revision` (shared catalog)
+- `user_game_blocks` (per username) → `LobbyPresence` / `ClientHello`
+  `client_blocks_revision` + `CatalogUserBlocks` (full or unchanged)
+
+Matching revision → empty unchanged reply; mismatch → full payload. Clients cache
+each side separately so only the changed half is resent.
 
 The CLI client stores this at `$XDG_CACHE_HOME/archstreamer/catalog.json`, or
 `~/.cache/archstreamer/catalog.json` when `XDG_CACHE_HOME` is not set (Windows:
@@ -265,7 +266,6 @@ Flatpak GUI Host tab launches a **native** `host_runner` via `flatpak-spawn --ho
 - Windows video sink is still a separate top-level window (xid embed is Linux-first); cutover placement restore is also Linux-first
 - RetroArch-on-Windows host parity (paths / joypad drivers) after Switch stream proof
 - Windows host backends now follow the same `using` / CMake twin pattern as pads/media (`HostVirtualKeyboard`, `SaveProfilePaths`, `windows_*_resolve` / soft-keyboard / audio-sink). Linux reference implementations stay in place until a matching `Posix*` wrapper is introduced without behaviour change. Windows soft-keyboard typing uses EnumWindows + SendInput; audio parking mutes tracked emulator WASAPI sessions (speakers quiet while `wasapisrc` loopback continues).
-- Catalog revision deltas (`deleted_game_ids` / incremental `updated_at` filtering) once catalogs grow large enough to matter
 
 ## Save Profiles
 

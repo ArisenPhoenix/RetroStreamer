@@ -301,6 +301,33 @@ std::string canonical_token(std::string value) {
     return result;
 }
 
+std::string normalize_catalog_system_key(std::string system_key) {
+    system_key = canonical_token(std::move(system_key));
+    if (system_key == "game-boy-advance"
+        || system_key == "gameboy-advance"
+        || system_key == "gameboyadvance") {
+        return "gba";
+    }
+    if (system_key == "game-boy-color"
+        || system_key == "gameboy-color"
+        || system_key == "gameboycolor") {
+        return "gbc";
+    }
+    if (system_key == "game-boy" || system_key == "gameboy") {
+        return "gb";
+    }
+    if (system_key == "nintendo-ds" || system_key == "nintendo-ds-lite") {
+        return "nds";
+    }
+    if (system_key == "nintendo-3ds" || system_key == "new-nintendo-3ds") {
+        return "3ds";
+    }
+    if (system_key == "nintendo-switch" || system_key == "nsw") {
+        return "switch";
+    }
+    return system_key;
+}
+
 std::string sanitize_game_display_name(std::string name) {
     // Trim trailing whitespace first.
     while (!name.empty() && (name.back() == ' ' || name.back() == '\t')) {
@@ -488,7 +515,8 @@ void apply_game_metadata(GameInfo& info, const std::filesystem::path& metadata_p
             }
         }
         if (metadata.contains("system_key")) {
-            auto system_key = canonical_token(metadata.at("system_key").get<std::string>());
+            auto system_key = normalize_catalog_system_key(
+                metadata.at("system_key").get<std::string>());
             if (!system_key.empty()) {
                 info.system_key = std::move(system_key);
             }
@@ -562,7 +590,7 @@ void apply_game_metadata(GameInfo& info, const std::filesystem::path& metadata_p
 }
 
 void finalize_game_identity(GameInfo& info) {
-    info.system_key = canonical_token(info.system_key);
+    info.system_key = normalize_catalog_system_key(info.system_key);
     info.canonical_name = canonical_token(info.canonical_name.empty() ? info.display_name : info.canonical_name);
     const auto composed = compose_catalog_identity(
         info.system_key,

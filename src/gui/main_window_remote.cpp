@@ -6,11 +6,14 @@
 
 #include "common/remote_host.hpp"
 
+#include <QAbstractItemView>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
+#include <QListWidgetItem>
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -22,6 +25,10 @@
 
 namespace archstreamer::gui {
 namespace {
+
+constexpr int kRemoteRoleKind = Qt::UserRole;
+constexpr int kRemoteRoleClientId = Qt::UserRole + 1;
+constexpr int kRemoteRoleSlot = Qt::UserRole + 2;
 
 bool try_probe_session(
     ClientApp& app,
@@ -137,9 +144,28 @@ QWidget* MainWindow::build_remote_tab() {
 
     remote_status_ = new QLabel(
         "Ensure Host probes port blocks, reuses a free matching lobby, or SSH-starts "
-        "host_runner (or an optional start script with ports + GPU).",
+        "host_runner (or an optional start script with ports + GPU). "
+        "Remote users lists Connected/Active from cadence SQL on the host; Kick writes the "
+        "same markers as the Users tab. Stop Host uses the tracked port, or the GPU field "
+        "to find and stop that instance.",
         page);
     remote_status_->setWordWrap(true);
+
+    auto* users_box = new QGroupBox("Remote users", page);
+    auto* users_layout = new QVBoxLayout(users_box);
+    remote_users_ = new QListWidget(users_box);
+    remote_users_->setMinimumHeight(120);
+    remote_users_->setMaximumHeight(200);
+    remote_users_->setSelectionMode(QAbstractItemView::SingleSelection);
+    auto* users_buttons = new QHBoxLayout();
+    remote_users_refresh_ = new QPushButton("Refresh users", users_box);
+    remote_users_kick_ = new QPushButton("Kick selected", users_box);
+    users_buttons->addWidget(remote_users_refresh_);
+    users_buttons->addWidget(remote_users_kick_);
+    users_buttons->addStretch(1);
+    users_layout->addWidget(remote_users_);
+    users_layout->addLayout(users_buttons);
+
     remote_log_ = new QPlainTextEdit(page);
     remote_log_->setObjectName("remoteLog");
     remote_log_->setReadOnly(true);
@@ -147,6 +173,8 @@ QWidget* MainWindow::build_remote_tab() {
 
     connect(ensure, &QPushButton::clicked, this, [this] { ensure_remote_host(); });
     connect(stop, &QPushButton::clicked, this, [this] { stop_remote_host(); });
+    connect(remote_users_refresh_, &QPushButton::clicked, this, [this] { refresh_remote_users(); });
+    connect(remote_users_kick_, &QPushButton::clicked, this, [this] { kick_remote_user(); });
     for (auto* edit :
          {remote_ssh_host_,
           remote_ssh_user_,
@@ -170,6 +198,7 @@ QWidget* MainWindow::build_remote_tab() {
     root->addWidget(form_box);
     root->addLayout(buttons);
     root->addWidget(remote_status_);
+    root->addWidget(users_box);
     root->addWidget(remote_log_, 1);
     return page;
 }
@@ -261,6 +290,7 @@ void MainWindow::ensure_remote_host() {
                     if (apply) {
                         apply_client_host(host, control, input, QStringLiteral("Remote"));
                         remote_tracked_control_port_ = tracked_control;
+                        refresh_remote_users();
                     }
                     persist_settings_if_idle();
                 },
@@ -409,7 +439,7 @@ void MainWindow::ensure_remote_host() {
                         gpu_note = QStringLiteral(" %1").arg(resolved_gpu_label);
                     }
                     finish(
-                        QStringLiteral("Started host on %1:%2%3")
+                        QStringLiteral("Started new host instance on %1:%2%3")
                             .arg(ssh_host)
                             .arg(ports.control_port)
                             .arg(gpu_note),
@@ -450,7 +480,7 @@ void MainWindow::ensure_remote_host() {
                         gpu_text = QStringLiteral(" %1").arg(resolved_gpu_label);
                     }
                     finish(
-                        QStringLiteral("Reusing host on %1:%2%3%4")
+                        QStringLiteral("Reusing existing host instance on %1:%2%3%4")
                             .arg(ssh_host)
                             .arg(ports.control_port)
                             .arg(slot_text)
@@ -501,10 +531,16 @@ void MainWindow::stop_remote_host() {
     const auto ssh_user = remote_ssh_user_->text().trimmed();
     const auto password = remote_ssh_password_->text();
     const auto directory = remote_directory_->text().trimmed();
+    const auto binary = remote_binary_->text().trimmed().isEmpty()
+        ? QStringLiteral("./host_runner")
+        : remote_binary_->text().trimmed();
+    const auto want_gpu = remote_gpu_ != nullptr ? remote_gpu_->text().trimmed() : QString();
     const int ssh_port = remote_ssh_port_->value();
-    const int control = remote_tracked_control_port_ > 0
-        ? remote_tracked_control_port_
-        : (remote_base_control_port_ != nullptr ? remote_base_control_port_->value() : 45555);
+    const auto base_control =
+        static_cast<std::uint16_t>(remote_base_control_port_->value());
+    const auto base_input =
+        static_cast<std::uint16_t>(remote_base_input_port_->value());
+    const int tracked = remote_tracked_control_port_;
 
     if (ssh_host.isEmpty() || ssh_user.isEmpty()) {
         QMessageBox::warning(
@@ -523,9 +559,122 @@ void MainWindow::stop_remote_host() {
 
     persist_settings_if_idle();
     remote_busy_ = true;
-    set_remote_status(QStringLiteral("Stopping remote host on control port %1…").arg(control));
+    if (want_gpu.isEmpty()) {
+        const int control = tracked > 0 ? tracked : static_cast<int>(base_control);
+        set_remote_status(QStringLiteral("Stopping remote host on control port %1…").arg(control));
+    } else {
+        set_remote_status(
+            QStringLiteral("Finding remote host for GPU “%1” to stop…").arg(want_gpu));
+    }
 
-    std::thread([this, ssh_host, ssh_user, password, directory, ssh_port, control] {
+    std::thread([this,
+                 ssh_host,
+                 ssh_user,
+                 password,
+                 directory,
+                 binary,
+                 want_gpu,
+                 ssh_port,
+                 base_control,
+                 base_input,
+                 tracked] {
+        int control = tracked > 0 ? tracked : static_cast<int>(base_control);
+        QString resolved_label;
+
+        if (!want_gpu.isEmpty()) {
+            const auto list_cmd = QString::fromStdString(remote_host_list_gpus_shell(
+                directory.toStdString(),
+                binary.toStdString()));
+            const auto listed = run_remote_ssh_command(
+                ssh_host, ssh_port, ssh_user, password, list_cmd);
+            if (!listed.ok) {
+                QMetaObject::invokeMethod(
+                    this,
+                    [this, listed] {
+                        remote_busy_ = false;
+                        set_remote_status(
+                            QStringLiteral("Remote GPU list failed: %1%2")
+                                .arg(listed.error)
+                                .arg(listed.stderr_text.isEmpty()
+                                    ? QString()
+                                    : QStringLiteral("\n%1").arg(listed.stderr_text)));
+                    },
+                    Qt::QueuedConnection);
+                return;
+            }
+            std::vector<std::pair<std::string, std::string>> gpu_options;
+            for (const auto& line : listed.stdout_text.split('\n', Qt::SkipEmptyParts)) {
+                const auto tab = line.indexOf('\t');
+                if (tab <= 0) {
+                    continue;
+                }
+                gpu_options.emplace_back(
+                    line.left(tab).trimmed().toStdString(),
+                    line.mid(tab + 1).trimmed().toStdString());
+            }
+            const auto matched =
+                remote_host_match_gpu_option(gpu_options, want_gpu.toStdString());
+            if (!matched.has_value()) {
+                QMetaObject::invokeMethod(
+                    this,
+                    [this, want_gpu] {
+                        remote_busy_ = false;
+                        set_remote_status(
+                            QStringLiteral("No remote GPU matched “%1”.").arg(want_gpu));
+                    },
+                    Qt::QueuedConnection);
+                return;
+            }
+            const auto& resolved_id = matched->first;
+            resolved_label = QStringLiteral("%1 [%2]")
+                .arg(QString::fromStdString(matched->second), QString::fromStdString(resolved_id));
+
+            int found_port = -1;
+            for (int n = 0; n < 8; ++n) {
+                const auto ports = remote_host_port_block(n, base_control, base_input);
+                const auto gpu_cmd = QString::fromStdString(
+                    remote_host_encode_gpu_query_shell(ports.control_port));
+                const auto gpu_ssh = run_remote_ssh_command(
+                    ssh_host, ssh_port, ssh_user, password, gpu_cmd, 15'000);
+                if (!gpu_ssh.ok) {
+                    continue;
+                }
+                const auto process_gpu = gpu_ssh.stdout_text.trimmed().toStdString();
+                if (process_gpu.empty() && n == 0 && resolved_id == gpu_options.front().first) {
+                    found_port = static_cast<int>(ports.control_port);
+                    break;
+                }
+                const auto process_match =
+                    remote_host_match_gpu_option(gpu_options, process_gpu);
+                if (process_match.has_value() && process_match->first == resolved_id) {
+                    found_port = static_cast<int>(ports.control_port);
+                    break;
+                }
+            }
+            if (found_port < 0) {
+                QMetaObject::invokeMethod(
+                    this,
+                    [this, resolved_label] {
+                        remote_busy_ = false;
+                        set_remote_status(
+                            QStringLiteral("No running host_runner found for %1.")
+                                .arg(resolved_label));
+                    },
+                    Qt::QueuedConnection);
+                return;
+            }
+            control = found_port;
+            QMetaObject::invokeMethod(
+                this,
+                [this, control, resolved_label] {
+                    set_remote_status(
+                        QStringLiteral("Stopping %1 on control port %2…")
+                            .arg(resolved_label)
+                            .arg(control));
+                },
+                Qt::QueuedConnection);
+        }
+
         const auto cmd = QString::fromStdString(remote_host_stop_shell(
             static_cast<std::uint16_t>(control),
             directory.toStdString()));
@@ -533,7 +682,7 @@ void MainWindow::stop_remote_host() {
             ssh_host, ssh_port, ssh_user, password, cmd);
         QMetaObject::invokeMethod(
             this,
-            [this, ssh, control] {
+            [this, ssh, control, resolved_label] {
                 remote_busy_ = false;
                 if (!ssh.ok) {
                     set_remote_status(
@@ -543,11 +692,196 @@ void MainWindow::stop_remote_host() {
                                 ? QString()
                                 : QStringLiteral("\n%1").arg(ssh.stderr_text)));
                 } else {
-                    set_remote_status(
-                        QStringLiteral("Stopped remote host on control port %1.").arg(control));
+                    QString msg = QStringLiteral("Stopped remote host on control port %1.")
+                        .arg(control);
+                    if (!resolved_label.isEmpty()) {
+                        msg += QStringLiteral(" (%1)").arg(resolved_label);
+                    }
+                    set_remote_status(msg);
                     remote_tracked_control_port_ = 0;
+                    if (remote_users_ != nullptr) {
+                        remote_users_->clear();
+                    }
                 }
                 persist_settings_if_idle();
+            },
+            Qt::QueuedConnection);
+    }).detach();
+}
+
+void MainWindow::refresh_remote_users() {
+    if (remote_busy_) {
+        set_remote_status(QStringLiteral("Remote action already running."));
+        return;
+    }
+    const auto ssh_host = remote_ssh_host_->text().trimmed();
+    const auto ssh_user = remote_ssh_user_->text().trimmed();
+    const auto password = remote_ssh_password_->text();
+    const int ssh_port = remote_ssh_port_->value();
+    if (ssh_host.isEmpty() || ssh_user.isEmpty()) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("Remote users"),
+            QStringLiteral("SSH host and user are required."));
+        return;
+    }
+    if (password.isEmpty()) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("Remote users"),
+            QStringLiteral("Enter the SSH password (it is not saved)."));
+        return;
+    }
+
+    remote_busy_ = true;
+    set_remote_status(QStringLiteral("Refreshing remote users…"));
+    std::thread([this, ssh_host, ssh_user, password, ssh_port] {
+        const auto cmd = QString::fromStdString(remote_host_list_presence_shell());
+        const auto ssh = run_remote_ssh_command(
+            ssh_host, ssh_port, ssh_user, password, cmd);
+        QMetaObject::invokeMethod(
+            this,
+            [this, ssh] {
+                remote_busy_ = false;
+                if (remote_users_ == nullptr) {
+                    return;
+                }
+                remote_users_->clear();
+                if (!ssh.ok) {
+                    set_remote_status(
+                        QStringLiteral("Refresh users failed: %1%2")
+                            .arg(ssh.error)
+                            .arg(ssh.stderr_text.isEmpty()
+                                ? QString()
+                                : QStringLiteral("\n%1").arg(ssh.stderr_text)));
+                    return;
+                }
+                const auto rows = remote_host_parse_presence_output(
+                    ssh.stdout_text.toStdString());
+                // Active first, then Connected (skip Connected covered by seated Active).
+                std::vector<RemotePresenceRow> actives;
+                std::vector<RemotePresenceRow> connected;
+                for (const auto& row : rows) {
+                    if (row.kind == "active") {
+                        actives.push_back(row);
+                    } else {
+                        connected.push_back(row);
+                    }
+                }
+                auto add_row = [&](const RemotePresenceRow& row, const QString& label) {
+                    auto* item = new QListWidgetItem(label, remote_users_);
+                    item->setData(kRemoteRoleKind, QString::fromStdString(row.kind));
+                    item->setData(kRemoteRoleClientId, static_cast<qulonglong>(row.client_id));
+                    item->setData(kRemoteRoleSlot, row.slot_index);
+                };
+                for (const auto& row : actives) {
+                    const auto game = row.display_name.empty() ? row.game_id : row.display_name;
+                    add_row(
+                        row,
+                        QStringLiteral("Active — %1 — %2 (slot %3)")
+                            .arg(
+                                QString::fromStdString(row.username),
+                                QString::fromStdString(game))
+                            .arg(row.slot_index));
+                }
+                for (const auto& row : connected) {
+                    bool covered = false;
+                    for (const auto& active : actives) {
+                        if (active.slot_index == row.slot_index
+                            && active.username == row.username
+                            && row.seated) {
+                            covered = true;
+                            break;
+                        }
+                    }
+                    if (covered) {
+                        continue;
+                    }
+                    const auto phase = row.phase.empty()
+                        ? (row.slot_index < 0 ? QStringLiteral("lobby") : QStringLiteral("session"))
+                        : QString::fromStdString(row.phase);
+                    add_row(
+                        row,
+                        QStringLiteral("Connected — %1 (client %2, %3)")
+                            .arg(QString::fromStdString(row.username))
+                            .arg(row.client_id)
+                            .arg(phase));
+                }
+                set_remote_status(
+                    QStringLiteral("Remote users: %1 row(s).")
+                        .arg(remote_users_->count()));
+            },
+            Qt::QueuedConnection);
+    }).detach();
+}
+
+void MainWindow::kick_remote_user() {
+    if (remote_busy_) {
+        set_remote_status(QStringLiteral("Remote action already running."));
+        return;
+    }
+    if (remote_users_ == nullptr || remote_users_->currentItem() == nullptr) {
+        QMessageBox::information(
+            this,
+            QStringLiteral("Kick"),
+            QStringLiteral("Select a remote user row first."));
+        return;
+    }
+    const auto* item = remote_users_->currentItem();
+    const auto kind = item->data(kRemoteRoleKind).toString();
+    const auto client_id = static_cast<std::uint32_t>(item->data(kRemoteRoleClientId).toULongLong());
+    const int slot = item->data(kRemoteRoleSlot).toInt();
+    const auto label = item->text();
+
+    const auto ssh_host = remote_ssh_host_->text().trimmed();
+    const auto ssh_user = remote_ssh_user_->text().trimmed();
+    const auto password = remote_ssh_password_->text();
+    const int ssh_port = remote_ssh_port_->value();
+    if (ssh_host.isEmpty() || ssh_user.isEmpty()) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("Kick"),
+            QStringLiteral("SSH host and user are required."));
+        return;
+    }
+    if (password.isEmpty()) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("Kick"),
+            QStringLiteral("Enter the SSH password (it is not saved)."));
+        return;
+    }
+    if (QMessageBox::question(
+            this,
+            QStringLiteral("Kick"),
+            QStringLiteral("Kick “%1” on the remote host?").arg(label))
+        != QMessageBox::Yes) {
+        return;
+    }
+
+    remote_busy_ = true;
+    set_remote_status(QStringLiteral("Kicking %1…").arg(label));
+    std::thread([this, ssh_host, ssh_user, password, ssh_port, kind, client_id, slot, label] {
+        const auto cmd = kind == QLatin1String("active")
+            ? QString::fromStdString(remote_host_kick_active_shell(slot))
+            : QString::fromStdString(remote_host_kick_connected_shell(client_id, slot));
+        const auto ssh = run_remote_ssh_command(
+            ssh_host, ssh_port, ssh_user, password, cmd);
+        QMetaObject::invokeMethod(
+            this,
+            [this, ssh, label] {
+                remote_busy_ = false;
+                if (!ssh.ok) {
+                    set_remote_status(
+                        QStringLiteral("Kick failed: %1%2")
+                            .arg(ssh.error)
+                            .arg(ssh.stderr_text.isEmpty()
+                                ? QString()
+                                : QStringLiteral("\n%1").arg(ssh.stderr_text)));
+                    return;
+                }
+                set_remote_status(QStringLiteral("Kick requested for %1.").arg(label));
+                refresh_remote_users();
             },
             Qt::QueuedConnection);
     }).detach();

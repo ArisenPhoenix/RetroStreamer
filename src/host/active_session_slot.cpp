@@ -482,8 +482,10 @@ void ActiveSessionSlot::drain_pending_joins() {
                 // Match what add_client just latched (720p/medium shared tee).
                 reconnected_player->applied_tier = MediaQualityTier::Medium;
                 reconnected_player->applied_size = MediaStreamSize::P720;
+                reconnected_player->applied_feel = MediaStreamFeel::LowLatency;
                 reconnected_player->pending_tier.reset();
                 reconnected_player->pending_size.reset();
+                reconnected_player->pending_feel.reset();
                 reconnected_player->pending_video_uri.reset();
                 reconnected_player->video_cutover_started = {};
                 reconnected_player->video_cutover_failures = 0;

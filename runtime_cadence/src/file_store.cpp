@@ -42,6 +42,10 @@ std::filesystem::path FileRuntimeStore::sessions_path() const {
     return root_ / "sessions.json";
 }
 
+std::filesystem::path FileRuntimeStore::connections_path() const {
+    return root_ / "connections.json";
+}
+
 std::filesystem::path FileRuntimeStore::claims_path() const {
     return root_ / "claims.json";
 }
@@ -334,6 +338,93 @@ std::vector<SessionRecord> FileRuntimeStore::list_sessions(bool active_only) {
     }
     std::sort(out.begin(), out.end(), [](const SessionRecord& a, const SessionRecord& b) {
         return a.started_at > b.started_at;
+    });
+    return out;
+}
+
+bool FileRuntimeStore::upsert_connection(const ConnectionRecord& connection) {
+    if (connection.connection_id.empty()) {
+        return false;
+    }
+    std::lock_guard lock(mutex_);
+    if (!ensure_ready_unlocked()) {
+        return false;
+    }
+    auto root = load_object_file(connections_path());
+    ConnectionRecord stored = connection;
+    if (stored.connected_at <= 0) {
+        stored.connected_at = now_epoch_seconds();
+    }
+    root[stored.connection_id] = connection_to_json(stored);
+    return save_object_file(connections_path(), root);
+}
+
+bool FileRuntimeStore::end_connection(
+    const std::string& connection_id,
+    const std::string& end_reason) {
+    if (connection_id.empty()) {
+        return false;
+    }
+    std::lock_guard lock(mutex_);
+    if (!ensure_ready_unlocked()) {
+        return false;
+    }
+    auto root = load_object_file(connections_path());
+    if (!root.contains(connection_id)) {
+        return false;
+    }
+    auto connection = connection_from_json(root.at(connection_id));
+    if (connection.disconnected_at != 0) {
+        return true;
+    }
+    connection.disconnected_at = now_epoch_seconds();
+    connection.end_reason = end_reason;
+    root[connection_id] = connection_to_json(connection);
+    return save_object_file(connections_path(), root);
+}
+
+bool FileRuntimeStore::end_connections_for_host(
+    const std::string& host_id,
+    const std::string& end_reason) {
+    if (host_id.empty()) {
+        return false;
+    }
+    std::lock_guard lock(mutex_);
+    if (!ensure_ready_unlocked()) {
+        return false;
+    }
+    auto root = load_object_file(connections_path());
+    const auto now = now_epoch_seconds();
+    bool changed = false;
+    for (auto it = root.begin(); it != root.end(); ++it) {
+        auto connection = connection_from_json(it.value());
+        if (connection.host_id != host_id || connection.disconnected_at != 0) {
+            continue;
+        }
+        connection.disconnected_at = now;
+        connection.end_reason = end_reason;
+        it.value() = connection_to_json(connection);
+        changed = true;
+    }
+    return !changed || save_object_file(connections_path(), root);
+}
+
+std::vector<ConnectionRecord> FileRuntimeStore::list_connections(bool live_only) {
+    std::lock_guard lock(mutex_);
+    const auto root = load_object_file(connections_path());
+    std::vector<ConnectionRecord> out;
+    for (auto it = root.begin(); it != root.end(); ++it) {
+        auto connection = connection_from_json(it.value());
+        if (connection.connection_id.empty()) {
+            connection.connection_id = it.key();
+        }
+        if (live_only && connection.disconnected_at != 0) {
+            continue;
+        }
+        out.push_back(std::move(connection));
+    }
+    std::sort(out.begin(), out.end(), [](const ConnectionRecord& a, const ConnectionRecord& b) {
+        return a.connected_at > b.connected_at;
     });
     return out;
 }

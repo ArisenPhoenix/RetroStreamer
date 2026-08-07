@@ -446,4 +446,161 @@ inline std::string remote_host_encode_gpu_query_shell(std::uint16_t control_port
                "printf '%s\\n' \"$found\"";
 }
 
+/** Default remote saves root (shell expression; expands on the remote). */
+inline std::string remote_host_default_saves_root_expr() {
+    return "${XDG_DATA_HOME:-$HOME/.local/share}/archstreamer/saves";
+}
+
+/**
+ * One Users-style presence row for Remote admin (Active session or Connected client).
+ * kind: "active" | "connected"
+ */
+struct RemotePresenceRow {
+    std::string kind;
+    std::string username;
+    std::uint32_t client_id = 0;
+    int slot_index = -1;
+    std::string phase;
+    std::string display_name;
+    std::string game_id;
+    bool seated = false;
+};
+
+inline std::string remote_host_default_cadence_db_expr() {
+    return "${XDG_DATA_HOME:-$HOME/.local/share}/archstreamer/cadence/cadence.sqlite";
+}
+
+/**
+ * List Active sessions + Connected clients from cadence SQL on the remote host.
+ * Output lines (TAB-separated):
+ *   A\tusername\tslot\tdisplay\tgame_id
+ *   C\tusername\tclient_id\tslot\tphase\tseated
+ * Empty db_path → default XDG cadence.sqlite on the remote.
+ */
+inline std::string remote_host_list_presence_shell(const std::string& db_path = {}) {
+    // sqlite3 -separator $'\t' keeps the same wire format as the old JSON scanner.
+    const std::string db_arg = db_path.empty()
+        ? ("\"" + remote_host_default_cadence_db_expr() + "\"")
+        : remote_shell_single_quote(db_path);
+    std::string cmd;
+    cmd += "DB=";
+    cmd += db_arg;
+    cmd += "; if [ ! -f \"$DB\" ]; then exit 0; fi; ";
+    cmd += "sqlite3 -separator $'\\t' \"$DB\" "
+           "\"SELECT 'A', username, slot, "
+           "CASE WHEN game_key!='' THEN game_key ELSE '' END, game_key "
+           "FROM sessions WHERE ended_at=0 AND username!='' "
+           "ORDER BY started_at DESC;\" 2>/dev/null; ";
+    cmd += "sqlite3 -separator $'\\t' \"$DB\" "
+           "\"SELECT 'C', username, client_id, slot, "
+           "CASE WHEN phase!='' THEN phase ELSE "
+           "CASE WHEN slot<0 THEN 'lobby' ELSE 'session' END END, "
+           "CASE WHEN seated!=0 THEN 1 ELSE 0 END "
+           "FROM connections WHERE disconnected_at=0 AND username!='' AND client_id!=0 "
+           "ORDER BY connected_at DESC;\" 2>/dev/null";
+    return cmd;
+}
+
+inline std::vector<RemotePresenceRow> remote_host_parse_presence_output(const std::string& output) {
+    std::vector<RemotePresenceRow> out;
+    std::istringstream stream(output);
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        if (line.empty()) {
+            continue;
+        }
+        std::vector<std::string> cols;
+        std::string col;
+        std::istringstream row(line);
+        while (std::getline(row, col, '\t')) {
+            cols.push_back(col);
+        }
+        if (cols.empty()) {
+            continue;
+        }
+        RemotePresenceRow entry;
+        if (cols[0] == "A" && cols.size() >= 3) {
+            entry.kind = "active";
+            entry.username = cols[1];
+            try {
+                entry.slot_index = std::stoi(cols[2]);
+            } catch (...) {
+                continue;
+            }
+            if (cols.size() >= 4) {
+                entry.display_name = cols[3];
+            }
+            if (cols.size() >= 5) {
+                entry.game_id = cols[4];
+            }
+            out.push_back(std::move(entry));
+        } else if (cols[0] == "C" && cols.size() >= 4) {
+            entry.kind = "connected";
+            entry.username = cols[1];
+            try {
+                entry.client_id = static_cast<std::uint32_t>(std::stoul(cols[2]));
+                entry.slot_index = std::stoi(cols[3]);
+            } catch (...) {
+                continue;
+            }
+            if (cols.size() >= 5) {
+                entry.phase = cols[4];
+            }
+            if (cols.size() >= 6) {
+                entry.seated = cols[5] == "1";
+            }
+            out.push_back(std::move(entry));
+        }
+    }
+    return out;
+}
+
+/** Write a Connected-client disconnect marker (same as Users-tab Kick). */
+inline std::string remote_host_kick_connected_shell(
+    std::uint32_t client_id,
+    int slot_index,
+    const std::string& saves_root = {}) {
+    const std::string key = slot_index < 0
+        ? ("lobby-" + std::to_string(client_id))
+        : ("slot-" + std::to_string(slot_index) + "-" + std::to_string(client_id));
+    const std::string json = std::string("{\"reason\":\"kicked\",\"client_id\":")
+        + std::to_string(client_id)
+        + ",\"slot_index\":"
+        + std::to_string(slot_index)
+        + "}";
+    const std::string root = saves_root.empty()
+        ? ("\"" + remote_host_default_saves_root_expr() + "\"")
+        : remote_shell_single_quote(saves_root);
+    const auto path_expr = std::string("\"$dir/disconnect-") + key + "\"";
+    return std::string("set -e; root=")
+        + root
+        + "; dir=\"$root/.archstreamer_active\"; mkdir -p \"$dir\"; printf '%s\\n' "
+        + remote_shell_single_quote(json)
+        + " > "
+        + path_expr;
+}
+
+/** Write an Active-slot stop marker (same as Users-tab Kick of a playing session). */
+inline std::string remote_host_kick_active_shell(
+    int slot_index,
+    const std::string& saves_root = {}) {
+    const std::string json = std::string("{\"reason\":\"kicked\",\"slot_index\":")
+        + std::to_string(slot_index)
+        + "}";
+    const std::string root = saves_root.empty()
+        ? ("\"" + remote_host_default_saves_root_expr() + "\"")
+        : remote_shell_single_quote(saves_root);
+    const auto path_expr =
+        std::string("\"$dir/stop-slot-") + std::to_string(slot_index) + "\"";
+    return std::string("set -e; root=")
+        + root
+        + "; dir=\"$root/.archstreamer_active\"; mkdir -p \"$dir\"; printf '%s\\n' "
+        + remote_shell_single_quote(json)
+        + " > "
+        + path_expr;
+}
+
 } // namespace archstreamer

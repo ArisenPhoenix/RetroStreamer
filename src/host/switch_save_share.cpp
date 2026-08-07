@@ -772,6 +772,136 @@ std::string resolve_switch_title_id_for_catalog(
     return title_id_from_bis(profile, {});
 }
 
+/**
+ * Rolling pre-launch snapshot:
+ *   <user>/switch/saves/.prelaunch/<content_stem>/
+ * Taken before BIS replace so a bad launch/wipe still has a restore path.
+ */
+int backup_catalog_switch_save_prelaunch(
+    const SaveProfile& profile,
+    std::string_view content_stem,
+    const std::filesystem::path& canon) {
+    if (content_stem.empty() || !directory_has_save_payload(canon)) {
+        return 0;
+    }
+    const auto bak =
+        profile.user_directory / "switch" / "saves" / ".prelaunch" / std::string(content_stem);
+    std::error_code ec;
+    std::filesystem::remove_all(bak, ec);
+    std::filesystem::create_directories(bak, ec);
+    if (ec) {
+        std::cerr << "switch save share: pre-launch backup mkdir failed " << bak
+                  << ": " << ec.message() << '\n';
+        return 0;
+    }
+    int copied = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(canon, ec)) {
+        if (ec) {
+            break;
+        }
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        const auto name = entry.path().filename().string();
+        if (name.empty()) {
+            continue;
+        }
+        // Keep sidecars (.title_id etc.) so restore is self-describing.
+        if (copy_file_overwrite_preserve_mtime(entry.path(), bak / name)) {
+            ++copied;
+        }
+    }
+    if (copied > 0) {
+        write_text_file(bak / ".prelaunch_stamp", "archstreamer-prelaunch");
+        std::cout
+            << "switch save share: pre-launch backup \"" << content_stem << "\" → "
+            << bak << " (" << copied << " file(s))\n";
+    }
+    return copied;
+}
+
+bool backup_one_bis_slot_into(
+    const std::filesystem::path& slot,
+    const std::filesystem::path& dest_dir,
+    int& copied) {
+    if (!directory_has_save_payload(slot)) {
+        return false;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(dest_dir, ec);
+    for (const auto& entry : std::filesystem::directory_iterator(slot, ec)) {
+        if (ec || !entry.is_regular_file()) {
+            continue;
+        }
+        const auto name = entry.path().filename().string();
+        if (name.empty() || name.front() == '.') {
+            continue;
+        }
+        const auto dst = dest_dir / name;
+        if (std::filesystem::exists(dst, ec)) {
+            if (!source_should_replace_dest(entry.path(), dst)) {
+                continue;
+            }
+        }
+        if (copy_file_overwrite_preserve_mtime(entry.path(), dst)) {
+            ++copied;
+        }
+    }
+    return true;
+}
+
+bool backup_bis_account_fn(
+    const std::filesystem::path& /*account_dir*/,
+    const std::filesystem::path& slot0,
+    const std::filesystem::path& slot1,
+    const std::filesystem::path& dest) {
+    // dest is .prelaunch/<stem>/.bis-rescue — merge slot payloads (slot0 preferred).
+    int copied = 0;
+    backup_one_bis_slot_into(slot0, dest, copied);
+    backup_one_bis_slot_into(slot1, dest, copied);
+    return copied > 0;
+}
+
+/** When stem is empty, rescue live BIS bytes before wipe-replace. */
+int backup_ryujinx_bis_prelaunch_if_stem_empty(
+    const SaveProfile& profile,
+    std::string_view content_stem,
+    const std::filesystem::path& canon,
+    const std::filesystem::path& ryujinx_bis,
+    std::string_view title_id) {
+    if (content_stem.empty() || title_id.empty() || directory_has_save_payload(canon)) {
+        return 0;
+    }
+    const auto bak = profile.user_directory / "switch" / "saves" / ".prelaunch"
+        / std::string(content_stem) / ".bis-rescue";
+    std::error_code ec;
+    std::filesystem::remove_all(bak, ec);
+    const int accounts = for_each_ryujinx_title_account_save(
+        ryujinx_bis,
+        title_id,
+        bak,
+        backup_bis_account_fn);
+    if (accounts <= 0 || !directory_has_save_payload(bak)) {
+        std::filesystem::remove_all(bak, ec);
+        return 0;
+    }
+    int files = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(bak, ec)) {
+        if (ec || !entry.is_regular_file()) {
+            continue;
+        }
+        const auto name = entry.path().filename().string();
+        if (!name.empty() && name.front() != '.') {
+            ++files;
+        }
+    }
+    write_text_file(bak / ".prelaunch_stamp", "archstreamer-bis-rescue");
+    std::cout
+        << "switch save share: pre-launch BIS rescue \"" << content_stem
+        << "\" → " << bak << " (" << files << " file(s))\n";
+    return files;
+}
+
 std::string sync_catalog_switch_save_for_launch(
     const SaveProfile& profile,
     std::string_view content_stem,
@@ -787,11 +917,15 @@ std::string sync_catalog_switch_save_for_launch(
     if (canon.empty()) {
         return {};
     }
+    // Always snapshot user stem (and empty-stem BIS) before launch mutates banks.
+    (void)backup_catalog_switch_save_prelaunch(profile, content_stem, canon);
     if (!tid.empty()) {
         // Stem is source of truth: never absorb leftover yuzu/BIS bytes into it.
         link_yuzu_to_canon(profile, tid, canon, /*absorb_existing_into_target=*/false);
         const auto ryujinx_bis =
             profile.user_directory / "ryujinx" / "xdg-config" / "Ryujinx" / "bis" / "user" / "save";
+        (void)backup_ryujinx_bis_prelaunch_if_stem_empty(
+            profile, content_stem, canon, ryujinx_bis, tid);
         const int replaced = replace_ryujinx_bis_with_canon(ryujinx_bis, canon, tid);
         std::cout
             << "switch save share: launch \"" << content_stem << "\" → BIS title "

@@ -216,6 +216,92 @@ std::string catalog_content_stem_for(std::string_view display_name, std::string_
     return stem;
 }
 
+std::string catalog_save_stem_for(std::string_view display_name, std::string_view version) {
+    return catalog_rom_stem_for(display_name, version);
+}
+
+bool catalog_save_stem_matches(
+    std::string_view disk_stem,
+    std::string_view display_name,
+    std::string_view version) {
+    if (disk_stem.empty() || display_name.empty()) {
+        return false;
+    }
+    const auto want = catalog_save_stem_for(display_name, version);
+    if (disk_stem == want) {
+        return true;
+    }
+    const auto want_l = catalog_content_stem_for(display_name, version);
+    if (want_l.empty()) {
+        return false;
+    }
+    if (disk_stem.size() != want_l.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < disk_stem.size(); ++i) {
+        const auto a = static_cast<unsigned char>(disk_stem[i]);
+        const auto b = static_cast<unsigned char>(want_l[i]);
+        if (std::tolower(a) != b) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string catalog_normalize_save_stem_intent(std::string_view disk_stem) {
+    std::string out{disk_stem};
+    if (out.size() < 3) {
+        return out;
+    }
+    // "Title v1.1" / "Title V2" → "Title (1.1)" / "Title (2)" (intent match only).
+    std::size_t i = out.size();
+    while (i > 0) {
+        const auto ch = static_cast<unsigned char>(out[i - 1]);
+        if (std::isdigit(ch) || out[i - 1] == '.') {
+            --i;
+            continue;
+        }
+        break;
+    }
+    if (i >= out.size() || i < 2) {
+        return out;
+    }
+    const auto ver = out.substr(i);
+    if (ver.empty() || ver.front() == '.' || ver.back() == '.') {
+        return out;
+    }
+    bool saw_digit = false;
+    for (char ch : ver) {
+        if (std::isdigit(static_cast<unsigned char>(ch))) {
+            saw_digit = true;
+        } else if (ch != '.') {
+            return out;
+        }
+    }
+    if (!saw_digit) {
+        return out;
+    }
+    std::size_t vpos = i;
+    while (vpos > 0 && (out[vpos - 1] == ' ' || out[vpos - 1] == '\t')) {
+        --vpos;
+    }
+    if (vpos == 0) {
+        return out;
+    }
+    const char marker = out[vpos - 1];
+    if (marker != 'v' && marker != 'V') {
+        return out;
+    }
+    std::size_t title_end = vpos - 1;
+    while (title_end > 0 && (out[title_end - 1] == ' ' || out[title_end - 1] == '\t')) {
+        --title_end;
+    }
+    if (title_end == 0) {
+        return out;
+    }
+    return out.substr(0, title_end) + " (" + ver + ")";
+}
+
 void strip_matching_version_label(std::string& display_name, std::string_view version) {
     if (display_name.empty()) {
         return;

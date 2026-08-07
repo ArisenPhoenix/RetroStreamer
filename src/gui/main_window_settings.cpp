@@ -389,6 +389,9 @@ void MainWindow::load_persisted_settings() {
         client_host_->setText(address);
         update_client_host_summary(client_host_label_);
     }
+    if (client_alt_host_ != nullptr) {
+        client_alt_host_->setText(settings.value("client/altHostAddress").toString());
+    }
     if (remote_ssh_host_ != nullptr) {
         remote_ssh_host_->setText(settings.value("remote/sshHost").toString());
     }
@@ -649,6 +652,9 @@ void MainWindow::save_persisted_settings() {
 
     if (client_host_ != nullptr) {
         settings.setValue("client/hostAddress", client_host_->text().trimmed());
+    }
+    if (client_alt_host_ != nullptr) {
+        settings.setValue("client/altHostAddress", client_alt_host_->text().trimmed());
     }
     settings.setValue("client/hostLabel", client_host_label_);
     if (client_port_ != nullptr) {

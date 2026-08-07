@@ -1,5 +1,6 @@
 #include "client/controls_sync.hpp"
 
+#include "client/catalog_blocks_cache.hpp"
 #include "client/session_service.hpp"
 #include "common/client_debug_log.hpp"
 #include "common/protocol.hpp"
@@ -44,9 +45,26 @@ TcpStream connect_and_authenticate(
     LobbyPresence presence;
     presence.username = username;
     presence.password = password;
+    try {
+        const auto blocks_cache = load_catalog_blocks_cache(
+            default_catalog_blocks_cache_path(), host, control_port, username);
+        presence.client_blocks_revision = blocks_cache.blocks_revision;
+    } catch (const std::exception&) {
+    }
     stream.send_packet(serialize_packet(presence));
-    const auto ack_payload = receive_client_control_payload(stream);
-    if (std::get_if<LobbyPresenceAck>(&ack_payload) == nullptr) {
+    while (true) {
+        const auto ack_payload = receive_client_control_payload(stream);
+        if (std::get_if<CatalogUserBlocks>(&ack_payload) != nullptr) {
+            // Per-user blocks after auth — ignore for controls sync.
+            continue;
+        }
+        if (std::get_if<GameList>(&ack_payload) != nullptr) {
+            // Legacy filtered catalog after auth — ignore for controls sync.
+            continue;
+        }
+        if (std::get_if<LobbyPresenceAck>(&ack_payload) != nullptr) {
+            break;
+        }
         if (const auto* error = std::get_if<ErrorPacket>(&ack_payload); error != nullptr) {
             throw std::runtime_error(
                 error->message.empty() ? "lobby presence failed" : error->message);

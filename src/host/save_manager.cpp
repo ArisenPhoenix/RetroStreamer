@@ -1,8 +1,10 @@
 #include "host/save_manager.hpp"
 
 #include "archstreamer/runtime_cadence/cadence.hpp"
+#include "common/game_identity.hpp"
 #include "host/game_catalog_scanner.hpp"
 #include "host/game_meta_store.hpp"
+#include "host/ps2_memcard.hpp"
 #include "host/save_active_sessions.hpp"
 #include "host/switch_save_share.hpp"
 #include "host/user_credentials.hpp"
@@ -290,6 +292,71 @@ std::pair<std::string, std::string> resolve_file_labels(
     return {infer_system_from_extension(to_lower(ext)), sanitize_game_display_name(raw_stem)};
 }
 
+/** Attach catalog id + stem-mismatch flags for RetroArch-style file saves. */
+void annotate_file_save_catalog(
+    SaveGameEntry& entry,
+    std::string_view disk_stem,
+    GameMetaStore* meta) {
+    if (meta == nullptr || !meta->ready() || disk_stem.empty()) {
+        return;
+    }
+
+    auto apply_row = [&](const GameMetaRecord& row, bool exact_stem_ok) {
+        entry.catalog_game_id = row.game_id;
+        entry.system_key = normalize_browser_system_key(
+            row.system_key.empty() ? entry.system_key : row.system_key);
+        entry.system_label = save_system_label(entry.system_key);
+        if (exact_stem_ok) {
+            entry.display_name =
+                row.display_name.empty() ? entry.display_name : row.display_name;
+            entry.save_stem_mismatch = false;
+            entry.expected_save_stem.clear();
+            return;
+        }
+        entry.save_stem_mismatch = true;
+        entry.expected_save_stem = catalog_save_stem_for(row.display_name, row.version);
+        // Keep the on-disk stem visible so the bad name is obvious in Users.
+        if (entry.display_name.empty()) {
+            entry.display_name = std::string(disk_stem);
+        }
+    };
+
+    if (auto row = meta->resolve(disk_stem, entry.system_key)) {
+        const bool ok = catalog_save_stem_matches(disk_stem, row->display_name, row->version);
+        apply_row(*row, ok);
+        return;
+    }
+    if (auto row = meta->resolve(disk_stem, {})) {
+        const bool ok = catalog_save_stem_matches(disk_stem, row->display_name, row->version);
+        apply_row(*row, ok);
+        return;
+    }
+
+    // Near-miss intent only (e.g. "Title v1.1" → "Title (1.1)") — never accept as OK.
+    const auto intent = catalog_normalize_save_stem_intent(disk_stem);
+    if (intent != disk_stem) {
+        if (auto row = meta->resolve(intent, entry.system_key)) {
+            apply_row(*row, false);
+            return;
+        }
+        if (auto row = meta->resolve(intent, {})) {
+            apply_row(*row, false);
+            return;
+        }
+        const auto intent_l = to_lower(intent);
+        if (intent_l != to_lower(std::string(disk_stem))) {
+            if (auto row = meta->resolve(intent_l, entry.system_key)) {
+                apply_row(*row, false);
+                return;
+            }
+            if (auto row = meta->resolve(intent_l, {})) {
+                apply_row(*row, false);
+                return;
+            }
+        }
+    }
+}
+
 void append_switch_entries(
     std::vector<SaveGameEntry>& out,
     const std::string& username,
@@ -373,32 +440,444 @@ void append_switch_entries(
     }
 }
 
+void append_meta_system_entries(
+    std::vector<SaveGameEntry>& out,
+    const std::string& username,
+    std::string_view system_key,
+    GameMetaStore* meta,
+    const std::unordered_set<std::string>& skip_catalog_ids);
+
 void append_ps2_entries(
     std::vector<SaveGameEntry>& out,
     const std::string& username,
+    const std::filesystem::path& user_dir,
     GameMetaStore* meta) {
     if (meta == nullptr || !meta->ready()) {
         return;
     }
+
+    std::vector<Ps2MemcardUsage> cards;
+    std::uint64_t capacity = 0;
+    const auto cards_dir = user_dir / "pcsx2" / "memcards";
+    for (const char* name : {"Mcd001.ps2", "Mcd002.ps2"}) {
+        if (auto usage = read_ps2_memcard_usage(cards_dir / name)) {
+            capacity += usage->capacity_bytes;
+            cards.push_back(std::move(*usage));
+        }
+    }
+
+    auto serial_for_game = [&](std::string_view game_id) -> std::string {
+        for (const auto& alias : meta->list_aliases(game_id)) {
+            if (alias.alias_kind == game_meta_alias::kSerial
+                || alias.alias_kind == game_meta_alias::kPs2Product) {
+                if (!alias.alias_value.empty()) {
+                    return alias.alias_value;
+                }
+            }
+        }
+        return {};
+    };
+
     for (const auto& played : meta->list_user_games(username, "ps2")) {
+        std::string display = played.game_id;
+        std::string content_stem;
+        std::string serial;
+        if (const auto row = meta->find_by_id(played.game_id)) {
+            display = row->display_name.empty() ? row->canonical_name : row->display_name;
+            if (display.empty()) {
+                display = played.game_id;
+            }
+            content_stem = row->content_stem;
+        } else if (const auto row = meta->resolve(played.game_id, "ps2")) {
+            display = row->display_name;
+            content_stem = row->content_stem;
+        }
+        serial = serial_for_game(played.game_id);
+
+        std::uint64_t bytes = 0;
+        for (const auto& card : cards) {
+            if (auto hit = ps2_memcard_bytes_for_game(card, display, content_stem, serial)) {
+                bytes += *hit;
+            }
+        }
+
+        SaveGameEntry entry{
+            username,
+            "ps2",
+            save_system_label("ps2"),
+            ps2_meta_game_key(played.game_id),
+            std::move(display),
+            {},
+            bytes,
+        };
+        entry.capacity_bytes = capacity;
+        entry.catalog_game_id = played.game_id;
+        out.push_back(std::move(entry));
+    }
+}
+
+/** Strip punctuation/spaces for compact stem matching (PokemonXD ↔ pokemon xd - …). */
+std::string compact_stem_key(std::string_view value) {
+    std::string out;
+    out.reserve(value.size());
+    for (char ch : value) {
+        const auto u = static_cast<unsigned char>(ch);
+        if (std::isalnum(u)) {
+            out.push_back(static_cast<char>(std::tolower(u)));
+        }
+    }
+    return out;
+}
+
+std::optional<std::pair<std::string, std::string>> resolve_dolphin_title(
+    std::string_view system_key,
+    std::string_view game_code,
+    std::string_view save_label,
+    const SaveNameHints& hints,
+    GameMetaStore* meta) {
+    auto try_key = [&](std::string_view key) -> std::optional<std::pair<std::string, std::string>> {
+        if (key.empty()) {
+            return std::nullopt;
+        }
+        const auto lower = to_lower(std::string(key));
+        if (const auto it = hints.by_stem.find(lower); it != hints.by_stem.end()) {
+            if (it->second.first.empty() || it->second.first == system_key) {
+                return it->second;
+            }
+        }
+        if (meta != nullptr && meta->ready()) {
+            if (auto row = meta->resolve(key, system_key)) {
+                return std::pair{row->system_key, row->display_name};
+            }
+            if (auto row = meta->resolve(key, {})) {
+                if (row->system_key == system_key) {
+                    return std::pair{row->system_key, row->display_name};
+                }
+            }
+        }
+        return std::nullopt;
+    };
+
+    if (auto hit = try_key(game_code)) {
+        return hit;
+    }
+    if (auto hit = try_key(save_label)) {
+        return hit;
+    }
+    const auto compact = compact_stem_key(save_label);
+    if (compact.size() >= 4) {
+        for (const auto& [key, value] : hints.by_stem) {
+            if (!value.first.empty() && value.first != system_key) {
+                continue;
+            }
+            const auto key_c = compact_stem_key(key);
+            if (key_c.rfind(compact, 0) == 0 || compact.rfind(key_c, 0) == 0) {
+                return value;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+bool read_gci_identity(
+    const std::filesystem::path& path,
+    std::string& game_code,
+    std::string& internal_name) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    char header[0x40]{};
+    in.read(header, sizeof(header));
+    if (in.gcount() < 6) {
+        return false;
+    }
+    game_code.assign(header, 4);
+    for (char ch : game_code) {
+        if (!std::isalnum(static_cast<unsigned char>(ch))) {
+            return false;
+        }
+    }
+    internal_name.assign(header + 0x08, 32);
+    const auto nul = internal_name.find('\0');
+    if (nul != std::string::npos) {
+        internal_name.resize(nul);
+    }
+    while (!internal_name.empty()
+           && (internal_name.back() == ' ' || internal_name.back() == '\0')) {
+        internal_name.pop_back();
+    }
+    return !game_code.empty();
+}
+
+/** Parse Dolphin export name "01-GXXE-PokemonXD.gci" → comment after game code. */
+std::string gci_filename_comment(const std::filesystem::path& path) {
+    const auto stem = path.stem().string();
+    // NN-GAME-Comment
+    const auto first = stem.find('-');
+    if (first == std::string::npos) {
+        return {};
+    }
+    const auto second = stem.find('-', first + 1);
+    if (second == std::string::npos || second + 1 >= stem.size()) {
+        return {};
+    }
+    return stem.substr(second + 1);
+}
+
+void append_dolphin_gamecube_entries(
+    std::vector<SaveGameEntry>& out,
+    const std::string& username,
+    const std::filesystem::path& user_dir,
+    const SaveNameHints& hints,
+    GameMetaStore* meta) {
+    const auto gc_root = user_dir / "saves" / "dolphin-emu" / "User" / "GC";
+    std::error_code ec;
+    if (!std::filesystem::is_directory(gc_root, ec)) {
+        return;
+    }
+
+    struct Group {
+        std::filesystem::path primary;
+        std::uint64_t bytes = 0;
+        std::string game_code;
+        std::string label;
+        std::string catalog_game_id;
+        std::string display;
+    };
+    std::unordered_map<std::string, Group> by_code;
+
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(
+             gc_root, std::filesystem::directory_options::skip_permission_denied, ec)) {
+        if (!entry.is_regular_file(ec)) {
+            continue;
+        }
+        if (to_lower(entry.path().extension().string()) != ".gci") {
+            continue;
+        }
+        std::string game_code;
+        std::string internal_name;
+        if (!read_gci_identity(entry.path(), game_code, internal_name)) {
+            continue;
+        }
+        const auto code_key = to_lower(game_code);
+        auto& group = by_code[code_key];
+        group.bytes += directory_bytes(entry.path());
+        if (group.primary.empty()) {
+            group.primary = entry.path();
+            group.game_code = game_code;
+            group.label = internal_name;
+            if (group.label.empty()) {
+                group.label = gci_filename_comment(entry.path());
+            }
+            if (group.label.empty()) {
+                group.label = game_code;
+            }
+            if (auto hit = resolve_dolphin_title(
+                    "gamecube", game_code, group.label, hints, meta)) {
+                group.display = hit->second;
+                if (meta != nullptr && meta->ready()) {
+                    if (auto row = meta->resolve(hit->second, "gamecube")) {
+                        group.catalog_game_id = row->game_id;
+                    } else if (auto row = meta->resolve(game_code, "gamecube")) {
+                        group.catalog_game_id = row->game_id;
+                    }
+                }
+            } else {
+                group.display = group.label;
+            }
+            if (group.catalog_game_id.empty() && meta != nullptr && meta->ready()) {
+                if (auto row = meta->resolve(game_code, "gamecube")) {
+                    group.catalog_game_id = row->game_id;
+                    if (!row->display_name.empty()) {
+                        group.display = row->display_name;
+                    }
+                }
+            }
+            if (!group.catalog_game_id.empty() && meta != nullptr && meta->ready()) {
+                // Remember disc game code so later resolves hit without stem heuristics.
+                (void)meta->upsert_alias(
+                    game_meta_alias::kSerial,
+                    to_lower(game_code),
+                    "gamecube",
+                    group.catalog_game_id);
+            }
+        }
+    }
+
+    std::unordered_set<std::string> seen_catalog;
+    for (auto& [_, group] : by_code) {
+        if (group.bytes == 0 || group.game_code.empty()) {
+            continue;
+        }
+        SaveGameEntry entry{
+            username,
+            "gamecube",
+            save_system_label("gamecube"),
+            "gamecube:gci:" + group.game_code,
+            group.display.empty() ? group.game_code : group.display,
+            group.primary,
+            group.bytes,
+        };
+        entry.catalog_game_id = group.catalog_game_id;
+        if (!entry.catalog_game_id.empty()) {
+            seen_catalog.insert(entry.catalog_game_id);
+        }
+        out.push_back(std::move(entry));
+    }
+    append_meta_system_entries(out, username, "gamecube", meta, seen_catalog);
+}
+
+std::optional<std::string> wii_title_low_to_game_code(std::string_view low_hex) {
+    if (low_hex.size() != 8) {
+        return std::nullopt;
+    }
+    std::string code;
+    code.resize(4);
+    for (std::size_t i = 0; i < 4; ++i) {
+        const auto hi = low_hex[i * 2];
+        const auto lo = low_hex[i * 2 + 1];
+        auto nibble = [](char c) -> int {
+            if (c >= '0' && c <= '9') {
+                return c - '0';
+            }
+            if (c >= 'a' && c <= 'f') {
+                return 10 + (c - 'a');
+            }
+            if (c >= 'A' && c <= 'F') {
+                return 10 + (c - 'A');
+            }
+            return -1;
+        };
+        const int a = nibble(hi);
+        const int b = nibble(lo);
+        if (a < 0 || b < 0) {
+            return std::nullopt;
+        }
+        code[i] = static_cast<char>((a << 4) | b);
+        if (!std::isalnum(static_cast<unsigned char>(code[i]))) {
+            return std::nullopt;
+        }
+    }
+    return code;
+}
+
+void append_dolphin_wii_entries(
+    std::vector<SaveGameEntry>& out,
+    const std::string& username,
+    const std::filesystem::path& user_dir,
+    const SaveNameHints& hints,
+    GameMetaStore* meta) {
+    const auto title_root = user_dir / "saves" / "dolphin-emu" / "User" / "Wii" / "title";
+    std::error_code ec;
+    if (!std::filesystem::is_directory(title_root, ec)) {
+        append_meta_system_entries(out, username, "wii", meta, {});
+        return;
+    }
+
+    std::unordered_set<std::string> seen_catalog;
+    for (const auto& high_entry : std::filesystem::directory_iterator(title_root, ec)) {
+        if (!high_entry.is_directory(ec)) {
+            continue;
+        }
+        const auto high = high_entry.path().filename().string();
+        // Disc games are under 00010000; skip system titles (00000001, …).
+        if (high != "00010000" && high != "00010001" && high != "00010004") {
+            continue;
+        }
+        for (const auto& low_entry : std::filesystem::directory_iterator(high_entry.path(), ec)) {
+            if (!low_entry.is_directory(ec)) {
+                continue;
+            }
+            const auto low = low_entry.path().filename().string();
+            const auto data_dir = low_entry.path() / "data";
+            std::uint64_t bytes = 0;
+            if (std::filesystem::is_directory(data_dir, ec)) {
+                bytes = directory_bytes(data_dir);
+            } else {
+                bytes = directory_bytes(low_entry.path());
+            }
+            if (bytes == 0) {
+                continue;
+            }
+            const auto game_code = wii_title_low_to_game_code(low).value_or(low);
+            std::string display = game_code;
+            std::string catalog_id;
+            if (auto hit = resolve_dolphin_title("wii", game_code, game_code, hints, meta)) {
+                display = hit->second;
+            }
+            if (meta != nullptr && meta->ready()) {
+                if (auto row = meta->resolve(game_code, "wii")) {
+                    catalog_id = row->game_id;
+                    if (!row->display_name.empty()) {
+                        display = row->display_name;
+                    }
+                } else if (auto row = meta->resolve(display, "wii")) {
+                    catalog_id = row->game_id;
+                }
+            }
+            SaveGameEntry entry{
+                username,
+                "wii",
+                save_system_label("wii"),
+                "wii:title:" + high + "/" + low,
+                std::move(display),
+                std::filesystem::is_directory(data_dir, ec) ? data_dir : low_entry.path(),
+                bytes,
+            };
+            entry.catalog_game_id = catalog_id;
+            if (!catalog_id.empty()) {
+                seen_catalog.insert(catalog_id);
+            }
+            out.push_back(std::move(entry));
+        }
+    }
+    append_meta_system_entries(out, username, "wii", meta, seen_catalog);
+}
+
+void append_meta_system_entries(
+    std::vector<SaveGameEntry>& out,
+    const std::string& username,
+    std::string_view system_key,
+    GameMetaStore* meta,
+    const std::unordered_set<std::string>& skip_catalog_ids) {
+    if (meta == nullptr || !meta->ready()) {
+        return;
+    }
+    for (const auto& played : meta->list_user_games(username, system_key)) {
+        if (skip_catalog_ids.contains(played.game_id)) {
+            continue;
+        }
         std::string display = played.game_id;
         if (const auto row = meta->find_by_id(played.game_id)) {
             display = row->display_name.empty() ? row->canonical_name : row->display_name;
             if (display.empty()) {
                 display = played.game_id;
             }
-        } else if (const auto row = meta->resolve(played.game_id, "ps2")) {
+        } else if (const auto row = meta->resolve(played.game_id, system_key)) {
             display = row->display_name;
         }
-        out.push_back(SaveGameEntry{
+        std::string key;
+        if (system_key == "ps2") {
+            key = ps2_meta_game_key(played.game_id);
+        } else if (system_key == "gamecube") {
+            key = gamecube_meta_game_key(played.game_id);
+        } else if (system_key == "wii") {
+            key = wii_meta_game_key(played.game_id);
+        } else {
+            key = std::string(system_key) + ":id:" + played.game_id;
+        }
+        SaveGameEntry entry{
             username,
-            "ps2",
-            save_system_label("ps2"),
-            ps2_meta_game_key(played.game_id),
+            std::string(system_key),
+            save_system_label(system_key),
+            std::move(key),
             std::move(display),
-            {}, // no memcard path — association is user+game in meta DB
+            {},
             0,
-        });
+        };
+        entry.catalog_game_id = played.game_id;
+        out.push_back(std::move(entry));
     }
 }
 
@@ -441,6 +920,20 @@ void append_file_entries(
         if (ec) {
             continue;
         }
+        // Dolphin GC/Wii trees are handled by dedicated appenders (skip SRAM.raw etc.).
+        {
+            bool under_dolphin = false;
+            for (const auto& part : rel) {
+                const auto name = to_lower(part.string());
+                if (name == "dolphin-emu" || name == "dolphin") {
+                    under_dolphin = true;
+                    break;
+                }
+            }
+            if (under_dolphin) {
+                continue;
+            }
+        }
         const auto group_key = to_lower(rel.parent_path().string()) + "|" + to_lower(rel.stem().string());
         auto labels = resolve_file_labels(rel, hints, meta);
         auto& group = groups[group_key];
@@ -457,7 +950,7 @@ void append_file_entries(
         if (group.bytes == 0 || group.relative_key.empty()) {
             continue;
         }
-        out.push_back(SaveGameEntry{
+        SaveGameEntry entry{
             username,
             group.system_key,
             save_system_label(group.system_key),
@@ -465,7 +958,9 @@ void append_file_entries(
             group.display,
             group.primary,
             group.bytes,
-        });
+        };
+        annotate_file_save_catalog(entry, group.primary.stem().string(), meta);
+        out.push_back(std::move(entry));
     }
 }
 
@@ -477,7 +972,9 @@ std::vector<SaveGameEntry> list_user_games(
     const auto user_dir = save_root / username;
     std::vector<SaveGameEntry> out;
     append_switch_entries(out, username, user_dir, hints, meta);
-    append_ps2_entries(out, username, meta);
+    append_ps2_entries(out, username, user_dir, meta);
+    append_dolphin_gamecube_entries(out, username, user_dir, hints, meta);
+    append_dolphin_wii_entries(out, username, user_dir, hints, meta);
     append_file_entries(out, username, user_dir, hints, meta);
     std::sort(out.begin(), out.end(), [](const SaveGameEntry& a, const SaveGameEntry& b) {
         if (a.system_label != b.system_label) {
@@ -641,7 +1138,7 @@ std::string save_system_label(std::string_view system_key) {
         return "Nintendo 64";
     }
     if (system_key == "gamecube") {
-        return "GameCube / Wii";
+        return "GameCube";
     }
     if (system_key == "wii") {
         return "Wii";
@@ -735,6 +1232,10 @@ std::vector<SaveGameEntry> list_save_games(
             }
             out.push_back(std::move(game));
         }
+    }
+    // Lock memcard disk reads only after a Users-tab pass actually allowed parsing.
+    if (ps2_memcard_users_tab_opened()) {
+        ps2_memcard_finish_initial_scan();
     }
     return out;
 }
@@ -831,6 +1332,17 @@ std::size_t delete_save_system(
         std::error_code ec;
         std::filesystem::create_directories(user_dir / "pcsx2" / "memcards", ec);
     }
+    if (system_key == "gamecube" || system_key == "wii") {
+        try {
+            GameMetaStore meta;
+            if (meta.ready()) {
+                (void)meta.remove_user_games_for_system(username, system_key);
+            }
+        } catch (...) {
+        }
+        // Physical Dolphin files are removed per-game via delete_save_game; wiping the
+        // whole User/GC or User/Wii tree would drop the other system's saves too.
+    }
     return games.size();
 }
 
@@ -889,11 +1401,92 @@ void delete_save_game(
         }
         return;
     }
+    if (kind == "gamecube") {
+        if (rest.rfind("id:", 0) == 0) {
+            try {
+                GameMetaStore meta;
+                if (meta.ready()) {
+                    (void)meta.remove_user_game(username, rest.substr(3));
+                }
+            } catch (...) {
+            }
+            return;
+        }
+        if (rest.rfind("gci:", 0) == 0) {
+            const auto game_code = rest.substr(4);
+            const auto gc_root = user_dir / "saves" / "dolphin-emu" / "User" / "GC";
+            std::error_code ec;
+            if (!std::filesystem::is_directory(gc_root, ec)) {
+                return;
+            }
+            std::vector<std::filesystem::path> doomed;
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(
+                     gc_root, std::filesystem::directory_options::skip_permission_denied, ec)) {
+                if (!entry.is_regular_file(ec)) {
+                    continue;
+                }
+                if (to_lower(entry.path().extension().string()) != ".gci") {
+                    continue;
+                }
+                std::string code;
+                std::string internal;
+                if (!read_gci_identity(entry.path(), code, internal)) {
+                    continue;
+                }
+                if (to_lower(code) == to_lower(game_code)) {
+                    doomed.push_back(entry.path());
+                }
+            }
+            for (const auto& path : doomed) {
+                remove_path_best_effort(path);
+            }
+            return;
+        }
+        throw std::runtime_error("invalid gamecube game key");
+    }
+    if (kind == "wii") {
+        if (rest.rfind("id:", 0) == 0) {
+            try {
+                GameMetaStore meta;
+                if (meta.ready()) {
+                    (void)meta.remove_user_game(username, rest.substr(3));
+                }
+            } catch (...) {
+            }
+            return;
+        }
+        if (rest.rfind("title:", 0) == 0) {
+            const auto rel = rest.substr(6); // high/low
+            remove_path_best_effort(
+                user_dir / "saves" / "dolphin-emu" / "User" / "Wii" / "title" / rel);
+            return;
+        }
+        throw std::runtime_error("invalid wii game key");
+    }
     if (kind == "file") {
         delete_file_game(user_dir, rest);
         return;
     }
     throw std::runtime_error("unknown game key kind");
+}
+
+bool user_has_mismatched_save_for_game(
+    const std::filesystem::path& save_root,
+    std::string_view username,
+    std::string_view game_id) {
+    if (save_root.empty() || username.empty() || game_id.empty()) {
+        return false;
+    }
+    try {
+        for (const auto& game : list_save_games(save_root, username)) {
+            if (game.save_stem_mismatch && game.catalog_game_id == game_id) {
+                return true;
+            }
+        }
+    } catch (...) {
+        return false;
+    }
+    return false;
 }
 
 } // namespace archstreamer

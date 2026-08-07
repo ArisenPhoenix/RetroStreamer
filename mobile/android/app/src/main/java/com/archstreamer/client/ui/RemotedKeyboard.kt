@@ -7,7 +7,8 @@ import com.archstreamer.client.protocol.RemotedKey
 /**
  * Remoted-key bits for host VirtualKeyboard (Space FF hold on RetroArch, …).
  * Arrow keys are intentionally omitted — on mobile they map to joypad D-pad while playing.
- * Keyboard F / P are handled via EmulatorControl (absolute FF / pause toggles), not remoted.
+ * Keyboard F / remapped pad / overlay = hold EmulatorControl FF.
+ * Play-menu switch = latch. Pause (P) is EmulatorControl absolute, not remoted.
  */
 fun remotedKeyBitFromAndroidKeyCode(keyCode: Int): Int? = when (keyCode) {
     KeyEvent.KEYCODE_SPACE -> RemotedKey.SPACE
@@ -47,6 +48,7 @@ enum class PlayMenuFocusItem {
     GameOptions,
     Stream,
     Settings,
+    Remote,
     Pause,
     FastForward,
     EditControls,
@@ -55,6 +57,13 @@ enum class PlayMenuFocusItem {
     Leave,
     Disconnect,
 }
+
+fun playMenuFocusItems(includeRemote: Boolean): List<PlayMenuFocusItem> =
+    if (includeRemote) {
+        PlayMenuFocusItem.entries
+    } else {
+        PlayMenuFocusItem.entries.filter { it != PlayMenuFocusItem.Remote }
+    }
 
 sealed class PlayMenuCommand {
     data object MoveUp : PlayMenuCommand()

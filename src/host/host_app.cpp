@@ -13,6 +13,7 @@
 #include "host/cadence_session_events.hpp"
 #include "host/cadence_session_tracker.hpp"
 #include "host/game_catalog_scanner.hpp"
+#include "host/game_meta_store.hpp"
 #include "host/gpu_select.hpp"
 #include "host/host_app.hpp"
 #include "host/host_app_config.hpp"
@@ -918,11 +919,13 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                 const auto reaped = archstreamer::cadence::reap_stale_instance_state(
                     *cadence,
                     started.host_id);
-                if (reaped.sessions_ended > 0 || reaped.claims_released > 0) {
+                if (reaped.sessions_ended > 0 || reaped.claims_released > 0 ||
+                    reaped.connections_ended > 0) {
                     std::cout
                         << "cadence: reaped stale state ("
                         << reaped.sessions_ended << " session(s), "
-                        << reaped.claims_released << " claim(s))\n";
+                        << reaped.claims_released << " claim(s), "
+                        << reaped.connections_ended << " connection(s))\n";
                 }
 
                 const auto save_root = config_.save_root.empty()
@@ -956,11 +959,13 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                     *cadence,
                     host_id_for_shutdown,
                     reason);
-                if (released.sessions_ended > 0 || released.claims_released > 0) {
+                if (released.sessions_ended > 0 || released.claims_released > 0 ||
+                    released.connections_ended > 0) {
                     std::cout
                         << "cadence: host shutdown released "
                         << released.sessions_ended << " session(s), "
-                        << released.claims_released << " claim(s)\n";
+                        << released.claims_released << " claim(s), "
+                        << released.connections_ended << " connection(s)\n";
                 }
             } catch (...) {
             }
@@ -984,6 +989,7 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                    "not hosted until fixed.\n";
         }
         const auto list = catalog.list();
+        rebuild_catalog_offerings_from_list(list);
 
         const bool host_plays_locally =
             config.host_role == ParticipantRole::Player &&

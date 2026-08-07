@@ -185,19 +185,18 @@ void VirtualKeyboard::set_paused(bool want_paused, bool force) {
     if (!plugged_) {
         return;
     }
+    // F5 is a toggle — never blind-force when the cache already matches (inverts game).
     if (want_paused == paused_) {
-        if ((switch_style_hotkeys_ || melonds_style_hotkeys_) && !force) {
+        if (switch_style_hotkeys_ || melonds_style_hotkeys_) {
             return;
         }
-        if (!switch_style_hotkeys_ && !melonds_style_hotkeys_) {
-            if (!force) {
-                const auto current = query_retroarch_paused(netcmd_port_);
-                if (current.has_value() && *current == want_paused) {
-                    return;
-                }
-                if (!current.has_value()) {
-                    return;
-                }
+        if (!force) {
+            const auto current = query_retroarch_paused(netcmd_port_);
+            if (current.has_value() && *current == want_paused) {
+                return;
+            }
+            if (!current.has_value()) {
+                return;
             }
         }
     }
@@ -228,17 +227,11 @@ void VirtualKeyboard::set_fast_forward(bool want_on, bool force) {
         return;
     }
     if (switch_style_hotkeys_) {
-        if (want_on == fast_forward_ && !force) {
+        // Never re-cycle F1 when cache already matches (force retries desync VSync).
+        if (want_on == fast_forward_) {
             return;
         }
         if (want_on) {
-            if (force && ryujinx_vsync_mode_ != 0) {
-                while (ryujinx_vsync_mode_ != 0) {
-                    tap_vk(VK_F1);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(40));
-                    ryujinx_vsync_mode_ = static_cast<std::uint8_t>((ryujinx_vsync_mode_ + 1) % 3);
-                }
-            }
             if (ryujinx_vsync_mode_ == 0) {
                 tap_vk(VK_F1);
                 std::this_thread::sleep_for(std::chrono::milliseconds(40));
@@ -303,8 +296,6 @@ void VirtualKeyboard::apply_emulator_control(const EmulatorControl& control) {
         set_fast_forward(true, force);
     } else if (control.fast_forward == EmulatorControlState::Off) {
         set_fast_forward(false, force);
-    } else if (control.pause == EmulatorControlState::Off) {
-        reassert_fast_forward_hold();
     }
 }
 

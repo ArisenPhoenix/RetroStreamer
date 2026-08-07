@@ -1,5 +1,7 @@
 #include "host/save_active_sessions.hpp"
 
+#include "archstreamer/runtime_cadence/cadence.hpp"
+#include "host/cadence_session_events.hpp"
 #include "host/game_meta_store.hpp"
 #include "host/switch_save_share.hpp"
 
@@ -9,12 +11,25 @@
 #include <cctype>
 #include <cstdint>
 #include <fstream>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <system_error>
 
 namespace archstreamer {
 namespace {
+
+std::shared_ptr<cadence::RuntimeStore> cadence_store_or_null() {
+    try {
+        auto store = cadence::make_runtime_store();
+        if (!store || !store->ensure_ready()) {
+            return nullptr;
+        }
+        return store;
+    } catch (...) {
+        return nullptr;
+    }
+}
 
 std::string to_lower(std::string value) {
     for (char& ch : value) {
@@ -169,25 +184,13 @@ std::filesystem::path active_save_sessions_directory(const std::filesystem::path
 void publish_active_save_session(
     const std::filesystem::path& save_root,
     const ActiveSaveSession& session) {
+    // Active presence is cadence sessions (CadenceSessionTracker). Keep the
+    // marker directory so Kick/Stop files still have a home.
     if (save_root.empty() || session.slot_index < 0 || session.username.empty()) {
         return;
     }
     std::error_code ec;
     std::filesystem::create_directories(active_save_sessions_directory(save_root), ec);
-    nlohmann::json json{
-        {"username", session.username},
-        {"game_id", session.game_id},
-        {"system_key", session.system_key},
-        {"display_name", session.display_name},
-        {"content_path", session.content_path},
-        {"slot_index", session.slot_index},
-    };
-    const auto path = slot_status_path(save_root, session.slot_index);
-    std::ofstream out(path, std::ios::trunc);
-    if (!out) {
-        return;
-    }
-    out << json.dump(2) << '\n';
 }
 
 void clear_active_save_session(
@@ -197,7 +200,6 @@ void clear_active_save_session(
         return;
     }
     std::error_code ec;
-    std::filesystem::remove(slot_status_path(save_root, slot_index), ec);
     std::filesystem::remove(slot_stop_path(save_root, slot_index), ec);
     clear_connected_clients_for_slot(save_root, slot_index);
 }
@@ -251,42 +253,63 @@ std::optional<std::string> take_active_session_stop_request(
 void publish_connected_client(
     const std::filesystem::path& save_root,
     const ConnectedClientPresence& client) {
-    if (save_root.empty() || client.username.empty() || client.client_id == 0) {
+    (void)save_root;
+    if (client.username.empty() || client.client_id == 0) {
         return;
     }
-    std::error_code ec;
-    std::filesystem::create_directories(active_save_sessions_directory(save_root), ec);
-    nlohmann::json json{
-        {"username", client.username},
-        {"client_id", client.client_id},
-        {"slot_index", client.slot_index},
-        {"game_id", client.game_id},
-        {"phase", client.phase.empty() ? (client.slot_index < 0 ? "lobby" : "session")
-                                       : client.phase},
-        {"seated", client.seated},
-    };
-    std::ofstream out(connected_path(save_root, client.client_id, client.slot_index), std::ios::trunc);
-    if (!out) {
+    auto store = cadence_store_or_null();
+    if (!store) {
         return;
     }
-    out << json.dump(2) << '\n';
+    cadence::ConnectionRecord row;
+    row.host_id = cadence_host_id();
+    row.client_id = client.client_id;
+    row.slot = client.slot_index;
+    row.connection_id = cadence::make_connection_id(row.host_id, row.client_id, row.slot);
+    row.username = client.username;
+    row.game_key = client.game_id;
+    row.phase = client.phase.empty()
+        ? (client.slot_index < 0 ? "lobby" : "session")
+        : client.phase;
+    row.seated = client.seated;
+    row.connected_at = cadence::now_epoch_seconds();
+    row.disconnected_at = 0;
+    (void)store->upsert_connection(row);
 }
 
 void clear_connected_client(
     const std::filesystem::path& save_root,
     std::uint32_t client_id,
     int slot_index) {
-    if (save_root.empty() || client_id == 0) {
+    if (client_id == 0) {
         return;
     }
-    std::error_code ec;
-    std::filesystem::remove(connected_path(save_root, client_id, slot_index), ec);
-    std::filesystem::remove(disconnect_path(save_root, client_id, slot_index), ec);
+    auto store = cadence_store_or_null();
+    if (store) {
+        const auto host_id = cadence_host_id();
+        const auto connection_id =
+            cadence::make_connection_id(host_id, client_id, slot_index);
+        (void)store->end_connection(connection_id, "disconnected");
+    }
+    if (!save_root.empty()) {
+        std::error_code ec;
+        std::filesystem::remove(disconnect_path(save_root, client_id, slot_index), ec);
+    }
 }
 
 void clear_connected_clients_for_slot(
     const std::filesystem::path& save_root,
     int slot_index) {
+    auto store = cadence_store_or_null();
+    if (store) {
+        const auto host_id = cadence_host_id();
+        for (const auto& row : store->list_connections(true)) {
+            if (row.host_id != host_id || row.slot != slot_index) {
+                continue;
+            }
+            (void)store->end_connection(row.connection_id, "slot cleared");
+        }
+    }
     if (save_root.empty()) {
         return;
     }
@@ -295,9 +318,6 @@ void clear_connected_clients_for_slot(
     if (!std::filesystem::is_directory(dir, ec)) {
         return;
     }
-    const std::string prefix = slot_index < 0
-        ? "connected-lobby-"
-        : ("connected-slot-" + std::to_string(slot_index) + "-");
     const std::string disconnect_prefix = slot_index < 0
         ? "disconnect-lobby-"
         : ("disconnect-slot-" + std::to_string(slot_index) + "-");
@@ -306,46 +326,29 @@ void clear_connected_clients_for_slot(
             continue;
         }
         const auto name = entry.path().filename().string();
-        if (name.rfind(prefix, 0) == 0 || name.rfind(disconnect_prefix, 0) == 0) {
+        if (name.rfind(disconnect_prefix, 0) == 0) {
             std::filesystem::remove(entry.path(), ec);
         }
     }
 }
 
 std::vector<ConnectedClientPresence> list_connected_clients(
-    const std::filesystem::path& save_root) {
+    const std::filesystem::path& /*save_root*/) {
     std::vector<ConnectedClientPresence> out;
-    std::error_code ec;
-    const auto dir = active_save_sessions_directory(save_root);
-    if (!std::filesystem::is_directory(dir, ec)) {
+    auto store = cadence_store_or_null();
+    if (!store) {
         return out;
     }
-    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
-        if (!entry.is_regular_file(ec)) {
-            continue;
-        }
-        const auto name = entry.path().filename().string();
-        if (name.rfind("connected-", 0) != 0 || entry.path().extension() != ".json") {
-            continue;
-        }
-        std::ifstream in(entry.path());
-        if (!in) {
-            continue;
-        }
-        try {
-            const auto json = nlohmann::json::parse(in);
-            ConnectedClientPresence client;
-            client.username = json.value("username", "");
-            client.client_id = json.value("client_id", 0u);
-            client.slot_index = json.value("slot_index", -1);
-            client.game_id = json.value("game_id", "");
-            client.phase = json.value("phase", "");
-            client.seated = json.value("seated", false);
-            if (!client.username.empty() && client.client_id != 0) {
-                out.push_back(std::move(client));
-            }
-        } catch (const nlohmann::json::exception&) {
-            continue;
+    for (const auto& row : store->list_connections(true)) {
+        ConnectedClientPresence client;
+        client.username = row.username;
+        client.client_id = row.client_id;
+        client.slot_index = row.slot;
+        client.game_id = row.game_key;
+        client.phase = row.phase;
+        client.seated = row.seated;
+        if (!client.username.empty() && client.client_id != 0) {
+            out.push_back(std::move(client));
         }
     }
     std::sort(
@@ -413,40 +416,21 @@ std::optional<std::string> take_connected_client_disconnect_request(
 }
 
 std::vector<ActiveSaveSession> list_active_save_sessions(
-    const std::filesystem::path& save_root) {
+    const std::filesystem::path& /*save_root*/) {
     std::vector<ActiveSaveSession> out;
-    std::error_code ec;
-    const auto dir = active_save_sessions_directory(save_root);
-    if (!std::filesystem::is_directory(dir, ec)) {
+    auto store = cadence_store_or_null();
+    if (!store) {
         return out;
     }
-    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
-        if (!entry.is_regular_file(ec)) {
-            continue;
-        }
-        const auto name = entry.path().filename().string();
-        if (name.rfind("slot-", 0) != 0 || entry.path().extension() != ".json") {
-            continue;
-        }
-        // stop-slot-N is not a status file (no .json).
-        std::ifstream in(entry.path());
-        if (!in) {
-            continue;
-        }
-        try {
-            const auto json = nlohmann::json::parse(in);
-            ActiveSaveSession session;
-            session.username = json.value("username", "");
-            session.game_id = json.value("game_id", "");
-            session.system_key = json.value("system_key", "");
-            session.display_name = json.value("display_name", "");
-            session.content_path = json.value("content_path", "");
-            session.slot_index = json.value("slot_index", -1);
-            if (!session.username.empty()) {
-                out.push_back(std::move(session));
-            }
-        } catch (const nlohmann::json::exception&) {
-            continue;
+    for (const auto& session : store->list_sessions(true)) {
+        ActiveSaveSession active;
+        active.username = session.username;
+        active.game_id = session.game_key;
+        active.system_key = session.system_key;
+        active.display_name = session.game_key;
+        active.slot_index = session.slot;
+        if (!active.username.empty()) {
+            out.push_back(std::move(active));
         }
     }
     std::sort(out.begin(), out.end(), [](const ActiveSaveSession& a, const ActiveSaveSession& b) {

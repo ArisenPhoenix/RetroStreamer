@@ -11,6 +11,7 @@ namespace archstreamer::cadence {
 struct StaleReapResult {
     std::size_t sessions_ended = 0;
     std::size_t claims_released = 0;
+    std::size_t connections_ended = 0;
 };
 
 /**

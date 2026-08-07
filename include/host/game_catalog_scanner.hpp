@@ -23,6 +23,11 @@ std::optional<std::string> infer_system_key_from_path(const std::filesystem::pat
 void replace_all(std::string& value, std::string_view from, std::string_view to);
 std::string fold_common_latin_accents(std::string value);
 std::string canonical_token(std::string value);
+/**
+ * Map long / legacy Meta system_key spellings onto registry keys
+ * (e.g. game-boy-advance → gba). Call after canonical_token.
+ */
+std::string normalize_catalog_system_key(std::string system_key);
 std::string sanitize_game_display_name(std::string name);
 /**
  * Strip trailing region/revision tags: "Pokemon Ruby (USA, Europe) (Rev 2)" → "Pokemon Ruby".

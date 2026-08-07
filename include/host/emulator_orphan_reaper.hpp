@@ -5,6 +5,12 @@
 namespace archstreamer {
 
 /**
+ * True if another host_runner process (not this pid) is alive on this machine.
+ * Used so a second GPU host does not wipe the shared Users/Remote presence dir.
+ */
+bool other_host_runner_alive();
+
+/**
  * Last-resort cleanup for emulator trees left behind when a previous host
  * process died without running SessionRuntime / HostRetroArchProcess destructors
  * (crash, kill -9, etc.).

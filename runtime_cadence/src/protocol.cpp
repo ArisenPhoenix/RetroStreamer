@@ -169,6 +169,38 @@ SessionRecord session_from_json(const nlohmann::json& j) {
     return session;
 }
 
+nlohmann::json connection_to_json(const ConnectionRecord& connection) {
+    return {
+        {"connection_id", connection.connection_id},
+        {"host_id", connection.host_id},
+        {"client_id", connection.client_id},
+        {"slot", connection.slot},
+        {"username", connection.username},
+        {"game_key", connection.game_key},
+        {"phase", connection.phase},
+        {"seated", connection.seated},
+        {"connected_at", connection.connected_at},
+        {"disconnected_at", connection.disconnected_at},
+        {"end_reason", connection.end_reason},
+    };
+}
+
+ConnectionRecord connection_from_json(const nlohmann::json& j) {
+    ConnectionRecord connection;
+    connection.connection_id = j.value("connection_id", "");
+    connection.host_id = j.value("host_id", "");
+    connection.client_id = j.value("client_id", std::uint32_t{0});
+    connection.slot = j.value("slot", -1);
+    connection.username = j.value("username", "");
+    connection.game_key = j.value("game_key", "");
+    connection.phase = j.value("phase", "");
+    connection.seated = j.value("seated", false);
+    connection.connected_at = j.value("connected_at", std::int64_t{0});
+    connection.disconnected_at = j.value("disconnected_at", std::int64_t{0});
+    connection.end_reason = j.value("end_reason", "");
+    return connection;
+}
+
 nlohmann::json claim_to_json(const ResourceClaim& claim) {
     return {
         {"session_id", claim.session_id},

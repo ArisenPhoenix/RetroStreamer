@@ -146,6 +146,18 @@ StaleReapResult reap_stale_instance_state(
         total.claims_released += part.claims_released;
     }
 
+    // Stale Connected rows for dead host processes.
+    for (const auto& connection : store.list_connections(true)) {
+        const bool is_current = !current_host_id.empty() &&
+            connection.host_id == current_host_id;
+        if (is_current || host_process_alive(connection.host_id)) {
+            continue;
+        }
+        if (store.end_connection(connection.connection_id, "stale host")) {
+            ++total.connections_ended;
+        }
+    }
+
     // Orphan held claims: session gone/ended, or host process dead.
     const auto held = store.list_claims(true);
     for (const auto& claim : held) {
@@ -202,6 +214,16 @@ StaleReapResult release_host_instance_state(
         const auto part = end_session_and_claims(store, session, reason);
         total.sessions_ended += part.sessions_ended;
         total.claims_released += part.claims_released;
+    }
+    std::size_t live_connections = 0;
+    for (const auto& connection : store.list_connections(true)) {
+        if (connection.host_id == host_id) {
+            ++live_connections;
+        }
+    }
+    if (live_connections > 0 &&
+        store.end_connections_for_host(std::string(host_id), std::string(reason))) {
+        total.connections_ended += live_connections;
     }
     // Any leftover held claims tagged with this host_id.
     for (const auto& claim : store.list_claims(true)) {

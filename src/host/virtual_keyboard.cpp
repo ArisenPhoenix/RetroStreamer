@@ -773,25 +773,23 @@ void VirtualKeyboard::set_paused(bool want_paused, bool force) {
     if (!plugged_) {
         return;
     }
-    // Client sends absolute On/Off. F5 is a toggle, so we only tap when the
-    // desired state differs from our last applied value. force re-applies even
-    // when the cache matches — used to recover when the game drifted opposite
-    // the cache (e.g. a missed F5 earlier).
+    // Client sends absolute On/Off. F5 is a toggle: tap only when desired state
+    // differs from our cache. Never blind-force F5 when the cache already matches —
+    // that inverts the game (Android A/V-resync used to force pause=off right after
+    // cutover and leave Ryujinx paused while the UI showed playing).
     if (want_paused == paused_) {
-        if ((switch_style_hotkeys_ || melonds_style_hotkeys_) && !force) {
+        if (switch_style_hotkeys_ || melonds_style_hotkeys_) {
             return;
         }
-        if (!switch_style_hotkeys_ && !melonds_style_hotkeys_) {
-            if (!force) {
-                const auto current = query_retroarch_paused(netcmd_port_);
-                if (current.has_value() && *current == want_paused) {
-                    return;
-                }
-                if (!current.has_value()) {
-                    return;
-                }
-                // Local cache drifted — fall through and fix.
+        if (!force) {
+            const auto current = query_retroarch_paused(netcmd_port_);
+            if (current.has_value() && *current == want_paused) {
+                return;
             }
+            if (!current.has_value()) {
+                return;
+            }
+            // Local cache drifted — fall through and fix via netcmd.
         }
     }
     if (switch_style_hotkeys_ || melonds_style_hotkeys_) {
@@ -845,26 +843,19 @@ void VirtualKeyboard::set_fast_forward(bool want_on, bool force) {
         // Ryujinx: F1 cycles Switch(0) → Unbounded(1) → Custom@200%(2) → Switch.
         // On = land on Custom (2 taps from Switch). Off = return to Switch
         // (1 tap from Custom, or 2 from Unbounded if an On tap was missed).
-        if (want_on == fast_forward_ && !force) {
+        // Never re-cycle when the cache already matches — force retries desync F1
+        // and leave the game in Custom@200% while the client thinks FF is off.
+        if (want_on == fast_forward_) {
             return;
         }
         if (!focus_emulator_window(/*settle=*/true)) {
             std::cerr
                 << "EmulatorControl: fast_forward=" << (want_on ? "on" : "off")
                 << " skipped — no emulator focus on " << capture_display_ << '\n';
-            // Do not update caches — client may retry Off; updating would strand turbo.
+            // Do not update caches — a later real edge can still apply.
             return;
         }
         if (want_on) {
-            // Drive to Custom@200% from Switch. If force and we were already in a
-            // non-Switch mode, step back to Switch first so two taps land on Custom.
-            if (force && ryujinx_vsync_mode_ != 0) {
-                while (ryujinx_vsync_mode_ != 0) {
-                    xtest_tap_keysym(XK_F1);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(40));
-                    ryujinx_vsync_mode_ = static_cast<std::uint8_t>((ryujinx_vsync_mode_ + 1) % 3);
-                }
-            }
             if (ryujinx_vsync_mode_ == 0) {
                 xtest_tap_keysym(XK_F1);
                 std::this_thread::sleep_for(std::chrono::milliseconds(40));
@@ -951,9 +942,9 @@ void VirtualKeyboard::apply_emulator_control(const EmulatorControl& control) {
         set_fast_forward(true, force);
     } else if (control.fast_forward == EmulatorControlState::Off) {
         set_fast_forward(false, force);
-    } else if (control.pause == EmulatorControlState::Off) {
-        reassert_fast_forward_hold();
     }
+    // Do not reassert FF on pause-off. FF is only driven by explicit On/Off from
+    // the client (hold or menu latch). Spurious re-holds fight that model.
 }
 
 void VirtualKeyboard::apply(const KeyboardState& state) {

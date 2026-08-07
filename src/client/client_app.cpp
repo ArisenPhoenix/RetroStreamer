@@ -221,6 +221,21 @@ ClientCatalogView ClientApp::fetch_catalog(
     const ClientAppCallbacks& callbacks) const {
     ClientSessionService session_service(config.host, config.control_port);
     auto pending_session = session_service.begin();
+    // Host blocks in receive_packet after GameList until Hello / LobbyPresence / close.
+    // Finish or drop that handshake before art so the accept loop can serve other clients.
+    const bool want_presence =
+        valid_username(config.username) && !config.password.empty();
+    if (want_presence) {
+        try {
+            session_service.apply_authenticated_catalog_filter(
+                pending_session, config.username, config.password);
+        } catch (const std::exception&) {
+            pending_session.stream = TcpStream{};
+        }
+    } else {
+        pending_session.stream = TcpStream{};
+    }
+    session_service.sync_catalog_art(pending_session);
     auto filtered_catalog = filter_games(pending_session.game_list, config.filter);
     if (callbacks.on_catalog) {
         callbacks.on_catalog(pending_session.game_list, filtered_catalog);
@@ -237,6 +252,9 @@ ClientSessionDraft ClientApp::begin_session(
     const ClientAppConfig& config,
     const ClientAppCallbacks& callbacks) const {
     ClientSessionService session_service(config.host, config.control_port);
+    // Join socket: GameList then ClientHello only. LobbyPresence on this socket would
+    // park the connection in the host presence list and discard the Hello. Art was
+    // already fetched on Connect via separate sockets.
     auto pending_session = session_service.begin();
     auto filtered_catalog = filter_games(pending_session.game_list, config.filter);
     if (callbacks.on_catalog) {

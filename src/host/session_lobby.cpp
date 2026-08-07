@@ -5,7 +5,9 @@
 #include "common/client_logs.hpp"
 #include "common/game_identity.hpp"
 #include "host/controls_db_sync.hpp"
+#include "host/game_meta_store.hpp"
 #include "host/save_active_sessions.hpp"
+#include "host/save_manager.hpp"
 #include "host/user_credentials.hpp"
 
 #include <algorithm>
@@ -55,15 +57,32 @@ std::optional<GameInfo> game_info_for(const GameList& list, const GameId& game_i
 }
 
 GameList catalog_delta_for_request(const GameList& full_list, const GameListRequest& request) {
-    // Catalogs are small; always full-replace. Incremental deleted_game_ids were never
-    // populated and left clients with stale entries after membership shrank.
-    (void)request;
+    // Prefer the durable catalog_offerings snapshot (hash/revision matched).
+    try {
+        GameMetaStore store;
+        if (store.ready()) {
+            const auto revision = store.catalog_offerings_revision();
+            if (revision != 0 && request.client_catalog_revision == revision) {
+                GameList unchanged;
+                unchanged.catalog_revision = revision;
+                unchanged.full = false;
+                unchanged.deleted_game_ids.clear();
+                return unchanged;
+            }
+            auto offerings = store.load_catalog_offerings();
+            if (revision != 0) {
+                offerings.full = true;
+                offerings.deleted_game_ids.clear();
+                return offerings;
+            }
+        }
+    } catch (...) {
+    }
+
+    // Fallback when offerings were not rebuilt yet (older host DB / scan failed).
     auto response = full_list;
     response.full = true;
     response.deleted_game_ids.clear();
-    // Presentation edge for clients: keep display_name as the clean base title, and
-    // put either a real version token or "" in version. Clients only concatenate —
-    // they must not re-interpret 0/1/unknown/rev bookkeeping.
     for (auto& game : response.games) {
         game.version = catalog_version_display_token(game.version);
     }
@@ -387,6 +406,20 @@ void assign_seats_welcome_and_save_username(SessionPlan& plan) {
     }
 }
 
+void enforce_user_save_stem_for_plan(
+    const SessionPlan& plan,
+    const std::filesystem::path& save_root) {
+    if (save_root.empty() || plan.save_username.empty() || plan.selected_game_id.empty()) {
+        return;
+    }
+    if (user_has_mismatched_save_for_game(
+            save_root, plan.save_username, plan.selected_game_id)) {
+        throw std::runtime_error(
+            "save file name does not match the catalog stem for this game; "
+            "rename the save under this user (see Users tab) before playing");
+    }
+}
+
 void finalize_session_plan_ready(SessionPlan& plan) {
     assign_seats_welcome_and_save_username(plan);
 }
@@ -395,13 +428,31 @@ SessionPlan make_singleplayer_session_plan(
     ClientId client_id,
     ClientHello hello,
     TcpStream stream,
-    const GameList& game_list) {
+    const GameList& game_list,
+    const std::filesystem::path& save_root) {
     if (!hello.selected_game_id.has_value()) {
         throw std::runtime_error("session client did not select a game");
     }
     const auto selected_game = game_info_for(game_list, *hello.selected_game_id);
     if (!selected_game.has_value()) {
         throw std::runtime_error("session client selected an unknown game");
+    }
+    // Blocked titles are omitted from the user's catalog; treat a crafted id as unknown.
+    try {
+        GameMetaStore store;
+        if (store.ready() && store.is_user_game_blocked(hello.username, *hello.selected_game_id)) {
+            throw std::runtime_error("session client selected an unknown game");
+        }
+    } catch (const std::runtime_error&) {
+        throw;
+    } catch (...) {
+    }
+    if (!save_root.empty()
+        && user_has_mismatched_save_for_game(
+            save_root, hello.username, *hello.selected_game_id)) {
+        throw std::runtime_error(
+            "save file name does not match the catalog stem for this game; "
+            "rename the save under this user (see Users tab) before playing");
     }
     if (hello.session_mode != GameSessionMode::SinglePlayer) {
         throw std::runtime_error("make_singleplayer_session_plan requires Singleplayer mode");
@@ -447,12 +498,20 @@ SessionPlan gather_session_clients(
 
     struct LobbyPresenceGuard {
         std::filesystem::path root;
+        std::vector<std::uint32_t> client_ids;
         ~LobbyPresenceGuard() {
-            if (!root.empty()) {
-                clear_connected_clients_for_slot(root, -1);
+            // Only clear clients this gather published — never wipe every
+            // connected-lobby-* file (that deletes other hosts' catalog Connected).
+            for (const auto client_id : client_ids) {
+                clear_connected_client(root, client_id, -1);
             }
         }
-    } lobby_presence{save_root};
+        void track(std::uint32_t client_id) {
+            if (client_id != 0) {
+                client_ids.push_back(client_id);
+            }
+        }
+    } lobby_presence{save_root, {}};
 
     const auto publish_lobby_client = [&](const SessionClientConnection& client) {
         if (save_root.empty() || client.hello.username.empty()) {
@@ -466,6 +525,7 @@ SessionPlan gather_session_clients(
         presence.phase = "lobby";
         presence.seated = client.hello.requested_players > 0;
         publish_connected_client(save_root, presence);
+        lobby_presence.track(client.client_id);
     };
 
     auto selected_game = std::optional<GameId>{};
@@ -488,6 +548,7 @@ SessionPlan gather_session_clients(
         if (selected_game_info.has_value() &&
             launch_requirements_satisfied(plan, *selected_game_info)) {
             assign_seats_welcome_and_save_username(plan);
+            enforce_user_save_stem_for_plan(plan, save_root);
             return plan;
         }
     }
@@ -645,6 +706,19 @@ SessionPlan gather_session_clients(
                 throw std::runtime_error("session client supplied an invalid username");
             }
             authenticate_client_hello(*stream, save_root, authenticated_hello, allow_new_users);
+            {
+                CatalogUserBlocks blocks;
+                try {
+                    GameMetaStore store;
+                    if (store.ready()) {
+                        blocks = store.catalog_user_blocks_for(
+                            authenticated_hello.username,
+                            authenticated_hello.client_blocks_revision);
+                    }
+                } catch (...) {
+                }
+                stream->send_packet(serialize_packet(blocks));
+            }
             if (!valid_player_count(authenticated_hello.requested_players)) {
                 throw std::runtime_error("session client requested too many players");
             }
@@ -719,6 +793,7 @@ SessionPlan gather_session_clients(
     }
 
     assign_seats_welcome_and_save_username(plan);
+    enforce_user_save_stem_for_plan(plan, save_root);
     return plan;
 }
 

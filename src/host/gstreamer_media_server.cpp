@@ -115,6 +115,8 @@ std::vector<std::string> GStreamerVideoFanout::build_single_encode_args(
         settings.key_int_max == 0 ? framerate : static_cast<int>(settings.key_int_max);
     const int sixth_sec = std::max(5, framerate / 6);
     const int key_int_max = std::min(configured_key_int, sixth_sec);
+    const int queue_buffers =
+        settings.queue_buffers == 0 ? 1 : static_cast<int>(settings.queue_buffers);
     const bool nvenc = gst_element_available("nvh264enc");
 
     auto args = std::vector<std::string>{"gst-launch-1.0", "-q"};
@@ -144,7 +146,7 @@ std::vector<std::string> GStreamerVideoFanout::build_single_encode_args(
 
     args.insert(args.end(), {
         "queue",
-        "max-size-buffers=1",
+        "max-size-buffers=" + std::to_string(queue_buffers),
         "max-size-time=0",
         "max-size-bytes=0",
         "leaky=upstream",
@@ -171,7 +173,8 @@ std::vector<std::string> GStreamerVideoFanout::build_single_encode_args(
         args.insert(args.end(), {
             "nvh264enc",
             "zerolatency=true",
-            "preset=low-latency-hp",
+            std::string("preset=") +
+                (settings.nvenc_high_quality ? "low-latency-hq" : "low-latency-hp"),
             "strict-gop=true",
             "bitrate=" + std::to_string(bitrate),
             "gop-size=" + std::to_string(key_int_max),
@@ -528,13 +531,14 @@ void GStreamerVideoFanout::restart_pipeline() {
             settings.key_int_max == 0 ? framerate : static_cast<int>(settings.key_int_max);
         const int sixth_sec = std::max(5, framerate / 6);
         const int key_int_max = std::min(configured_key_int, sixth_sec);
+        const int queue_buffers =
+            settings.queue_buffers == 0 ? 1 : static_cast<int>(settings.queue_buffers);
 
         // Live capture must drop OLD frames under backpressure, never NEW ones.
-        // Keep the queue tiny: max-size-buffers=4 held up to ~4 frames (~130 ms at
-        // 30 fps) before encode, which dominated felt button lag after pad UDP.
+        // Queue depth comes from MediaStreamFeel (1=low-latency … 4=smooth).
         args.insert(args.end(), {
             "queue",
-            "max-size-buffers=1",
+            "max-size-buffers=" + std::to_string(queue_buffers),
             "max-size-time=0",
             "max-size-bytes=0",
             "leaky=upstream",
@@ -561,7 +565,8 @@ void GStreamerVideoFanout::restart_pipeline() {
             args.insert(args.end(), {
                 "nvh264enc",
                 "zerolatency=true",
-                "preset=low-latency-hp",
+                std::string("preset=") +
+                    (settings.nvenc_high_quality ? "low-latency-hq" : "low-latency-hp"),
                 "strict-gop=true",
                 "bitrate=" + std::to_string(bitrate),
                 "gop-size=" + std::to_string(key_int_max),

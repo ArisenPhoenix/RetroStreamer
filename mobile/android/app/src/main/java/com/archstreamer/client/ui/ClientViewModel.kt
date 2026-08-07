@@ -16,6 +16,7 @@ import com.archstreamer.client.net.CatalogFetcher
 import com.archstreamer.client.net.ClientFileLog
 import com.archstreamer.client.net.ControlConnection
 import com.archstreamer.client.net.DiscoveredHost
+import com.archstreamer.client.net.HostAddresses
 import com.archstreamer.client.net.HostDiscovery
 import com.archstreamer.client.net.JoinedPlaySession
 import com.archstreamer.client.net.RemoteHost
@@ -33,6 +34,7 @@ import com.archstreamer.client.protocol.GameInfo
 import com.archstreamer.client.protocol.LinkAction
 import com.archstreamer.client.protocol.LinkStatus
 import com.archstreamer.client.protocol.MediaQualityTier
+import com.archstreamer.client.protocol.MediaStreamFeel
 import com.archstreamer.client.protocol.MediaStreamSize
 import com.archstreamer.client.protocol.Protocol
 import com.archstreamer.client.protocol.SoftKeyboardRequest
@@ -74,6 +76,8 @@ data class UiState(
     val playing: Boolean = false,
     val connected: Boolean = false,
     val host: String = "",
+    /** Optional backup IP (WireGuard, etc.); tried when Host IP is unreachable. */
+    val altHost: String = "",
     val controlPort: String = Protocol.DEFAULT_CONTROL_PORT.toString(),
     val inputPort: String = Protocol.DEFAULT_INPUT_PORT.toString(),
     /** Save-profile username. Empty / placeholder "android" cannot edit or sync controls. */
@@ -95,6 +99,13 @@ data class UiState(
     val busy: Boolean = false,
     val status: String = "Connect to a host on the Client tab.",
     val games: List<GameInfo> = emptyList(),
+    /** Host catalog_offerings revision — used to skip full GameList when unchanged. */
+    val catalogRevision: Long = 0L,
+    /** Unfiltered offerings kept across Disconnect for revision cache hits. */
+    val catalogCacheGames: List<GameInfo> = emptyList(),
+    /** Per-user blocks cache (independent revision from catalog offerings). */
+    val blocksRevision: Long = 0L,
+    val blockedGameIds: List<String> = emptyList(),
     val filter: String = "",
     val selectedGame: GameInfo? = null,
     val mediaHint: String = "",
@@ -109,6 +120,8 @@ data class UiState(
     val streamQuality: MediaQualityTier = MediaQualityTier.Medium,
     /** Heartbeat wanted encode size (mobile defaults 540p). */
     val streamSize: MediaStreamSize = MediaStreamSize.P540,
+    /** Heartbeat wanted stream feel (default Low latency = current host encode). */
+    val streamFeel: MediaStreamFeel = MediaStreamFeel.LowLatency,
     val padLayout: PadLayout = PadLayout.Standard,
     val overlayOpacity: Float = OverlayProfile.DEFAULT_OPACITY,
     val swapNw: Boolean = false,
@@ -141,7 +154,7 @@ data class UiState(
     val artByAssetKey: Map<String, android.graphics.Bitmap> = emptyMap(),
     /** When set, Games list highlights this title — tap again to reclaim a reserved seat. */
     val reconnectHintGameId: String? = null,
-    /** Explicit host fast-forward (EmulatorControl); toggle from play menu. */
+    /** Play-menu FF latch (hold is separate; UI switch shows latch only). */
     val fastForward: Boolean = false,
     /** Explicit host pause (EmulatorControl); play-menu switch + auto menu-open pause. */
     val paused: Boolean = false,
@@ -207,7 +220,21 @@ data class UiState(
             "(or an optional start script with ports + GPU).",
     val remoteBusy: Boolean = false,
     val remoteTrackedControlPort: Int = 0,
-)
+    val remoteUsers: List<RemoteHost.PresenceRow> = emptyList(),
+    val remoteSelectedUserIndex: Int = -1,
+) {
+    /**
+     * Host admin: Profile username matches Remote SSH user → Remote stays available
+     * while playing (kick/stop without leaving the session). Always available offline.
+     */
+    fun canAccessRemoteDuringPlay(): Boolean {
+        val profile = username.trim()
+        val sshUser = remoteSshUser.trim()
+        return ClientViewModel.isProfileUsername(profile) &&
+            sshUser.isNotEmpty() &&
+            profile.equals(sshUser, ignoreCase = true)
+    }
+}
 
 class ClientViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = application.getSharedPreferences(PREFS_NAME, Application.MODE_PRIVATE)
@@ -222,6 +249,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private val _state = MutableStateFlow(
         UiState(
             host = prefs.getString(KEY_HOST, "").orEmpty(),
+            altHost = prefs.getString(KEY_ALT_HOST, "").orEmpty(),
             controlPort = prefs.getString(KEY_CONTROL_PORT, Protocol.DEFAULT_CONTROL_PORT.toString())
                 .orEmpty()
                 .ifBlank { Protocol.DEFAULT_CONTROL_PORT.toString() },
@@ -229,13 +257,19 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 .orEmpty()
                 .ifBlank { Protocol.DEFAULT_INPUT_PORT.toString() },
             username = prefs.getString(KEY_USERNAME, "").orEmpty().let { raw ->
-                if (raw.equals(PLACEHOLDER_USERNAME, ignoreCase = true)) "" else raw
+                if (raw.equals(PLACEHOLDER_USERNAME, ignoreCase = true)) {
+                    prefs.edit().remove(KEY_USERNAME).apply()
+                    ""
+                } else {
+                    raw
+                }
             },
             hasProfileUsername = isProfileUsername(
                 prefs.getString(KEY_USERNAME, "").orEmpty(),
             ),
             streamQuality = qualityFromPrefs(),
             streamSize = sizeFromPrefs(),
+            streamFeel = feelFromPrefs(),
             logSessions = prefs.getString(KEY_LOG_SESSIONS, "3").orEmpty().ifBlank { "3" },
             logControls = prefs.getBoolean(KEY_LOG_CONTROLS, false),
             logConnections = prefs.getBoolean(KEY_LOG_CONNECTIONS, false),
@@ -302,11 +336,18 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private var discoveryJob: Job? = null
     private var menuPauseJob: Job? = null
     private var ffJob: Job? = null
-    /** Last FF On/Off actually sent to the host. */
+    /** Last effective FF On/Off sent to the host (latch ∨ hold). */
     private var lastSentFf: Boolean? = null
     private var lastFfSendAtMs: Long = 0L
-    /** Latest user/overlay intent while [ffJob] coalesces + rate-limits. */
-    private var ffWanted: Boolean? = null
+    /** Play-menu / switch latch — stays until the user turns it off. */
+    private var ffMenuLatched = false
+    /** Keyboard F / overlay / remapped pad hold. */
+    private var ffHoldPressed = false
+    /**
+     * False until the first decoded video frame. Ignores hold edges during stream
+     * init so startup noise cannot poke Ryujinx F1 before client/host agree on Off.
+     */
+    private var ffInputArmed = false
     private var lastAvResyncAtMs: Long = 0L
     /** Desktop client_app: ≥3 zero-frame heartbeats → realign audio when frames return. */
     private var zeroFrameStreak = 0
@@ -335,7 +376,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 requestPlayMenu()
             }
         },
-        onFastForward = { held -> setFastForward(held) },
+        onFastForward = { held -> setFastForwardHold(held) },
         onScreenSwap = { triggerScreenSwap() },
     )
     private val inputManager = application.getSystemService(InputManager::class.java)
@@ -391,9 +432,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         buttonMapDocument.profile(OverlaySystemFamily.toMapFamily(family))
 
     /**
-     * Real save-profile username for SQL persistence / host sync.
-     * Placeholder "android" and blank are local-only and never transported.
-     * Reads prefs (always initialized) so class property init is safe.
+     * Real save-profile username from SharedPreferences.
+     * Rejects blank and the legacy "android" placeholder (never a valid save profile).
      */
     private fun profileUsernameOrNull(): String? {
         val raw = prefs.getString(KEY_USERNAME, "").orEmpty().trim()
@@ -939,7 +979,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         if (snap.section == NavSection.Controls ||
             snap.section == NavSection.GameOptions ||
             snap.section == NavSection.Stream ||
-            snap.section == NavSection.Settings
+            snap.section == NavSection.Settings ||
+            snap.section == NavSection.Remote
         ) {
             return false
         }
@@ -977,13 +1018,10 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             return true
         }
 
-        // F → toggle EmulatorControl fast-forward (edge only). Hold would release
-        // back to Off and cannot correct a host FF boolean stuck opposite the UI;
-        // a toggle always sends the flipped absolute On/Off.
+        // F → hold EmulatorControl fast-forward (down=on, up=off). Not a toggle —
+        // menu latch is the only sticky On.
         if (keyCode == KeyEvent.KEYCODE_F) {
-            if (edge) {
-                setFastForward(!_state.value.fastForward, force = true)
-            }
+            setFastForwardHold(down)
             return true
         }
 
@@ -1186,21 +1224,30 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         return MediaStreamSize.entries.firstOrNull { it.id == id } ?: MediaStreamSize.P540
     }
 
+    private fun feelFromPrefs(): MediaStreamFeel {
+        val id = prefs.getInt(KEY_STREAM_FEEL, MediaStreamFeel.LowLatency.id)
+        return MediaStreamFeel.entries.firstOrNull { it.id == id } ?: MediaStreamFeel.LowLatency
+    }
+
     private fun applyStreamPrefsToSession() {
         val snap = _state.value
         session?.wantedTier = snap.streamQuality.id
         session?.wantedSize = snap.streamSize.id
+        session?.wantedFeel = snap.streamFeel.id
         // Android always requests Hybrid; portrait stacking is client-side.
         session?.displayLayout = DisplayLayoutPreference.Landscape.id
     }
 
     fun selectSection(section: NavSection) {
         if (_state.value.playing) {
-            // Stay in the session — open overlay/stream/settings over the play surface.
+            // Stay in the session — open overlay/stream/settings/remote over the play surface.
+            val remoteOk =
+                section == NavSection.Remote && _state.value.canAccessRemoteDuringPlay()
             if (section == NavSection.Controls ||
                 section == NavSection.GameOptions ||
                 section == NavSection.Stream ||
-                section == NavSection.Settings
+                section == NavSection.Settings ||
+                remoteOk
             ) {
                 if (section == NavSection.Controls) {
                     publishEditing(sessionFamily)
@@ -1247,6 +1294,15 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 recentGameIds = loadRecentGameIds(host, it.controlPort),
             )
         }
+    }
+
+    fun onAltHostChange(value: String) {
+        val trimmed = value.trim()
+        // Persist blank or a valid IP; keep invalid drafts in UI until corrected.
+        if (trimmed.isEmpty() || HostAddresses.looksLikeIp(trimmed)) {
+            prefs.edit().putString(KEY_ALT_HOST, trimmed).apply()
+        }
+        _state.update { it.copy(altHost = value) }
     }
 
     fun selectDiscoveredHost(host: DiscoveredHost) {
@@ -1317,9 +1373,16 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                     val playing = _state.value.playing
                     if (!playing) {
                         val saved = _state.value.host.trim()
+                        val alt = _state.value.altHost.trim()
                         val seeds = linkedSetOf<String>()
                         if (saved.isNotEmpty() && !HostDiscovery.isLoopback(saved)) {
                             seeds.add(saved)
+                        }
+                        if (alt.isNotEmpty() &&
+                            HostAddresses.looksLikeIp(alt) &&
+                            !HostDiscovery.isLoopback(alt)
+                        ) {
+                            seeds.add(alt)
                         }
                         seeds.addAll(loadRecentDiscoverySeeds())
                         browser.setSeedHosts(seeds.toList())
@@ -1543,6 +1606,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                         recentGameIds = loadRecentGameIds(host, control.toString()),
                     )
                 }
+                refreshRemoteUsers()
             }
 
             fun fail(status: String) {
@@ -1624,7 +1688,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                         applyPorts(
                             ports.controlPort,
                             ports.inputPort,
-                            "Started host on $host:${ports.controlPort}$gpuNote",
+                            "Started new host instance on $host:${ports.controlPort}$gpuNote",
                         )
                         return true
                     }
@@ -1648,7 +1712,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                         applyPorts(
                             ports.controlPort,
                             ports.inputPort,
-                            "Reusing host on $host:${ports.controlPort}$slotText$gpuText",
+                            "Reusing existing host instance on $host:${ports.controlPort}$slotText$gpuText",
                         )
                         return@launch
                     }
@@ -1679,11 +1743,17 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         val user = snap.remoteSshUser.trim()
         val password = snap.remoteSshPassword
         val directory = snap.remoteDirectory.trim()
+        val binary = snap.remoteBinary.trim().ifBlank { "./host_runner" }
+        val wantGpu = snap.remoteGpu.trim()
         val sshPort = snap.remoteSshPort.trim().toIntOrNull() ?: RemoteHost.DEFAULT_SSH_PORT
-        val tracked = if (snap.remoteTrackedControlPort > 0) {
+        val baseControl = snap.remoteBaseControlPort.trim().toIntOrNull()
+            ?: Protocol.DEFAULT_CONTROL_PORT
+        val baseInput = snap.remoteBaseInputPort.trim().toIntOrNull()
+            ?: Protocol.DEFAULT_INPUT_PORT
+        var control = if (snap.remoteTrackedControlPort > 0) {
             snap.remoteTrackedControlPort
         } else {
-            snap.remoteBaseControlPort.trim().toIntOrNull() ?: Protocol.DEFAULT_CONTROL_PORT
+            baseControl
         }
 
         if (host.isEmpty() || user.isEmpty()) {
@@ -1695,16 +1765,170 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
-        setRemoteStatus("Stopping remote host on control port $tracked…", busy = true)
+        if (wantGpu.isEmpty()) {
+            setRemoteStatus("Stopping remote host on control port $control…", busy = true)
+        } else {
+            setRemoteStatus("Finding remote host for GPU “$wantGpu” to stop…", busy = true)
+        }
+
         viewModelScope.launch(Dispatchers.IO) {
-            val cmd = RemoteHost.stopShell(tracked, directory)
+            var resolvedLabel = ""
+            if (wantGpu.isNotEmpty()) {
+                val listCmd = RemoteHost.listGpusShell(directory, binary)
+                val listed = RemoteHost.runSshCommand(host, sshPort, user, password, listCmd)
+                if (!listed.ok) {
+                    setRemoteStatus("Remote GPU list failed: ${listed.error}", busy = false)
+                    return@launch
+                }
+                val gpuOptions = RemoteHost.parseListGpusOutput(listed.output)
+                val matched = RemoteHost.matchGpuOption(gpuOptions, wantGpu)
+                if (matched == null) {
+                    setRemoteStatus("No remote GPU matched “$wantGpu”.", busy = false)
+                    return@launch
+                }
+                resolvedLabel = "${matched.name} [${matched.id}]"
+                var foundPort: Int? = null
+                for (n in 0 until 8) {
+                    val ports = RemoteHost.portBlock(n, baseControl, baseInput)
+                    val gpuSsh = RemoteHost.runSshCommand(
+                        host,
+                        sshPort,
+                        user,
+                        password,
+                        RemoteHost.encodeGpuQueryShell(ports.controlPort),
+                        timeoutSec = 15,
+                    )
+                    if (!gpuSsh.ok) continue
+                    val processGpu = gpuSsh.output.trim()
+                    if (processGpu.isEmpty() && n == 0 && matched.id == gpuOptions.firstOrNull()?.id) {
+                        foundPort = ports.controlPort
+                        break
+                    }
+                    val processMatch = RemoteHost.matchGpuOption(gpuOptions, processGpu)
+                    if (processMatch?.id == matched.id) {
+                        foundPort = ports.controlPort
+                        break
+                    }
+                }
+                if (foundPort == null) {
+                    setRemoteStatus("No running host_runner found for $resolvedLabel.", busy = false)
+                    return@launch
+                }
+                control = foundPort
+                setRemoteStatus("Stopping $resolvedLabel on control port $control…")
+            }
+
+            val cmd = RemoteHost.stopShell(control, directory)
             ClientFileLog.append("[remote] ssh stop cmd: $cmd")
             val ssh = RemoteHost.runSshCommand(host, sshPort, user, password, cmd)
             if (ssh.ok) {
-                setRemoteStatus("Stopped remote host on control port $tracked.", busy = false)
+                var msg = "Stopped remote host on control port $control."
+                if (resolvedLabel.isNotEmpty()) msg += " ($resolvedLabel)"
+                _state.update {
+                    it.copy(
+                        remoteBusy = false,
+                        remoteStatus = msg,
+                        remoteTrackedControlPort = 0,
+                        remoteUsers = emptyList(),
+                        remoteSelectedUserIndex = -1,
+                    )
+                }
             } else {
                 setRemoteStatus("SSH stop failed: ${ssh.error}", busy = false)
             }
+        }
+    }
+
+    fun selectRemoteUser(index: Int) {
+        _state.update { it.copy(remoteSelectedUserIndex = index) }
+    }
+
+    fun refreshRemoteUsers() {
+        val snap = _state.value
+        if (snap.remoteBusy) {
+            setRemoteStatus("Remote action already running.")
+            return
+        }
+        val host = snap.remoteSshHost.trim()
+        val user = snap.remoteSshUser.trim()
+        val password = snap.remoteSshPassword
+        val sshPort = snap.remoteSshPort.trim().toIntOrNull() ?: RemoteHost.DEFAULT_SSH_PORT
+        if (host.isEmpty() || user.isEmpty()) {
+            setRemoteStatus("SSH host and user are required.")
+            return
+        }
+        if (password.isEmpty()) {
+            setRemoteStatus("Enter the SSH password (it is not saved).")
+            return
+        }
+        setRemoteStatus("Refreshing remote users…", busy = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            val cmd = RemoteHost.listPresenceShell()
+            val ssh = RemoteHost.runSshCommand(host, sshPort, user, password, cmd)
+            if (!ssh.ok) {
+                setRemoteStatus("Refresh users failed: ${ssh.error}", busy = false)
+                return@launch
+            }
+            val parsed = RemoteHost.parsePresenceOutput(ssh.output)
+            val actives = parsed.filter { it.kind == "active" }
+            val connected = parsed.filter { it.kind == "connected" }.filter { row ->
+                actives.none { active ->
+                    active.slotIndex == row.slotIndex &&
+                        active.username == row.username &&
+                        row.seated
+                }
+            }
+            val rows = actives + connected
+            _state.update {
+                it.copy(
+                    remoteBusy = false,
+                    remoteUsers = rows,
+                    remoteSelectedUserIndex = -1,
+                    remoteStatus = "Remote users: ${rows.size} row(s).",
+                )
+            }
+        }
+    }
+
+    fun kickRemoteUser() {
+        val snap = _state.value
+        if (snap.remoteBusy) {
+            setRemoteStatus("Remote action already running.")
+            return
+        }
+        val index = snap.remoteSelectedUserIndex
+        val row = snap.remoteUsers.getOrNull(index)
+        if (row == null) {
+            setRemoteStatus("Select a remote user row first.")
+            return
+        }
+        val host = snap.remoteSshHost.trim()
+        val user = snap.remoteSshUser.trim()
+        val password = snap.remoteSshPassword
+        val sshPort = snap.remoteSshPort.trim().toIntOrNull() ?: RemoteHost.DEFAULT_SSH_PORT
+        if (host.isEmpty() || user.isEmpty()) {
+            setRemoteStatus("SSH host and user are required.")
+            return
+        }
+        if (password.isEmpty()) {
+            setRemoteStatus("Enter the SSH password (it is not saved).")
+            return
+        }
+        val label = row.label()
+        setRemoteStatus("Kicking $label…", busy = true)
+        viewModelScope.launch(Dispatchers.IO) {
+            val cmd = if (row.kind == "active") {
+                RemoteHost.kickActiveShell(row.slotIndex)
+            } else {
+                RemoteHost.kickConnectedShell(row.clientId, row.slotIndex)
+            }
+            val ssh = RemoteHost.runSshCommand(host, sshPort, user, password, cmd)
+            if (!ssh.ok) {
+                setRemoteStatus("Kick failed: ${ssh.error}", busy = false)
+                return@launch
+            }
+            setRemoteStatus("Kick requested for $label.", busy = false)
+            refreshRemoteUsers()
         }
     }
 
@@ -1712,15 +1936,38 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         val username = value.trim().let { raw ->
             if (raw.equals(PLACEHOLDER_USERNAME, ignoreCase = true)) "" else raw
         }
-        prefs.edit().putString(KEY_USERNAME, username).apply()
+        // Only persist real profile names. Clearing the field must not erase SharedPreferences —
+        // Connect/disconnect/restart used to wipe merk by writing "" (or inventing "android").
+        if (isProfileUsername(username)) {
+            prefs.edit().putString(KEY_USERNAME, username).apply()
+        }
         _state.update {
             it.copy(
                 username = username,
-                hasProfileUsername = isProfileUsername(username),
+                hasProfileUsername = isProfileUsername(username) || profileUsernameOrNull() != null,
             )
         }
         reloadControlsFromLocalStore()
         refreshControlsSyncReady()
+    }
+
+    /** Re-fill Profile from SharedPreferences if the UI field was cleared without a new name. */
+    private fun rehydrateUsernameFromPrefs() {
+        if (isProfileUsername(_state.value.username.trim())) return
+        val stored = profileUsernameOrNull() ?: return
+        _state.update {
+            it.copy(username = stored, hasProfileUsername = true)
+        }
+    }
+
+    /** Saved profile name for host sessions — never the "android" placeholder. */
+    private fun sessionUsernameOrNull(): String? {
+        rehydrateUsernameFromPrefs()
+        val fromState = _state.value.username.trim()
+        if (isProfileUsername(fromState)) {
+            return fromState
+        }
+        return profileUsernameOrNull()
     }
 
     fun pullControlsFromHost() {
@@ -1892,7 +2139,16 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
         val controlPort = _state.value.controlPort.toIntOrNull() ?: Protocol.DEFAULT_CONTROL_PORT
-        val username = _state.value.username.ifBlank { "android" }
+        val username = sessionUsernameOrNull()
+        if (username == null) {
+            _state.update {
+                it.copy(
+                    passwordStatus = "Set a Profile username before changing password.",
+                    section = NavSection.Profile,
+                )
+            }
+            return
+        }
         val current = _state.value.password.ifEmpty { _state.value.changeCurrentPassword }
         val newPw = _state.value.newPassword
         val confirm = _state.value.confirmPassword
@@ -1996,29 +2252,51 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     fun sendLogsToHost() {
         if (_state.value.busy) return
-        val host = _state.value.host.trim()
-        if (host.isEmpty()) {
+        val snap = _state.value
+        val primary = snap.host.trim()
+        if (primary.isEmpty()) {
             _state.update { it.copy(logSendStatus = "Set a Host IP on the Client tab first.") }
             return
         }
-        val controlPort = _state.value.controlPort.toIntOrNull() ?: Protocol.DEFAULT_CONTROL_PORT
-        val sessions = (_state.value.logSessions.toIntOrNull() ?: 3).coerceIn(1, 20)
-        val username = _state.value.username.ifBlank { "android" }
+        val alt = snap.altHost.trim()
+        if (alt.isNotEmpty() && !HostAddresses.looksLikeIp(alt)) {
+            _state.update {
+                it.copy(logSendStatus = "Alt IP must look like an IP address, or leave it blank.")
+            }
+            return
+        }
+        val candidates = HostAddresses.connectCandidates(primary, alt)
+        val controlPort = snap.controlPort.toIntOrNull() ?: Protocol.DEFAULT_CONTROL_PORT
+        val sessions = (snap.logSessions.toIntOrNull() ?: 3).coerceIn(1, 20)
+        val username = sessionUsernameOrNull() ?: "android-client"
         _state.update { it.copy(busy = true, logSendStatus = "Sending logs…") }
-        ClientFileLog.append("Send logs requested ($sessions session(s)) → $host:$controlPort")
+        ClientFileLog.append("Send logs requested ($sessions session(s)) → $primary:$controlPort")
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     val text = ClientFileLog.extractLastSessions(sessions)
                     require(text.isNotEmpty()) { "client log is empty" }
-                    ControlConnection(host, controlPort).use { conn ->
-                        conn.connect()
-                        conn.send(PacketCodec.clientLogBundle(username, sessions, text))
-                        when (val reply = conn.receive()) {
-                            is IncomingPacket.Error -> reply.value.message
-                            else -> "unexpected reply from host"
+                    var lastError: Throwable? = null
+                    for ((index, host) in candidates.withIndex()) {
+                        try {
+                            return@runCatching ControlConnection(host, controlPort).use { conn ->
+                                conn.connect()
+                                conn.send(PacketCodec.clientLogBundle(username, sessions, text))
+                                when (val reply = conn.receive()) {
+                                    is IncomingPacket.Error -> reply.value.message
+                                    else -> "unexpected reply from host"
+                                }
+                            }
+                        } catch (err: Throwable) {
+                            lastError = err
+                            if (index >= candidates.lastIndex ||
+                                !HostAddresses.isReachabilityFailure(err)
+                            ) {
+                                throw err
+                            }
                         }
                     }
+                    throw lastError ?: IllegalStateException("Send logs failed")
                 }
             }
             result.fold(
@@ -2076,7 +2354,24 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setReceiveVideo(value: Boolean) = _state.update { it.copy(receiveVideo = value) }
-    fun setReceiveAudio(value: Boolean) = _state.update { it.copy(receiveAudio = value) }
+
+    fun setReceiveAudio(value: Boolean) {
+        _state.update { it.copy(receiveAudio = value) }
+        val active = session
+        if (active != null) {
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching { active.setReceiveAudio(value) }
+                    .onFailure { err ->
+                        ClientFileLog.conn("receive audio toggle failed: ${err.message ?: err}")
+                    }
+                _state.update {
+                    it.copy(
+                        status = if (value) "Audio on." else "Audio muted.",
+                    )
+                }
+            }
+        }
+    }
 
     fun setStreamQuality(tier: MediaQualityTier) {
         _state.update { it.copy(streamQuality = tier) }
@@ -2087,6 +2382,12 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     fun setStreamSize(size: MediaStreamSize) {
         _state.update { it.copy(streamSize = size) }
         prefs.edit().putInt(KEY_STREAM_SIZE, size.id).apply()
+        applyStreamPrefsToSession()
+    }
+
+    fun setStreamFeel(feel: MediaStreamFeel) {
+        _state.update { it.copy(streamFeel = feel) }
+        prefs.edit().putInt(KEY_STREAM_FEEL, feel.id).apply()
         applyStreamPrefsToSession()
     }
 
@@ -2142,10 +2443,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             // Initial Closed while playing / drawer open before first frame: do not poke.
             if (lastSentMenuPause == null && !wantPaused) return@launch
             if (lastSentMenuPause == wantPaused) return@launch
-            val reassertFf = !wantPaused && _state.value.fastForward
             pushEmulatorControls(
                 pause = wantPaused,
-                fastForward = if (reassertFf) true else null,
                 force = true,
             )
         }
@@ -2162,10 +2461,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             _state.update { it.copy(paused = false) }
             return
         }
-        val reassertFf = _state.value.fastForward
         pushEmulatorControls(
             pause = false,
-            fastForward = if (reassertFf) true else null,
             force = true,
         )
     }
@@ -2186,21 +2483,44 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * Absolute FF On/Off (menu switch, overlay hold, remapped physical button, or
-     * keyboard F toggle). UI updates immediately; host packets are coalesced and
-     * capped to once per second so rapid taps cannot desync F1 VSync.
-     * Off always force-sends (and retries): a focus-missed Off leaves the host
-     * cache On while UI shows Off, and without a resend turbo sticks permanently.
+     * Play-menu / switch latch. Turns FF on and leaves it alone until turned off.
+     * Hold input is separate — releasing R2 must not clear this latch.
      */
-    fun setFastForward(enabled: Boolean, force: Boolean = false) {
+    fun setFastForward(enabled: Boolean) {
         if (!_state.value.playing) return
+        ffMenuLatched = enabled
         _state.update { it.copy(fastForward = enabled) }
-        ffWanted = enabled
-        val forceSend = force || !enabled
-        if (forceSend) {
-            lastSentFf = null
+        publishEffectiveFastForward()
+    }
+
+    /**
+     * Hold-to-FF from overlay pad, remapped L2/R2, or keyboard F.
+     * Ignored until [ffInputArmed] so stream startup cannot poke the host.
+     */
+    fun setFastForwardHold(held: Boolean) {
+        if (!_state.value.playing) return
+        if (!ffInputArmed) {
+            if (!held) {
+                ffHoldPressed = false
+            }
+            return
         }
-        scheduleFastForwardSend(forceSend = forceSend, retryOff = !enabled)
+        if (ffHoldPressed == held) return
+        ffHoldPressed = held
+        publishEffectiveFastForward()
+    }
+
+    private fun effectiveFastForward(): Boolean = ffMenuLatched || ffHoldPressed
+
+    /**
+     * Send EmulatorControl FF only when latch∨hold changes. No force, no Off retries —
+     * those re-cycled Ryujinx F1 and left Custom@200% stuck while UI showed Off.
+     */
+    private fun publishEffectiveFastForward() {
+        if (!_state.value.playing) return
+        val want = effectiveFastForward()
+        if (lastSentFf == want) return
+        scheduleFastForwardSend()
     }
 
     /** One-shot DS screen swap via EmulatorControl action (melonDS F6). */
@@ -2220,14 +2540,13 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * Single owner for desired pause / fast-forward → host EmulatorControlPlane.
+     * Single owner for desired pause → host EmulatorControlPlane.
+     * Fast-forward is owned only by [setFastForward] / [setFastForwardHold].
      * @param pause null = leave Unchanged on the wire; non-null updates UI + sends On/Off
-     * @param fastForward same
-     * @param force ask host to re-apply even if its cache already matches
+     * @param force ask host to re-apply pause even if its cache already matches
      */
     private fun pushEmulatorControls(
         pause: Boolean? = null,
-        fastForward: Boolean? = null,
         force: Boolean = false,
     ) {
         if (!_state.value.playing) return
@@ -2236,39 +2555,20 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             lastSentMenuPause = pause
             _state.update { it.copy(paused = pause) }
         }
-        if (fastForward != null) {
-            ffWanted = fastForward
-            _state.update { it.copy(fastForward = fastForward) }
-            if (force) {
-                lastSentFf = null
-            }
-        }
-        // Remoted P/Space must not fight absolute intents on the same session.
+        // Remoted P/Space must not fight absolute pause intents on the same session.
         clearRemotedKeys()
         val pauseWire = when (pause) {
             true -> EmulatorControlState.On
             false -> EmulatorControlState.Off
             null -> EmulatorControlState.Unchanged
         }
-        val ffWire = when (fastForward) {
-            true -> EmulatorControlState.On
-            false -> EmulatorControlState.Off
-            null -> EmulatorControlState.Unchanged
-        }
-        if (pauseWire == EmulatorControlState.Unchanged &&
-            ffWire == EmulatorControlState.Unchanged
-        ) {
+        if (pauseWire == EmulatorControlState.Unchanged) {
             return
-        }
-        if (fastForward != null) {
-            lastSentFf = fastForward
-            lastFfSendAtMs = System.currentTimeMillis()
         }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 active.sendEmulatorControl(
                     pause = pauseWire,
-                    fastForward = ffWire,
                     force = force,
                 )
             }.onFailure { err ->
@@ -2278,13 +2578,14 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
         ClientFileLog.append(
-            "emuControl push pause=${pause ?: "-"} ff=${fastForward ?: "-"} force=$force",
+            "emuControl push pause=${pause ?: "-"} ff=- force=$force",
         )
     }
 
     /**
      * Desktop "Resync A/V" fallback: restart Opus so audio meets the live video edge.
      * Rate-limited to once per 15s (same as desktop client). Video is not touched.
+     * Does not touch pause or FF.
      */
     fun resyncAv() {
         if (!_state.value.playing) {
@@ -2293,10 +2594,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         }
         viewModelScope.launch(Dispatchers.IO) {
             val status = when (tryResyncAudio(manual = true)) {
-                1 -> {
-                    reassertEmulatorControlsAfterAvResync()
-                    "Realigned audio to video."
-                }
+                1 -> "Realigned audio to video."
                 0 -> "A/V resync cooling down… try again shortly."
                 else -> "A/V resync failed (no audio stream?)."
             }
@@ -2332,12 +2630,19 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * After a video stall (≥3 zero-frame heartbeats), fire the same async audio
      * restart as the Resync button when frames return — never block heartbeat.
+     * Does not touch pause or FF.
      */
     private fun noteHeartbeatFrames(active: JoinedPlaySession, framesDelta: Int) {
         val video = active.videoPlayer ?: return
         if (active.audioPlayer == null) return
         if (video.hasDecodedFrames()) {
-            everDecodedVideoFrames = true
+            if (!everDecodedVideoFrames) {
+                everDecodedVideoFrames = true
+                // Client + host both start Off; arm hold input only after video is live.
+                ffInputArmed = true
+                lastSentFf = false
+                ClientFileLog.append("emuControl FF armed (hold+latch); default off")
+            }
         }
         if (!everDecodedVideoFrames) return
 
@@ -2353,26 +2658,11 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         audioRealignAfterVideoStall = false
         viewModelScope.launch(Dispatchers.IO) {
             if (tryResyncAudio(manual = false) == 1) {
-                reassertEmulatorControlsAfterAvResync()
                 _state.update {
                     it.copy(status = "Video recovered; restarted audio to match (lip-sync).")
                 }
             }
         }
-    }
-
-    /**
-     * Re-push absolute pause + FF after A/V resync so a host F1/F5 cache drift
-     * (common when FF was on across a stall) does not stick perpetual turbo.
-     */
-    private fun reassertEmulatorControlsAfterAvResync() {
-        val snap = _state.value
-        if (!snap.playing) return
-        pushEmulatorControls(
-            pause = snap.paused || lastSentMenuPause == true,
-            fastForward = snap.fastForward,
-            force = true,
-        )
     }
 
     private fun resetAvStallState() {
@@ -2382,83 +2672,140 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         lastAvResyncAtMs = 0L
     }
 
-    private fun scheduleFastForwardSend(
-        forceSend: Boolean = false,
-        retryOff: Boolean = false,
-    ) {
+    private fun scheduleFastForwardSend() {
         ffJob?.cancel()
         ffJob = viewModelScope.launch(Dispatchers.IO) {
             delay(FF_COALESCE_MS)
             if (!_state.value.playing) return@launch
-            var want = ffWanted ?: return@launch
-            if (!forceSend && lastSentFf == want) return@launch
+            val latest = effectiveFastForward()
+            if (lastSentFf == latest) return@launch
             val elapsed = System.currentTimeMillis() - lastFfSendAtMs
             if (lastFfSendAtMs > 0L && elapsed < FF_MIN_INTERVAL_MS) {
                 delay(FF_MIN_INTERVAL_MS - elapsed)
             }
             if (!_state.value.playing) return@launch
-            want = ffWanted ?: return@launch
-            if (!forceSend && lastSentFf == want) return@launch
-            lastSentFf = want
+            val finalWant = effectiveFastForward()
+            if (lastSentFf == finalWant) return@launch
+            lastSentFf = finalWant
             lastFfSendAtMs = System.currentTimeMillis()
-            fun sendOnce(force: Boolean) {
-                runCatching {
-                    session?.sendEmulatorControl(
-                        fastForward = if (want) EmulatorControlState.On else EmulatorControlState.Off,
-                        force = force,
-                    )
-                }
+            runCatching {
+                session?.sendEmulatorControl(
+                    fastForward = if (finalWant) EmulatorControlState.On else EmulatorControlState.Off,
+                    force = false,
+                )
+            }.onFailure { err ->
+                ClientFileLog.append(
+                    "EmulatorControl FF send failed: ${err.javaClass.simpleName}: ${err.message}",
+                )
+                lastSentFf = null
             }
-            sendOnce(force = forceSend)
-            // Focus-missed Off leaves Ryujinx in Custom/Unbounded while UI is Off.
-            if (retryOff && !want && ffWanted == false) {
-                delay(180L)
-                if (!_state.value.playing || ffWanted != false) return@launch
-                sendOnce(force = true)
-                delay(320L)
-                if (!_state.value.playing || ffWanted != false) return@launch
-                sendOnce(force = true)
-            }
+            ClientFileLog.append(
+                "emuControl push pause=- ff=$finalWant force=false " +
+                    "(latch=$ffMenuLatched hold=$ffHoldPressed)",
+            )
         }
     }
 
     private fun resetFastForwardSendState() {
         ffJob?.cancel()
         ffJob = null
-        ffWanted = null
+        ffMenuLatched = false
+        ffHoldPressed = false
+        ffInputArmed = false
         lastSentFf = null
         lastFfSendAtMs = 0L
     }
 
     fun connect() {
         val snap = _state.value
-        val host = snap.host
-        val port = snap.controlPort.toIntOrNull() ?: Protocol.DEFAULT_CONTROL_PORT
-        if (host.isBlank()) {
+        val primary = snap.host.trim()
+        val altDraft = snap.altHost.trim()
+        if (primary.isBlank()) {
             _state.update { it.copy(status = "Host IP is required.") }
             return
         }
+        if (altDraft.isNotEmpty() && !HostAddresses.looksLikeIp(altDraft)) {
+            _state.update {
+                it.copy(status = "Alt IP must look like an IP address (e.g. 10.6.0.2), or leave it blank.")
+            }
+            return
+        }
+        val candidates = HostAddresses.connectCandidates(primary, altDraft)
+        val port = snap.controlPort.toIntOrNull() ?: Protocol.DEFAULT_CONTROL_PORT
+        val sessionUser = sessionUsernameOrNull()
+        if (sessionUser == null && snap.password.isNotEmpty()) {
+            _state.update {
+                it.copy(
+                    status = "Set a Profile username before connecting with a password.",
+                    section = NavSection.Profile,
+                    passwordStatus = "Username required — blank falls through to a throwaway “android” save.",
+                )
+            }
+            return
+        }
+        // Persist primary host/ports only. Alt is owned by onAltHostChange.
+        // Username is owned by onUsernameChange — never overwrite with a blank field.
         prefs.edit()
-            .putString(KEY_HOST, host)
+            .putString(KEY_HOST, primary)
             .putString(KEY_CONTROL_PORT, snap.controlPort)
             .putString(KEY_INPUT_PORT, snap.inputPort)
-            .putString(KEY_USERNAME, snap.username)
             .apply()
 
         viewModelScope.launch {
-            _state.update { it.copy(busy = true, status = "Fetching catalog from $host:$port…") }
+            _state.update { it.copy(busy = true, status = "Fetching catalog from $primary:$port…") }
             clearLobbyPresence()
-            val username = snap.username.ifBlank { "android" }
+            val username = sessionUser
             val password = snap.password
             runCatching {
                 withContext(Dispatchers.IO) {
-                    if (password.isNotEmpty()) {
-                        CatalogFetcher.fetchAndHoldPresence(host, port, username, password)
-                    } else {
-                        CatalogFetcher.fetch(host, port) to null
+                    val knownRev = snap.catalogRevision
+                    val knownGames = snap.catalogCacheGames.ifEmpty { snap.games }
+                    var lastError: Throwable? = null
+                    for ((index, host) in candidates.withIndex()) {
+                        if (index > 0) {
+                            withContext(Dispatchers.Main) {
+                                _state.update {
+                                    it.copy(status = "Host IP unreachable; trying Alt IP $host:$port…")
+                                }
+                            }
+                            ClientFileLog.conn("connect fallback primary=$primary → alt=$host")
+                        }
+                        try {
+                            val result = if (password.isNotEmpty() && username != null) {
+                                CatalogFetcher.fetchAndHoldPresence(
+                                    host,
+                                    port,
+                                    username,
+                                    password,
+                                    knownRevision = knownRev,
+                                    knownGames = knownGames,
+                                    knownBlocksRevision = snap.blocksRevision,
+                                    knownBlockedIds = snap.blockedGameIds,
+                                )
+                            } else {
+                                CatalogFetcher.fetch(
+                                    host,
+                                    port,
+                                    knownRevision = knownRev,
+                                    knownGames = knownGames,
+                                ) to null
+                            }
+                            return@withContext Triple(host, result.first, result.second)
+                        } catch (err: Throwable) {
+                            lastError = err
+                            val canFallback = index < candidates.lastIndex &&
+                                HostAddresses.isReachabilityFailure(err)
+                            if (!canFallback) {
+                                throw err
+                            }
+                            ClientFileLog.conn(
+                                "connect failed $host:$port (${err.message ?: err}); will try Alt IP",
+                            )
+                        }
                     }
+                    throw lastError ?: IllegalStateException("Connect failed")
                 }
-            }.onSuccess { (catalog, presence) ->
+            }.onSuccess { (host, catalog, presence) ->
                 lobbyPresence = presence
                 ClientFileLog.append("Catalog loaded: ${catalog.games.size} games from $host:$port")
                 val recentIds = loadRecentGameIds(host, snap.controlPort)
@@ -2472,20 +2819,28 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 } else {
                     " (enter password to register Connected on host)."
                 }
+                val viaAlt = !host.equals(primary, ignoreCase = true)
                 _state.update {
                     it.copy(
                         busy = false,
                         connected = true,
+                        // Host IP / Alt IP prefs stay as entered; art/join use reachable host.
                         section = NavSection.Games,
                         games = catalog.games,
+                        catalogRevision = catalog.catalogRevision,
+                        catalogCacheGames = catalog.cacheGames,
+                        blocksRevision = catalog.blocksRevision,
+                        blockedGameIds = catalog.blockedGameIds,
                         recentGameIds = recentIds,
                         expandedSystems = expanded,
                         artByAssetKey = emptyMap(),
-                        status = "Loaded ${catalog.games.size} games (rev ${catalog.catalogRevision}).$presenceNote",
+                        status = "Loaded ${catalog.games.size} games from $host" +
+                            (if (viaAlt) " (Alt IP)" else "") +
+                            " (rev ${catalog.catalogRevision}).$presenceNote",
                         controlsSyncReady = profileUsernameOrNull() != null && presence != null,
                     )
                 }
-                startArtPrefetch(catalog.games, host, port)
+                startArtPrefetch(catalog.games, host, port, catalog.catalogRevision)
             }.onFailure { err ->
                 clearLobbyPresence()
                 _state.update {
@@ -2499,7 +2854,12 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun startArtPrefetch(games: List<GameInfo>, host: String, controlPort: Int) {
+    private fun startArtPrefetch(
+        games: List<GameInfo>,
+        host: String,
+        controlPort: Int,
+        catalogRevision: Long,
+    ) {
         artJob?.cancel()
         val cacheDir = File(getApplication<Application>().cacheDir, "archstreamer")
         artJob = viewModelScope.launch(Dispatchers.IO) {
@@ -2508,6 +2868,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 controlPort = controlPort,
                 games = games,
                 cacheDir = cacheDir,
+                catalogRevision = catalogRevision,
                 isActive = { isActive && _state.value.connected },
             ) { assetKey, bitmap ->
                 _state.update { state ->
@@ -2522,12 +2883,15 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         artJob = null
         clearLobbyPresence()
         endSession()
+        rehydrateUsernameFromPrefs()
         _state.update {
             it.copy(
                 playing = false,
                 connected = false,
                 section = NavSection.Client,
-                games = emptyList(),
+                // Keep catalogRevision + catalogCacheGames so the next Connect can
+                // take the host unchanged short-circuit without an empty UI.
+                games = it.catalogCacheGames.ifEmpty { it.games },
                 selectedGame = null,
                 mediaHint = "",
                 videoPlayer = null,
@@ -2541,10 +2905,37 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     fun startGame(game: GameInfo) {
         val snap = _state.value
-        val host = snap.host
+        val primary = snap.host.trim()
+        val altDraft = snap.altHost.trim()
+        if (primary.isBlank()) {
+            _state.update {
+                it.copy(status = "Host IP is required.", section = NavSection.Client)
+            }
+            return
+        }
+        if (altDraft.isNotEmpty() && !HostAddresses.looksLikeIp(altDraft)) {
+            _state.update {
+                it.copy(
+                    status = "Alt IP must look like an IP address (e.g. 10.6.0.2), or leave it blank.",
+                    section = NavSection.Client,
+                )
+            }
+            return
+        }
+        val candidates = HostAddresses.connectCandidates(primary, altDraft)
         val controlPort = snap.controlPort.toIntOrNull() ?: Protocol.DEFAULT_CONTROL_PORT
         val inputPort = snap.inputPort.toIntOrNull() ?: Protocol.DEFAULT_INPUT_PORT
-        val username = snap.username.ifBlank { "android" }
+        val username = sessionUsernameOrNull()
+        if (username == null) {
+            _state.update {
+                it.copy(
+                    status = "Set a Profile username before joining — saves are keyed by that name.",
+                    section = NavSection.Profile,
+                    passwordStatus = "Username required (never join as the “android” placeholder).",
+                )
+            }
+            return
+        }
         val password = snap.password
         if (password.isEmpty()) {
             _state.update {
@@ -2574,46 +2965,71 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                     val pads = PhysicalGamepad.connectedPads()
                     val usePad = preferPhysical && pads.isNotEmpty()
                     val pad = pads.firstOrNull()
-                    SessionJoiner.join(
-                        host,
-                        controlPort,
-                        inputPort,
-                        username,
-                        password,
-                        game,
-                        receiveAudio = snap.receiveAudio,
-                        displayLayout = DisplayLayoutPreference.Landscape.id,
-                        controllerName = if (usePad) {
-                            pad?.name ?: "Android Gamepad"
-                        } else {
-                            "Android Touch Pad"
-                        },
-                        controllerGuid = if (usePad) {
-                            pad?.descriptor ?: "android-pad-0"
-                        } else {
-                            "android-touch-0"
-                        },
-                        onPasswordChangeRequired = {
-                            val latch = java.util.concurrent.CountDownLatch(1)
-                            passwordChangeLatch = latch
-                            passwordChangeResult = ""
-                            _state.update {
-                                it.copy(
-                                    forcePasswordChange = true,
-                                    forcePasswordDraft = "",
-                                    forcePasswordConfirm = "",
-                                    passwordStatus = "Host requires a new password.",
-                                )
+                    var lastError: Throwable? = null
+                    for ((index, host) in candidates.withIndex()) {
+                        if (index > 0) {
+                            withContext(Dispatchers.Main) {
+                                _state.update {
+                                    it.copy(status = "Host IP unreachable; joining via Alt IP $host…")
+                                }
                             }
-                            latch.await()
-                            passwordChangeLatch = null
-                            passwordChangeResult.also {
-                                require(it.isNotEmpty()) { "password change cancelled" }
-                            }
-                        },
-                    )
+                            ClientFileLog.conn("join fallback primary=$primary → alt=$host")
+                        }
+                        try {
+                            val joined = SessionJoiner.join(
+                                host,
+                                controlPort,
+                                inputPort,
+                                username,
+                                password,
+                                game,
+                                receiveAudio = snap.receiveAudio,
+                                displayLayout = DisplayLayoutPreference.Landscape.id,
+                                controllerName = if (usePad) {
+                                    pad?.name ?: "Android Gamepad"
+                                } else {
+                                    "Android Touch Pad"
+                                },
+                                controllerGuid = if (usePad) {
+                                    pad?.descriptor ?: "android-pad-0"
+                                } else {
+                                    "android-touch-0"
+                                },
+                                knownCatalogRevision = snap.catalogRevision,
+                                knownBlocksRevision = snap.blocksRevision,
+                                onPasswordChangeRequired = {
+                                    val latch = java.util.concurrent.CountDownLatch(1)
+                                    passwordChangeLatch = latch
+                                    passwordChangeResult = ""
+                                    _state.update {
+                                        it.copy(
+                                            forcePasswordChange = true,
+                                            forcePasswordDraft = "",
+                                            forcePasswordConfirm = "",
+                                            passwordStatus = "Host requires a new password.",
+                                        )
+                                    }
+                                    latch.await()
+                                    passwordChangeLatch = null
+                                    passwordChangeResult.also {
+                                        require(it.isNotEmpty()) { "password change cancelled" }
+                                    }
+                                },
+                            )
+                            return@withContext host to joined
+                        } catch (err: Throwable) {
+                            lastError = err
+                            val canFallback = index < candidates.lastIndex &&
+                                HostAddresses.isReachabilityFailure(err)
+                            if (!canFallback) throw err
+                            ClientFileLog.conn(
+                                "join failed $host:$controlPort (${err.message ?: err}); will try Alt IP",
+                            )
+                        }
+                    }
+                    throw lastError ?: IllegalStateException("Join failed")
                 }
-            }.onSuccess { joined ->
+            }.onSuccess { (host, joined) ->
                 session = joined
                 applyStreamPrefsToSession()
                 startInputLoop()
@@ -2630,6 +3046,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                     it.copy(
                         busy = false,
                         playing = true,
+                        host = host,
                         recentGameIds = recentIds,
                         videoPlayer = joined.videoPlayer,
                         padLayout = profile.resolveLayout(game.systemKey),
@@ -2658,6 +3075,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                         linkStatusKind = null,
                         status = "Playing ${game.title()}",
                         controlsSyncReady = profileUsernameOrNull() != null,
+                        paused = false,
+                        fastForward = false,
                         mediaHint = run {
                             val video = joined.videoPlayer
                             val audio = joined.audioPlayer
@@ -2674,11 +3093,13 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                         },
                     )
                 }
-                // Grace reconnect / fresh join: align host cache+emu to client defaults.
+                // Grace reconnect / fresh join: pause Off only. FF stays default Off on
+                // both sides — do not poke F1 during stream init (hold arms after first frame).
+                menuDrawerOpen = false
                 lastSentMenuPause = false
                 resetFastForwardSendState()
                 viewModelScope.launch(Dispatchers.IO) {
-                    pushEmulatorControls(pause = false, fastForward = false, force = true)
+                    pushEmulatorControls(pause = false, force = false)
                 }
             }.onFailure { err ->
                 val msg = err.message ?: err.toString()
@@ -3213,7 +3634,14 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         val held = lobbyPresence
         lobbyPresence = null
         if (held != null) {
-            runCatching { held.close() }
+            // Same pitfall as ClientSessionLeave: closing the TCP socket on the
+            // main thread can throw NetworkOnMainThreadException, so the host
+            // never sees FIN and Users stays "Connected".
+            runBlocking {
+                withContext(Dispatchers.IO) {
+                    runCatching { held.close() }
+                }
+            }
         }
         refreshControlsSyncReady()
     }
@@ -3297,11 +3725,13 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
         private const val PREFS_NAME = "archstreamer_client"
         private const val KEY_HOST = "host"
+        private const val KEY_ALT_HOST = "alt_host"
         private const val KEY_CONTROL_PORT = "control_port"
         private const val KEY_INPUT_PORT = "input_port"
         private const val KEY_USERNAME = "username"
         private const val KEY_STREAM_QUALITY = "stream_quality"
         private const val KEY_STREAM_SIZE = "stream_size"
+        private const val KEY_STREAM_FEEL = "stream_feel"
         private const val KEY_DISCOVERY_SEEDS = "discovery_seeds"
         private const val KEY_LOG_SESSIONS = "log_sessions"
         private const val KEY_LOG_CONTROLS = "log_controls"
@@ -3326,7 +3756,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         private const val MENU_PAUSE_DEBOUNCE_MS = 250L
         /** Ignore FF button bounce before rate-limit clock. */
         private const val FF_COALESCE_MS = 80L
-        /** Max one FF EmulatorControl per second (Ryujinx F1 cycle desyncs if spammed). */
+        /** Max one FF EmulatorControl edge per second (Ryujinx F1 cycle). */
         private const val FF_MIN_INTERVAL_MS = 1_000L
         /** Match desktop client_app A/V resync cooldown. */
         private const val AV_RESYNC_MIN_INTERVAL_MS = 15_000L

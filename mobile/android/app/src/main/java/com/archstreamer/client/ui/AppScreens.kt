@@ -77,8 +77,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import android.content.res.Configuration
+import com.archstreamer.client.net.HostAddresses
 import com.archstreamer.client.protocol.GameInfo
 import com.archstreamer.client.protocol.MediaQualityTier
+import com.archstreamer.client.protocol.MediaStreamFeel
 import com.archstreamer.client.protocol.MediaStreamSize
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
@@ -91,7 +93,14 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     var playMenuFocus by remember { mutableStateOf(PlayMenuFocusItem.Controls) }
-    val playMenuItems = remember { PlayMenuFocusItem.entries }
+    val playMenuItems = remember(state.username, state.remoteSshUser) {
+        playMenuFocusItems(includeRemote = state.canAccessRemoteDuringPlay())
+    }
+    LaunchedEffect(playMenuItems) {
+        if (playMenuFocus !in playMenuItems) {
+            playMenuFocus = playMenuItems.firstOrNull() ?: PlayMenuFocusItem.Controls
+        }
+    }
 
     fun openDrawer() {
         scope.launch { drawerState.open() }
@@ -119,6 +128,10 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
                 viewModel.selectSection(NavSection.Settings)
                 closeDrawer()
             }
+            PlayMenuFocusItem.Remote -> {
+                viewModel.selectSection(NavSection.Remote)
+                closeDrawer()
+            }
             PlayMenuFocusItem.Pause -> viewModel.setPaused(!state.paused, force = true)
             PlayMenuFocusItem.FastForward -> viewModel.setFastForward(!state.fastForward)
             PlayMenuFocusItem.EditControls -> {
@@ -138,6 +151,14 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
                 viewModel.disconnect()
                 closeDrawer()
             }
+        }
+    }
+
+    // Close any nav drawer left open from Client/Games before play so we do not
+    // treat a leftover Open as "pause the emulator".
+    LaunchedEffect(state.playing) {
+        if (state.playing && drawerState.isOpen) {
+            drawerState.close()
         }
     }
 
@@ -224,7 +245,8 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
             (state.section == NavSection.Controls ||
                 state.section == NavSection.GameOptions ||
                 state.section == NavSection.Stream ||
-                state.section == NavSection.Settings)
+                state.section == NavSection.Settings ||
+                (state.section == NavSection.Remote && state.canAccessRemoteDuringPlay()))
         ) {
             Scaffold(
                 // System bars via Scaffold; IME via imePadding on content so focused
@@ -252,6 +274,7 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
                         NavSection.GameOptions -> GameOptionsSection(state, viewModel)
                         NavSection.Stream -> StreamSection(state, viewModel)
                         NavSection.Settings -> SettingsSection(state, viewModel)
+                        NavSection.Remote -> RemoteSection(state, viewModel)
                         else -> Unit
                     }
                 }
@@ -499,6 +522,14 @@ private fun AppDrawer(
                     onClick = { onSelect(NavSection.Settings) },
                     modifier = Modifier.padding(horizontal = 12.dp),
                 )
+                if (state.canAccessRemoteDuringPlay()) {
+                    NavigationDrawerItem(
+                        label = { Text(NavSection.Remote.title) },
+                        selected = focusedItem == PlayMenuFocusItem.Remote,
+                        onClick = { onSelect(NavSection.Remote) },
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                    )
+                }
             }
 
             if (state.playing || state.connected) {
@@ -681,6 +712,19 @@ private fun ClientSection(state: UiState, viewModel: ClientViewModel) {
             placeholder = { Text("192.168.x.x or 10.6.0.x") },
         )
         OutlinedTextField(
+            value = state.altHost,
+            onValueChange = viewModel::onAltHostChange,
+            label = { Text("Alt IP") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("optional — e.g. WireGuard 10.6.0.x") },
+            supportingText = {
+                Text("Tried when Host IP is unreachable. Must look like an IP address.")
+            },
+            isError = state.altHost.isNotBlank() &&
+                !HostAddresses.looksLikeIp(state.altHost),
+        )
+        OutlinedTextField(
             value = state.password,
             onValueChange = viewModel::onPasswordChange,
             label = { Text("Password (session only)") },
@@ -854,6 +898,61 @@ private fun RemoteSection(state: UiState, viewModel: ClientViewModel) {
                 modifier = Modifier.weight(1f),
             ) {
                 Text("Stop Host")
+            }
+        }
+        Text("Remote users", style = MaterialTheme.typography.titleSmall)
+        Text(
+            "Lists Connected/Active from the host saves root. Kick uses the same markers as Users. " +
+                "Stop Host uses the tracked port, or the GPU field to find that instance.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = viewModel::refreshRemoteUsers,
+                enabled = !state.remoteBusy,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Refresh users")
+            }
+            OutlinedButton(
+                onClick = viewModel::kickRemoteUser,
+                enabled = !state.remoteBusy && state.remoteSelectedUserIndex >= 0,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Kick selected")
+            }
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 220.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            if (state.remoteUsers.isEmpty()) {
+                Text(
+                    "No remote users loaded yet.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            } else {
+                state.remoteUsers.forEachIndexed { index, row ->
+                    val selected = index == state.remoteSelectedUserIndex
+                    Text(
+                        text = row.label(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                if (selected) {
+                                    MaterialTheme.colorScheme.primaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceVariant
+                                },
+                                RoundedCornerShape(8.dp),
+                            )
+                            .clickable { viewModel.selectRemoteUser(index) }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
             }
         }
         if (state.remoteBusy) {
@@ -1079,7 +1178,7 @@ private fun StreamSection(state: UiState, viewModel: ClientViewModel) {
         Text("Client stream", style = MaterialTheme.typography.titleMedium)
         Text(
             "Heartbeats tell the host which encode ladder to send. " +
-                "Mobile defaults are Medium @ 540p.",
+                "Mobile defaults are Medium @ 540p, Low latency.",
             style = MaterialTheme.typography.bodyMedium,
         )
         Text("Quality", style = MaterialTheme.typography.titleSmall)
@@ -1094,6 +1193,11 @@ private fun StreamSection(state: UiState, viewModel: ClientViewModel) {
                 onClick = { viewModel.setStreamQuality(MediaQualityTier.Medium) },
                 label = { Text("Medium") },
             )
+            FilterChip(
+                selected = state.streamQuality == MediaQualityTier.High,
+                onClick = { viewModel.setStreamQuality(MediaQualityTier.High) },
+                label = { Text("High") },
+            )
         }
         Text("Size", style = MaterialTheme.typography.titleSmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1106,6 +1210,33 @@ private fun StreamSection(state: UiState, viewModel: ClientViewModel) {
                 selected = state.streamSize == MediaStreamSize.P720,
                 onClick = { viewModel.setStreamSize(MediaStreamSize.P720) },
                 label = { Text("720p") },
+            )
+            FilterChip(
+                selected = state.streamSize == MediaStreamSize.P1080,
+                onClick = { viewModel.setStreamSize(MediaStreamSize.P1080) },
+                label = { Text("1080p") },
+            )
+        }
+        Text("Stream feel", style = MaterialTheme.typography.titleSmall)
+        Text(
+            "Low latency = snappier controls; Smooth = more buffer (closer to older feel).",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = state.streamFeel == MediaStreamFeel.LowLatency,
+                onClick = { viewModel.setStreamFeel(MediaStreamFeel.LowLatency) },
+                label = { Text("Low latency") },
+            )
+            FilterChip(
+                selected = state.streamFeel == MediaStreamFeel.Balanced,
+                onClick = { viewModel.setStreamFeel(MediaStreamFeel.Balanced) },
+                label = { Text("Balanced") },
+            )
+            FilterChip(
+                selected = state.streamFeel == MediaStreamFeel.Smooth,
+                onClick = { viewModel.setStreamFeel(MediaStreamFeel.Smooth) },
+                label = { Text("Smooth") },
             )
         }
         Row(
@@ -1124,6 +1255,10 @@ private fun StreamSection(state: UiState, viewModel: ClientViewModel) {
             Text("Receive audio")
             Switch(checked = state.receiveAudio, onCheckedChange = viewModel::setReceiveAudio)
         }
+        Text(
+            "Off mutes game sound on this device (stream can stay up).",
+            style = MaterialTheme.typography.bodySmall,
+        )
         if (state.mediaHint.isNotBlank()) {
             Text(state.mediaHint, style = MaterialTheme.typography.bodySmall)
         }
@@ -1302,7 +1437,7 @@ private fun ControlsSection(state: UiState, viewModel: ClientViewModel) {
         Text(
             when {
                 !state.hasProfileUsername ->
-                    "Set a save-profile username first. “android” is never pushed or pulled."
+                    "Set a save-profile username first before pull/push."
                 !state.controlsSyncReady ->
                     "Connect to a host with your password (or join a session) before syncing."
                 else ->
@@ -1479,8 +1614,8 @@ private fun ProfileSection(state: UiState, viewModel: ClientViewModel) {
             modifier = Modifier.fillMaxWidth(),
         )
         Text(
-            "Required to edit and sync controls. Leave blank until you pick a real " +
-                "profile — the “android” placeholder is never transported to the host. " +
+            "Required before Connect/Join — host saves are keyed by this name. " +
+                "It is stored on the phone and survives disconnect and app restart. " +
                 "Session password is on the Client tab.",
             style = MaterialTheme.typography.bodySmall,
         )
@@ -1551,7 +1686,7 @@ private fun SettingsSection(state: UiState, viewModel: ClientViewModel) {
             )
         }
         Text(
-            "Host IP is on the Client tab. Ports match the desktop host defaults (45555 / 45454).",
+            "Host IP and Alt IP are on the Client tab. Ports match the desktop host defaults (45555 / 45454).",
             style = MaterialTheme.typography.bodySmall,
         )
         HorizontalDivider()
@@ -1610,12 +1745,12 @@ private fun SettingsSection(state: UiState, viewModel: ClientViewModel) {
                 Text("Log connections")
                 Text(
                     if (state.logConnections) {
-                        "On — TCP connect/close and session/media bind lifecycle " +
-                            "are written to the on-device log (lines prefixed conn:). " +
-                            "Use Send logs to host after a play session."
+                        "On — TCP connect/close, session/media bind lifecycle, and " +
+                            "per-second RTP video stats (rx/lost/gaps/frames) while playing " +
+                            "(lines prefixed conn:). Use Send logs to host after a play session."
                     } else {
-                        "Off — no connection lifecycle lines. Enable to diagnose " +
-                            "drops, rebinds, and join ordering."
+                        "Off — no connection lifecycle or RTP loss lines. Enable to diagnose " +
+                            "drops, rebinds, join ordering, and green/stutter from packet loss."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1676,7 +1811,7 @@ private fun PlayScreen(
                 editing = state.overlayEditing,
                 onState = viewModel::onPadState,
                 onMenuClick = onOpenMenu,
-                onFastForwardHold = viewModel::setFastForward,
+                onFastForwardHold = viewModel::setFastForwardHold,
                 onScreenSwap = viewModel::triggerScreenSwap,
                 onItemsChange = viewModel::updateOverlayItems,
                 onDoneEditing = viewModel::finishOverlayEdit,

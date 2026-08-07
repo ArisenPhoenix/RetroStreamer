@@ -9,7 +9,11 @@
 #include "host/session_types.hpp"
 #include "host/streaming_audio_sink.hpp"
 
-#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>

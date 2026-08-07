@@ -46,6 +46,14 @@ struct EmulatorLaunchEnvRequest {
     bool gamescope_capture = false;
     bool virtualgl_capture = false;
     std::string capture_display; // DISPLAY=:99 for Xvfb/Xephyr/VGL
+    /**
+     * Gamescope nested XTest target (`:20+slot`). Pin only — identity is
+     * ARCHSTREAMER_SESSION_ID; the gamescope wrapper uses this to reserve lower
+     * display numbers so nested Xwayland lands here.
+     */
+    std::string xtest_display;
+    /** Lobby / SessionManager id; injected as ARCHSTREAMER_SESSION_ID. */
+    std::string session_id;
 
     std::optional<GpuDevice> render_gpu;
     std::optional<YuzuUserProfile> yuzu_profile; // set for standalone Yuzu

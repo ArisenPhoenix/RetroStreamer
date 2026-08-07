@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -66,6 +67,8 @@ public:
 
     /** Per-session RetroArch network_cmd_port (multi-slot hosts). */
     void set_netcmd_port(std::uint16_t port) { netcmd_port_ = port; }
+    /** melonDS --archstreamer-ctrl name for absolute PAUSE on|off (preferred over F5). */
+    void set_melonds_ctrl_name(std::string name) { melonds_ctrl_name_ = std::move(name); }
 
     void apply(const KeyboardState& state);
     /**
@@ -79,6 +82,11 @@ public:
     void reassert_fast_forward_hold();
     /** One-shot melonDS screen swap (keyboard F6); no-op on other backends. */
     void trigger_screen_swap();
+    /**
+     * One-shot pause toggle (P key). melonDS/Ryujinx: XTest F5. RetroArch: PAUSE_TOGGLE.
+     * Prefer this over absolute set_paused for toggle hotkeys — each press is one tap.
+     */
+    void trigger_pause_toggle();
     void release_all();
 
 private:
@@ -111,6 +119,7 @@ private:
     bool ryujinx_switch_vsync_ = true;
     int target_pid_ = 0;
     std::uint16_t netcmd_port_ = DefaultRetroArchNetcmdPort;
+    std::string melonds_ctrl_name_;
     std::uint32_t last_keys_ = 0;
     std::chrono::steady_clock::time_point last_space_repeat_{};
 };
@@ -123,6 +132,11 @@ private:
 // Cancel / empty / timeout never invents a name — if the game dialog is still
 // focused, another SoftKeyboardRequest is published; otherwise we wait for the
 // next real dialog. `fallback_text` is unused (kept for call-site compatibility).
+// `prompt` is a fallback only — when empty/default, Linux captures the Avalonia
+// ContentDialog and OCRs Ryujinx HeaderText via `tesseract` when available.
+// The same watcher auto-dismisses Ryujinx Error applet windows ("Error Number:",
+// "Error Code:", "Details:") with End/Tab+Return so cancelled LDN links don't
+// block the session on an OK dialog.
 // `preferred_display` / `owner_pid` scope probes to this session's nested
 // Xwayland — never scan sibling gamescope displays (concurrent slots).
 #endif
@@ -132,14 +146,14 @@ private:
 void schedule_soft_keyboard(
     std::shared_ptr<SoftKeyboardHostBridge> bridge,
     std::string fallback_text,
-    std::string prompt = "The game is asking for text. Enter it with the pad.",
+    std::string prompt = {},
     std::string preferred_display = {},
     int owner_pid = 0);
 
 void ensure_soft_keyboard(
     std::shared_ptr<SoftKeyboardHostBridge>& bridge,
     std::string fallback_text,
-    std::string prompt = "The game is asking for text. Enter it with the pad.",
+    std::string prompt = {},
     std::string preferred_display = {},
     int owner_pid = 0);
 
@@ -154,5 +168,21 @@ std::vector<std::string> xtest_display_candidates(const std::string& preferred =
 std::vector<std::string> soft_keyboard_display_candidates(
     const std::string& preferred = {},
     int owner_pid = 0);
+
+/**
+ * True when `display` is the XTest target leased to the session that owns
+ * this process tree (ARCHSTREAMER_SESSION_ID → host registry), or when the
+ * tree still holds that X11 listen socket (legacy / non-gamescope).
+ */
+bool display_belongs_to_process_tree(const std::string& display, int owner_pid);
+
+/** Lease a nested XTest DISPLAY for a Lobby/SessionManager session id. */
+void register_session_xtest_display(const std::string& session_id, const std::string& display);
+void unregister_session_xtest_display(const std::string& session_id);
+std::optional<std::string> lookup_session_xtest_display(const std::string& session_id);
+/** Re-pin the lease to the display VK actually bound (after nested Xwayland starts). */
+void register_session_xtest_display_for_owner(int owner_pid, const std::string& display);
+
+inline constexpr const char* kArchstreamerSessionIdEnv = "ARCHSTREAMER_SESSION_ID";
 
 } // namespace archstreamer

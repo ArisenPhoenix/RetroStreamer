@@ -318,6 +318,8 @@ enum class EmulatorControlState : std::uint8_t {
 /** One-shot EmulatorControlPlane action codes (0 = none; ≥64 match EmulatorIntentKind). */
 constexpr std::uint8_t EmulatorControlActionNone = 0;
 constexpr std::uint8_t EmulatorControlActionScreenSwap = 64;
+/** Keyboard P: one F5 / PAUSE_TOGGLE edge (toggle backends). Not absolute On/Off. */
+constexpr std::uint8_t EmulatorControlActionPauseToggle = 65;
 
 struct EmulatorControl {
     ClientId client_id = 0;

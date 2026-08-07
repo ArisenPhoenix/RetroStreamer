@@ -24,6 +24,7 @@
 #include "host/host_session_helpers.hpp"
 #include "host/input_router.hpp"
 #include "host/launch_environment.hpp"
+#include "host/virtual_display.hpp"
 #include "host/virtual_keyboard.hpp"
 #include "host/soft_keyboard_host.hpp"
 #include "host/local_controller_bridge.hpp"
@@ -305,6 +306,17 @@ int HostApp::run_direct_session(
     launch_env_request.gamescope_capture = gamescope_capture;
     launch_env_request.virtualgl_capture = virtualgl_capture;
     launch_env_request.capture_display = capture_display;
+    const std::string xtest_display = gamescope_capture
+        ? gamescope_xtest_display_for_slot(0)
+        : capture_display;
+    if (gamescope_capture) {
+        launch_env_request.xtest_display = xtest_display;
+    }
+    // Direct CLI path has no Lobby session id — mint one for the XTest lease map.
+    const std::string session_id = "direct-" + std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    launch_env_request.session_id = session_id;
+    register_session_xtest_display(session_id, xtest_display);
 
     auto resolved_encode = resolve_render_gpu(config.encode_gpu);
     auto resolved_gpu = resolve_render_gpu(effective_render_gpu_selection(config));
@@ -443,8 +455,8 @@ int HostApp::run_direct_session(
     for (RetroArchPort port = 0; port < launch_plan.players; ++port) {
         gamepads.plug(port);
     }
-    // Virtual keyboard needs the capture display (:99) which media_server starts later.
-    VirtualKeyboard keyboard(capture_display);
+    // Virtual keyboard targets ARCHSTREAMER_XTEST_DISPLAY for gamescope, else Xvfb capture.
+    VirtualKeyboard keyboard(xtest_display);
     std::this_thread::sleep_for(std::chrono::milliseconds(750));
 
     // Resolve joypad indices after uinput pads appear. Prefer discovered index so
@@ -647,8 +659,9 @@ int HostApp::run_direct_session(
     }
     std::unique_ptr<MelonDsCtrlClient> melonds_touch_ctrl;
     if (melonds_backend != nullptr && melonds_backend->profile() != nullptr) {
-        melonds_touch_ctrl = std::make_unique<MelonDsCtrlClient>(
-            melonds_backend->profile()->ctrl_server_name);
+        const auto& ctrl_name = melonds_backend->profile()->ctrl_server_name;
+        keyboard.set_melonds_ctrl_name(ctrl_name);
+        melonds_touch_ctrl = std::make_unique<MelonDsCtrlClient>(ctrl_name);
         MelonDsCtrlClient* touch_ctrl = melonds_touch_ctrl.get();
         input_router.set_touch_handler([touch_ctrl](const TouchInput& input) {
             if (touch_ctrl == nullptr) {
@@ -769,7 +782,7 @@ int HostApp::run_direct_session(
         config.pulse_input,
         &keyboard,
         gamescope_capture,
-        capture_display);
+        xtest_display);
 
     CadenceSessionTracker cadence_tracker;
     {
@@ -801,14 +814,15 @@ int HostApp::run_direct_session(
     }
 
     if (arm_soft_keyboard && standalone_soft_keyboard) {
-        std::string display = capture_display;
+        std::string display = xtest_display;
         if (keyboard.plugged()) {
             display = keyboard.capture_display();
         }
         schedule_soft_keyboard(
             standalone_soft_keyboard,
             soft_keyboard_fallback,
-            "What is your name?",
+            // Prefer OCR of Ryujinx HeaderText when the dialog appears.
+            {},
             display,
             session_runtime->emulator().process_id().value_or(0));
     }
@@ -853,6 +867,7 @@ int HostApp::run_direct_session(
 
     // Close XTest before stopping gamescope/Xvfb so Xlib does not abort the process.
     unplug_session_keyboard(&keyboard);
+    unregister_session_xtest_display(session_id);
 
     untrack_session_audio(&streaming_audio);
     stop_session_runtime(session_runtime);

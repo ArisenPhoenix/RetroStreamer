@@ -122,6 +122,7 @@ struct EmulatorControlBridge {
     bool sent_paused = false;
     bool have_sent_paused = false;
     bool pending_screen_swap = false;
+    bool pending_pause_toggle = false;
 
     void set_fast_forward_held(bool held) {
         std::lock_guard lock(mutex);
@@ -134,10 +135,15 @@ struct EmulatorControlBridge {
         want_paused = paused;
     }
 
-    /** Keyboard P edge while not in OSK — toggle desired pause. */
+    /**
+     * Keyboard P edge while not in OSK — one-shot pause toggle on the host
+     * (F5 / PAUSE_TOGGLE). Mirrors want_paused for local UI only; does not send
+     * absolute On/Off (that desyncs when a toggle hotkey tap is missed).
+     */
     void toggle_pause() {
         std::lock_guard lock(mutex);
         want_paused = !want_paused;
+        pending_pause_toggle = true;
     }
 
     void request_screen_swap() {
@@ -148,13 +154,19 @@ struct EmulatorControlBridge {
     std::optional<EmulatorControl> take_pending(ClientId client_id) {
         std::lock_guard lock(mutex);
         const bool ff_changed = want_fast_forward != sent_fast_forward;
-        const bool pause_changed = !have_sent_paused || want_paused != sent_paused;
-        if (!ff_changed && !pause_changed && !pending_screen_swap) {
+        const bool pause_changed =
+            !pending_pause_toggle && (!have_sent_paused || want_paused != sent_paused);
+        if (!ff_changed && !pause_changed && !pending_screen_swap && !pending_pause_toggle) {
             return std::nullopt;
         }
         EmulatorControl control;
         control.client_id = client_id;
-        if (pause_changed) {
+        if (pending_pause_toggle) {
+            pending_pause_toggle = false;
+            sent_paused = want_paused;
+            have_sent_paused = true;
+            control.action = EmulatorControlActionPauseToggle;
+        } else if (pause_changed) {
             sent_paused = want_paused;
             have_sent_paused = true;
             control.pause = want_paused
@@ -170,7 +182,13 @@ struct EmulatorControlBridge {
         }
         if (pending_screen_swap) {
             pending_screen_swap = false;
-            control.action = EmulatorControlActionScreenSwap;
+            // Prefer PauseToggle if both edged same tick; swap is rare with P.
+            if (control.action == EmulatorControlActionNone) {
+                control.action = EmulatorControlActionScreenSwap;
+            } else {
+                // Re-queue swap for the next take_pending.
+                pending_screen_swap = true;
+            }
         }
         return control;
     }
@@ -183,6 +201,7 @@ struct EmulatorControlBridge {
         sent_paused = false;
         have_sent_paused = false;
         pending_screen_swap = false;
+        pending_pause_toggle = false;
     }
 };
 

@@ -79,6 +79,9 @@ void EmulatorControlPlane::apply_action(EmulatorIntentKind kind) {
     case EmulatorIntentKind::ScreenSwap:
         keyboard_->trigger_screen_swap();
         break;
+    case EmulatorIntentKind::PauseToggle:
+        keyboard_->trigger_pause_toggle();
+        break;
     default:
         std::cerr
             << "EmulatorControlPlane: action intent "

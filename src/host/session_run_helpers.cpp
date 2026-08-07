@@ -31,66 +31,6 @@ std::string with_prefix(std::string_view prefix, std::string_view message) {
 }
 
 #ifndef _WIN32
-std::optional<std::string> display_from_process_environ(int pid) {
-    if (pid <= 0) {
-        return std::nullopt;
-    }
-    std::ifstream in("/proc/" + std::to_string(pid) + "/environ");
-    if (!in) {
-        return std::nullopt;
-    }
-    std::string blob(
-        (std::istreambuf_iterator<char>(in)),
-        std::istreambuf_iterator<char>());
-    std::size_t pos = 0;
-    while (pos < blob.size()) {
-        const auto end = blob.find('\0', pos);
-        const auto entry = blob.substr(
-            pos,
-            end == std::string::npos ? std::string::npos : end - pos);
-        if (entry.rfind("DISPLAY=", 0) == 0) {
-            auto value = entry.substr(8);
-            if (!value.empty()) {
-                return value;
-            }
-        }
-        if (end == std::string::npos) {
-            break;
-        }
-        pos = end + 1;
-    }
-    return std::nullopt;
-}
-
-std::vector<int> child_pids(int parent_pid) {
-    std::vector<int> children;
-    if (parent_pid <= 0) {
-        return children;
-    }
-    std::error_code error;
-    for (const auto& entry : std::filesystem::directory_iterator("/proc", error)) {
-        if (!entry.is_directory(error)) {
-            continue;
-        }
-        const auto name = entry.path().filename().string();
-        if (name.empty() || name.find_first_not_of("0123456789") != std::string::npos) {
-            continue;
-        }
-        std::ifstream stat(entry.path() / "stat");
-        std::string ignore;
-        int pid = 0;
-        char state = 0;
-        int ppid = 0;
-        if (!(stat >> pid >> ignore >> state >> ppid)) {
-            continue;
-        }
-        if (ppid == parent_pid) {
-            children.push_back(pid);
-        }
-    }
-    return children;
-}
-
 std::string host_desktop_display() {
     if (const char* display = std::getenv("DISPLAY"); display != nullptr && *display != '\0') {
         return display;
@@ -117,6 +57,13 @@ bool is_host_desktop_display(const std::string& name) {
 std::vector<std::string> gamescope_xtest_candidates(
     const std::string& preferred_display,
     std::optional<int> emulator_pid) {
+    // When we know the session leader, reuse the soft-keyboard scoping rules:
+    // only that process tree (nested Xwayland owned by it), never every local
+    // X socket / :0–:10 probe. Sibling concurrent sessions must not share pause.
+    if (emulator_pid.has_value() && *emulator_pid > 0) {
+        return soft_keyboard_display_candidates(preferred_display, *emulator_pid);
+    }
+
     std::vector<std::string> names;
     auto add = [&](const std::string& name) {
         if (name.empty()) {
@@ -135,34 +82,8 @@ std::vector<std::string> gamescope_xtest_candidates(
         names.push_back(name);
     };
 
-    // 1) DISPLAY from gamescope / emulator process tree — children first (nested
-    // Xwayland), then the parent. Parent is usually the host desktop and skipped.
-    if (emulator_pid.has_value()) {
-        std::vector<std::string> from_tree;
-        auto consider = [&](int pid) {
-            if (const auto display = display_from_process_environ(pid); display) {
-                from_tree.push_back(*display);
-            }
-        };
-        for (const int child : child_pids(*emulator_pid)) {
-            consider(child);
-            for (const int grand : child_pids(child)) {
-                consider(grand);
-                for (const int great : child_pids(grand)) {
-                    consider(great);
-                }
-            }
-        }
-        consider(*emulator_pid);
-        for (const auto& display : from_tree) {
-            add(display);
-        }
-    }
-
-    // 2) Configured virtual display (Xvfb-style); often unused under gamescope.
     add(preferred_display);
 
-    // 3) Nested sockets under /tmp/.X11-unix, newest first — host desktop already filtered.
     struct SocketCandidate {
         std::string name;
         std::filesystem::file_time_type mtime{};
@@ -244,8 +165,12 @@ bool plug_gamescope_virtual_keyboard_after_start(
     std::string_view log_prefix) {
 #ifndef _WIN32
     if (keyboard.plugged()) {
-        // Defensive: never leave a gamescope session bound to the host desktop.
-        if (is_host_desktop_display(keyboard.capture_display())) {
+        // Defensive: never leave a gamescope session bound to the host desktop
+        // or a sibling session's nested Xwayland.
+        if (is_host_desktop_display(keyboard.capture_display())
+            || (emulator_pid.has_value()
+                && !display_belongs_to_process_tree(
+                        keyboard.capture_display(), *emulator_pid))) {
             keyboard.unplug();
         } else {
             if (emulator_pid.has_value()) {
@@ -258,6 +183,13 @@ bool plug_gamescope_virtual_keyboard_after_start(
     for (int attempt = 0; attempt < 50; ++attempt) {
         const auto candidates = gamescope_xtest_candidates(preferred_display, emulator_pid);
         for (const auto& name : candidates) {
+            if (emulator_pid.has_value()
+                && !display_belongs_to_process_tree(name, *emulator_pid)
+                && name != preferred_display) {
+                // Preferred is ARCHSTREAMER_XTEST_DISPLAY from launch — try it even
+                // before the child environ/socket ownership checks can see it.
+                continue;
+            }
             try {
                 keyboard.rebind_display(name);
                 if (emulator_pid.has_value()) {
@@ -267,6 +199,17 @@ bool plug_gamescope_virtual_keyboard_after_start(
                 if (is_host_desktop_display(keyboard.capture_display())) {
                     keyboard.unplug();
                     continue;
+                }
+                if (emulator_pid.has_value()
+                    && !display_belongs_to_process_tree(
+                            keyboard.capture_display(), *emulator_pid)
+                    && keyboard.capture_display() != preferred_display) {
+                    keyboard.unplug();
+                    continue;
+                }
+                if (emulator_pid.has_value()) {
+                    register_session_xtest_display_for_owner(
+                        *emulator_pid, keyboard.capture_display());
                 }
                 return true;
             } catch (const std::exception&) {

@@ -31,6 +31,7 @@
 #include "host/nds/melonds_backend.hpp"
 #include "host/virtual_joypad_resolve.hpp"
 #include "host/pad_plan.hpp"
+#include "host/virtual_display.hpp"
 #include "host/virtual_keyboard.hpp"
 #include "host/soft_keyboard_host.hpp"
 
@@ -423,6 +424,9 @@ void ActiveSessionSlot::unregister_input_clients() {
 }
 
 void ActiveSessionSlot::shutdown_media_and_clients(const std::string& end_reason) {
+    if (!config_.session_id.empty()) {
+        unregister_session_xtest_display(config_.session_id);
+    }
     if (cadence_session_live_) {
         record_session_ended(
             config_.slot_index,
@@ -865,7 +869,21 @@ void ActiveSessionSlot::run_session() {
     launch_env_request.gamescope_capture = gamescope_capture_;
     launch_env_request.virtualgl_capture = virtualgl_capture;
     launch_env_request.capture_display = capture_display;
-
+    const std::string xtest_display = gamescope_capture_
+        ? gamescope_xtest_display_for_slot(slot)
+        : capture_display;
+    if (gamescope_capture_) {
+        launch_env_request.xtest_display = xtest_display;
+    }
+    if (!config_.session_id.empty()) {
+        launch_env_request.session_id = config_.session_id;
+        if (gamescope_capture_ || use_virtual_capture_) {
+            register_session_xtest_display(config_.session_id, xtest_display);
+            std::cout
+                << "session slot " << slot << ": session " << config_.session_id
+                << " XTest lease " << xtest_display << '\n';
+        }
+    }
     auto resolved_encode = resolve_render_gpu(config.encode_gpu);
     auto resolved_gpu = resolve_render_gpu(effective_render_gpu_selection(config));
     std::string gamescope_vk_device;
@@ -942,7 +960,7 @@ void ActiveSessionSlot::run_session() {
         gamepads_->plug(port);
     }
 
-    keyboard_ = std::make_unique<VirtualKeyboard>(capture_display);
+    keyboard_ = std::make_unique<VirtualKeyboard>(xtest_display);
     keyboard_->set_netcmd_port(plan.retroarch_netcmd_port);
     std::this_thread::sleep_for(std::chrono::milliseconds(750));
 
@@ -1164,8 +1182,9 @@ void ActiveSessionSlot::run_session() {
     }
     melonds_touch_ctrl_.reset();
     if (melonds_backend != nullptr && melonds_backend->profile() != nullptr) {
-        melonds_touch_ctrl_ = std::make_unique<MelonDsCtrlClient>(
-            melonds_backend->profile()->ctrl_server_name);
+        const auto& ctrl_name = melonds_backend->profile()->ctrl_server_name;
+        keyboard_->set_melonds_ctrl_name(ctrl_name);
+        melonds_touch_ctrl_ = std::make_unique<MelonDsCtrlClient>(ctrl_name);
         MelonDsCtrlClient* touch_ctrl = melonds_touch_ctrl_.get();
         input_router_->set_touch_handler([touch_ctrl](const TouchInput& input) {
             if (touch_ctrl == nullptr) {
@@ -1257,7 +1276,7 @@ void ActiveSessionSlot::run_session() {
         config.pulse_input,
         keyboard_.get(),
         gamescope_capture_,
-        capture_display,
+        xtest_display,
         slot_prefix,
         audio_channel_.get());
 
@@ -1307,14 +1326,15 @@ void ActiveSessionSlot::run_session() {
     }
 
     if (arm_soft_keyboard && plan.soft_keyboard) {
-        std::string display = capture_display;
+        std::string display = xtest_display;
         if (keyboard_ != nullptr && keyboard_->plugged()) {
             display = keyboard_->capture_display();
         }
         schedule_soft_keyboard(
             plan.soft_keyboard,
             soft_keyboard_fallback,
-            "What is your name?",
+            // Prefer OCR of Ryujinx HeaderText when the dialog appears.
+            {},
             display,
             session_runtime_->emulator().process_id().value_or(0));
     }

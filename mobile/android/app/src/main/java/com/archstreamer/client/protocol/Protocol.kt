@@ -267,6 +267,8 @@ enum class EmulatorControlState(val id: Int) {
 object EmulatorControlAction {
     const val None: Int = 0
     const val ScreenSwap: Int = 64
+    /** Keyboard P — one host F5 / PAUSE_TOGGLE edge (not absolute On/Off). */
+    const val PauseToggle: Int = 65
 }
 
 /** Matches DiscControlAction in protocol.hpp. */

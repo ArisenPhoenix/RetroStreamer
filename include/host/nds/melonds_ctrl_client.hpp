@@ -49,6 +49,15 @@ public:
         DsScreenLayout& out,
         std::chrono::milliseconds timeout = std::chrono::milliseconds(500)) const;
 
+    /** Absolute pause via ctrl PAUSE on|off (not F5). */
+    bool set_paused(
+        bool paused,
+        std::chrono::milliseconds timeout = std::chrono::milliseconds(1500)) const;
+    bool toggle_paused(
+        std::chrono::milliseconds timeout = std::chrono::milliseconds(1500)) const;
+    std::optional<bool> query_paused(
+        std::chrono::milliseconds timeout = std::chrono::milliseconds(1500)) const;
+
     const std::string& server_name() const { return server_name_; }
     const std::string& last_error() const { return last_error_; }
 

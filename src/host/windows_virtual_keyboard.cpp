@@ -185,7 +185,8 @@ void VirtualKeyboard::set_paused(bool want_paused, bool force) {
     if (!plugged_) {
         return;
     }
-    // F5 is a toggle — never blind-force when the cache already matches (inverts game).
+    // F5 is a toggle: tap only when desired state differs from cache. force must
+    // not re-tap on a match (inverts). RetroArch can still absolute-set below.
     if (want_paused == paused_) {
         if (switch_style_hotkeys_ || melonds_style_hotkeys_) {
             return;
@@ -283,6 +284,26 @@ void VirtualKeyboard::trigger_screen_swap() {
     }
     tap_vk(VK_F6);
     std::cout << "EmulatorControl: screen_swap (SendInput F6/melonDS)\n";
+}
+
+void VirtualKeyboard::trigger_pause_toggle() {
+    if (!plugged_) {
+        return;
+    }
+    if (switch_style_hotkeys_ || melonds_style_hotkeys_) {
+        tap_vk(VK_F5);
+        paused_ = !paused_;
+        std::cout
+            << "EmulatorControl: pause_toggle → " << (paused_ ? "on" : "off")
+            << " (SendInput F5" << (melonds_style_hotkeys_ ? "/melonDS" : "") << ")\n";
+        return;
+    }
+    if (send_retroarch_netcmd("PAUSE_TOGGLE", netcmd_port_)) {
+        paused_ = !paused_;
+        std::cout
+            << "EmulatorControl: pause_toggle → " << (paused_ ? "on" : "off")
+            << " (netcmd " << netcmd_port_ << ")\n";
+    }
 }
 
 void VirtualKeyboard::apply_emulator_control(const EmulatorControl& control) {

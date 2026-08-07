@@ -1,28 +1,44 @@
 #ifndef _WIN32
 #include "host/virtual_keyboard.hpp"
 #include "host/soft_keyboard_host.hpp"
+#include "host/nds/melonds_ctrl_client.hpp"
 
 #include "host/retroarch_netcmd.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <queue>
+#include <regex>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include <unistd.h>
+
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
+#include <X11/Xutil.h>
 #include <X11/keysym.h>
 #include <X11/extensions/XTest.h>
+
+#include <cstdio>
 
 namespace archstreamer {
 namespace {
@@ -532,6 +548,348 @@ bool is_soft_keyboard_dialog_title(const std::string& title) {
         title.find("ContentDialogOverlayWindow") != std::string::npos;
 }
 
+// Ryujinx ErrorAppletWindow: Title is "Error Number: N", "Error Code: …", or
+// "Details: …". Separate from soft-keyboard ContentDialogOverlayWindow.
+bool is_error_applet_dialog_title(const std::string& title) {
+    return title.rfind("Error Number:", 0) == 0 ||
+        title.rfind("Error Code:", 0) == 0 ||
+        title.rfind("Details:", 0) == 0;
+}
+
+std::optional<Window> find_viewable_titled(
+    Display* display,
+    bool (*match)(const std::string&)) {
+    std::vector<std::pair<Window, std::string>> windows;
+    collect_windows(display, DefaultRootWindow(display), windows);
+    for (const auto& [window, title] : windows) {
+        if (match(title) && window_is_viewable(display, window)) {
+            return window;
+        }
+    }
+    return std::nullopt;
+}
+
+void xtest_tap_keysym_display(Display* display, KeySym keysym) {
+    const KeyCode code = XKeysymToKeycode(display, keysym);
+    if (code == 0) {
+        return;
+    }
+    XTestFakeKeyEvent(display, code, True, CurrentTime);
+    XFlush(display);
+    std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    XTestFakeKeyEvent(display, code, False, CurrentTime);
+    XFlush(display);
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+}
+
+// Error applet buttons are [Details?, OK] with OK last. Focus the dialog, then
+ // Tab→Return (or End→Return) so we hit OK rather than Details.
+bool try_dismiss_error_applet_on_display(const std::string& display_name) {
+    install_x_error_guard();
+    Display* display = XOpenDisplay(display_name.c_str());
+    if (display == nullptr) {
+        return false;
+    }
+    install_x_io_exit_guard(display);
+
+    const auto target = find_viewable_titled(display, is_error_applet_dialog_title);
+    if (!target.has_value()) {
+        XCloseDisplay(display);
+        return false;
+    }
+    const auto title = window_title(display, *target);
+    activate_x_window(display, *target);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    // Prefer End (last button = OK) then Return; fall back to Tab+Return.
+    xtest_tap_keysym_display(display, XK_End);
+    xtest_tap_keysym_display(display, XK_Return);
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    if (!find_viewable_titled(display, is_error_applet_dialog_title).has_value()) {
+        XCloseDisplay(display);
+        std::cout
+            << "Ryujinx Error Applet: dismissed \"" << title
+            << "\" on " << display_name << " (End+Return)\n";
+        return true;
+    }
+    xtest_tap_keysym_display(display, XK_Tab);
+    xtest_tap_keysym_display(display, XK_Return);
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    const bool gone =
+        !find_viewable_titled(display, is_error_applet_dialog_title).has_value();
+    XCloseDisplay(display);
+    if (gone) {
+        std::cout
+            << "Ryujinx Error Applet: dismissed \"" << title
+            << "\" on " << display_name << " (Tab+Return)\n";
+    }
+    return gone;
+}
+
+std::string trim_ascii(std::string text) {
+    while (!text.empty() &&
+           std::isspace(static_cast<unsigned char>(text.front()))) {
+        text.erase(text.begin());
+    }
+    while (!text.empty() &&
+           std::isspace(static_cast<unsigned char>(text.back()))) {
+        text.pop_back();
+    }
+    return text;
+}
+
+std::string lower_ascii(std::string text) {
+    for (char& character : text) {
+        character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+    }
+    return text;
+}
+
+// Pokemon HeaderText uses (♀)'s / (♂)'s. Tesseract mangles only the symbol
+// glyph (e.g. ♂ → "0'fs", ♀ → "o" / "dfs"); parentheses are already in the
+ // string. Replace the junk token alone — do not wrap or re-parenthesize.
+std::string fix_swkbd_gender_symbols(std::string text) {
+    constexpr const char* kFemale = "\xE2\x99\x80"; // ♀
+    constexpr const char* kMale = "\xE2\x99\x82";   // ♂
+    if (text.find(kFemale) != std::string::npos || text.find(kMale) != std::string::npos) {
+        return text;
+    }
+
+    // Closed "(JUNK)'s" → "(♀/♂)'s"
+    static const std::regex kMaleClosed(
+        R"(\(\s*(?:0'fs|0fs|o'fs|ofs|0'f|o\^|\^|o\+|o\|)\s*\)\s*'?s\b)");
+    static const std::regex kFemaleClosed(
+        R"(\(\s*(?:[oOq]|o'|dfs?|d'?s|9ys?)\s*\)\s*'?s\b)");
+
+    // OCR often eats ")'s" into the junk: "(0'fs nickname" → keep "("; fix token.
+    static const std::regex kMaleOpen(
+        R"(\(\s*(?:0'fs|0fs|o'fs|ofs|0'f|o\^|\^|o\+|o\|)\s+)");
+    static const std::regex kFemaleOpen(
+        R"(\(\s*(?:dfs?|d'?s|9ys?)\s+)");
+
+    const std::string male_closed = std::string("(") + kMale + ")'s";
+    const std::string female_closed = std::string("(") + kFemale + ")'s";
+    // Open forms restore the missing ")'s" that OCR merged into the glyph junk.
+    const std::string male_open = std::string("(") + kMale + ")'s ";
+    const std::string female_open = std::string("(") + kFemale + ")'s ";
+
+    text = std::regex_replace(text, kMaleClosed, male_closed);
+    text = std::regex_replace(text, kFemaleClosed, female_closed);
+    text = std::regex_replace(text, kMaleOpen, male_open);
+    text = std::regex_replace(text, kFemaleOpen, female_open);
+    text = std::regex_replace(text, std::regex(R"(\s+)"), " ");
+    return trim_ascii(text);
+}
+
+// Pick HeaderText from tesseract lines on the Avalonia swkbd ContentDialog.
+// Layout: title "Software Keyboard", HeaderText, validation ("Must be…"), OK/Cancel.
+std::string prompt_from_swkbd_ocr(const std::string& ocr_text) {
+    std::istringstream stream(ocr_text);
+    std::string line;
+    std::string best;
+    while (std::getline(stream, line)) {
+        line = trim_ascii(line);
+        if (line.size() < 3) {
+            continue;
+        }
+        const auto lower = lower_ascii(line);
+        if (lower.find("software keyboard") != std::string::npos) {
+            continue;
+        }
+        if (lower.rfind("must be", 0) == 0) {
+            continue;
+        }
+        if (lower == "ok" || lower == "cancel" || lower == "submit") {
+            continue;
+        }
+        if (line.find('?') != std::string::npos) {
+            return fix_swkbd_gender_symbols(line);
+        }
+        if (best.empty() || line.size() > best.size()) {
+            best = line;
+        }
+    }
+    return fix_swkbd_gender_symbols(best);
+}
+
+bool write_pgm_u8(
+    const std::filesystem::path& path,
+    int width,
+    int height,
+    const std::vector<std::uint8_t>& pixels) {
+    if (width <= 0 || height <= 0 ||
+        pixels.size() != static_cast<std::size_t>(width) * static_cast<std::size_t>(height)) {
+        return false;
+    }
+    std::ofstream out(path, std::ios::binary);
+    if (!out) {
+        return false;
+    }
+    out << "P5\n" << width << ' ' << height << "\n255\n";
+    out.write(reinterpret_cast<const char*>(pixels.data()),
+              static_cast<std::streamsize>(pixels.size()));
+    return static_cast<bool>(out);
+}
+
+// Capture the focused ContentDialog overlay and OCR HeaderText.
+// gamescope/Xwayland often yields a blank frame from XGetImage right as the
+// dialog maps; ImageMagick `import -window` matches what we can read by hand.
+// Retries until ink appears. Needs `import`/`convert` (imagemagick) + `tesseract`.
+std::string ocr_soft_keyboard_prompt_on_display(
+    const std::string& display_name,
+    Window dialog) {
+    const auto dir = std::filesystem::temp_directory_path() / "archstreamer-swkbd";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    const auto png = dir / "dialog.png";
+    const auto pgm = dir / "dialog.pgm";
+
+    const char* home = std::getenv("HOME");
+    std::string path_prefix = "PATH=\"";
+    if (home != nullptr && home[0] != '\0') {
+        path_prefix += home;
+        path_prefix += "/.local/bin:";
+    }
+    path_prefix += "${PATH}\" ";
+
+    auto run_shell = [](const std::string& command) -> int {
+        return std::system(command.c_str());
+    };
+
+    auto tesseract_prompt = [&]() -> std::string {
+        std::ostringstream command;
+        command << path_prefix << "tesseract " << pgm.string()
+                << " stdout -l eng --psm 6 2>/dev/null";
+        FILE* pipe = popen(command.str().c_str(), "r");
+        if (pipe == nullptr) {
+            return {};
+        }
+        std::string ocr;
+        char buffer[512];
+        while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+            ocr += buffer;
+        }
+        const int status = pclose(pipe);
+        if (status != 0 || ocr.empty()) {
+            return {};
+        }
+        return prompt_from_swkbd_ocr(ocr);
+    };
+
+    // Give Avalonia a beat to paint HeaderText before the first grab.
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        if (attempt > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        }
+
+        // 1) Preferred: ImageMagick import of the overlay window (works under gamescope).
+        bool got_image = false;
+        {
+            std::ostringstream command;
+            command << "DISPLAY=" << display_name << " import -window "
+                    << "0x" << std::hex << static_cast<unsigned long>(dialog) << std::dec
+                    << " " << png.string() << " 2>/dev/null";
+            if (run_shell(command.str()) == 0 &&
+                std::filesystem::exists(png) &&
+                std::filesystem::file_size(png, ec) > 1024) {
+                std::ostringstream convert;
+                convert << "convert " << png.string()
+                        << " -gravity Center -crop 55%x50%+0-20 +repage "
+                        << "-colorspace Gray -negate -threshold 70% "
+                        << pgm.string() << " 2>/dev/null";
+                if (run_shell(convert.str()) == 0 && std::filesystem::exists(pgm, ec)) {
+                    got_image = true;
+                }
+            }
+        }
+
+        // 2) Fallback: XGetImage (may be blank on the first frames).
+        if (!got_image) {
+            install_x_error_guard();
+            Display* display = XOpenDisplay(display_name.c_str());
+            if (display == nullptr) {
+                continue;
+            }
+            install_x_io_exit_guard(display);
+
+            XWindowAttributes attrs{};
+            if (!XGetWindowAttributes(display, dialog, &attrs) ||
+                attrs.width < 64 || attrs.height < 64) {
+                XCloseDisplay(display);
+                continue;
+            }
+
+            XImage* image = XGetImage(
+                display, dialog, 0, 0, attrs.width, attrs.height, AllPlanes, ZPixmap);
+            if (image == nullptr) {
+                XCloseDisplay(display);
+                continue;
+            }
+
+            const int full_w = attrs.width;
+            const int full_h = attrs.height;
+            const int crop_w = std::max(64, full_w * 55 / 100);
+            const int crop_h = std::max(64, full_h * 50 / 100);
+            const int origin_x = (full_w - crop_w) / 2;
+            const int origin_y = std::max(0, (full_h - crop_h) / 2 - full_h / 40);
+
+            std::vector<std::uint8_t> pixels(
+                static_cast<std::size_t>(crop_w) * static_cast<std::size_t>(crop_h));
+            std::size_t ink = 0;
+            for (int y = 0; y < crop_h; ++y) {
+                for (int x = 0; x < crop_w; ++x) {
+                    const unsigned long pixel =
+                        XGetPixel(image, origin_x + x, origin_y + y);
+                    const unsigned r = (pixel & image->red_mask) /
+                        (image->red_mask ? (image->red_mask / 255) : 1);
+                    const unsigned g = (pixel & image->green_mask) /
+                        (image->green_mask ? (image->green_mask / 255) : 1);
+                    const unsigned b = (pixel & image->blue_mask) /
+                        (image->blue_mask ? (image->blue_mask / 255) : 1);
+                    unsigned luma = (r * 30 + g * 59 + b * 11) / 100;
+                    if (luma > 255) {
+                        luma = 255;
+                    }
+                    luma = 255 - luma;
+                    const auto value =
+                        static_cast<std::uint8_t>(luma < 180 ? 0 : 255);
+                    pixels[static_cast<std::size_t>(y) * static_cast<std::size_t>(crop_w) +
+                           static_cast<std::size_t>(x)] = value;
+                    if (value == 0) {
+                        ++ink;
+                    }
+                }
+            }
+            XDestroyImage(image);
+            XCloseDisplay(display);
+
+            // Flat dark frame → all-white after invert; wait and retry.
+            if (ink * 200 < pixels.size()) { // <0.5% ink
+                continue;
+            }
+            if (!write_pgm_u8(pgm, crop_w, crop_h, pixels)) {
+                continue;
+            }
+            got_image = true;
+        }
+
+        if (!got_image) {
+            continue;
+        }
+
+        if (auto prompt = tesseract_prompt(); !prompt.empty()) {
+            return prompt;
+        }
+    }
+
+    std::cerr
+        << "Ryujinx Software Keyboard: OCR failed to read dialog prompt on "
+        << display_name << " (need imagemagick + tesseract)\n";
+    return {};
+}
+
 // A dialog that has opened and is accepting typed input: viewable + keyboard focus.
 //
 // Walks up from the focused window rather than enumerating the whole tree. A desktop
@@ -773,10 +1131,34 @@ void VirtualKeyboard::set_paused(bool want_paused, bool force) {
     if (!plugged_) {
         return;
     }
+    // melonDS: absolute PAUSE via --archstreamer-ctrl (emuPause/emuUnpause). F5 is a
+    // toggle and cannot implement drawer On/Off reliably; it also fights PauseToggle.
+    if (melonds_style_hotkeys_ && !melonds_ctrl_name_.empty()) {
+        MelonDsCtrlClient client(melonds_ctrl_name_);
+        if (const auto current = client.query_paused(); current.has_value()) {
+            if (*current == want_paused && !force) {
+                paused_ = want_paused;
+                return;
+            }
+        } else if (want_paused == paused_ && !force) {
+            return;
+        }
+        if (client.set_paused(want_paused)) {
+            paused_ = want_paused;
+            std::cout
+                << "EmulatorControl: pause=" << (want_paused ? "on" : "off")
+                << " (melonDS ctrl PAUSE"
+                << (force ? ", force" : "") << ") on " << capture_display_ << '\n';
+            return;
+        }
+        std::cerr
+            << "EmulatorControl: melonDS ctrl PAUSE failed (" << client.last_error()
+            << ") — falling back to XTest F5\n";
+    }
     // Client sends absolute On/Off. F5 is a toggle: tap only when desired state
-    // differs from our cache. Never blind-force F5 when the cache already matches —
-    // that inverts the game (Android A/V-resync used to force pause=off right after
-    // cutover and leave Ryujinx paused while the UI showed playing).
+    // differs from our cache. force must NOT re-tap on a match — that inverts an
+    // already-correct (or already-assumed) game. Missed taps are a focus/delivery
+    // problem; blind force retries make P-spam feel random.
     if (want_paused == paused_) {
         if (switch_style_hotkeys_ || melonds_style_hotkeys_) {
             return;
@@ -790,6 +1172,8 @@ void VirtualKeyboard::set_paused(bool want_paused, bool force) {
                 return;
             }
             // Local cache drifted — fall through and fix via netcmd.
+        } else {
+            // RetroArch: force may push absolute pause via netcmd below.
         }
     }
     if (switch_style_hotkeys_ || melonds_style_hotkeys_) {
@@ -929,6 +1313,52 @@ void VirtualKeyboard::trigger_screen_swap() {
     std::cout
         << "EmulatorControl: screen_swap (XTest F6/melonDS) on " << capture_display_
         << '\n';
+}
+
+void VirtualKeyboard::trigger_pause_toggle() {
+    if (!plugged_) {
+        return;
+    }
+    if (melonds_style_hotkeys_ && !melonds_ctrl_name_.empty()) {
+        MelonDsCtrlClient client(melonds_ctrl_name_);
+        if (client.toggle_paused()) {
+            if (const auto current = client.query_paused(); current.has_value()) {
+                paused_ = *current;
+            } else {
+                paused_ = !paused_;
+            }
+            std::cout
+                << "EmulatorControl: pause_toggle → " << (paused_ ? "on" : "off")
+                << " (melonDS ctrl PAUSE) on " << capture_display_ << '\n';
+            return;
+        }
+        std::cerr
+            << "EmulatorControl: melonDS ctrl PAUSE toggle failed (" << client.last_error()
+            << ") — falling back to XTest F5\n";
+    }
+    if (switch_style_hotkeys_ || melonds_style_hotkeys_) {
+        // One P → one F5. Absolute On/Off + host cache desyncs whenever a tap misses;
+        // FF works because it is a level hold (Space), not a toggle.
+        if (!focus_emulator_window(/*settle=*/true)) {
+            std::cerr
+                << "EmulatorControl: pause_toggle skipped — no emulator focus on "
+                << capture_display_ << '\n';
+            return;
+        }
+        xtest_tap_keysym(XK_F5);
+        paused_ = !paused_;
+        std::cout
+            << "EmulatorControl: pause_toggle → " << (paused_ ? "on" : "off")
+            << " (XTest F5" << (melonds_style_hotkeys_ ? "/melonDS" : "")
+            << ") on " << capture_display_ << '\n';
+        return;
+    }
+    if (send_retroarch_netcmd("PAUSE_TOGGLE", netcmd_port_)) {
+        paused_ = !paused_;
+        std::cout
+            << "EmulatorControl: pause_toggle → " << (paused_ ? "on" : "off")
+            << " (netcmd " << netcmd_port_ << ")\n";
+    }
 }
 
 void VirtualKeyboard::apply_emulator_control(const EmulatorControl& control) {
@@ -1082,8 +1512,8 @@ bool is_host_desktop_display_name(const std::string& name) {
     return normalize_display_name(name) == host;
 }
 
-std::optional<std::string> display_from_process_environ(int pid) {
-    if (pid <= 0) {
+std::optional<std::string> env_from_process(int pid, std::string_view key) {
+    if (pid <= 0 || key.empty()) {
         return std::nullopt;
     }
     std::ifstream in("/proc/" + std::to_string(pid) + "/environ");
@@ -1091,13 +1521,14 @@ std::optional<std::string> display_from_process_environ(int pid) {
         return std::nullopt;
     }
     std::string blob((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    const std::string prefix = std::string(key) + "=";
     std::size_t pos = 0;
     while (pos < blob.size()) {
         const auto end = blob.find('\0', pos);
         const auto entry = blob.substr(
             pos, end == std::string::npos ? std::string::npos : end - pos);
-        if (entry.rfind("DISPLAY=", 0) == 0) {
-            auto value = entry.substr(8);
+        if (entry.rfind(prefix, 0) == 0) {
+            auto value = entry.substr(prefix.size());
             if (!value.empty()) {
                 return value;
             }
@@ -1108,6 +1539,10 @@ std::optional<std::string> display_from_process_environ(int pid) {
         pos = end + 1;
     }
     return std::nullopt;
+}
+
+std::optional<std::string> display_from_process_environ(int pid) {
+    return env_from_process(pid, "DISPLAY");
 }
 
 std::vector<int> child_pids_of(int parent_pid) {
@@ -1133,7 +1568,315 @@ std::vector<int> child_pids_of(int parent_pid) {
     return children;
 }
 
+std::optional<int> parse_display_number(const std::string& display) {
+    const auto normalized = normalize_display_name(display);
+    const auto colon = normalized.rfind(':');
+    if (colon == std::string::npos || colon + 1 >= normalized.size()) {
+        return std::nullopt;
+    }
+    try {
+        return std::stoi(normalized.substr(colon + 1));
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+std::optional<int> display_number_from_x11_unix_path(std::string_view path) {
+    // /tmp/.X11-unix/XN or @/tmp/.X11-unix/XN (abstract)
+    constexpr std::string_view kPrefix = "/tmp/.X11-unix/X";
+    if (!path.empty() && path.front() == '@') {
+        path.remove_prefix(1);
+    }
+    if (path.size() <= kPrefix.size() || path.compare(0, kPrefix.size(), kPrefix) != 0) {
+        return std::nullopt;
+    }
+    const auto suffix = path.substr(kPrefix.size());
+    if (suffix.empty() || suffix.find_first_not_of("0123456789") != std::string_view::npos) {
+        return std::nullopt;
+    }
+    try {
+        return std::stoi(std::string(suffix));
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+/** inode → nested display number for local X11 unix listeners. */
+std::unordered_map<unsigned long, int> x11_listen_inode_to_display() {
+    std::unordered_map<unsigned long, int> out;
+    std::ifstream in("/proc/net/unix");
+    if (!in) {
+        return out;
+    }
+    std::string line;
+    std::getline(in, line); // header
+    while (std::getline(in, line)) {
+        std::istringstream iss(line);
+        std::string num;
+        std::string ref;
+        std::string proto;
+        std::string flags;
+        std::string type;
+        std::string st;
+        std::string inode_str;
+        if (!(iss >> num >> ref >> proto >> flags >> type >> st >> inode_str)) {
+            continue;
+        }
+        std::string path;
+        std::getline(iss >> std::ws, path);
+        const auto display_num = display_number_from_x11_unix_path(path);
+        if (!display_num.has_value()) {
+            continue;
+        }
+        try {
+            out.emplace(std::stoul(inode_str), *display_num);
+        } catch (...) {
+            // ignore malformed inode
+        }
+    }
+    return out;
+}
+
+std::unordered_set<unsigned long> process_socket_inodes(int pid) {
+    std::unordered_set<unsigned long> out;
+    if (pid <= 0) {
+        return out;
+    }
+    std::error_code error;
+    const auto fd_dir = std::filesystem::path("/proc") / std::to_string(pid) / "fd";
+    for (const auto& entry : std::filesystem::directory_iterator(fd_dir, error)) {
+        if (error) {
+            break;
+        }
+        char target[256];
+        const ssize_t n = ::readlink(entry.path().c_str(), target, sizeof(target) - 1);
+        if (n <= 0) {
+            continue;
+        }
+        target[n] = '\0';
+        constexpr std::string_view kSock = "socket:[";
+        std::string_view view(target);
+        if (view.size() < kSock.size() + 2 || view.compare(0, kSock.size(), kSock) != 0
+            || view.back() != ']') {
+            continue;
+        }
+        view.remove_prefix(kSock.size());
+        view.remove_suffix(1);
+        try {
+            out.insert(std::stoul(std::string(view)));
+        } catch (...) {
+            // ignore
+        }
+    }
+    return out;
+}
+
+std::vector<int> descendant_pids_of(int root_pid) {
+    std::vector<int> out;
+    if (root_pid <= 0) {
+        return out;
+    }
+    std::unordered_set<int> seen;
+    std::queue<int> pending;
+    pending.push(root_pid);
+    seen.insert(root_pid);
+    while (!pending.empty()) {
+        const int parent = pending.front();
+        pending.pop();
+        for (const int child : child_pids_of(parent)) {
+            if (!seen.insert(child).second) {
+                continue;
+            }
+            out.push_back(child);
+            pending.push(child);
+        }
+    }
+    return out;
+}
+
+std::vector<int> owner_tree_pids(int owner_pid) {
+    std::vector<int> pids = descendant_pids_of(owner_pid);
+    pids.push_back(owner_pid);
+    return pids;
+}
+
+std::optional<std::string> session_id_from_process_tree(int owner_pid) {
+    if (owner_pid <= 0) {
+        return std::nullopt;
+    }
+    for (const int pid : owner_tree_pids(owner_pid)) {
+        if (const auto id = env_from_process(pid, kArchstreamerSessionIdEnv); id) {
+            return id;
+        }
+    }
+    return std::nullopt;
+}
+
+std::mutex g_xtest_session_mu;
+std::unordered_map<std::string, std::string> g_xtest_session_displays;
+
+std::optional<int> display_number_from_xwayland_cmdline(int pid) {
+    if (pid <= 0) {
+        return std::nullopt;
+    }
+    std::ifstream in("/proc/" + std::to_string(pid) + "/cmdline");
+    if (!in) {
+        return std::nullopt;
+    }
+    std::string blob((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::vector<std::string> args;
+    std::size_t pos = 0;
+    while (pos < blob.size()) {
+        const auto end = blob.find('\0', pos);
+        args.push_back(blob.substr(
+            pos, end == std::string::npos ? std::string::npos : end - pos));
+        if (end == std::string::npos) {
+            break;
+        }
+        pos = end + 1;
+    }
+    if (args.empty()) {
+        return std::nullopt;
+    }
+    const auto base = std::filesystem::path(args[0]).filename().string();
+    if (base.find("Xwayland") == std::string::npos && base.find("Xorg") == std::string::npos) {
+        return std::nullopt;
+    }
+    for (std::size_t i = 1; i < args.size(); ++i) {
+        if (args[i].size() >= 2 && args[i].front() == ':') {
+            try {
+                return std::stoi(args[i].substr(1));
+            } catch (...) {
+                return std::nullopt;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+/**
+ * gamescope keeps the nested X11 listen fds even when Xwayland is reparented to a
+ * subreaper — so ownership is "does this session tree hold the XN socket?", not
+ * "is Xwayland a child of gamescope?".
+ */
+bool process_tree_holds_display(int owner_pid, int display_num) {
+    if (owner_pid <= 0) {
+        return false;
+    }
+    const auto inode_map = x11_listen_inode_to_display();
+    std::unordered_set<unsigned long> target;
+    for (const auto& [inode, number] : inode_map) {
+        if (number == display_num) {
+            target.insert(inode);
+        }
+    }
+    for (const int pid : owner_tree_pids(owner_pid)) {
+        if (!target.empty()) {
+            const auto held = process_socket_inodes(pid);
+            for (const unsigned long inode : target) {
+                if (held.contains(inode)) {
+                    return true;
+                }
+            }
+        }
+        if (const auto from_cmd = display_number_from_xwayland_cmdline(pid); from_cmd) {
+            if (*from_cmd == display_num) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+std::vector<std::string> displays_held_by_process_tree(int owner_pid) {
+    std::vector<std::string> names;
+    if (owner_pid <= 0) {
+        return names;
+    }
+    const auto inode_map = x11_listen_inode_to_display();
+    std::unordered_set<int> seen_display;
+    auto add_display = [&](int display_num) {
+        if (display_num < 0 || !seen_display.insert(display_num).second) {
+            return;
+        }
+        names.push_back(":" + std::to_string(display_num));
+    };
+    for (const int pid : owner_tree_pids(owner_pid)) {
+        for (const unsigned long inode : process_socket_inodes(pid)) {
+            const auto it = inode_map.find(inode);
+            if (it != inode_map.end()) {
+                add_display(it->second);
+            }
+        }
+        // firejail: listen fds may be netns-local and missing from host
+        // /proc/net/unix until/unless a filesystem socket is published. Xwayland's
+        // cmdline still reports ":N" for the nested server we should open.
+        if (const auto from_cmd = display_number_from_xwayland_cmdline(pid); from_cmd) {
+            add_display(*from_cmd);
+        }
+    }
+    return names;
+}
+
 } // namespace
+
+void register_session_xtest_display(const std::string& session_id, const std::string& display) {
+    if (session_id.empty() || display.empty()) {
+        return;
+    }
+    std::lock_guard lock(g_xtest_session_mu);
+    g_xtest_session_displays[session_id] = display;
+}
+
+void register_session_xtest_display_for_owner(int owner_pid, const std::string& display) {
+    if (owner_pid <= 0 || display.empty()) {
+        return;
+    }
+    if (const auto session_id = session_id_from_process_tree(owner_pid); session_id) {
+        register_session_xtest_display(*session_id, display);
+    }
+}
+
+void unregister_session_xtest_display(const std::string& session_id) {
+    if (session_id.empty()) {
+        return;
+    }
+    std::lock_guard lock(g_xtest_session_mu);
+    g_xtest_session_displays.erase(session_id);
+}
+
+std::optional<std::string> lookup_session_xtest_display(const std::string& session_id) {
+    if (session_id.empty()) {
+        return std::nullopt;
+    }
+    std::lock_guard lock(g_xtest_session_mu);
+    const auto it = g_xtest_session_displays.find(session_id);
+    if (it == g_xtest_session_displays.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+bool display_belongs_to_process_tree(const std::string& display, int owner_pid) {
+    if (owner_pid <= 0 || display.empty() || is_host_desktop_display_name(display)) {
+        return false;
+    }
+    const auto display_num = parse_display_number(display);
+    if (!display_num.has_value()) {
+        return false;
+    }
+    // Socket ownership is ground truth. The session lease is only a pin hint —
+    // if reservation missed and Xwayland landed elsewhere, trust the fds.
+    if (process_tree_holds_display(owner_pid, *display_num)) {
+        return true;
+    }
+    if (const auto session_id = session_id_from_process_tree(owner_pid); session_id) {
+        if (const auto leased = lookup_session_xtest_display(*session_id); leased) {
+            return normalize_display_name(*leased) == normalize_display_name(display);
+        }
+    }
+    return false;
+}
 
 std::vector<std::string> soft_keyboard_display_candidates(
     const std::string& preferred,
@@ -1152,27 +1895,18 @@ std::vector<std::string> soft_keyboard_display_candidates(
     };
 
     if (owner_pid > 0) {
-        // Children first: nested Xwayland / Ryujinx hold the real dialog DISPLAY.
-        std::vector<std::string> from_tree;
-        auto consider = [&](int pid) {
-            if (const auto display = display_from_process_environ(pid); display) {
-                from_tree.push_back(*display);
-            }
-        };
-        for (const int child : child_pids_of(owner_pid)) {
-            consider(child);
-            for (const int grand : child_pids_of(child)) {
-                consider(grand);
-                for (const int great : child_pids_of(grand)) {
-                    consider(great);
-                }
+        // 1) Session id → leased nested display on the host.
+        if (const auto session_id = session_id_from_process_tree(owner_pid); session_id) {
+            if (const auto leased = lookup_session_xtest_display(*session_id); leased) {
+                add(*leased);
             }
         }
-        consider(owner_pid);
-        for (const auto& display : from_tree) {
-            add(display);
-        }
+        // 2) Host-known preferred (same lease, passed at plug time).
         add(preferred);
+        // 3) Socket fds still held by this tree (fallback).
+        for (const auto& name : displays_held_by_process_tree(owner_pid)) {
+            add(name);
+        }
         return names;
     }
 
@@ -1283,10 +2017,33 @@ void schedule_soft_keyboard(
             return true;
         };
 
+        const auto dismiss_error_applets = [&]() {
+            std::vector<std::string> displays;
+            if (!pinned_display.empty()) {
+                displays.push_back(pinned_display);
+            }
+            for (const auto& name : candidate_displays()) {
+                bool seen = false;
+                for (const auto& existing : displays) {
+                    if (existing == name) {
+                        seen = true;
+                        break;
+                    }
+                }
+                if (!seen) {
+                    displays.push_back(name);
+                }
+            }
+            for (const auto& name : displays) {
+                try_dismiss_error_applet_on_display(name);
+            }
+        };
+
         // Wait until a dialog is mapped *and* holding keyboard focus (wants typed text),
         // not merely present unmapped in the window tree (boot-time false positives).
         // False once the session drops the bridge.
         // Also services manual pad-OSK injects so the escape hatch works while idle.
+        // While idle, auto-OK Ryujinx Error applet dialogs (link cancelled, etc.).
         const auto wait_for_dialog = [&](std::string& out) {
             for (int attempt = 0;; ++attempt) {
                 if (weak_bridge.expired()) {
@@ -1296,6 +2053,7 @@ void schedule_soft_keyboard(
                     // Inject may have dismissed the dialog; keep waiting for the next one.
                     continue;
                 }
+                dismiss_error_applets();
                 if (!pinned_display.empty()) {
                     const auto result = probe_text_dialog(pinned_display);
                     if (result == TextDialogProbe::Ready) {
@@ -1323,6 +2081,38 @@ void schedule_soft_keyboard(
 
         // False once the session drops the bridge.
         const auto serve_dialog = [&](const std::string& display_name) -> ServeOutcome {
+            std::string request_prompt = prompt;
+            // Prefer the HeaderText Ryujinx paints on the ContentDialog (OCR), not a
+            // hardcoded "What is your name?" — games ask for codes, nicknames, etc.
+            {
+                install_x_error_guard();
+                Display* display = XOpenDisplay(display_name.c_str());
+                if (display != nullptr) {
+                    install_x_io_exit_guard(display);
+                    Window dialog = 0;
+                    if (const auto focused = find_focused_text_dialog(display);
+                        focused.has_value()) {
+                        dialog = *focused;
+                    } else if (
+                        const auto any =
+                            find_viewable_titled(display, is_soft_keyboard_dialog_title);
+                        any.has_value()) {
+                        dialog = *any;
+                    }
+                    XCloseDisplay(display);
+                    if (dialog != 0) {
+                        if (auto ocr = ocr_soft_keyboard_prompt_on_display(
+                                display_name, dialog);
+                            !ocr.empty()) {
+                            request_prompt = std::move(ocr);
+                            std::cout
+                                << "Ryujinx Software Keyboard: OCR prompt \""
+                                << request_prompt << "\"\n";
+                        }
+                    }
+                }
+            }
+
             SoftKeyboardRequest request;
             {
                 auto bridge = weak_bridge.lock();
@@ -1333,13 +2123,14 @@ void schedule_soft_keyboard(
                     std::lock_guard lock(bridge->mutex);
                     // Blank field: the player is being asked to type a name, and
                     // prefilling it just means erasing it on a pad keyboard first.
-                    request = bridge->make_request(prompt, /*initial_text=*/{}, 12);
+                    request = bridge->make_request(request_prompt, /*initial_text=*/{}, 12);
                 }
                 bridge->publish_request(request);
             }
             std::cout
                 << "Ryujinx Software Keyboard: focused text dialog on " << display_name
-                << " — requesting pad OSK (id=" << request.request_id << ")\n";
+                << " — requesting pad OSK (id=" << request.request_id
+                << ", prompt=\"" << request_prompt << "\")\n";
 
             std::optional<SoftKeyboardResponse> response;
             std::optional<std::string> manual_text;

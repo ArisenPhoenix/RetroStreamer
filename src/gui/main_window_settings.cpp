@@ -610,6 +610,7 @@ void MainWindow::load_persisted_settings() {
 
     apply_log_level_from_settings();
     apply_art_root_to_pickers();
+    refresh_recent_settings_keys();
     if (!account.isEmpty() && profile_log_ != nullptr) {
         append_log(profile_log_, QString("Loaded Steam account ID %1").arg(account));
     }
@@ -1116,6 +1117,49 @@ std::string MainWindow::profile_host_name() const {
     }
     const auto text = profile_host_name_->text().trimmed();
     return text.isEmpty() ? profile_client_username() : text.toStdString();
+}
+
+void MainWindow::refresh_recent_settings_keys() {
+    auto sanitize = [](QString value) {
+        value = value.trimmed().toLower();
+        for (QChar& ch : value) {
+            const auto u = ch.unicode();
+            const bool ok = (u >= 'a' && u <= 'z') || (u >= '0' && u <= '9') ||
+                ch == QLatin1Char('.') || ch == QLatin1Char('_') || ch == QLatin1Char('-');
+            if (!ok) {
+                ch = QLatin1Char('_');
+            }
+        }
+        if (value.isEmpty()) {
+            value = QStringLiteral("_");
+        }
+        return value;
+    };
+
+    if (client_game_picker_ != nullptr) {
+        const auto user = sanitize(QString::fromStdString(profile_client_username()));
+        const auto host = client_host_ != nullptr
+            ? sanitize(client_host_->text())
+            : QStringLiteral("_");
+        const auto port = client_port_ != nullptr
+            ? QString::number(client_port_->value())
+            : QStringLiteral("45555");
+        // Prefer scoped key; fall back to legacy global list only when host is blank
+        // so an unfinished Client tab still has somewhere to write.
+        if (host == QStringLiteral("_")) {
+            client_game_picker_->setRecentSettingsKey(QStringLiteral("client/recent_game_ids"));
+        } else {
+            client_game_picker_->setRecentSettingsKey(
+                QStringLiteral("client/recent_game_ids/%1/%2/%3").arg(user, host, port));
+        }
+    }
+#ifdef ARCHSTREAMER_HAS_HOST
+    if (host_game_picker_ != nullptr) {
+        const auto user = sanitize(QString::fromStdString(profile_client_username()));
+        host_game_picker_->setRecentSettingsKey(
+            QStringLiteral("host/recent_game_ids/%1").arg(user));
+    }
+#endif
 }
 
 void MainWindow::apply_art_root_to_pickers() {

@@ -3,6 +3,7 @@
 #include "common/platform/default_platform.hpp"
 #include "host/media_capture.hpp"
 
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
@@ -111,6 +112,17 @@ std::unique_ptr<VirtualDisplay> make_virtual_display(VirtualDisplayBackend backe
     int height,
     const std::string& prefer_vk_device);
 [[nodiscard]] std::vector<std::pair<std::string, std::string>> gamescope_launch_environment();
+
+/**
+ * Nested XTest DISPLAY for gamescope session slot N (`:20+N`).
+ * Pin only (ARCHSTREAMER_XTEST_DISPLAY); match sessions via ARCHSTREAMER_SESSION_ID
+ * and the host lease map. The gamescope wrapper reserves lower numbers with
+ * abstract bind-without-listen (per firejail netns) plus X lock files so nested
+ * Xwayland lands here. Do not listen() on those sockets — that hangs gamescope.
+ */
+[[nodiscard]] std::string gamescope_xtest_display_for_slot(std::size_t slot_index);
+inline constexpr const char* kArchstreamerXTestDisplayEnv = "ARCHSTREAMER_XTEST_DISPLAY";
+
 // Map a sysfs-style PCI bus (0000:03:00.0 / 00000000:03:00.0) to "vendor:device" for
 // gamescope --prefer-vk-device (e.g. 10de:2504).
 [[nodiscard]] std::optional<std::string> pci_vendor_device_id(const std::string& pci_bus);

@@ -396,12 +396,37 @@ KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"
 
 ### Remoted keyboard (session-wide)
 
-Clients may also send `KeyboardInput` on the same UDP input port (Space = hold fast-forward, P = pause, F1 = menu, arrows/Enter/Esc for simple navigation). These keys are **session-wide**: the host `InputRouter` applies them without requiring a pad seat, so Viewers (0 players) can still fast-forward.
+Clients may also send `KeyboardInput` on the same UDP input port (Space = hold fast-forward, F1 = menu, arrows/Enter/Esc for simple navigation). Pause is **not** remoted as a key — keyboard **P** sends `EmulatorControl` action `PauseToggle` (one-shot F5 / RA `PAUSE_TOGGLE`). Menu/failsafe may still send absolute pause On/Off. These controls are **session-scoped** via each slot’s `VirtualKeyboard` / `InputRouter`; a missing keyboard plug drops EmulatorControl for that slot only (it does not fall through to a sibling session).
+
+**Pause vs fast-forward:** FF is a **level** (Space held while desired). Pause on stock melonDS/Ryujinx is a **toggle hotkey** (F5). Absolute On/Off over F5 desyncs (drawer open/close + P fighting each other). melonDS therefore uses `--archstreamer-ctrl` `PAUSE on|off|toggle` (`emuPause`/`emuUnpause`) for both drawer absolute pause and P toggle; F5 is only a fallback. Ryujinx still uses F5 until a similar absolute API exists.
 
 Do not conflate two different DISPLAY concepts:
 
 - **Host capture display** (e.g. Xvfb `:99`) — where RetroArch runs and where `VirtualKeyboard` injects XTest. Private to the host.
+- **Gamescope nested Xwayland** (`:20+slot` when pinned) — Switch / melonDS under gamescope. This is the XTest target for pause/FF, **not** the PipeWire capture node and **not** the client present display.
 - **Client present display** (Wayland and/or XWayland) — only where GStreamer paints the video window.
+
+#### Gamescope XTest isolation (concurrent slots / firejail)
+
+Each Lobby slot leases `ARCHSTREAMER_XTEST_DISPLAY=:20+N` and sets `ARCHSTREAMER_SESSION_ID`. After nested Xwayland is up, the host plugs `VirtualKeyboard` to that display (and re-pins the lease to whatever display actually appeared).
+
+**Symptom that pause/FF never reach Ryujinx:** host log
+`remoted keyboard (Space=FF) unavailable — could not open gamescope nested Xwayland with XTest`.
+PipeWire video can still work. EmulatorControl is then silently dropped for that slot.
+
+**Why firejail breaks a naive shared `:20`:** LDN wraps Ryujinx+gamescope in `firejail --net=…` (separate netns). Abstract `@/tmp/.X11-unix/XN` names are **per-netns**, so a jailed gamescope can claim Xwayland `:20` while the host melonDS session already owns filesystem `/tmp/.X11-unix/X20`. Host `XOpenDisplay(":20")` hits the wrong server; the jail’s server is unreachable by that path unless it also publishes a unique filesystem socket.
+
+**Levers (independent — know which one you changed):**
+
+| Lever | Path / knob | When it applies | Notes |
+| --- | --- | --- | --- |
+| Managed gamescope wrapper | `~/.local/share/archstreamer/gamescope/archstreamer-gamescope` | **Every new emulator/gamescope spawn** (no host rebuild/restart) | Reserves lower display numbers so nested Xwayland lands on `:20+N`. Uses abstract **bind without listen** (per netns) + X lock files. `listen()` on fake sockets hangs firejail gamescope before Vulkan; filesystem fake `XN` sockets starve siblings. |
+| Host binary | `host_runner` / `archstreamer_gui` | Only after **rebuild and process restart** | Session lease map, VK candidate discovery (socket fds + Xwayland cmdline), `force` pause semantics, refusing host desktop `DISPLAY`. |
+| Env pin | `ARCHSTREAMER_XTEST_DISPLAY` | Set by host per slot at launch | Hint for the wrapper; identity is `ARCHSTREAMER_SESSION_ID` → lease map. |
+| Live check | Host log line | After gamescope PipeWire is up | Success: `Virtual keyboard ready on :21 (Ryujinx …)`. Failure: `remoted keyboard … unavailable`. Concurrent melonDS should stay on `:20`. |
+
+If pause suddenly works after “only” relaunching the game with no host rebuild, the wrapper on disk was almost certainly updated — the running host keeps using old C++ until restarted, but each gamescope child re-reads the wrapper script.
+
 
 Client key capture uses `RemotedKeyboardSource`:
 

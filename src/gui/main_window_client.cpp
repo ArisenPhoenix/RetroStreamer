@@ -221,6 +221,7 @@ void MainWindow::apply_client_host(const QString& address, int control_port, int
             .arg(address)
             .arg(control_port)
             .arg(input_port));
+        refresh_recent_settings_keys();
         persist_settings_if_idle();
     }
 }

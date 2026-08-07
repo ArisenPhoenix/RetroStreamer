@@ -92,6 +92,16 @@ ProcessEnvironment build_emulator_launch_environment(const EmulatorLaunchEnvRequ
         request.gamescope_capture,
         request.virtualgl_capture,
         request.capture_display));
+    // Pin only: gamescope wrapper reserves lower :N (abstract bind-without-listen
+    // + lock files) so nested Xwayland lands here. listen() hang firejail; lock
+    // files alone do not reserve abstract names inside a firejail netns.
+    // Identity / matching uses ARCHSTREAMER_SESSION_ID → host lease map.
+    if (request.gamescope_capture && !request.xtest_display.empty()) {
+        env.set("ARCHSTREAMER_XTEST_DISPLAY", request.xtest_display);
+    }
+    if (!request.session_id.empty()) {
+        env.set("ARCHSTREAMER_SESSION_ID", request.session_id);
+    }
     if (request.yuzu_profile.has_value()) {
         env.merge_pairs(yuzu_launch_environment(*request.yuzu_profile));
     }

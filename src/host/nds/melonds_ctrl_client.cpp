@@ -424,4 +424,32 @@ bool MelonDsCtrlClient::query_screens(
     return out.has_top || out.has_bot;
 }
 
+bool MelonDsCtrlClient::set_paused(bool paused, std::chrono::milliseconds timeout) const {
+    return send_command(paused ? "PAUSE on" : "PAUSE off", timeout);
+}
+
+bool MelonDsCtrlClient::toggle_paused(std::chrono::milliseconds timeout) const {
+    return send_command("PAUSE toggle", timeout);
+}
+
+std::optional<bool> MelonDsCtrlClient::query_paused(std::chrono::milliseconds timeout) const {
+    const auto reply = transact("PAUSE", timeout);
+    if (!reply.has_value()) {
+        return std::nullopt;
+    }
+    if (reply->rfind("OK ", 0) != 0) {
+        last_error_ = *reply;
+        return std::nullopt;
+    }
+    const auto rest = reply->substr(3);
+    if (rest == "1" || rest == "true" || rest == "on") {
+        return true;
+    }
+    if (rest == "0" || rest == "false" || rest == "off") {
+        return false;
+    }
+    last_error_ = "malformed PAUSE reply: " + *reply;
+    return std::nullopt;
+}
+
 } // namespace archstreamer

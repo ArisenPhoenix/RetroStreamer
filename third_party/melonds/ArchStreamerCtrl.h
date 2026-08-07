@@ -41,6 +41,10 @@ public:
     static void applyTouchEnd();
     /** Top/bottom AABBs in window pixels (updates with swap/emphasis). */
     static bool queryScreens(ScreenRects& out);
+    /** Absolute pause (not a hotkey toggle). */
+    static bool applyPause(bool paused);
+    static bool applyPauseToggle();
+    static bool queryPaused(bool& out);
 
 private slots:
     void onNewConnection();

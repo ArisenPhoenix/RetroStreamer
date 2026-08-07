@@ -23,8 +23,12 @@ can arm Local Wireless mid-session without opening the melonDS UI.
 ```
 
 Control lines (newline-terminated): `LAN_HOST <player> [n]`, `LAN_CONNECT <player> <host>`,
-`LAN_END`, `TOUCH <x> <y>`, `TOUCH_END`, `SCREENS`, `PING`
-→ replies `OK` / `ERR …` / `PONG`.
+`LAN_END`, `TOUCH <x> <y>`, `TOUCH_END`, `SCREENS`, `PAUSE on|off|toggle`, `PAUSE` (status),
+`PING`
+→ replies `OK` / `ERR …` / `PONG` / `OK 0|1` for pause status.
+
+`PAUSE on|off` calls melonDS `emuPause`/`emuUnpause` (absolute). Do not use keyboard F5 for
+ArchStreamer drawer/menu pause — F5 is a toggle and desyncs absolute On/Off.
 
 `SCREENS` → `OK <ww> <wh> <hasTop> <tx> <ty> <tw> <th> <hasBot> <bx> <by> <bw> <bh>`
 (window + top/bottom AABBs in panel pixels; follows swap/emphasis).

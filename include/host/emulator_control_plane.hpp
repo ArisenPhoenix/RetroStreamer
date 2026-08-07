@@ -18,6 +18,7 @@ enum class EmulatorIntentKind : std::uint8_t {
     FastForward = 2,
     // FastForwardRate = 3, // future stateful
     ScreenSwap = 64,
+    PauseToggle = 65,
 };
 
 enum class EmulatorIntentClass : std::uint8_t {

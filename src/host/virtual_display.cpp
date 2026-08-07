@@ -300,6 +300,13 @@ void ensure_gamescope_wsi_layer_manifest(const std::filesystem::path& root) {
 
 } // namespace
 
+std::string gamescope_xtest_display_for_slot(std::size_t slot_index) {
+    // Stay above desktop :0 and the common first nested :1 so concurrent
+    // firejail/netns slots do not all claim the same DISPLAY string.
+    constexpr int kBase = 20;
+    return ":" + std::to_string(kBase + static_cast<int>(slot_index));
+}
+
 std::vector<std::pair<std::string, std::string>> gamescope_launch_environment() {
     // Nested clients must load Gamescope WSI so any preferred GPU can present into
     // gamescope's XWayland (otherwise dual-NVIDIA present stays stuck on one card).

@@ -8,6 +8,8 @@
       TOUCH <x> <y>          // absolute DS coords; x 0-255, y 0-191
       TOUCH_END
       SCREENS               // window + top/bottom AABBs (follows swap/emphasis)
+      PAUSE on|off|toggle   // absolute emuPause / emuUnpause (not F5 hotkey)
+      PAUSE                 // status → OK 0|1
       PING
     Replies: OK / ERR <message> / PONG
     SCREENS OK:
@@ -20,6 +22,8 @@
 #include <algorithm>
 
 #include "Config.h"
+#include "EmuInstance.h"
+#include "EmuThread.h"
 #include "LAN.h"
 #include "Screen.h"
 #include "Window.h"
@@ -190,6 +194,46 @@ bool ArchStreamerCtrl::queryScreens(ScreenRects& out)
     return true;
 }
 
+bool ArchStreamerCtrl::applyPause(bool paused)
+{
+    EmuInstance* inst = firstEmuInstance();
+    if (!inst)
+        return false;
+    EmuThread* thr = inst->getEmuThread();
+    if (!thr)
+        return false;
+    // broadcast=false: single-instance ArchStreamer sessions.
+    if (paused)
+        thr->emuPause(false);
+    else
+        thr->emuUnpause(false);
+    return true;
+}
+
+bool ArchStreamerCtrl::applyPauseToggle()
+{
+    EmuInstance* inst = firstEmuInstance();
+    if (!inst)
+        return false;
+    EmuThread* thr = inst->getEmuThread();
+    if (!thr)
+        return false;
+    thr->emuTogglePause(false);
+    return true;
+}
+
+bool ArchStreamerCtrl::queryPaused(bool& out)
+{
+    EmuInstance* inst = firstEmuInstance();
+    if (!inst)
+        return false;
+    EmuThread* thr = inst->getEmuThread();
+    if (!thr)
+        return false;
+    out = !thr->emuIsRunning();
+    return true;
+}
+
 void ArchStreamerCtrl::onNewConnection()
 {
     while (server_ && server_->hasPendingConnections())
@@ -332,6 +376,45 @@ void ArchStreamerCtrl::handleLine(QLocalSocket* sock, const QByteArray& line)
             + QByteArray::number(q.botW) + ' '
             + QByteArray::number(q.botH);
         writeReply(sock, reply);
+        return;
+    }
+
+    if (cmd == QStringLiteral("PAUSE"))
+    {
+        if (parts.size() < 2)
+        {
+            bool paused = false;
+            if (!queryPaused(paused))
+            {
+                writeReply(sock, "ERR no emu instance");
+                return;
+            }
+            writeReply(sock, QByteArrayLiteral("OK ") + (paused ? "1" : "0"));
+            return;
+        }
+        const QString arg = parts[1].toLower();
+        if (arg == QStringLiteral("toggle"))
+        {
+            if (applyPauseToggle())
+                writeReply(sock, "OK");
+            else
+                writeReply(sock, "ERR no emu instance");
+            return;
+        }
+        bool want = false;
+        if (arg == QStringLiteral("on") || arg == QStringLiteral("1") || arg == QStringLiteral("true"))
+            want = true;
+        else if (arg == QStringLiteral("off") || arg == QStringLiteral("0") || arg == QStringLiteral("false"))
+            want = false;
+        else
+        {
+            writeReply(sock, "ERR usage: PAUSE [on|off|toggle]");
+            return;
+        }
+        if (applyPause(want))
+            writeReply(sock, "OK");
+        else
+            writeReply(sock, "ERR no emu instance");
         return;
     }
 

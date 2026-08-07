@@ -1029,11 +1029,12 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             return true
         }
 
-        // P → absolute pause toggle (same ownership as menu pause). Never remoted:
-        // host remoted-P is a cache toggle that desyncs EmulatorControl On/Off.
+        // P → one-shot PauseToggle (host F5). Not absolute On/Off — melonDS/Ryujinx
+        // F5 is a toggle; absolute + host cache desyncs when a tap misses (FF is fine
+        // because it is a Space hold). Menu pause switch still uses absolute setPaused.
         if (keyCode == KeyEvent.KEYCODE_P) {
             if (edge) {
-                setPaused(!_state.value.paused, force = true)
+                triggerPauseToggle()
             }
             return true
         }
@@ -1970,6 +1971,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             it.copy(
                 username = username,
                 hasProfileUsername = isProfileUsername(username) || profileUsernameOrNull() != null,
+                recentGameIds = loadRecentGameIds(it.host, it.controlPort),
             )
         }
         reloadControlsFromLocalStore()
@@ -2568,6 +2570,31 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
         ClientFileLog.append("emuControl action=ScreenSwap")
+    }
+
+    /**
+     * Keyboard P: one-shot pause toggle on the host (F5 / PAUSE_TOGGLE).
+     * Updates local paused UI as a mirror only — does not send absolute On/Off.
+     */
+    fun triggerPauseToggle() {
+        if (!_state.value.playing) return
+        val active = session ?: return
+        menuPauseJob?.cancel()
+        menuPauseJob = null
+        val next = !_state.value.paused
+        lastSentMenuPause = next
+        _state.update { it.copy(paused = next) }
+        clearRemotedKeys()
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                active.sendEmulatorControl(action = EmulatorControlAction.PauseToggle)
+            }.onFailure { err ->
+                ClientFileLog.append(
+                    "EmulatorControl pause_toggle failed: ${err.javaClass.simpleName}: ${err.message}",
+                )
+            }
+        }
+        ClientFileLog.append("emuControl action=PauseToggle uiPaused=$next")
     }
 
     /**
@@ -3781,6 +3808,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         private const val KEY_REMOTE_BASE_INPUT = "remote_base_input"
         private const val KEY_REMOTE_TRACKED_CONTROL = "remote_tracked_control"
         private const val KEY_RECENT_PREFIX = "recent_games_"
+        /** Pre-username Recents key prefix (migrated on first read for a profile). */
+        private const val KEY_RECENT_LEGACY_PREFIX = "recent_games_"
         private const val MAX_DISCOVERY_SEEDS = 6
         private const val MAX_RECENT_GAMES = 8
         private const val HOST_EDIT_SUPPRESS_MS = 4_000L
@@ -3796,20 +3825,53 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         private const val AV_STALL_ZERO_FRAME_HEARTBEATS = 3
     }
 
-    private fun recentPrefsKey(host: String, controlPort: String): String {
-        val h = host.trim().lowercase()
+    private fun recentKeyPart(raw: String): String =
+        raw.trim().lowercase()
+            .replace(Regex("[^a-z0-9._-]+"), "_")
+            .ifBlank { "_" }
+
+    /** Profile used for Recents scoping (prefs only — safe during UiState init). */
+    private fun recentUsernamePart(): String =
+        profileUsernameOrNull()?.let { recentKeyPart(it) } ?: "_nouser"
+
+    private fun recentPrefsKey(username: String, host: String, controlPort: String): String {
+        val u = recentKeyPart(username).ifBlank { "_nouser" }
+        val h = recentKeyPart(host)
         val p = controlPort.trim().ifBlank { Protocol.DEFAULT_CONTROL_PORT.toString() }
-        return "$KEY_RECENT_PREFIX${h}_$p"
+        return "$KEY_RECENT_PREFIX${u}_${h}_$p"
     }
 
-    private fun loadRecentGameIds(host: String, controlPort: String): List<String> {
-        if (host.isBlank()) return emptyList()
-        return prefs.getString(recentPrefsKey(host, controlPort), "")
-            .orEmpty()
+    /** Host+port only — used before Recents were per-user. */
+    private fun legacyRecentPrefsKey(host: String, controlPort: String): String {
+        val h = host.trim().lowercase()
+        val p = controlPort.trim().ifBlank { Protocol.DEFAULT_CONTROL_PORT.toString() }
+        return "$KEY_RECENT_LEGACY_PREFIX${h}_$p"
+    }
+
+    private fun parseRecentIds(raw: String?): List<String> =
+        raw.orEmpty()
             .split(',')
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .take(MAX_RECENT_GAMES)
+
+    private fun loadRecentGameIds(host: String, controlPort: String): List<String> {
+        if (host.isBlank()) return emptyList()
+        val user = recentUsernamePart()
+        val key = recentPrefsKey(user, host, controlPort)
+        val scoped = parseRecentIds(prefs.getString(key, null))
+        if (scoped.isNotEmpty()) {
+            return scoped
+        }
+        // One-time migrate from the pre-username host:port list into this profile's key.
+        if (user == "_nouser") {
+            return emptyList()
+        }
+        val legacy = parseRecentIds(prefs.getString(legacyRecentPrefsKey(host, controlPort), null))
+        if (legacy.isNotEmpty()) {
+            prefs.edit().putString(key, legacy.joinToString(",")).apply()
+        }
+        return legacy
     }
 
     private fun rememberRecentGame(gameId: String, host: String, controlPort: String): List<String> {
@@ -3821,7 +3883,10 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         next.add(0, gameId)
         val trimmed = next.take(MAX_RECENT_GAMES)
         prefs.edit()
-            .putString(recentPrefsKey(host, controlPort), trimmed.joinToString(","))
+            .putString(
+                recentPrefsKey(recentUsernamePart(), host, controlPort),
+                trimmed.joinToString(","),
+            )
             .apply()
         return trimmed
     }

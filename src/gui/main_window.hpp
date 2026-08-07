@@ -168,6 +168,8 @@ private:
     std::string steam_account_id_text() const;
     std::string profile_client_username() const;
     std::string profile_host_name() const;
+    /** Recents QSettings key: client uses user+host+port; host uses user. */
+    void refresh_recent_settings_keys();
     void apply_art_root_to_pickers();
     void detect_steam_account();
     void refresh_art_from_steam();

@@ -129,7 +129,7 @@ QWidget* MainWindow::build_host_tab() {
     host_status_ = new QLabel("Host stopped", page);
     host_game_picker_ = new archstreamer::gui::GamePickerWidget(page);
     host_game_picker_->setArtRoot(art_root_path());
-    host_game_picker_->setRecentSettingsKey(QStringLiteral("host/recent_game_ids"));
+    refresh_recent_settings_keys();
     connect(host_game_picker_, &archstreamer::gui::GamePickerWidget::selectionChanged, this, [this] {
         if (host_game_picker_->hasSelection()) {
             persisted_host_game_id_ =

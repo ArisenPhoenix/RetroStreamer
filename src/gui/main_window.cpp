@@ -216,6 +216,7 @@ QWidget* MainWindow::build_client_tab() {
         "Works even when the video window has focus (not only this GUI).");
     connect(client_port_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
         update_client_host_summary(client_host_label_);
+        refresh_recent_settings_keys();
         persist_settings_if_idle();
     });
     connect(client_input_port_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
@@ -265,7 +266,7 @@ QWidget* MainWindow::build_client_tab() {
 
     client_game_picker_ = new archstreamer::gui::GamePickerWidget(page);
     client_game_picker_->setArtRoot(art_root_path());
-    client_game_picker_->setRecentSettingsKey(QStringLiteral("client/recent_game_ids"));
+    refresh_recent_settings_keys();
     connect(client_game_picker_, &archstreamer::gui::GamePickerWidget::selectionChanged, this, [this] {
         if (client_game_picker_->hasSelection()) {
             persisted_client_game_id_ =
@@ -1420,6 +1421,7 @@ QWidget* MainWindow::build_profile_tab() {
     });
 
     connect(profile_username_, &QLineEdit::editingFinished, this, [this] {
+        refresh_recent_settings_keys();
         persist_settings_if_idle();
     });
     connect(profile_host_name_, &QLineEdit::editingFinished, this, [this] {

@@ -357,6 +357,19 @@ enum class MediaStreamFeel : std::uint8_t {
     Smooth = 2,     // queue=4, nvenc hq (pre-d5edd11 smoother feel)
 };
 
+/**
+ * Encode bitrate ladder (independent of framerate tier).
+ * Trailing on ViewerHeartbeat — older peers omit → Auto (legacy combined tier).
+ */
+enum class MediaStreamBitrate : std::uint8_t {
+    Auto = 0, // Use legacy bitrate from MediaQualityTier.
+    Kbps800 = 1,
+    Kbps3500 = 2,
+    Kbps8000 = 3,
+    Kbps12000 = 4,
+    Kbps25000 = 5,
+};
+
 struct VideoEncodeSettings {
     std::uint16_t bitrate_kbps = 1500;
     std::uint8_t framerate = 30;
@@ -431,6 +444,7 @@ inline MediaStreamSize media_stream_size_for_legacy_tier(MediaQualityTier tier) 
 
 inline VideoEncodeSettings video_encode_settings_for_quality(MediaQualityTier quality) {
     // key_int_max ~0.5s so remotes get an IDR quickly after join / pipeline restart.
+    // Legacy combined fps+bitrate ladder (used when MediaStreamBitrate::Auto).
     switch (quality) {
     case MediaQualityTier::Low:
         return VideoEncodeSettings{800, 20, 10, 0, 0};
@@ -444,6 +458,67 @@ inline VideoEncodeSettings video_encode_settings_for_quality(MediaQualityTier qu
     case MediaQualityTier::Auto:
     default:
         return VideoEncodeSettings{3500, 30, 15, 0, 0};
+    }
+}
+
+/** Frame rate from wanted_tier (UI Frame rate); Med-High/Very-High → 60. */
+inline std::uint8_t framerate_for_quality_tier(MediaQualityTier quality) {
+    switch (quality) {
+    case MediaQualityTier::Low:
+        return 20;
+    case MediaQualityTier::High:
+    case MediaQualityTier::MediumHigh:
+    case MediaQualityTier::VeryHigh:
+        return 60;
+    case MediaQualityTier::Medium:
+    case MediaQualityTier::Auto:
+    default:
+        return 30;
+    }
+}
+
+inline std::uint16_t key_int_max_for_framerate(std::uint8_t framerate) {
+    if (framerate <= 20) {
+        return 10;
+    }
+    if (framerate >= 50) {
+        return 30;
+    }
+    return 15;
+}
+
+inline std::uint16_t bitrate_kbps_for_stream_bitrate(MediaStreamBitrate bitrate) {
+    switch (bitrate) {
+    case MediaStreamBitrate::Kbps800:
+        return 800;
+    case MediaStreamBitrate::Kbps8000:
+        return 8000;
+    case MediaStreamBitrate::Kbps12000:
+        return 12000;
+    case MediaStreamBitrate::Kbps25000:
+        return 25000;
+    case MediaStreamBitrate::Kbps3500:
+    case MediaStreamBitrate::Auto:
+    default:
+        return 3500;
+    }
+}
+
+/** Default bitrate when Bitrate=Auto but fps is taken from an explicit frame-rate tier. */
+inline MediaStreamBitrate default_bitrate_for_framerate_tier(MediaQualityTier quality) {
+    switch (quality) {
+    case MediaQualityTier::Low:
+        return MediaStreamBitrate::Kbps800;
+    case MediaQualityTier::MediumHigh:
+        return MediaStreamBitrate::Kbps8000;
+    case MediaQualityTier::High:
+        return MediaStreamBitrate::Kbps12000;
+    case MediaQualityTier::VeryHigh:
+        return MediaStreamBitrate::Kbps25000;
+    case MediaQualityTier::Medium:
+    case MediaQualityTier::Auto:
+    default:
+        return MediaStreamBitrate::Kbps3500;
     }
 }
 
@@ -470,8 +545,18 @@ inline VideoEncodeSettings video_encode_settings(
     MediaQualityTier quality,
     std::uint16_t capture_width = 1920,
     std::uint16_t capture_height = 1080,
-    MediaStreamFeel feel = MediaStreamFeel::LowLatency) {
-    auto settings = video_encode_settings_for_quality(quality);
+    MediaStreamFeel feel = MediaStreamFeel::LowLatency,
+    MediaStreamBitrate bitrate = MediaStreamBitrate::Auto) {
+    VideoEncodeSettings settings;
+    if (bitrate == MediaStreamBitrate::Auto) {
+        // Older clients / Auto bitrate: full legacy fps+bitrate from tier.
+        settings = video_encode_settings_for_quality(quality);
+    } else {
+        const auto fps = framerate_for_quality_tier(quality);
+        settings.framerate = fps;
+        settings.key_int_max = key_int_max_for_framerate(fps);
+        settings.bitrate_kbps = bitrate_kbps_for_stream_bitrate(bitrate);
+    }
     if (size == MediaStreamSize::Auto) {
         size = MediaStreamSize::P720;
     }
@@ -640,6 +725,55 @@ inline const char* media_stream_feel_name(MediaStreamFeel feel) {
     return "unknown";
 }
 
+inline const char* media_stream_bitrate_name(MediaStreamBitrate bitrate) {
+    switch (bitrate) {
+    case MediaStreamBitrate::Auto:
+        return "auto";
+    case MediaStreamBitrate::Kbps800:
+        return "0.8Mbps";
+    case MediaStreamBitrate::Kbps3500:
+        return "3.5Mbps";
+    case MediaStreamBitrate::Kbps8000:
+        return "8Mbps";
+    case MediaStreamBitrate::Kbps12000:
+        return "12Mbps";
+    case MediaStreamBitrate::Kbps25000:
+        return "25Mbps";
+    }
+    return "unknown";
+}
+
+/** Framerate-only Auto ladder when bitrate is fixed (skip Med-High/Very-High aliases). */
+inline MediaQualityTier step_framerate_tier_down(MediaQualityTier tier) {
+    switch (tier) {
+    case MediaQualityTier::VeryHigh:
+    case MediaQualityTier::High:
+    case MediaQualityTier::MediumHigh:
+        return MediaQualityTier::Medium;
+    case MediaQualityTier::Medium:
+    case MediaQualityTier::Auto:
+        return MediaQualityTier::Low;
+    case MediaQualityTier::Low:
+    default:
+        return MediaQualityTier::Low;
+    }
+}
+
+inline MediaQualityTier step_framerate_tier_up(MediaQualityTier tier) {
+    switch (tier) {
+    case MediaQualityTier::Low:
+        return MediaQualityTier::Medium;
+    case MediaQualityTier::Medium:
+    case MediaQualityTier::Auto:
+        return MediaQualityTier::High;
+    case MediaQualityTier::MediumHigh:
+    case MediaQualityTier::High:
+    case MediaQualityTier::VeryHigh:
+    default:
+        return MediaQualityTier::High;
+    }
+}
+
 /** Parse "WxH" capture resolution; returns false and leaves outs unchanged on failure. */
 inline bool parse_video_resolution(
     std::string_view text,
@@ -683,6 +817,8 @@ struct ViewerHeartbeat {
     DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto;
     // Trailing — older peers omit → LowLatency (current encode defaults).
     MediaStreamFeel wanted_feel = MediaStreamFeel::LowLatency;
+    // Trailing — older peers omit → Auto (legacy combined fps+bitrate from wanted_tier).
+    MediaStreamBitrate wanted_bitrate = MediaStreamBitrate::Auto;
 };
 
 struct ErrorPacket {

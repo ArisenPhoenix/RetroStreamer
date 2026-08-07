@@ -3,6 +3,7 @@
 #include "common/platform/process_utils.hpp"
 #include "host/gstreamer_media_server.hpp"
 #include "host/host_launch_planner.hpp"
+#include "host/rtp_frame_pace_debug.hpp"
 
 #include <array>
 #include <algorithm>
@@ -33,6 +34,16 @@ std::string multiudp_clients_arg(
         joined += std::to_string(port);
     }
     return joined;
+}
+
+/** TEMP: frame pacing debug — optional loopback RTP tee. */
+std::vector<std::pair<std::string, std::uint16_t>> multiudp_clients_with_pace_tee(
+    std::vector<std::pair<std::string, std::uint16_t>> clients,
+    std::uint16_t encode_port) {
+    if (auto tee = rtp_frame_pace_debug::ensure_tee(encode_port)) {
+        clients.push_back(*tee);
+    }
+    return clients;
 }
 
 bool gst_element_available(const char* element) {
@@ -208,7 +219,8 @@ std::vector<std::string> GStreamerVideoFanout::build_single_encode_args(
         "pt=96",
         "!",
         "multiudpsink",
-        "clients=" + multiudp_clients_arg({{host, port}}),
+        "clients=" + multiudp_clients_arg(
+            multiudp_clients_with_pace_tee({{host, port}}, port)),
         "sync=false",
         "async=false",
     });
@@ -406,6 +418,7 @@ void GStreamerVideoFanout::abort_tier_cutover(ClientId client_id) {
     slot->staging.stop();
     if (slot->staging_port != 0) {
         terminate_gst_multiudpsink_on_port(slot->staging_port);
+        rtp_frame_pace_debug::stop_tee(slot->staging_port);
     }
     slot->staging_active = false;
     slot->staging_port = 0;
@@ -422,12 +435,18 @@ void GStreamerVideoFanout::stop() {
         if (destination.staging_active) {
             destination.staging.stop();
             destination.staging_active = false;
+            if (destination.staging_port != 0) {
+                rtp_frame_pace_debug::stop_tee(destination.staging_port);
+            }
         }
         destination.dedicated.stop();
+        rtp_frame_pace_debug::stop_tee(destination.port);
+        rtp_frame_pace_debug::stop_tee(destination.base_port);
     }
     process_.stop();
     destinations_.clear();
     display_.clear();
+    rtp_frame_pace_debug::stop_all();
 }
 
 void GStreamerVideoFanout::stop_client(ClientId client_id) {
@@ -439,6 +458,8 @@ void GStreamerVideoFanout::stop_client(ClientId client_id) {
     if (slot->staging_active) {
         abort_tier_cutover(client_id);
     }
+    rtp_frame_pace_debug::stop_tee(slot->port);
+    rtp_frame_pace_debug::stop_tee(slot->base_port);
     slot->dedicated.stop();
     destinations_.erase(
         std::remove_if(
@@ -600,7 +621,10 @@ void GStreamerVideoFanout::restart_pipeline() {
             "pt=96",
             "!",
             "multiudpsink",
-            "clients=" + multiudp_clients_arg(clients),
+            "clients=" + multiudp_clients_arg(
+                multiudp_clients_with_pace_tee(
+                    clients,
+                    clients.empty() ? 0 : clients.front().second)),
             "sync=false",
             "async=false",
         });

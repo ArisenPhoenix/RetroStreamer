@@ -31,6 +31,7 @@ struct ClientHeartbeatPrefs {
     std::mutex mutex;
     MediaQualityTier wanted_tier = MediaQualityTier::Auto;
     MediaStreamSize wanted_size = MediaStreamSize::Auto;
+    MediaStreamBitrate wanted_bitrate = MediaStreamBitrate::Auto;
     std::uint16_t max_bitrate_kbps = 0;
     bool show_framecount = false;
     DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto;
@@ -43,6 +44,11 @@ struct ClientHeartbeatPrefs {
     void set_wanted_size(MediaStreamSize size) {
         std::lock_guard lock(mutex);
         wanted_size = size;
+    }
+
+    void set_wanted_bitrate(MediaStreamBitrate bitrate) {
+        std::lock_guard lock(mutex);
+        wanted_bitrate = bitrate;
     }
 
     void set_show_framecount(bool enabled) {
@@ -58,12 +64,14 @@ struct ClientHeartbeatPrefs {
     void snapshot(
         MediaQualityTier& tier,
         MediaStreamSize& size,
+        MediaStreamBitrate& bitrate,
         std::uint16_t& max_bitrate,
         bool& framecount,
         DisplayLayoutPreference& layout) {
         std::lock_guard lock(mutex);
         tier = wanted_tier;
         size = wanted_size;
+        bitrate = wanted_bitrate;
         max_bitrate = max_bitrate_kbps;
         framecount = show_framecount;
         layout = display_layout;
@@ -401,6 +409,7 @@ struct ClientAppConfig {
     bool synced_av = false;
     MediaQualityTier wanted_tier = MediaQualityTier::Auto;
     MediaStreamSize wanted_size = MediaStreamSize::Auto;
+    MediaStreamBitrate wanted_bitrate = MediaStreamBitrate::Auto;
     // 0 = use tier default bitrate cap on the host.
     std::uint16_t max_bitrate_kbps = 0;
     // Request host RetroArch "Frames:" OSD (default off). Prefer heartbeat_prefs for live updates.

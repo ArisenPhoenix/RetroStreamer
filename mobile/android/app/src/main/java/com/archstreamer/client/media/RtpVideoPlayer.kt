@@ -6,6 +6,8 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
 import android.view.Surface
+import com.archstreamer.client.BuildConfig
+import com.archstreamer.client.net.ClientFileLog
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetSocketAddress
@@ -13,6 +15,7 @@ import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.min
 
 /**
  * Binds the host-assigned RTP video UDP port, depayloads H.264, and decodes to a Surface.
@@ -48,6 +51,11 @@ class RtpVideoPlayer(
     private var decodeHandler: Handler? = null
     private var socket: DatagramSocket? = null
 
+    // TEMP: frame pacing debug — remove when judder investigation is done.
+    // Gate: debug APK + Settings → Debug → Log connections.
+    private val paceAu = FramePaceWindow("au", listenPort)
+    private val pacePresent = FramePaceWindow("present", listenPort)
+
     val port: Int get() = listenPort
 
     fun takeFramesDecodedDelta(): Int = framesDecodedDelta.getAndSet(0)
@@ -71,6 +79,10 @@ class RtpVideoPlayer(
             1000
         } else {
             rtpLoss
+        }
+        if (BuildConfig.DEBUG && ClientFileLog.logConnections) {
+            paceAu.flushIfDue()?.let { ClientFileLog.conn(it) }
+            pacePresent.flushIfDue()?.let { ClientFileLog.conn(it) }
         }
         return HeartbeatStats(
             framesDecodedDelta = frames,
@@ -179,6 +191,9 @@ class RtpVideoPlayer(
 
     private fun offerNal(au: ByteArray) {
         accessUnitsReceived.incrementAndGet()
+        if (BuildConfig.DEBUG && ClientFileLog.logConnections) {
+            paceAu.record()
+        }
         if (!nalQueue.offer(au)) {
             nalQueue.poll()
             nalQueue.offer(au)
@@ -294,6 +309,9 @@ class RtpVideoPlayer(
                             framesDecoded.incrementAndGet()
                             framesDecodedDelta.incrementAndGet()
                             pipelineDead.set(false)
+                            if (BuildConfig.DEBUG && ClientFileLog.logConnections) {
+                                pacePresent.record()
+                            }
                         }
                         outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                             val fmt = c.outputFormat
@@ -327,6 +345,62 @@ class RtpVideoPlayer(
         val sequenceGaps: Long = 0,
         val pipelineDead: Boolean = false,
     )
+
+    /**
+     * TEMP: 1 Hz Δt summary for frame-pacing debug.
+     * Delete this class + paceAu/pacePresent call sites when done.
+     */
+    private class FramePaceWindow(
+        private val label: String,
+        private val port: Int,
+    ) {
+        private val lock = Any()
+        private var lastNs = 0L
+        private var windowStartNs = 0L
+        private val dtsMs = ArrayList<Double>(64)
+
+        fun record() {
+            val now = System.nanoTime()
+            synchronized(lock) {
+                if (lastNs != 0L) {
+                    val dt = (now - lastNs) / 1_000_000.0
+                    if (dt > 0.0 && dt < 1000.0) {
+                        dtsMs.add(dt)
+                    }
+                }
+                lastNs = now
+                if (windowStartNs == 0L) {
+                    windowStartNs = now
+                }
+            }
+        }
+
+        fun flushIfDue(): String? {
+            val now = System.nanoTime()
+            synchronized(lock) {
+                if (windowStartNs == 0L || now - windowStartNs < 1_000_000_000L) {
+                    return null
+                }
+                if (dtsMs.isEmpty()) {
+                    windowStartNs = now
+                    return null
+                }
+                dtsMs.sort()
+                val n = dtsMs.size
+                val p50 = dtsMs[n / 2]
+                val p95 = dtsMs[min(n - 1, (n * 95) / 100)]
+                val maxDt = dtsMs.last()
+                val avg = dtsMs.sum() / n
+                val line =
+                    "pace $label port=$port n=$n dt_ms " +
+                        "avg=${"%.1f".format(avg)} p50=${"%.1f".format(p50)} " +
+                        "p95=${"%.1f".format(p95)} max=${"%.1f".format(maxDt)}"
+                dtsMs.clear()
+                windowStartNs = now
+                return line
+            }
+        }
+    }
 
     companion object {
         private const val TAG = "RtpVideoPlayer"

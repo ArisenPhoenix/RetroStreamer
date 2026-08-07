@@ -185,6 +185,7 @@ private:
     void refresh_filtered_client_games();
     ClientAppConfig client_config_from_fields() const;
     MediaQualityTier selected_stream_quality() const;
+    MediaStreamBitrate selected_stream_bitrate() const;
     MediaStreamSize selected_stream_size() const;
     void apply_client_host(
         const QString& address,
@@ -280,6 +281,7 @@ private:
     QCheckBox* client_audio_ = nullptr;
     QCheckBox* client_send_keyboard_ = nullptr;
     QComboBox* client_stream_quality_ = nullptr;
+    QComboBox* client_stream_bitrate_ = nullptr;
     QComboBox* client_stream_size_ = nullptr;
     QCheckBox* client_synced_av_ = nullptr;
     QPushButton* client_resync_av_ = nullptr;

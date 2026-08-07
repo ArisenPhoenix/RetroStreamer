@@ -40,6 +40,7 @@ private:
         MediaStreamSize size,
         MediaQualityTier tier,
         MediaStreamFeel feel,
+        MediaStreamBitrate bitrate,
         std::string_view reason);
     static std::string client_label(const SessionClientConnection& client);
 

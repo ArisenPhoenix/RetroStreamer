@@ -300,9 +300,11 @@ void poll_active_session_joins(
             reconnected_player->applied_tier = MediaQualityTier::Medium;
             reconnected_player->applied_size = MediaStreamSize::P720;
             reconnected_player->applied_feel = MediaStreamFeel::LowLatency;
+            reconnected_player->applied_bitrate = MediaStreamBitrate::Auto;
             reconnected_player->pending_tier.reset();
             reconnected_player->pending_size.reset();
             reconnected_player->pending_feel.reset();
+            reconnected_player->pending_bitrate.reset();
             reconnected_player->pending_video_uri.reset();
             reconnected_player->video_cutover_started = {};
             reconnected_player->video_cutover_failures = 0;

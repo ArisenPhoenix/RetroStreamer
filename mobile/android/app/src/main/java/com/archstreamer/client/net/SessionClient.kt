@@ -16,6 +16,7 @@ import com.archstreamer.client.protocol.IncomingPacket
 import com.archstreamer.client.protocol.LinkAction
 import com.archstreamer.client.protocol.MediaEndpoint
 import com.archstreamer.client.protocol.MediaQualityTier
+import com.archstreamer.client.protocol.MediaStreamBitrate
 import com.archstreamer.client.protocol.MediaStreamFeel
 import com.archstreamer.client.protocol.MediaStreamSize
 import com.archstreamer.client.protocol.PacketCodec
@@ -238,6 +239,9 @@ data class JoinedPlaySession(
     var wantedFeel: Int = MediaStreamFeel.LowLatency.id
 
     @Volatile
+    var wantedBitrate: Int = MediaStreamBitrate.Kbps3500.id
+
+    @Volatile
     var displayLayout: Int = DisplayLayoutPreference.Landscape.id
 
     fun sendController(localPlayer: Int, state: ControllerState) {
@@ -332,6 +336,7 @@ data class JoinedPlaySession(
                 wantedSize = wantedSize,
                 displayLayout = displayLayout,
                 wantedFeel = wantedFeel,
+                wantedBitrate = wantedBitrate,
             ),
         )
         return frames

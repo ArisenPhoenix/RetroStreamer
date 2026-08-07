@@ -238,6 +238,16 @@ enum class MediaStreamFeel(val id: Int) {
     Smooth(2),
 }
 
+/** Matches MediaStreamBitrate in protocol.hpp — independent of frame-rate tier. */
+enum class MediaStreamBitrate(val id: Int) {
+    Auto(0),
+    Kbps800(1),
+    Kbps3500(2),
+    Kbps8000(3),
+    Kbps12000(4),
+    Kbps25000(5),
+}
+
 /** Matches DisplayLayoutPreference in protocol.hpp — DS Hybrid vs Top/Bottom.
  * Android always sends Landscape (Hybrid); portrait arrangement is client-side. */
 enum class DisplayLayoutPreference(val id: Int) {

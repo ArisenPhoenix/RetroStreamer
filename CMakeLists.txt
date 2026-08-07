@@ -359,6 +359,7 @@ if(ARCHSTREAMER_BUILD_HOST)
             src/host/posix_launch_environment.cpp
             src/host/posix_session_slot_lease.cpp
             src/host/gstreamer_media_server.cpp
+            src/host/rtp_frame_pace_debug.cpp
             src/host/linux_uinput_gamepad.cpp
             src/host/posix_retroarch_process.cpp
             src/host/virtual_display.cpp

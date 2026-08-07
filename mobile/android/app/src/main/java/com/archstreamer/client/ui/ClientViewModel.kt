@@ -34,6 +34,7 @@ import com.archstreamer.client.protocol.GameInfo
 import com.archstreamer.client.protocol.LinkAction
 import com.archstreamer.client.protocol.LinkStatus
 import com.archstreamer.client.protocol.MediaQualityTier
+import com.archstreamer.client.protocol.MediaStreamBitrate
 import com.archstreamer.client.protocol.MediaStreamFeel
 import com.archstreamer.client.protocol.MediaStreamSize
 import com.archstreamer.client.protocol.Protocol
@@ -116,8 +117,10 @@ data class UiState(
     val softKeyboard: SoftKeyboardRequest? = null,
     /** Host melonDS top/bottom panes (follows swap); drives DS touch hit target. */
     val dsScreenLayout: DsScreenLayout? = null,
-    /** Heartbeat wanted quality (mobile defaults Medium). */
+    /** Heartbeat wanted frame rate (mobile defaults 30 fps / Medium tier). */
     val streamQuality: MediaQualityTier = MediaQualityTier.Medium,
+    /** Heartbeat wanted encode bitrate (mobile defaults 3.5 Mbps). */
+    val streamBitrate: MediaStreamBitrate = MediaStreamBitrate.Kbps3500,
     /** Heartbeat wanted encode size (mobile defaults 540p). */
     val streamSize: MediaStreamSize = MediaStreamSize.P540,
     /** Heartbeat wanted stream feel (default Low latency = current host encode). */
@@ -268,6 +271,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 prefs.getString(KEY_USERNAME, "").orEmpty(),
             ),
             streamQuality = qualityFromPrefs(),
+            streamBitrate = bitrateFromPrefs(),
             streamSize = sizeFromPrefs(),
             streamFeel = feelFromPrefs(),
             logSessions = prefs.getString(KEY_LOG_SESSIONS, "3").orEmpty().ifBlank { "3" },
@@ -1216,7 +1220,27 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun qualityFromPrefs(): MediaQualityTier {
         val id = prefs.getInt(KEY_STREAM_QUALITY, MediaQualityTier.Medium.id)
-        return MediaQualityTier.entries.firstOrNull { it.id == id } ?: MediaQualityTier.Medium
+        // Frame-rate ladder: collapse legacy Med-High/Very-High → High (60 fps).
+        return when (id) {
+            MediaQualityTier.MediumHigh.id, MediaQualityTier.VeryHigh.id -> MediaQualityTier.High
+            else -> MediaQualityTier.entries.firstOrNull { it.id == id } ?: MediaQualityTier.Medium
+        }
+    }
+
+    private fun bitrateFromPrefs(): MediaStreamBitrate {
+        if (prefs.contains(KEY_STREAM_BITRATE)) {
+            val id = prefs.getInt(KEY_STREAM_BITRATE, MediaStreamBitrate.Kbps3500.id)
+            return MediaStreamBitrate.entries.firstOrNull { it.id == id }
+                ?: MediaStreamBitrate.Kbps3500
+        }
+        // Migrate legacy combined quality pref → matching bitrate once.
+        return when (prefs.getInt(KEY_STREAM_QUALITY, MediaQualityTier.Medium.id)) {
+            MediaQualityTier.Low.id -> MediaStreamBitrate.Kbps800
+            MediaQualityTier.MediumHigh.id -> MediaStreamBitrate.Kbps8000
+            MediaQualityTier.High.id -> MediaStreamBitrate.Kbps12000
+            MediaQualityTier.VeryHigh.id -> MediaStreamBitrate.Kbps25000
+            else -> MediaStreamBitrate.Kbps3500
+        }
     }
 
     private fun sizeFromPrefs(): MediaStreamSize {
@@ -1234,6 +1258,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         session?.wantedTier = snap.streamQuality.id
         session?.wantedSize = snap.streamSize.id
         session?.wantedFeel = snap.streamFeel.id
+        session?.wantedBitrate = snap.streamBitrate.id
         // Android always requests Hybrid; portrait stacking is client-side.
         session?.displayLayout = DisplayLayoutPreference.Landscape.id
     }
@@ -2376,6 +2401,12 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     fun setStreamQuality(tier: MediaQualityTier) {
         _state.update { it.copy(streamQuality = tier) }
         prefs.edit().putInt(KEY_STREAM_QUALITY, tier.id).apply()
+        applyStreamPrefsToSession()
+    }
+
+    fun setStreamBitrate(bitrate: MediaStreamBitrate) {
+        _state.update { it.copy(streamBitrate = bitrate) }
+        prefs.edit().putInt(KEY_STREAM_BITRATE, bitrate.id).apply()
         applyStreamPrefsToSession()
     }
 
@@ -3730,6 +3761,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         private const val KEY_INPUT_PORT = "input_port"
         private const val KEY_USERNAME = "username"
         private const val KEY_STREAM_QUALITY = "stream_quality"
+        private const val KEY_STREAM_BITRATE = "stream_bitrate"
         private const val KEY_STREAM_SIZE = "stream_size"
         private const val KEY_STREAM_FEEL = "stream_feel"
         private const val KEY_DISCOVERY_SEEDS = "discovery_seeds"

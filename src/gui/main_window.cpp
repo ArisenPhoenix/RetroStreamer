@@ -348,17 +348,26 @@ QWidget* MainWindow::build_stream_tab() {
 
     client_stream_quality_ = new QComboBox(client_box);
     client_stream_quality_->addItem("Auto", static_cast<int>(archstreamer::MediaQualityTier::Auto));
-    client_stream_quality_->addItem("Low (800 kbps / 20 fps)", static_cast<int>(archstreamer::MediaQualityTier::Low));
-    client_stream_quality_->addItem("Medium (3.5 Mbps / 30 fps)", static_cast<int>(archstreamer::MediaQualityTier::Medium));
-    client_stream_quality_->addItem("Med-High (8 Mbps / 60 fps)", static_cast<int>(archstreamer::MediaQualityTier::MediumHigh));
-    client_stream_quality_->addItem("High (12 Mbps / 60 fps)", static_cast<int>(archstreamer::MediaQualityTier::High));
-    client_stream_quality_->addItem("Very-High (25 Mbps / 60 fps)", static_cast<int>(archstreamer::MediaQualityTier::VeryHigh));
+    client_stream_quality_->addItem("20 fps", static_cast<int>(archstreamer::MediaQualityTier::Low));
+    client_stream_quality_->addItem("30 fps", static_cast<int>(archstreamer::MediaQualityTier::Medium));
+    client_stream_quality_->addItem("60 fps", static_cast<int>(archstreamer::MediaQualityTier::High));
     client_stream_quality_->setCurrentIndex(0);
     client_stream_quality_->setToolTip(
-        "Preferred bitrate/FPS sent to the host each second.\n"
-        "Auto starts at Medium and steps up/down from decode health (~1 Hz heartbeats).\n"
-        "Resolution is chosen separately under Stream size.\n"
-        "Use Medium or Low on Wi‑Fi / weaker laptops; High/Very-High need a strong link.");
+        "Preferred encode frame rate sent to the host each second.\n"
+        "Auto starts at 30 fps and steps from decode health (~1 Hz heartbeats).\n"
+        "Bitrate is chosen separately; resolution under Stream size.");
+    client_stream_bitrate_ = new QComboBox(client_box);
+    client_stream_bitrate_->addItem("Auto", static_cast<int>(archstreamer::MediaStreamBitrate::Auto));
+    client_stream_bitrate_->addItem("0.8 Mbps", static_cast<int>(archstreamer::MediaStreamBitrate::Kbps800));
+    client_stream_bitrate_->addItem("3.5 Mbps", static_cast<int>(archstreamer::MediaStreamBitrate::Kbps3500));
+    client_stream_bitrate_->addItem("8 Mbps", static_cast<int>(archstreamer::MediaStreamBitrate::Kbps8000));
+    client_stream_bitrate_->addItem("12 Mbps", static_cast<int>(archstreamer::MediaStreamBitrate::Kbps12000));
+    client_stream_bitrate_->addItem("25 Mbps", static_cast<int>(archstreamer::MediaStreamBitrate::Kbps25000));
+    client_stream_bitrate_->setCurrentIndex(0);
+    client_stream_bitrate_->setToolTip(
+        "Preferred encode bitrate sent to the host each second.\n"
+        "Auto follows the legacy ladder for the chosen frame rate\n"
+        "(or full Auto adaptation when Frame rate is also Auto).");
     client_stream_size_ = new QComboBox(client_box);
     client_stream_size_->addItem("Auto (match display height)", static_cast<int>(archstreamer::MediaStreamSize::Auto));
     client_stream_size_->addItem("540p", static_cast<int>(archstreamer::MediaStreamSize::P540));
@@ -386,7 +395,8 @@ QWidget* MainWindow::build_stream_tab() {
         "Use if sound drifts ahead after a stutter; video keeps playing.");
     client_resync_av_->setEnabled(false);
 
-    client_form->addRow("Stream quality", client_stream_quality_);
+    client_form->addRow("Frame rate", client_stream_quality_);
+    client_form->addRow("Bitrate", client_stream_bitrate_);
     client_form->addRow("Stream size", client_stream_size_);
     client_form->addRow("", client_video_);
     client_form->addRow("", client_audio_);
@@ -418,6 +428,12 @@ QWidget* MainWindow::build_stream_tab() {
     connect(client_stream_quality_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
         if (heartbeat_prefs_) {
             heartbeat_prefs_->set_wanted_tier(selected_stream_quality());
+        }
+        persist_settings_if_idle();
+    });
+    connect(client_stream_bitrate_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+        if (heartbeat_prefs_) {
+            heartbeat_prefs_->set_wanted_bitrate(selected_stream_bitrate());
         }
         persist_settings_if_idle();
     });

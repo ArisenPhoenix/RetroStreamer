@@ -164,6 +164,7 @@ archstreamer::ClientAppConfig MainWindow::client_config_from_fields() const {
     config.synced_av = client_synced_av_ != nullptr && client_synced_av_->isChecked();
     config.wanted_tier = selected_stream_quality();
     config.wanted_size = selected_stream_size();
+    config.wanted_bitrate = selected_stream_bitrate();
     config.show_framecount =
         settings_show_framecount_ != nullptr && settings_show_framecount_->isChecked();
     if (const auto* screen = QGuiApplication::primaryScreen()) {
@@ -187,6 +188,13 @@ archstreamer::MediaQualityTier MainWindow::selected_stream_quality() const {
         return archstreamer::MediaQualityTier::Auto;
     }
     return static_cast<archstreamer::MediaQualityTier>(client_stream_quality_->currentData().toInt());
+}
+
+archstreamer::MediaStreamBitrate MainWindow::selected_stream_bitrate() const {
+    if (client_stream_bitrate_ == nullptr || client_stream_bitrate_->currentData().isNull()) {
+        return archstreamer::MediaStreamBitrate::Auto;
+    }
+    return static_cast<archstreamer::MediaStreamBitrate>(client_stream_bitrate_->currentData().toInt());
 }
 
 archstreamer::MediaStreamSize MainWindow::selected_stream_size() const {
@@ -581,6 +589,7 @@ void MainWindow::start_client() {
         std::lock_guard lock(heartbeat_prefs_->mutex);
         heartbeat_prefs_->wanted_tier = config.wanted_tier;
         heartbeat_prefs_->wanted_size = config.wanted_size;
+        heartbeat_prefs_->wanted_bitrate = config.wanted_bitrate;
         heartbeat_prefs_->max_bitrate_kbps = config.max_bitrate_kbps;
         heartbeat_prefs_->show_framecount = config.show_framecount;
         heartbeat_prefs_->display_layout = config.display_layout;

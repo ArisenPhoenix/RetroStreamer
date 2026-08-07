@@ -912,6 +912,7 @@ ClientRunResult ClientApp::join_session(
             }
             auto wanted_tier = config.wanted_tier;
             auto wanted_size = config.wanted_size;
+            auto wanted_bitrate = config.wanted_bitrate;
             auto max_bitrate_kbps = config.max_bitrate_kbps;
             auto show_framecount = config.show_framecount;
             auto display_layout = config.display_layout;
@@ -919,6 +920,7 @@ ClientRunResult ClientApp::join_session(
                 callbacks.heartbeat_prefs->snapshot(
                     wanted_tier,
                     wanted_size,
+                    wanted_bitrate,
                     max_bitrate_kbps,
                     show_framecount,
                     display_layout);
@@ -939,6 +941,8 @@ ClientRunResult ClientApp::join_session(
                 show_framecount,
                 wanted_size,
                 display_layout,
+                MediaStreamFeel::LowLatency,
+                wanted_bitrate,
             }));
             next_heartbeat = now + std::chrono::seconds(1);
         }

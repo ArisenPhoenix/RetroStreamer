@@ -41,11 +41,14 @@ struct SessionClientConnection {
     MediaStreamSize applied_size = MediaStreamSize::P720;
     MediaStreamFeel wanted_feel = MediaStreamFeel::LowLatency;
     MediaStreamFeel applied_feel = MediaStreamFeel::LowLatency;
+    MediaStreamBitrate wanted_bitrate = MediaStreamBitrate::Auto;
+    MediaStreamBitrate applied_bitrate = MediaStreamBitrate::Auto;
     DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto;
-    /** Tier/size/feel being warmed on a staging RTP path (cutover in flight). */
+    /** Tier/size/feel/bitrate being warmed on a staging RTP path (cutover in flight). */
     std::optional<MediaQualityTier> pending_tier;
     std::optional<MediaStreamSize> pending_size;
     std::optional<MediaStreamFeel> pending_feel;
+    std::optional<MediaStreamBitrate> pending_bitrate;
     std::optional<std::string> pending_video_uri;
     std::chrono::steady_clock::time_point video_cutover_started = {};
     std::uint16_t max_bitrate_kbps = 0;

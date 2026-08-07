@@ -80,6 +80,7 @@ import android.content.res.Configuration
 import com.archstreamer.client.net.HostAddresses
 import com.archstreamer.client.protocol.GameInfo
 import com.archstreamer.client.protocol.MediaQualityTier
+import com.archstreamer.client.protocol.MediaStreamBitrate
 import com.archstreamer.client.protocol.MediaStreamFeel
 import com.archstreamer.client.protocol.MediaStreamSize
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -1178,27 +1179,56 @@ private fun StreamSection(state: UiState, viewModel: ClientViewModel) {
         Text("Client stream", style = MaterialTheme.typography.titleMedium)
         Text(
             "Heartbeats tell the host which encode ladder to send. " +
-                "Mobile defaults are Medium @ 540p, Low latency.",
+                "Mobile defaults are 30 fps @ 3.5 Mbps, 540p, Low latency.",
             style = MaterialTheme.typography.bodyMedium,
         )
-        Text("Quality", style = MaterialTheme.typography.titleSmall)
+        Text("Frame rate", style = MaterialTheme.typography.titleSmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(
                 selected = state.streamQuality == MediaQualityTier.Low,
                 onClick = { viewModel.setStreamQuality(MediaQualityTier.Low) },
-                label = { Text("Low") },
+                label = { Text("20") },
             )
             FilterChip(
                 selected = state.streamQuality == MediaQualityTier.Medium,
                 onClick = { viewModel.setStreamQuality(MediaQualityTier.Medium) },
-                label = { Text("Medium") },
+                label = { Text("30") },
             )
             FilterChip(
                 selected = state.streamQuality == MediaQualityTier.High,
                 onClick = { viewModel.setStreamQuality(MediaQualityTier.High) },
-                label = { Text("High") },
+                label = { Text("60") },
             )
         }
+        Text("Bitrate", style = MaterialTheme.typography.titleSmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = state.streamBitrate == MediaStreamBitrate.Kbps800,
+                onClick = { viewModel.setStreamBitrate(MediaStreamBitrate.Kbps800) },
+                label = { Text("0.8") },
+            )
+            FilterChip(
+                selected = state.streamBitrate == MediaStreamBitrate.Kbps3500,
+                onClick = { viewModel.setStreamBitrate(MediaStreamBitrate.Kbps3500) },
+                label = { Text("3.5") },
+            )
+            FilterChip(
+                selected = state.streamBitrate == MediaStreamBitrate.Kbps8000,
+                onClick = { viewModel.setStreamBitrate(MediaStreamBitrate.Kbps8000) },
+                label = { Text("8") },
+            )
+            FilterChip(
+                selected = state.streamBitrate == MediaStreamBitrate.Kbps12000,
+                onClick = { viewModel.setStreamBitrate(MediaStreamBitrate.Kbps12000) },
+                label = { Text("12") },
+            )
+            FilterChip(
+                selected = state.streamBitrate == MediaStreamBitrate.Kbps25000,
+                onClick = { viewModel.setStreamBitrate(MediaStreamBitrate.Kbps25000) },
+                label = { Text("25") },
+            )
+        }
+        Text("Mbps", style = MaterialTheme.typography.bodySmall)
         Text("Size", style = MaterialTheme.typography.titleSmall)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(

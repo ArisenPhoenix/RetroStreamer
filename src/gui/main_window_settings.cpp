@@ -480,12 +480,46 @@ void MainWindow::load_persisted_settings() {
         }
     }
     if (client_stream_quality_ != nullptr) {
-        const auto tier = settings.value(
+        auto tier = settings.value(
             "client/streamQuality",
             static_cast<int>(archstreamer::MediaQualityTier::Auto)).toInt();
+        // Migrate legacy Med-High / Very-High → 60 fps.
+        if (tier == static_cast<int>(archstreamer::MediaQualityTier::MediumHigh) ||
+            tier == static_cast<int>(archstreamer::MediaQualityTier::VeryHigh)) {
+            tier = static_cast<int>(archstreamer::MediaQualityTier::High);
+        }
         const QSignalBlocker blocker(client_stream_quality_);
         const auto index = client_stream_quality_->findData(tier);
         client_stream_quality_->setCurrentIndex(index >= 0 ? index : 0);
+    }
+    if (client_stream_bitrate_ != nullptr) {
+        int bitrate = settings.value(
+            "client/streamBitrate",
+            -1).toInt();
+        if (bitrate < 0) {
+            // Migrate legacy combined streamQuality → bitrate once.
+            const auto legacy = settings.value(
+                "client/streamQuality",
+                static_cast<int>(archstreamer::MediaQualityTier::Auto)).toInt();
+            using QT = archstreamer::MediaQualityTier;
+            using BR = archstreamer::MediaStreamBitrate;
+            if (legacy == static_cast<int>(QT::Low)) {
+                bitrate = static_cast<int>(BR::Kbps800);
+            } else if (legacy == static_cast<int>(QT::MediumHigh)) {
+                bitrate = static_cast<int>(BR::Kbps8000);
+            } else if (legacy == static_cast<int>(QT::High)) {
+                bitrate = static_cast<int>(BR::Kbps12000);
+            } else if (legacy == static_cast<int>(QT::VeryHigh)) {
+                bitrate = static_cast<int>(BR::Kbps25000);
+            } else if (legacy == static_cast<int>(QT::Medium)) {
+                bitrate = static_cast<int>(BR::Kbps3500);
+            } else {
+                bitrate = static_cast<int>(BR::Auto);
+            }
+        }
+        const QSignalBlocker blocker(client_stream_bitrate_);
+        const auto index = client_stream_bitrate_->findData(bitrate);
+        client_stream_bitrate_->setCurrentIndex(index >= 0 ? index : 0);
     }
     if (client_stream_size_ != nullptr) {
         const auto size = settings.value(
@@ -726,6 +760,9 @@ void MainWindow::save_persisted_settings() {
     }
     if (client_stream_quality_ != nullptr) {
         settings.setValue("client/streamQuality", client_stream_quality_->currentData().toInt());
+    }
+    if (client_stream_bitrate_ != nullptr) {
+        settings.setValue("client/streamBitrate", client_stream_bitrate_->currentData().toInt());
     }
     if (client_stream_size_ != nullptr) {
         settings.setValue("client/streamSize", client_stream_size_->currentData().toInt());

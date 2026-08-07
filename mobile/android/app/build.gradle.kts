@@ -49,6 +49,8 @@ android {
 
     buildFeatures {
         compose = true
+        // Needed for TEMP frame-pace debug (BuildConfig.DEBUG). Remove with pace code.
+        buildConfig = true
     }
 
     packaging {

@@ -46,7 +46,7 @@ Concrete shape:
 
 - Public headers declare a small portable API (`ChildProcess`, path helpers, discovery sockets, `raise_video_window`, session slot lease, launch environment).
 - CMake selects `posix_*.cpp` or `windows_*.cpp` implementations. Downstream code includes the public header, not the platform source.
-- Product/process logic stays **outside** the platform files: soft-keyboard policy, quality cutover, seat reconnect, Ryujinx profile naming, and similar belong in shared host/client modules. Platform code should still make sense if the product were renamed (`raise_window(pid)`, `kill_process_tree(pid)`, open a discovery socket).
+- Product/process logic stays **outside** the platform files: soft-keyboard policy, session encode ceiling, seat reconnect, Ryujinx profile naming, and similar belong in shared host/client modules. Platform code should still make sense if the product were renamed (`raise_window(pid)`, `kill_process_tree(pid)`, open a discovery socket).
 
 That keeps dual-OS bugs localized (Windows Job Objects vs `PR_SET_PDEATHSIG`, X11 restack vs `SetForegroundWindow`) without forking session behavior per platform.
 
@@ -338,27 +338,22 @@ When video is enabled, capture depends on the emulator:
 - **Switch (Ryujinx preferred / Yuzu):** headless **gamescope** (managed wrapper under `~/.local/share/archstreamer/gamescope/` preferred). The host captures gamescope’s PipeWire Video/Source (`pipewiresrc`), not `ximagesrc`. Nested clients must load **Gamescope WSI** (`ENABLE_GAMESCOPE_WSI` + `VK_ADD_IMPLICIT_LAYER_PATH`); without it, dual-NVIDIA setups often only allow present on the boot GPU (“Device lacks a present queue” on the other card). Ryujinx is preferred for LDN/link play; per-user profiles live under the save-root username tree.
 - **RetroArch:** virtual X display + `ximagesrc` by default. `Xvfb` is preferred; `Xephyr` is the fallback. When a non-default NVIDIA GPU is selected for GL, **VirtualGL** (`vglrun`) renders via the real display’s PRIME providers while capture stays on `:99`. Nintendo DS (melonDS) uses Hybrid Top layout with OpenGL renderer so R2 swaps both panes cleanly.
 
-Encode is H.264 (`nvh264enc` when CUDA/NVENC is available, else `x264enc`), packetized with `rtph264pay`, and fanned with `multiudpsink`. Clients that share identical `VideoEncodeSettings` share an encode branch; different size/quality combinations get separate branches off a capture `tee`.
+Encode is H.264 (`nvh264enc` when CUDA/NVENC is available, else `x264enc`), packetized with `rtph264pay`, and fanned with `multiudpsink`. Each session slot runs **one** shared encode: the same RTP packets go to every video destination (seated players, viewers, and Watch-local).
 
 Stream size and quality are negotiated independently via `ViewerHeartbeat`:
 
 - `MediaStreamSize` — output height ladder (`Auto`, `540p`, `720p`, `1080p`, `1440p`)
 - `MediaQualityTier` — bitrate/FPS ladder (`Auto` can step up/down from host health signals)
 
+Only **seated players** (`requested_players > 0`) raise the session encode. The host takes a componentwise max of those players’ resolved `VideoEncodeSettings` (size, fps, bitrate, feel/queue). Viewers and Watch-local only receive that bitstream; their heartbeats update `wanted_*` for UI but never restage video.
+
 Host capture resolution (GUI: Stream tab → Host capture resolution) sets the gamescope/Xvfb framebuffer. Scaling the stream to the client's requested height without matching capture height still letterboxes inside the encode.
 
-Mid-session quality/size changes use a dual-stream cutover instead of tearing down the live path immediately:
-
-1. Host sends `MediaVideoPending` with the staging RTP URI.
-2. Client warms a second receiver (headless probe / staging pipeline) while the old sink keeps playing.
-3. Client replies `MediaVideoReady` when the staging stream is verified.
-4. Host swaps destinations, then tears down the old encode; the client switches sinks and restores window geometry when possible.
-
-On Linux, video-window geometry (position/size/maximized/fullscreen) is captured before cutover and reapplied to the new `gst-launch` window. Closing a host-requested pad OSK also raises the video window back above the Qt GUI.
+When the player-driven ceiling changes, the host **hard-restarts** the shared pipeline on the same client UDP ports (brief gap for everyone on that slot). Legacy dual-URI cutover (`MediaVideoPending` / dedicated encode) is no longer used for quality/size changes.
 
 Clients request video by default and can opt out with `session_client --no-video`. Stream size/quality can be set with `--stream-size` / quality options or the GUI Stream tab. If a `MediaEndpoint` is received, the client starts a GStreamer RTP/H.264 receiver and displays it through the platform sink (`ximagesink` / `d3d11videosink` / `autovideosink`).
 
-Session launches use per-client fanout. `--video-port` is the base UDP video port, `--audio-port` is the base UDP audio port, and each media client gets incremented ports. If `--video-dest` is omitted, the host sends media to each client's TCP peer address. If `--video-dest` is supplied, every stream uses that address with separate ports, which is useful for local multi-client testing on one machine.
+Session launches use per-client fanout destinations on one shared encode. `--video-port` is the base UDP video port, `--audio-port` is the base UDP audio port, and each media client gets incremented ports. If `--video-dest` is omitted, the host sends media to each client's TCP peer address. If `--video-dest` is supplied, every stream uses that address with separate ports, which is useful for local multi-client testing on one machine.
 
 Audio streaming is also **enabled by default** (`--audio`; disable with `--no-audio`):
 
@@ -373,7 +368,7 @@ Optional synced A/V mode runs video and audio in one GStreamer process so lip-sy
 
 Current limitations:
 
-- Cutover still briefly dual-encodes; a fully seamless single-decoder switch is future work.
+- Ceiling changes hard-restart the shared encode (brief blackout); seamless session-wide staging is future work.
 - Separate (non-synced) A/V streams rely on receiver buffering rather than a shared clock.
 - Linux Qt can embed video via `VideoEmbedBridge` / in-process overlay when GStreamer libs are available; Windows still prefers a separate top-level sink. CLI/`session_client` may still open a standalone `gst-launch` (or equivalent) window as a fallback.
 

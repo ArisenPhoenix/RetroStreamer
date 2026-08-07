@@ -97,6 +97,18 @@ struct SessionPlan {
     std::string pending_link_client_username;
     /** Pad OSK for Ryujinx Software Keyboard (optional; set for Switch sessions). */
     std::shared_ptr<SoftKeyboardHostBridge> soft_keyboard;
+
+    /**
+     * Single shared video encode for this session slot.
+     * Ceiling is owned by seated players only; viewers/Watch receive this bitstream.
+     */
+    VideoEncodeSettings session_video_settings =
+        video_encode_settings(MediaStreamSize::P720, MediaQualityTier::Medium);
+    MediaStreamSize session_video_size = MediaStreamSize::P720;
+    MediaQualityTier session_video_tier = MediaQualityTier::Medium;
+    MediaStreamFeel session_video_feel = MediaStreamFeel::LowLatency;
+    MediaStreamBitrate session_video_bitrate = MediaStreamBitrate::Auto;
+    bool session_video_configured = false;
 };
 
 const char* session_mode_name(GameSessionMode mode);

@@ -77,6 +77,157 @@ bool any_connected_seated_player(const SessionPlan& plan) {
     return false;
 }
 
+void sync_applied_to_session(SessionClientConnection& client, const SessionPlan& plan) {
+    client.applied_size = plan.session_video_size;
+    client.applied_tier = plan.session_video_tier;
+    client.applied_feel = plan.session_video_feel;
+    client.applied_bitrate = plan.session_video_bitrate;
+}
+
+void sync_all_applied_to_session(SessionPlan& plan) {
+    for (auto& client : plan.clients) {
+        if (client.connection_state != SessionConnectionState::Connected) {
+            continue;
+        }
+        sync_applied_to_session(client, plan);
+    }
+}
+
+int stream_feel_rank(MediaStreamFeel feel) {
+    switch (feel) {
+    case MediaStreamFeel::Smooth:
+        return 2;
+    case MediaStreamFeel::Balanced:
+        return 1;
+    case MediaStreamFeel::LowLatency:
+    default:
+        return 0;
+    }
+}
+
+struct PlayerEncodeContribution {
+    VideoEncodeSettings settings{};
+    MediaStreamSize size = MediaStreamSize::P720;
+    MediaQualityTier tier = MediaQualityTier::Medium;
+    MediaStreamFeel feel = MediaStreamFeel::LowLatency;
+    MediaStreamBitrate bitrate = MediaStreamBitrate::Auto;
+};
+
+PlayerEncodeContribution player_encode_contribution(
+    const SessionClientConnection& client,
+    std::uint16_t capture_width,
+    std::uint16_t capture_height,
+    MediaStreamSize size_override,
+    MediaQualityTier tier_override,
+    MediaStreamFeel feel_override,
+    MediaStreamBitrate bitrate_override,
+    bool use_override) {
+    MediaStreamSize size = use_override ? size_override : client.wanted_size;
+    if (size == MediaStreamSize::Auto) {
+        size = client.applied_size;
+    }
+    const MediaQualityTier wanted =
+        use_override ? tier_override : client.wanted_tier;
+    const auto tier = select_video_tier(wanted, client.applied_tier, client.max_bitrate_kbps);
+    const MediaStreamFeel feel = use_override ? feel_override : client.wanted_feel;
+    const MediaStreamBitrate bitrate =
+        use_override ? bitrate_override : client.wanted_bitrate;
+    return PlayerEncodeContribution{
+        video_encode_settings(size, tier, capture_width, capture_height, feel, bitrate),
+        size,
+        tier,
+        feel,
+        bitrate,
+    };
+}
+
+struct SessionVideoCeiling {
+    VideoEncodeSettings settings{};
+    MediaStreamSize size = MediaStreamSize::P720;
+    MediaQualityTier tier = MediaQualityTier::Medium;
+    MediaStreamFeel feel = MediaStreamFeel::LowLatency;
+    MediaStreamBitrate bitrate = MediaStreamBitrate::Auto;
+    bool any_player = false;
+};
+
+SessionVideoCeiling compute_session_video_ceiling(
+    const SessionPlan& plan,
+    std::uint16_t capture_width,
+    std::uint16_t capture_height,
+    ClientId override_client_id,
+    MediaStreamSize size_override,
+    MediaQualityTier tier_override,
+    MediaStreamFeel feel_override,
+    MediaStreamBitrate bitrate_override,
+    bool use_override_client) {
+    SessionVideoCeiling ceiling{};
+    bool all_bitrate_auto = true;
+    for (const auto& client : plan.clients) {
+        if (!client_is_seated_player(client) ||
+            client.connection_state != SessionConnectionState::Connected ||
+            !client.hello.wants_video) {
+            continue;
+        }
+        const bool use_override =
+            use_override_client && client.client_id == override_client_id;
+        const auto contrib = player_encode_contribution(
+            client,
+            capture_width,
+            capture_height,
+            size_override,
+            tier_override,
+            feel_override,
+            bitrate_override,
+            use_override);
+        if (contrib.bitrate != MediaStreamBitrate::Auto) {
+            all_bitrate_auto = false;
+        }
+        if (!ceiling.any_player) {
+            ceiling.settings = contrib.settings;
+            ceiling.size = contrib.size;
+            ceiling.tier = contrib.tier;
+            ceiling.feel = contrib.feel;
+            ceiling.bitrate = contrib.bitrate;
+            ceiling.any_player = true;
+            continue;
+        }
+        ceiling.settings = dominate_video_encode_settings(ceiling.settings, contrib.settings);
+        if (media_stream_size_height(contrib.size) > media_stream_size_height(ceiling.size)) {
+            ceiling.size = contrib.size;
+        }
+        if (tier_above(contrib.tier, ceiling.tier)) {
+            ceiling.tier = contrib.tier;
+        }
+        if (stream_feel_rank(contrib.feel) > stream_feel_rank(ceiling.feel)) {
+            ceiling.feel = contrib.feel;
+        }
+    }
+    if (!ceiling.any_player) {
+        if (plan.session_video_configured) {
+            ceiling.settings = plan.session_video_settings;
+            ceiling.size = plan.session_video_size;
+            ceiling.tier = plan.session_video_tier;
+            ceiling.feel = plan.session_video_feel;
+            ceiling.bitrate = plan.session_video_bitrate;
+        } else {
+            ceiling.settings = video_encode_settings(
+                MediaStreamSize::P720,
+                MediaQualityTier::Medium,
+                capture_width,
+                capture_height);
+            ceiling.size = MediaStreamSize::P720;
+            ceiling.tier = MediaQualityTier::Medium;
+            ceiling.feel = MediaStreamFeel::LowLatency;
+            ceiling.bitrate = MediaStreamBitrate::Auto;
+        }
+        return ceiling;
+    }
+    ceiling.bitrate = all_bitrate_auto
+        ? MediaStreamBitrate::Auto
+        : media_stream_bitrate_for_settings(ceiling.settings);
+    return ceiling;
+}
+
 std::chrono::seconds reconnect_grace_for(const SessionClientConnection& client, std::chrono::seconds full) {
     // Explicit ClientSessionLeave / admin Kick → end immediately (no reconnect hold).
     // TCP close / heartbeat loss → full reconnect window for flaky links.
@@ -113,18 +264,24 @@ SessionControlMonitor::SessionControlMonitor(
       slot_index_(slot_index),
       session_id_(std::move(session_id)) {
     const auto now = started_at_;
+    // Shared encode starts at Medium@720p; seated players may raise the session ceiling.
+    plan_.session_video_settings = video_encode_settings(
+        MediaStreamSize::P720,
+        MediaQualityTier::Medium,
+        capture_width_,
+        capture_height_);
+    plan_.session_video_size = MediaStreamSize::P720;
+    plan_.session_video_tier = MediaQualityTier::Medium;
+    plan_.session_video_feel = MediaStreamFeel::LowLatency;
+    plan_.session_video_bitrate = MediaStreamBitrate::Auto;
+    plan_.session_video_configured = true;
     for (auto& client : plan_.clients) {
         client.last_seen = now;
-        // Start at Medium@720p: High is 12 Mbps/60 and restarts the shared pipeline.
-        // Auto can still step up quality after a long healthy streak.
-        client.applied_tier = MediaQualityTier::Medium;
         client.wanted_tier = MediaQualityTier::Auto;
-        client.applied_size = MediaStreamSize::P720;
         client.wanted_size = MediaStreamSize::Auto;
-        client.applied_feel = MediaStreamFeel::LowLatency;
         client.wanted_feel = MediaStreamFeel::LowLatency;
-        client.applied_bitrate = MediaStreamBitrate::Auto;
         client.wanted_bitrate = MediaStreamBitrate::Auto;
+        sync_applied_to_session(client, plan_);
     }
 }
 
@@ -323,73 +480,21 @@ std::optional<std::string> SessionControlMonitor::poll() {
                 }
             } else if (const auto* video_ready = std::get_if<MediaVideoReady>(&payload);
                        video_ready != nullptr) {
-                if (client.pending_video_uri.has_value() && video_ready->video_uri.empty()) {
-                    // Client NACK (staging bind / decode probe failed) — abort immediately
-                    // instead of waiting out kVideoCutoverTimeout.
+                // Legacy dual-stream ACK. Quality changes now hard-restart the shared
+                // encode; clear any stale pending state without promoting a dedicated path.
+                if (client.pending_video_uri.has_value()) {
                     media_server_.abort_video_tier_cutover(client.client_id);
-                    ++client.video_cutover_failures;
-                    std::cerr << "Video cutover NACK from " << client_label(client) << '\n';
-                    if (!client.video_cutover_suppressed &&
-                        client.video_cutover_failures >= 2) {
-                        client.video_cutover_suppressed = true;
-                        std::cerr
-                            << " — suppressing further size cutovers until reconnect"
-                            << " (client NACK)\n";
-                    } else {
-                        std::cerr << '\n';
-                    }
                     client.pending_video_uri.reset();
                     client.pending_tier.reset();
                     client.pending_size.reset();
                     client.pending_feel.reset();
                     client.pending_bitrate.reset();
                     client.video_cutover_started = {};
-                } else if (client.pending_video_uri.has_value() &&
-                    video_ready->video_uri == *client.pending_video_uri) {
-                    if (media_server_.complete_video_tier_cutover(
-                            client.client_id,
-                            video_ready->video_uri)) {
-                        if (client.pending_tier.has_value()) {
-                            client.applied_tier = *client.pending_tier;
-                        }
-                        if (client.pending_size.has_value()) {
-                            client.applied_size = *client.pending_size;
-                        }
-                        if (client.pending_feel.has_value()) {
-                            client.applied_feel = *client.pending_feel;
-                        }
-                        if (client.pending_bitrate.has_value()) {
-                            client.applied_bitrate = *client.pending_bitrate;
-                        }
-                        client.video_cutover_failures = 0;
-                        client.video_cutover_suppressed = false;
-                        if (client.media_endpoint.has_value()) {
-                            client.media_endpoint->video_uri = video_ready->video_uri;
-                            try {
-                                client.stream.send_packet(serialize_packet(*client.media_endpoint));
-                            } catch (const std::exception&) {
-                            }
-                        }
-                        client.last_video_reconfigure = now;
-                        std::cout
-                            << "Video cutover ready from " << client_label(client)
-                            << " -> " << media_stream_size_name(client.applied_size)
-                            << "/" << media_quality_tier_name(client.applied_tier)
-                            << "/" << media_stream_bitrate_name(client.applied_bitrate)
-                            << "/" << media_stream_feel_name(client.applied_feel) << '\n';
-                    } else {
-                        media_server_.abort_video_tier_cutover(client.client_id);
-                        std::cerr
-                            << "Video cutover complete failed for "
-                            << client_label(client) << '\n';
-                    }
-                    client.pending_video_uri.reset();
-                    client.pending_tier.reset();
-                    client.pending_size.reset();
-                    client.pending_feel.reset();
-                    client.pending_bitrate.reset();
-                    client.video_cutover_started = {};
+                    std::cerr
+                        << "Ignoring legacy MediaVideoReady from " << client_label(client)
+                        << " (shared encode has no staging cutover)\n";
                 }
+                (void)video_ready;
             } else if (const auto* link_request = std::get_if<LinkRequest>(&payload);
                        link_request != nullptr) {
                 std::vector<LinkOutbound> outbound;
@@ -522,26 +627,15 @@ std::optional<std::string> SessionControlMonitor::poll() {
             client.video_cutover_started.time_since_epoch().count() != 0 &&
             now - client.video_cutover_started >= kVideoCutoverTimeout) {
             media_server_.abort_video_tier_cutover(client.client_id);
-            ++client.video_cutover_failures;
             std::cerr
-                << "Video cutover timed out for " << client_label(client)
-                << "; keeping " << media_stream_size_name(client.applied_size)
-                << "/" << media_quality_tier_name(client.applied_tier);
-            if (!client.video_cutover_suppressed &&
-                client.video_cutover_failures >= 2) {
-                client.video_cutover_suppressed = true;
-                std::cerr
-                    << " — suppressing further size cutovers until reconnect"
-                    << " (no MediaVideoReady)";
-            }
-            std::cerr << '\n';
+                << "Clearing stale video pending for " << client_label(client)
+                << " (shared encode no longer stages)\n";
             client.pending_video_uri.reset();
             client.pending_tier.reset();
             client.pending_size.reset();
             client.pending_feel.reset();
             client.pending_bitrate.reset();
             client.video_cutover_started = {};
-            client.last_video_reconfigure = now;
         }
 
         if (client.stream.peer_closed()) {
@@ -621,6 +715,14 @@ void SessionControlMonitor::handle_heartbeat(
     }
 
     if (!client.hello.wants_video) {
+        return;
+    }
+
+    // Viewers only receive the session encode; never raise or Auto-ladder it.
+    if (!client_is_seated_player(client)) {
+        sync_applied_to_session(client, plan_);
+        client.bad_health_streak = 0;
+        client.good_health_streak = 0;
         return;
     }
 
@@ -809,6 +911,9 @@ void SessionControlMonitor::apply_video_encode(
     MediaStreamFeel feel,
     MediaStreamBitrate bitrate,
     std::string_view reason) {
+    if (!client_is_seated_player(client)) {
+        return;
+    }
     const auto now = std::chrono::steady_clock::now();
     if (client.video_cutover_suppressed) {
         return;
@@ -826,51 +931,59 @@ void SessionControlMonitor::apply_video_encode(
         size = client.applied_size;
     }
     const auto resolved = select_video_tier(tier, client.applied_tier, client.max_bitrate_kbps);
-    const auto settings =
-        video_encode_settings(size, resolved, capture_width_, capture_height_, feel, bitrate);
-    const auto staging_uri = media_server_.begin_video_tier_cutover(client.client_id, settings);
-    if (!staging_uri.has_value()) {
-        return;
-    }
+    const auto ceiling = compute_session_video_ceiling(
+        plan_,
+        capture_width_,
+        capture_height_,
+        client.client_id,
+        size,
+        resolved,
+        feel,
+        bitrate,
+        true);
 
-    client.pending_tier = resolved;
-    client.pending_size = size;
-    client.pending_feel = feel;
-    client.pending_bitrate = bitrate;
-    client.pending_video_uri = *staging_uri;
-    client.video_cutover_started = now;
     client.bad_health_streak = 0;
     client.good_health_streak = 0;
 
-    if (client.connection_state == SessionConnectionState::Connected) {
-        try {
-            client.stream.send_packet(serialize_packet(MediaVideoPending{*staging_uri}));
-        } catch (const std::exception&) {
-            media_server_.abort_video_tier_cutover(client.client_id);
-            client.pending_tier.reset();
-            client.pending_size.reset();
-            client.pending_feel.reset();
-            client.pending_bitrate.reset();
-            client.pending_video_uri.reset();
-            client.video_cutover_started = {};
-            return;
+    if (plan_.session_video_configured &&
+        ceiling.settings == plan_.session_video_settings) {
+        // Contribution changed but session encode did not; mirror what this client receives.
+        sync_applied_to_session(client, plan_);
+        return;
+    }
+
+    if (!media_server_.reconfigure_shared_video(ceiling.settings)) {
+        return;
+    }
+
+    plan_.session_video_settings = ceiling.settings;
+    plan_.session_video_size = ceiling.size;
+    plan_.session_video_tier = ceiling.tier;
+    plan_.session_video_feel = ceiling.feel;
+    plan_.session_video_bitrate = ceiling.bitrate;
+    plan_.session_video_configured = true;
+    sync_all_applied_to_session(plan_);
+    for (auto& other : plan_.clients) {
+        if (other.connection_state == SessionConnectionState::Connected) {
+            other.last_video_reconfigure = now;
         }
     }
+
     std::cerr
-        << "Staging video for " << client_label(client)
-        << " -> " << media_stream_size_name(size)
-        << "/" << media_quality_tier_name(resolved)
-        << "/" << media_stream_bitrate_name(bitrate)
-        << "/" << media_stream_feel_name(feel)
-        << " (" << settings.bitrate_kbps << " kbps, "
-        << static_cast<int>(settings.framerate) << " fps";
-    if (settings.width > 0 && settings.height > 0) {
-        std::cerr << ", " << settings.width << "x" << settings.height;
+        << "Session video -> " << media_stream_size_name(ceiling.size)
+        << "/" << media_quality_tier_name(ceiling.tier)
+        << "/" << media_stream_bitrate_name(ceiling.bitrate)
+        << "/" << media_stream_feel_name(ceiling.feel)
+        << " (" << ceiling.settings.bitrate_kbps << " kbps, "
+        << static_cast<int>(ceiling.settings.framerate) << " fps";
+    if (ceiling.settings.width > 0 && ceiling.settings.height > 0) {
+        std::cerr << ", " << ceiling.settings.width << "x" << ceiling.settings.height;
     }
     std::cerr
-        << ", queue=" << static_cast<int>(settings.queue_buffers)
-        << ", nvenc=" << (settings.nvenc_high_quality ? "hq" : "hp")
-        << "): " << reason << '\n';
+        << ", queue=" << static_cast<int>(ceiling.settings.queue_buffers)
+        << ", nvenc=" << (ceiling.settings.nvenc_high_quality ? "hq" : "hp")
+        << ") from " << client_label(client)
+        << ": " << reason << '\n';
 }
 
 bool SessionControlMonitor::remove_viewer(std::size_t index, std::string_view reason) {
@@ -924,6 +1037,41 @@ void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& cl
     client.pending_video_uri.reset();
     client.video_cutover_started = {};
     input_router_.neutralize_client(client.client_id);
+
+    // Drop this seat's contribution; remaining players own the ceiling.
+    if (plan_.session_video_configured && client.hello.wants_video) {
+        const auto ceiling = compute_session_video_ceiling(
+            plan_,
+            capture_width_,
+            capture_height_,
+            client.client_id,
+            MediaStreamSize::P720,
+            MediaQualityTier::Medium,
+            MediaStreamFeel::LowLatency,
+            MediaStreamBitrate::Auto,
+            false);
+        if (ceiling.settings != plan_.session_video_settings) {
+            if (media_server_.reconfigure_shared_video(ceiling.settings)) {
+                plan_.session_video_settings = ceiling.settings;
+                plan_.session_video_size = ceiling.size;
+                plan_.session_video_tier = ceiling.tier;
+                plan_.session_video_feel = ceiling.feel;
+                plan_.session_video_bitrate = ceiling.bitrate;
+                sync_all_applied_to_session(plan_);
+                const auto now = std::chrono::steady_clock::now();
+                for (auto& other : plan_.clients) {
+                    if (other.connection_state == SessionConnectionState::Connected) {
+                        other.last_video_reconfigure = now;
+                    }
+                }
+                std::cerr
+                    << "Session video -> " << media_stream_size_name(ceiling.size)
+                    << "/" << media_quality_tier_name(ceiling.tier)
+                    << " after " << client_label(client) << " left\n";
+            }
+        }
+    }
+
     const auto grace = reconnect_grace_for(client, reconnect_timeout_);
     std::cerr
         << "Player " << static_cast<int>(client.client_id)

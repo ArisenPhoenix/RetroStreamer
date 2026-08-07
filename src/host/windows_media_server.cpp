@@ -93,9 +93,11 @@ void WindowsMediaServer::restart_video() {
     }
 
     const auto [width, height] = parse_resolution(capture_.video_resolution);
-    const auto settings = video_encode_settings_for_tier(MediaQualityTier::Medium);
+    const auto& settings = video_settings_;
     const auto bitrate = settings.bitrate_kbps == 0 ? 3500 : settings.bitrate_kbps;
-    const auto framerate = settings.framerate == 0 ? 30 : settings.framerate;
+    const auto framerate = settings.framerate == 0 ? 30 : static_cast<int>(settings.framerate);
+    const int out_w = settings.width > 0 ? static_cast<int>(settings.width) : width;
+    const int out_h = settings.height > 0 ? static_cast<int>(settings.height) : height;
 
     std::vector<std::string> args{
         "gst-launch-1.0",
@@ -106,7 +108,7 @@ void WindowsMediaServer::restart_video() {
         "!",
         "videoscale",
         "!",
-        "video/x-raw,width=" + std::to_string(width) + ",height=" + std::to_string(height),
+        "video/x-raw,width=" + std::to_string(out_w) + ",height=" + std::to_string(out_h),
         "!",
         "videorate",
         "drop-only=true",
@@ -118,7 +120,8 @@ void WindowsMediaServer::restart_video() {
         args.insert(args.end(), {
             "nvh264enc",
             "zerolatency=true",
-            "preset=low-latency-hp",
+            std::string("preset=") +
+                (settings.nvenc_high_quality ? "low-latency-hq" : "low-latency-hp"),
             "bitrate=" + std::to_string(bitrate),
             "!",
             "video/x-h264,profile=baseline,stream-format=byte-stream",
@@ -280,6 +283,17 @@ void WindowsMediaServer::remove_client(ClientId client_id) {
         destinations_.end());
     restart_video();
     restart_audio();
+}
+
+bool WindowsMediaServer::reconfigure_shared_video(const VideoEncodeSettings& settings) {
+    video_settings_ = settings;
+    try {
+        restart_video();
+    } catch (const std::exception& error) {
+        std::cerr << "Windows shared video reconfigure failed: " << error.what() << '\n';
+        return false;
+    }
+    return video_running_;
 }
 
 bool WindowsMediaServer::complete_video_tier_cutover(ClientId, std::string_view) {

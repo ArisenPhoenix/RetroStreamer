@@ -34,6 +34,7 @@ public:
         bool wants_video,
         bool wants_audio) override;
     void remove_client(ClientId client_id) override;
+    bool reconfigure_shared_video(const VideoEncodeSettings& settings) override;
     std::optional<std::string> begin_video_tier_cutover(
         ClientId client_id,
         const VideoEncodeSettings& settings) override;
@@ -51,6 +52,8 @@ private:
     WindowsMediaCaptureConfig capture_;
     HostMediaPlanConfig plan_{};
     std::vector<HostMediaDestination> destinations_;
+    VideoEncodeSettings video_settings_ =
+        video_encode_settings(MediaStreamSize::P720, MediaQualityTier::Medium);
     ChildProcess video_process_;
     ChildProcess audio_process_;
     bool video_running_ = false;

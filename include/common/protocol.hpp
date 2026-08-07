@@ -397,6 +397,59 @@ struct VideoEncodeSettings {
     }
 };
 
+/** Componentwise max for a single shared session encode (players-only ceiling). */
+inline VideoEncodeSettings dominate_video_encode_settings(
+    VideoEncodeSettings a,
+    const VideoEncodeSettings& b) {
+    if (b.width > a.width) {
+        a.width = b.width;
+    }
+    if (b.height > a.height) {
+        a.height = b.height;
+    }
+    if (b.framerate > a.framerate) {
+        a.framerate = b.framerate;
+    }
+    if (b.bitrate_kbps > a.bitrate_kbps) {
+        a.bitrate_kbps = b.bitrate_kbps;
+    }
+    if (b.key_int_max > a.key_int_max) {
+        a.key_int_max = b.key_int_max;
+    }
+    if (b.queue_buffers > a.queue_buffers) {
+        a.queue_buffers = b.queue_buffers;
+    }
+    a.nvenc_high_quality = a.nvenc_high_quality || b.nvenc_high_quality;
+    return a;
+}
+
+inline MediaStreamFeel media_stream_feel_for_settings(const VideoEncodeSettings& settings) {
+    if (settings.queue_buffers >= 4 || settings.nvenc_high_quality) {
+        return MediaStreamFeel::Smooth;
+    }
+    if (settings.queue_buffers >= 2) {
+        return MediaStreamFeel::Balanced;
+    }
+    return MediaStreamFeel::LowLatency;
+}
+
+/** Nearest explicit bitrate enum (never Auto) for applied_* mirrors. */
+inline MediaStreamBitrate media_stream_bitrate_for_settings(const VideoEncodeSettings& settings) {
+    if (settings.bitrate_kbps >= 18000) {
+        return MediaStreamBitrate::Kbps25000;
+    }
+    if (settings.bitrate_kbps >= 10000) {
+        return MediaStreamBitrate::Kbps12000;
+    }
+    if (settings.bitrate_kbps >= 6000) {
+        return MediaStreamBitrate::Kbps8000;
+    }
+    if (settings.bitrate_kbps <= 1000) {
+        return MediaStreamBitrate::Kbps800;
+    }
+    return MediaStreamBitrate::Kbps3500;
+}
+
 inline std::uint16_t media_stream_size_height(MediaStreamSize size) {
     switch (size) {
     case MediaStreamSize::P540:

@@ -29,14 +29,19 @@ public:
     virtual void remove_client(ClientId client_id) = 0;
 
     /**
-     * Warm a dedicated encode for the new tier on a staging port without stopping
-     * the client's current RTP. Returns the staging video URI, or nullopt if the
-     * request is a no-op / busy / unsupported.
+     * Restart the single shared encode at [settings] for every video destination
+     * (hard restart on the same client ports). Returns false if video fanout is
+     * unavailable / empty.
+     */
+    virtual bool reconfigure_shared_video(const VideoEncodeSettings& settings) = 0;
+
+    /**
+     * Legacy dual-stream cutover (unused for quality changes — session uses
+     * reconfigure_shared_video). Kept so older clients' MediaVideoReady is harmless.
      */
     virtual std::optional<std::string> begin_video_tier_cutover(
         ClientId client_id,
         const VideoEncodeSettings& settings) = 0;
-    /** Promote staging to active and tear down the previous encode path. */
     virtual bool complete_video_tier_cutover(
         ClientId client_id,
         std::string_view staging_video_uri) = 0;

@@ -316,98 +316,68 @@ MediaClientStream GStreamerVideoFanout::add(
     };
 }
 
-std::optional<std::string> GStreamerVideoFanout::begin_tier_cutover(
-    ClientId client_id,
-    const VideoEncodeSettings& settings) {
-    Destination* slot = find_destination(client_id);
-    if (slot == nullptr) {
-        return std::nullopt;
+bool GStreamerVideoFanout::reconfigure_shared(const VideoEncodeSettings& settings) {
+    if (destinations_.empty()) {
+        return false;
     }
     if (source_kind_ == SourceKind::X11 && display_.empty()) {
-        return std::nullopt;
+        return false;
     }
     if (source_kind_ == SourceKind::PipeWire && pipewire_node_.empty()) {
-        return std::nullopt;
-    }
-    if (slot->staging_active) {
-        return std::nullopt;
-    }
-    if (slot->settings == settings) {
-        return std::nullopt;
+        return false;
     }
 
-    const std::uint16_t staging_port =
-        slot->port == slot->base_port
-            ? static_cast<std::uint16_t>(slot->base_port + 16)
-            : slot->base_port;
-
-    const auto staging_log = staging_encode_log_path();
-    try {
-        terminate_gst_multiudpsink_on_port(staging_port);
-        auto args = build_single_encode_args(settings, slot->host, staging_port);
-        apply_nvenc_environment(slot->staging, std::move(args), staging_log);
-        // ximagesrc + nvenc can take ~1s to fail (context/session errors surface
-        // at first frame). Telling the client about a pipeline that is about to
-        // die is what strands it on a silent port.
-        std::this_thread::sleep_for(std::chrono::milliseconds(1200));
-        if (!slot->staging.running()) {
-            slot->staging.stop();
-            std::cerr
-                << "Video tier cutover staging exited immediately on port " << staging_port
-                << "; see " << staging_log << '\n';
-            return std::nullopt;
+    for (auto& destination : destinations_) {
+        if (destination.staging_active) {
+            destination.staging.stop();
+            if (destination.staging_port != 0) {
+                terminate_gst_multiudpsink_on_port(destination.staging_port);
+                rtp_frame_pace_debug::stop_tee(destination.staging_port);
+            }
+            destination.staging_active = false;
+            destination.staging_port = 0;
         }
-    } catch (const std::exception& error) {
-        std::cerr << "Video tier cutover staging failed: " << error.what() << '\n';
-        slot->staging.stop();
-        return std::nullopt;
+        if (destination.dedicated.running()) {
+            destination.dedicated.stop();
+        }
+        if (destination.port != destination.base_port) {
+            rtp_frame_pace_debug::stop_tee(destination.port);
+            destination.port = destination.base_port;
+        }
+        destination.settings = settings;
     }
 
-    slot->staging_active = true;
-    slot->staging_port = staging_port;
-    slot->staging_settings = settings;
-    slot->staging_started = std::chrono::steady_clock::now();
-    return rtp_h264_uri(slot->host, staging_port);
+    restart_pipeline();
+    const bool ok = process_.running();
+    if (ok) {
+        std::cout
+            << "Shared video reconfigured -> "
+            << media_stream_size_name(media_stream_size_for_settings(settings))
+            << "/" << media_quality_tier_name(media_quality_tier_for_settings(settings))
+            << " (" << settings.bitrate_kbps << " kbps, "
+            << static_cast<int>(settings.framerate) << " fps";
+        if (settings.width > 0 && settings.height > 0) {
+            std::cout << ", " << settings.width << "x" << settings.height;
+        }
+        std::cout
+            << ", queue=" << static_cast<int>(settings.queue_buffers)
+            << ", nvenc=" << (settings.nvenc_high_quality ? "hq" : "hp")
+            << ", clients=" << destinations_.size() << ")\n";
+    } else {
+        std::cerr << "Shared video reconfigure failed to start pipeline\n";
+    }
+    return ok;
 }
 
-bool GStreamerVideoFanout::complete_tier_cutover(
-    ClientId client_id,
-    std::string_view staging_video_uri) {
-    Destination* slot = find_destination(client_id);
-    if (slot == nullptr || !slot->staging_active) {
-        return false;
-    }
-    const auto expected = rtp_h264_uri(slot->host, slot->staging_port);
-    if (staging_video_uri != expected) {
-        return false;
-    }
-    if (!slot->staging.running()) {
-        abort_tier_cutover(client_id);
-        return false;
-    }
+std::optional<std::string> GStreamerVideoFanout::begin_tier_cutover(
+    ClientId,
+    const VideoEncodeSettings&) {
+    // Quality changes use reconfigure_shared (single encode). Legacy no-op.
+    return std::nullopt;
+}
 
-    const bool was_on_shared_tee = !slot->dedicated.running();
-    if (slot->dedicated.running()) {
-        slot->dedicated.stop();
-    }
-    // Promote staging process to dedicated (client leaves shared tee).
-    slot->dedicated = std::move(slot->staging);
-    slot->staging = ChildProcess{};
-    slot->port = slot->staging_port;
-    slot->settings = slot->staging_settings;
-    slot->staging_active = false;
-    slot->staging_port = 0;
-
-    if (was_on_shared_tee) {
-        // Drop this client from the shared ladder (may briefly affect remaining tee clients).
-        restart_pipeline();
-    }
-
-    std::cout << "Video cutover complete for client " << static_cast<int>(client_id)
-              << " -> " << media_stream_size_name(media_stream_size_for_settings(slot->settings))
-              << "/" << media_quality_tier_name(media_quality_tier_for_settings(slot->settings))
-              << " on port " << slot->port << '\n';
-    return true;
+bool GStreamerVideoFanout::complete_tier_cutover(ClientId, std::string_view) {
+    return false;
 }
 
 void GStreamerVideoFanout::abort_tier_cutover(ClientId client_id) {
@@ -1019,6 +989,13 @@ void GStreamerMediaServer::remove_client(ClientId client_id) {
     if (audio_fanout_.has_value()) {
         audio_fanout_->stop_client(client_id);
     }
+}
+
+bool GStreamerMediaServer::reconfigure_shared_video(const VideoEncodeSettings& settings) {
+    if (!video_fanout_.has_value()) {
+        return false;
+    }
+    return video_fanout_->reconfigure_shared(settings);
 }
 
 bool GStreamerMediaServer::complete_video_tier_cutover(

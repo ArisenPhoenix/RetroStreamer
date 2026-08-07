@@ -16,8 +16,8 @@
 
 namespace archstreamer {
 
-// Encode ladder: one capture tee into quality-tier branches for clients still on
-// the shared process. Tier moves use a dedicated staging ChildProcess + cutover.
+// Encode ladder: one capture → one shared H.264 encode → multiudpsink fanout.
+// Mid-session quality changes hard-restart that shared encode (no dedicated path).
 class GStreamerVideoFanout {
 public:
     ~GStreamerVideoFanout();
@@ -35,6 +35,10 @@ public:
         const MediaStreamRequest& destination,
         const VideoEncodeSettings& settings = {});
 
+    /** Apply [settings] to every destination and restart the shared pipeline. */
+    bool reconfigure_shared(const VideoEncodeSettings& settings);
+
+    // Legacy dual-stream API — no longer used for quality; kept as no-ops.
     std::optional<std::string> begin_tier_cutover(
         ClientId client_id,
         const VideoEncodeSettings& settings);
@@ -53,9 +57,9 @@ private:
         std::uint16_t base_port = 0;
         /** Port the client currently receives on. */
         std::uint16_t port = 0;
-        /** Current encode settings (size + quality merged). */
+        /** Current encode settings (session ceiling; same for all shared clients). */
         VideoEncodeSettings settings{};
-        /** When running, this client is off the shared tee. */
+        /** Legacy: leftover dedicated process (stopped on reconfigure_shared). */
         ChildProcess dedicated;
         ChildProcess staging;
         bool staging_active = false;
@@ -136,6 +140,7 @@ public:
         bool wants_video,
         bool wants_audio) override;
     void remove_client(ClientId client_id) override;
+    bool reconfigure_shared_video(const VideoEncodeSettings& settings) override;
     std::optional<std::string> begin_video_tier_cutover(
         ClientId client_id,
         const VideoEncodeSettings& settings) override;

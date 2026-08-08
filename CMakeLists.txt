@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(ArchStreamer LANGUAGES CXX)
+project(ArchStreamer LANGUAGES C CXX)
 
 include(FetchContent)
 include(GNUInstallDirs)

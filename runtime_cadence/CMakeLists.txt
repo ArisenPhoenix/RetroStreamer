@@ -56,7 +56,6 @@ if(NOT WIN32 AND PkgConfig_FOUND)
 endif()
 if(NOT ARCHSTREAMER_CADENCE_SQLITE_TARGET)
     message(STATUS "sqlite3 pkg-config not used; fetching amalgamation via FetchContent")
-    enable_language(C)
     include(FetchContent)
     FetchContent_Declare(
         sqlite_amalgamation

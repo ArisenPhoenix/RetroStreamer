@@ -1,5 +1,6 @@
 package com.archstreamer.client.ui.menu
 
+import android.content.res.Configuration
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -12,8 +13,10 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
@@ -49,6 +52,7 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -125,33 +129,57 @@ private fun rememberFieldEditor(
     )
 }
 
-/** Every option in a section, with one focus chrome shared by all of them. */
+/**
+ * Every option in a section, with one focus chrome shared by all of them.
+ *
+ * Lazy, not a scrolling [Column]: a pane is a dozen rows of which several are text fields,
+ * and composing all of them in one frame is what pushed the TV past the input dispatch
+ * timeout — the app would ANR on a section that had barely appeared and the system would
+ * close it. Only the rows on screen are built now.
+ */
 @Composable
 fun MenuOptionList(
     section: MenuSection,
     focusedOptionId: String?,
+    editingOptionId: String?,
     fieldFocus: MenuFieldFocus,
     onOptionTouched: (String) -> Unit,
     onFieldFocusChanged: (String, Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
+    val options = section.options
+    val listState = rememberLazyListState()
+    val configuration = LocalConfiguration.current
+    val useLightweightTextRows =
+        configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
+            Configuration.UI_MODE_TYPE_TELEVISION
+    // A row can only ask to be revealed once it exists, so wrapping to the far end of a
+    // page — where the target was never composed — has to be scrolled by the list itself.
+    LaunchedEffect(section.id, focusedOptionId) {
+        val target = options.indexOfFirst { it.id == focusedOptionId }
+        if (target < 0) return@LaunchedEffect
+        val visible = listState.layoutInfo.visibleItemsInfo
+        if (visible.isNotEmpty() && visible.none { it.index == target }) {
+            runCatching { listState.animateScrollToItem(target) }
+        }
+    }
+    LazyColumn(
+        state = listState,
         modifier = modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
             .padding(horizontal = 12.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        section.options.forEach { option ->
-            key(option.id) {
-                MenuOptionRow(
-                    option = option,
-                    focused = option.id == focusedOptionId,
-                    fieldFocus = fieldFocus,
-                    onOptionTouched = onOptionTouched,
-                    onFieldFocusChanged = onFieldFocusChanged,
-                )
-            }
+        items(options, key = { it.id }) { option ->
+            MenuOptionRow(
+                option = option,
+                focused = option.id == focusedOptionId,
+                editing = option.id == editingOptionId,
+                useLightweightTextRows = useLightweightTextRows,
+                fieldFocus = fieldFocus,
+                onOptionTouched = onOptionTouched,
+                onFieldFocusChanged = onFieldFocusChanged,
+            )
         }
     }
 }
@@ -160,6 +188,8 @@ fun MenuOptionList(
 private fun MenuOptionRow(
     option: MenuOption,
     focused: Boolean,
+    editing: Boolean,
+    useLightweightTextRows: Boolean,
     fieldFocus: MenuFieldFocus,
     onOptionTouched: (String) -> Unit,
     onFieldFocusChanged: (String, Boolean) -> Unit,
@@ -169,7 +199,18 @@ private fun MenuOptionRow(
         is MenuOption.Divider -> HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
         is MenuOption.Custom -> option.content()
 
-        is MenuOption.TextInput -> MenuRow(focused) {
+        is MenuOption.TextInput -> MenuRow(
+            focused = focused,
+            onClick = {
+                onOptionTouched(option.id)
+                if (option.takesTyping) onFieldFocusChanged(option.id, true)
+            },
+            enabled = option.enabled,
+        ) {
+            if (useLightweightTextRows && !editing) {
+                TextInputDisplay(option.title, option.value, option.placeholder, option.supporting, option.isError)
+                return@MenuRow
+            }
             val editor = rememberFieldEditor(
                 optionId = option.id,
                 incoming = option.value,
@@ -177,6 +218,7 @@ private fun MenuOptionRow(
                 fieldFocus = fieldFocus,
                 onFieldFocusChanged = onFieldFocusChanged,
             )
+            LaunchedEffect(option.id) { fieldFocus.request(option.id) }
             OutlinedTextField(
                 value = editor.text,
                 onValueChange = editor.onText,
@@ -202,7 +244,24 @@ private fun MenuOptionRow(
             )
         }
 
-        is MenuOption.PasswordInput -> MenuRow(focused) {
+        is MenuOption.PasswordInput -> MenuRow(
+            focused = focused,
+            onClick = {
+                onOptionTouched(option.id)
+                onFieldFocusChanged(option.id, true)
+            },
+            enabled = option.enabled,
+        ) {
+            if (useLightweightTextRows && !editing) {
+                TextInputDisplay(
+                    title = option.title,
+                    value = if (option.value.isBlank()) "" else "Password set",
+                    placeholder = "",
+                    supporting = option.supporting,
+                    isError = false,
+                )
+                return@MenuRow
+            }
             val editor = rememberFieldEditor(
                 optionId = option.id,
                 incoming = option.value,
@@ -213,6 +272,7 @@ private fun MenuOptionRow(
                 // and the IME does not learn what was typed.
                 keyboardType = KeyboardType.Password,
             )
+            LaunchedEffect(option.id) { fieldFocus.request(option.id) }
             OutlinedTextField(
                 value = editor.text,
                 onValueChange = editor.onText,
@@ -288,6 +348,42 @@ private fun MenuOptionRow(
         is MenuOption.Action -> MenuRow(focused) {
             ActionButton(option, onOptionTouched)
         }
+    }
+}
+
+@Composable
+private fun TextInputDisplay(
+    title: String,
+    value: String,
+    placeholder: String,
+    supporting: String,
+    isError: Boolean,
+) {
+    Text(title, style = MaterialTheme.typography.titleSmall)
+    val display = value.ifBlank { placeholder }
+    if (display.isNotBlank()) {
+        Text(
+            display,
+            style = MaterialTheme.typography.bodyMedium,
+            color = when {
+                isError -> MaterialTheme.colorScheme.error
+                value.isBlank() -> MaterialTheme.colorScheme.onSurfaceVariant
+                else -> MaterialTheme.colorScheme.onSurface
+            },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+    if (supporting.isNotBlank()) {
+        Text(
+            supporting,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (isError) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
     }
 }
 
@@ -493,4 +589,3 @@ fun MenuBusyIndicator() {
         CircularProgressIndicator()
     }
 }
-

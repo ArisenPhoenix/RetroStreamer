@@ -3,11 +3,14 @@ package com.archstreamer.client
 import android.Manifest
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
+import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
@@ -57,6 +60,29 @@ class MainActivity : ComponentActivity() {
                 }
             },
         )
+        if (!isTvDevice()) {
+            showComposeApp()
+            return
+        }
+        setContentView(
+            TextView(this).apply {
+                text = "ArchStreamer"
+                textSize = 24f
+                gravity = Gravity.CENTER
+                setTextColor(Color.WHITE)
+                setBackgroundColor(Color.rgb(11, 18, 16))
+            },
+        )
+        window.decorView.postDelayed({
+            showComposeApp()
+        }, 1_000L)
+    }
+
+    private fun isTvDevice(): Boolean =
+        resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
+            Configuration.UI_MODE_TYPE_TELEVISION
+
+    private fun showComposeApp() {
         setContent {
             ArchStreamerTheme {
                 val state by viewModel.state.collectAsState()

@@ -89,12 +89,26 @@ enum class NavSection(val title: String) {
 
 class ClientViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = application.getSharedPreferences(PREFS_NAME, Application.MODE_PRIVATE)
-    private val cadenceControls = CadenceControlsStore(application)
-        .also { store -> pruneTypedUsernameRows(store) }
+    /**
+     * Opened on first use, which is never during construction.
+     *
+     * A TV has about five seconds to put a focusable window up before the input dispatcher
+     * declares the app unresponsive, and cold start here already sits close to that. Opening
+     * the controls database — and migrating it — in front of the first frame spent that
+     * budget on work no frame needs.
+     */
+    private val cadenceControls: CadenceControlsStore by lazy {
+        CadenceControlsStore(getApplication())
+    }
     private val buttonMapFile =
         File(application.filesDir, ControllerMapDocument.FILE_NAME)
-    private var overlayProfiles = loadOverlayProfiles().toMutableMap()
-    private var buttonMapDocument = loadButtonMapDocument()
+
+    // Seeded without touching SQLite: SharedPreferences mirrors every overlay profile, and
+    // the legacy file still holds the button map on a profile that has not synced. The
+    // stored copies replace both from [adoptStoredControls] a beat later.
+    private var overlayProfiles = OverlayProfileStore.loadAll(prefs).toMutableMap()
+    private var buttonMapDocument =
+        if (buttonMapFile.isFile) ControllerMapStore.load(buttonMapFile) else ControllerMapDocument()
     private var passwordChangeLatch: java.util.concurrent.CountDownLatch? = null
     @Volatile private var passwordChangeResult: String = ""
 
@@ -342,6 +356,13 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             Handler(Looper.getMainLooper()),
         )
         startHostDiscovery()
+        // The controls store, its one-off tidy-up and its migrations, all off the first frame.
+        viewModelScope.launch(Dispatchers.IO) {
+            pruneTypedUsernameRows(cadenceControls)
+            val overlays = loadOverlayProfiles()
+            val map = loadButtonMapDocument()
+            withContext(Dispatchers.Main) { adoptStoredControls(overlays, map) }
+        }
         viewModelScope.launch {
             var wasPlaying = false
             state.collect { snap ->
@@ -448,8 +469,16 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun reloadControlsFromLocalStore() {
-        overlayProfiles = loadOverlayProfiles().toMutableMap()
-        buttonMapDocument = loadButtonMapDocument()
+        adoptStoredControls(loadOverlayProfiles(), loadButtonMapDocument())
+    }
+
+    /** Take the copies read out of the controls store and show them on the Controls tab. */
+    private fun adoptStoredControls(
+        overlays: Map<OverlaySystemFamily, OverlayProfile>,
+        map: ControllerMapDocument,
+    ) {
+        overlayProfiles = overlays.toMutableMap()
+        buttonMapDocument = map
         val family = _state.value.controls.editingOverlayFamily
         _state.update {
             it.copy(controls = it.controls.copy(editingOverlayProfile = overlayProfiles[family] ?: OverlayProfile.DEFAULT, editingMapProfile = buttonMapDocument.profile(

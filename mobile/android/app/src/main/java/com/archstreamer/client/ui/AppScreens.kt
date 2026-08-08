@@ -174,8 +174,12 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
     // composition entirely. Losing the focus owner that way does not always close the
     // keyboard, so hide it as well.
     val editingText = state.menu.editing || state.games.filterEditing
+    var hadEditingText by remember { mutableStateOf(false) }
     LaunchedEffect(editingText) {
-        if (!editingText) {
+        if (editingText) {
+            hadEditingText = true
+        } else if (hadEditingText) {
+            hadEditingText = false
             focusManager.clearFocus()
             keyboardController?.hide()
         }
@@ -528,6 +532,9 @@ private fun SectionPane(
                 section = section,
                 focusedOptionId = state.menu
                     .takeIf { it.inOptions && it.section == section.id }
+                    ?.optionId,
+                editingOptionId = state.menu
+                    .takeIf { it.editing && it.section == section.id }
                     ?.optionId,
                 fieldFocus = fieldFocus,
                 onOptionTouched = viewModel::onMenuOptionTouched,

@@ -531,7 +531,7 @@ void MainWindow::apply_updates() {
         "This will:\n"
         "- reset the repo to origin/%1 (discards local edits in that checkout)\n"
         "- rebuild ArchStreamer\n"
-        "- reinstall into Program Files (may need Admin)\n"
+        "- reinstall into Program Files (opens Windows UAC if needed)\n"
         "- keep this app open (restart later to load the new build)\n\n"
         "Continue?");
 #else
@@ -617,6 +617,22 @@ void MainWindow::apply_updates() {
         if (settings_update_check_ != nullptr) {
             settings_update_check_->setEnabled(true);
         }
+
+#ifdef Q_OS_WIN
+        if (code == 90) {
+            set_update_status(
+                QStringLiteral(
+                    "Admin updater launched. Approve UAC and follow the updater window."));
+            if (settings_update_apply_ != nullptr) {
+                settings_update_apply_->setEnabled(false);
+            }
+            if (settings_log_ != nullptr) {
+                settings_log_->appendPlainText(
+                    QStringLiteral("——— Elevated updater launched ———"));
+            }
+            return;
+        }
+#endif
 
         if (code == 0) {
             set_update_status(

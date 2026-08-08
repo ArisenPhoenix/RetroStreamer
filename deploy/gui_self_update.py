@@ -11,6 +11,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import ctypes
 import os
 import shutil
 import subprocess
@@ -28,6 +29,8 @@ from scriptutil import (  # noqa: E402
     run,
     which,
 )
+
+ELEVATION_LAUNCHED_EXIT_CODE = 90
 
 
 def _git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -113,6 +116,92 @@ def _windows_install_binaries() -> list[str]:
         "archstreamer_ssh_askpass.exe",
         "archstreamer_cadence.exe",
     ]
+
+
+def _windows_is_admin() -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())  # type: ignore[attr-defined]
+    except Exception:
+        return False
+
+
+def _path_is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve(strict=False).relative_to(parent.resolve(strict=False))
+        return True
+    except ValueError:
+        return False
+
+
+def _windows_prefix_needs_admin(prefix: Path) -> bool:
+    if sys.platform != "win32" or _windows_is_admin():
+        return False
+    protected_roots = [
+        os.environ.get("ProgramFiles", ""),
+        os.environ.get("ProgramFiles(x86)", ""),
+        os.environ.get("CommonProgramFiles", ""),
+        os.environ.get("CommonProgramFiles(x86)", ""),
+    ]
+    for root in protected_roots:
+        if root and _path_is_relative_to(prefix, Path(root)):
+            return True
+    return False
+
+
+def _windows_relaunch_elevated(root: Path, args: argparse.Namespace) -> int:
+    script = Path(__file__).resolve()
+    elevated_args = [
+        str(script),
+        "apply",
+        "--repo",
+        str(root),
+        "--branch",
+        args.branch,
+        "--config",
+        args.config,
+        "--prefix",
+        str(args.prefix),
+        "--wait-secs",
+        str(args.wait_secs),
+        "--elevated-child",
+        "--pause-on-exit",
+    ]
+    if args.reset_hard:
+        elevated_args.append("--reset-hard")
+    if args.skip_pull:
+        elevated_args.append("--skip-pull")
+    if args.skip_install:
+        elevated_args.append("--skip-install")
+    if args.build_host:
+        elevated_args.append("--build-host")
+    if args.reconfigure:
+        elevated_args.append("--reconfigure")
+    if args.clean:
+        elevated_args.append("--clean")
+    if args.launch:
+        elevated_args.append("--launch")
+    if args.keep_running:
+        elevated_args.append("--keep-running")
+    if args.vcpkg_root:
+        elevated_args.extend(["--vcpkg-root", str(args.vcpkg_root)])
+
+    params = subprocess.list2cmdline(elevated_args)
+    print("Program Files install needs Administrator permissions.")
+    print("Requesting Windows UAC approval for the updater...")
+    rc = ctypes.windll.shell32.ShellExecuteW(  # type: ignore[attr-defined]
+        None,
+        "runas",
+        sys.executable,
+        params,
+        str(root),
+        1,
+    )
+    if rc <= 32:
+        raise SystemExit(f"Could not launch elevated updater (ShellExecuteW={rc})")
+    print("Elevated updater launched in a separate window.")
+    return ELEVATION_LAUNCHED_EXIT_CODE
 
 
 def _stage_aside_locked_exes(prefix: Path) -> None:
@@ -348,6 +437,14 @@ def cmd_apply(root: Path, args: argparse.Namespace) -> int:
 
     keep_running = bool(getattr(args, "keep_running", False))
 
+    if (
+        sys.platform == "win32"
+        and not getattr(args, "elevated_child", False)
+        and not args.skip_install
+        and _windows_prefix_needs_admin(Path(args.prefix))
+    ):
+        return _windows_relaunch_elevated(root, args)
+
     # Detached/quit-and-relaunch path: give the GUI a moment to exit.
     if not keep_running and args.wait_secs > 0:
         time.sleep(args.wait_secs)
@@ -453,6 +550,11 @@ def parse_args() -> argparse.Namespace:
         "--pause-on-exit",
         action="store_true",
         help="Windows: keep the console open after apply (success or failure)",
+    )
+    p.add_argument(
+        "--elevated-child",
+        action="store_true",
+        help=argparse.SUPPRESS,
     )
     p.add_argument("--vcpkg-root", type=Path, default=None)
     p.add_argument("--config", default="Release")

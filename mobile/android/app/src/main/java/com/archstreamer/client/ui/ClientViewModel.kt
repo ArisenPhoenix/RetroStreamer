@@ -90,6 +90,7 @@ enum class NavSection(val title: String) {
 class ClientViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = application.getSharedPreferences(PREFS_NAME, Application.MODE_PRIVATE)
     private val cadenceControls = CadenceControlsStore(application)
+        .also { store -> pruneTypedUsernameRows(store) }
     private val buttonMapFile =
         File(application.filesDir, ControllerMapDocument.FILE_NAME)
     private var overlayProfiles = loadOverlayProfiles().toMutableMap()
@@ -171,6 +172,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         )
         val pads = PhysicalGamepad.connectedPads()
         val padConnected = pads.isNotEmpty()
+        val keyboard = hardwareKeyboardPresent()
+        val useKeyboard = keyboardPreference(keyboard)
         return base.copy(
             controls = base.controls.copy(
                 physicalPadConnected = padConnected,
@@ -178,7 +181,9 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 physicalInputActive = base.controls.usePhysicalController &&
                     padConnected &&
                     !base.controls.overlayEditing,
-                hasKeyboardActive = hardwareKeyboardPresent(),
+                hasKeyboardActive = keyboard,
+                useKeyboard = useKeyboard,
+                keyboardInputActive = useKeyboard && keyboard,
             ),
         )
     }
@@ -373,8 +378,47 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         profileUsernameOrNull()
             ?: error("Set a save-profile username on the Profile tab first")
 
+    /**
+     * The username allowed to own rows in the local store.
+     *
+     * A name is not a profile until a host has accepted it with its password, so typing one
+     * saves nothing — earlier builds wrote a row per keystroke and left "b", "br", "bra"
+     * behind. Rows that already exist are proof in themselves: they could only have been
+     * written by a connect, a pull, or an edit made after one.
+     */
+    private fun storedProfileUsernameOrNull(): String? {
+        val username = profileUsernameOrNull() ?: return null
+        if (confirmedUsernames().any { it.equals(username, ignoreCase = true) }) return username
+        return username.takeIf { cadenceControls.hasControls(it) }
+    }
+
+    private fun confirmedUsernames(): Set<String> =
+        prefs.getStringSet(KEY_CONFIRMED_USERS, emptySet()).orEmpty()
+
+    /** The host accepted this name and password: from here it may keep controls of its own. */
+    private fun confirmProfileUsername(username: String) {
+        if (!isProfileUsername(username)) return
+        val known = confirmedUsernames()
+        if (known.any { it.equals(username, ignoreCase = true) }) return
+        prefs.edit().putStringSet(KEY_CONFIRMED_USERS, known + username).apply()
+        logControl("profile $username confirmed by host; controls can be saved")
+    }
+
+    /**
+     * One-off tidy-up of the rows those keystroke writes left behind. Runs before anything
+     * reads the store, so a half-typed name cannot pass as a profile this session.
+     */
+    private fun pruneTypedUsernameRows(store: CadenceControlsStore) {
+        if (prefs.getBoolean(KEY_TYPED_ROWS_PRUNED, false)) return
+        val removed = store.pruneTypedPrefixRows(profileUsernameOrNull())
+        prefs.edit().putBoolean(KEY_TYPED_ROWS_PRUNED, true).apply()
+        if (removed > 0) {
+            ClientFileLog.append("Controls store: dropped $removed half-typed profile rows")
+        }
+    }
+
     private fun loadOverlayProfiles(): Map<OverlaySystemFamily, OverlayProfile> {
-        val username = profileUsernameOrNull()
+        val username = storedProfileUsernameOrNull()
         if (username != null) {
             cadenceControls.findControls(username, CadenceControlsStore.KIND_OVERLAY_PROFILES)
                 ?.let { json ->
@@ -390,7 +434,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun persistOverlayProfiles(
         profiles: Map<OverlaySystemFamily, OverlayProfile> = overlayProfiles,
-        username: String? = profileUsernameOrNull(),
+        username: String? = storedProfileUsernameOrNull(),
     ) {
         OverlayProfileStore.saveAll(prefs, profiles)
         if (username == null) return
@@ -415,7 +459,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun loadButtonMapDocument(): ControllerMapDocument {
-        val username = profileUsernameOrNull()
+        val username = storedProfileUsernameOrNull()
         if (username != null) {
             cadenceControls.findControls(username)?.let { json ->
                 return runCatching { ControllerMapStore.decode(json) }
@@ -461,7 +505,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun persistButtonMapDocument(
         document: ControllerMapDocument = buttonMapDocument,
-        username: String? = profileUsernameOrNull(),
+        username: String? = storedProfileUsernameOrNull(),
     ) {
         if (username == null) return
         cadenceControls.upsertControls(
@@ -810,6 +854,19 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /**
+     * Let the keyboard play games, the pad's switch for the other device you can hold.
+     * Off leaves it as a typing and menu device; the game hears nothing from it.
+     */
+    fun setUseKeyboard(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_USE_KEYBOARD, enabled).apply()
+        if (!enabled) {
+            clearKeyboardDpad()
+            clearRemotedKeys()
+        }
+        refreshPhysicalPads()
+    }
+
     fun refreshPhysicalPads(preferPhysical: Boolean = _state.value.controls.usePhysicalController) {
         val pads = PhysicalGamepad.connectedPads()
         val connected = pads.isNotEmpty()
@@ -819,8 +876,9 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         val wasActive = _state.value.controls.physicalInputActive
         // Once seen, a keyboard stays seen: see [ControlsState.hasKeyboardActive].
         val keyboard = _state.value.controls.hasKeyboardActive || hardwareKeyboardPresent()
+        val useKeyboard = keyboardPreference(keyboard)
         val before = _state.value.controls
-        updateControls { copy(usePhysicalController = preferPhysical, physicalPadConnected = connected, physicalPadLabel = label, physicalInputActive = active, hasKeyboardActive = keyboard) }
+        updateControls { copy(usePhysicalController = preferPhysical, physicalPadConnected = connected, physicalPadLabel = label, physicalInputActive = active, hasKeyboardActive = keyboard, useKeyboard = useKeyboard, keyboardInputActive = useKeyboard && keyboard) }
         if (wasActive != active) {
             gamepadTracker.reset()
             latestPad = ControllerState()
@@ -830,9 +888,13 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         if (before.physicalPadConnected != connected ||
             before.physicalPadLabel != label ||
             before.physicalInputActive != active ||
-            before.hasKeyboardActive != keyboard
+            before.hasKeyboardActive != keyboard ||
+            before.keyboardInputActive != (useKeyboard && keyboard)
         ) {
-            logControl("devices pads=${pads.map { it.name }} keyboard=$keyboard")
+            logControl(
+                "devices pads=${pads.map { it.name }} keyboard=$keyboard " +
+                    "keyboardPlays=${useKeyboard && keyboard}",
+            )
         }
     }
 
@@ -844,9 +906,28 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     fun noteKeyboardUse(event: KeyEvent) {
         if (_state.value.controls.hasKeyboardActive) return
         if (!isTypingKeyboardDeviceId(event.deviceId)) return
-        updateControls { copy(hasKeyboardActive = true) }
-        logControl("keyboard active device=${event.deviceId}")
+        val useKeyboard = keyboardPreference(detected = true)
+        updateControls {
+            copy(
+                hasKeyboardActive = true,
+                useKeyboard = useKeyboard,
+                keyboardInputActive = useKeyboard,
+            )
+        }
+        logControl("keyboard active device=${event.deviceId} plays=$useKeyboard")
     }
+
+    /**
+     * The switch when it has been set, otherwise whether a keyboard is there at all — an
+     * unanswered question follows the hardware, so one that turns up later works without
+     * a trip to the menu.
+     */
+    private fun keyboardPreference(detected: Boolean): Boolean =
+        if (prefs.contains(KEY_USE_KEYBOARD)) {
+            prefs.getBoolean(KEY_USE_KEYBOARD, detected)
+        } else {
+            detected
+        }
 
     /**
      * Device list first, then the platform's own answer: some Bluetooth keyboards do not
@@ -864,12 +945,22 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         _menuEffects.tryEmit(MenuEffect.OpenDrawer)
     }
 
+    /**
+     * Home / Guide — the PS button, the Xbox button, whatever the pad calls it — is the
+     * whole menu's on / off switch.
+     *
+     * Off means every part of it: while playing that is the settings pane as well as the
+     * drawer, so one press puts the game back however deep in the menu the cursor was.
+     * Offline there is nothing behind the pane, so the drawer is all there is to close.
+     */
     private fun toggleMenuDrawer() {
-        if (menuDrawerOpen) {
-            _menuEffects.tryEmit(MenuEffect.CloseDrawer)
-        } else {
+        val snap = _state.value
+        if (!menuDrawerOpen && !snap.playPaneVisible()) {
             requestPlayMenu()
+            return
         }
+        if (menuDrawerOpen) _menuEffects.tryEmit(MenuEffect.CloseDrawer)
+        returnToPlay()
     }
 
 /**
@@ -881,7 +972,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
  * 5) if menu open but hamburger not focused → focus hamburger
  * 6) if hamburger already focused → return false (Activity finishes)
  *
- * Home / Guide still toggles the drawer (see gamepad tracker / menu keys).
+ * Home / Guide is the whole menu's on / off instead (see [toggleMenuDrawer]).
  */
 fun handleSystemBack(): Boolean {
     val snap = _state.value
@@ -983,7 +1074,9 @@ fun clearBackMenuChromeFocus() {
      * Priority:
      * 1. Soft keyboard dialog up → leave keys alone (Enter/Backspace type in the OSK).
      * 2. Menu owns input (drawer open, offline, or a settings pane over play) → navigate.
-     * 3. Otherwise → Backspace opens menu; arrows = joypad D-pad; P/Space/Enter/… remoted.
+     * 3. Otherwise → Backspace opens menu; arrows = joypad D-pad; P/Space/Enter/… remoted,
+     *    unless the keyboard has been switched off for games
+     *    ([ControlsState.keyboardInputActive]).
      *
      * Events from a real [PhysicalGamepad] device are left to [onGamepadKeyEvent]
      * (MainActivity routes those first).
@@ -1019,6 +1112,13 @@ fun clearBackMenuChromeFocus() {
         if (keyCode == KeyEvent.KEYCODE_DEL) {
             if (edge) requestPlayMenu()
             return true
+        }
+
+        // Keyboard switched off for games: it still types and still opens the menu, the
+        // game just never hears it. A TV remote is not a keyboard, so its ring and OK are
+        // untouched — that is the only way to play on a TV.
+        if (!snap.controls.keyboardInputActive && isTypingKeyboardDeviceId(event.deviceId)) {
+            return false
         }
 
         // Arrows → joypad D-pad for the game.
@@ -1167,9 +1267,11 @@ fun clearBackMenuChromeFocus() {
             snap.section == NavSection.Games
 
     /**
-     * Up/Down walk the rows. Left is the way to the filter once there is text to edit, and
-     * the way back to the drawer from the filter itself or from an empty one. Right has no
-     * meaning here — a group opens with Select — so it is swallowed rather than remoted.
+     * Up/Down walk the rows, wrapping at the ends.
+     *
+     * Right goes forwards like it does in the options pane: it opens a closed group, else
+     * takes the next row. Left is the way to the filter once there is text to edit, and the
+     * way back to the drawer from the filter itself or from an empty one.
      */
     private fun onGamesDirection(dir: NavDir): Boolean {
         val snap = _state.value
@@ -1181,7 +1283,14 @@ fun clearBackMenuChromeFocus() {
                 updateGames { copy(cursorKey = next.key) }
                 logControl("games cursor $dir → ${next.key}")
             }
-            NavDir.Right -> Unit
+            NavDir.Right ->
+                if (here is GamesRow.Header && !here.expanded) {
+                    toggleSystemExpanded(here.system)
+                } else {
+                    stepGamesCursor(rows, here.key, NavDir.Down)?.let { next ->
+                        updateGames { copy(cursorKey = next.key) }
+                    }
+                }
             NavDir.Left ->
                 if (here !is GamesRow.Filter && snap.games.filter.isNotEmpty()) {
                     updateGames { copy(cursorKey = GamesRow.FILTER_KEY) }
@@ -2156,7 +2265,17 @@ fun clearBackMenuChromeFocus() {
                 }
             }
             val rows = actives + connected
-            updateRemote { copy(busy = false, users = rows, selectedUserIndex = -1, status = "Remote users: ${rows.size} row(s).") }
+            // Keep pointing at the same person across a refresh — Kick refreshes right after
+            // it fires, and resetting here left the highlight (and so Kick) unusable.
+            val was = snap.remote.users.getOrNull(snap.remote.selectedUserIndex)
+            val keep = rows.indexOfFirst {
+                was != null &&
+                    it.kind == was.kind &&
+                    it.clientId == was.clientId &&
+                    it.slotIndex == was.slotIndex &&
+                    it.username == was.username
+            }
+            updateRemote { copy(busy = false, users = rows, selectedUserIndex = keep, status = "Remote users: ${rows.size} row(s).") }
         }
     }
 
@@ -2241,6 +2360,8 @@ fun clearBackMenuChromeFocus() {
             runCatching {
                 val username = requireProfileUsername()
                 withControlsSyncConnection { send, receive ->
+                    // Reached only on an authenticated connection, so the name is a profile.
+                    confirmProfileUsername(username)
                     persistOverlayProfiles()
                     persistButtonMapDocument()
                     send(PacketCodec.controlsDbPull(username))
@@ -2278,6 +2399,7 @@ fun clearBackMenuChromeFocus() {
             runCatching {
                 val username = requireProfileUsername()
                 withControlsSyncConnection { send, receive ->
+                    confirmProfileUsername(username)
                     persistOverlayProfiles()
                     persistButtonMapDocument()
                     val bytes = cadenceControls.exportPackBytes(username)
@@ -3075,6 +3197,12 @@ fun clearBackMenuChromeFocus() {
                 }
             }.onSuccess { (host, catalog, presence) ->
                 lobbyPresence = presence
+                // Presence means the host took this name with its password: it is a profile
+                // now, and only now may it keep controls of its own.
+                if (presence != null && username != null) {
+                    confirmProfileUsername(username)
+                    reloadControlsFromLocalStore()
+                }
                 ClientFileLog.append("Catalog loaded: ${catalog.games.size} games from $host:$port")
                 val recentIds = loadRecentGameIds(host, snap.settings.controlPort)
                 val expanded = if (recentIds.any { id -> catalog.games.any { it.id == id } }) {
@@ -3277,6 +3405,9 @@ fun clearBackMenuChromeFocus() {
                 }
             }.onSuccess { (host, joined) ->
                 session = joined
+                // The host let this name into a session with its password, so it is a
+                // profile even if Connect was made without one.
+                confirmProfileUsername(username)
                 applyStreamPrefsToSession()
                 startInputLoop()
                 startHeartbeatLoop()
@@ -3980,6 +4111,11 @@ fun clearBackMenuChromeFocus() {
         private const val KEY_LOG_CONTROLS = "log_controls"
         private const val KEY_LOG_CONNECTIONS = "log_connections"
         private const val KEY_USE_PHYSICAL = "use_physical_controller"
+        private const val KEY_USE_KEYBOARD = "use_keyboard"
+
+        /** Profile names a host has accepted with their password. */
+        private const val KEY_CONFIRMED_USERS = "confirmed_usernames"
+        private const val KEY_TYPED_ROWS_PRUNED = "controls_typed_rows_pruned"
         private const val KEY_REMOTE_SSH_HOST = "remote_ssh_host"
         private const val KEY_REMOTE_SSH_USER = "remote_ssh_user"
         private const val KEY_REMOTE_SSH_PORT = "remote_ssh_port"

@@ -77,6 +77,45 @@ class CadenceControlsStore(context: Context) :
     }
 
     /**
+     * Whether this username owns anything here — the proof that it is a real profile.
+     *
+     * Matched exactly, like [findControls] and [exportPackBytes] and like the host's own
+     * lookups: a row spelled "Merk" is not a profile named "merk", and treating it as one
+     * only reports controls that the loading query then cannot see.
+     */
+    fun hasControls(username: String): Boolean {
+        if (username.isBlank()) return false
+        readableDatabase.rawQuery(
+            "SELECT 1 FROM user_controls WHERE username = ? LIMIT 1",
+            arrayOf(username),
+        ).use { cursor ->
+            return cursor.moveToFirst()
+        }
+    }
+
+    /**
+     * Drop rows left behind by earlier builds, which wrote a row per keystroke while the
+     * Profile name was being typed: "b", "br", "bra" … alongside the real "brandon".
+     *
+     * A half-typed name is always a prefix of the one that was finished, so anything that
+     * another stored username starts with goes, and the longest of each chain stays. [keep]
+     * is never touched.
+     */
+    fun pruneTypedPrefixRows(keep: String?): Int =
+        writableDatabase.delete(
+            "user_controls",
+            """
+            lower(username) <> lower(?) AND EXISTS (
+              SELECT 1 FROM user_controls other
+              WHERE length(other.username) > length(user_controls.username)
+                AND lower(substr(other.username, 1, length(user_controls.username)))
+                    = lower(user_controls.username)
+            )
+            """.trimIndent(),
+            arrayOf(keep.orEmpty()),
+        )
+
+    /**
      * Export this username's rows into a standalone controls.sqlite byte array
      * (same schema as host profile packs).
      */
@@ -131,8 +170,13 @@ class CadenceControlsStore(context: Context) :
     }
 
     /**
-     * Replace local rows for [username] with those from a host/profile pack.
-     * Ignores rows for other usernames.
+     * Take [username]'s rows from a host/profile pack, overwriting the local copy of each
+     * kind the pack carries and leaving the rest alone. Rows for other usernames are
+     * ignored.
+     *
+     * A pack is not a full picture of a profile: a host that only ever stored a button map
+     * has no overlay row to send, and wiping first meant a pull deleted custom layouts that
+     * existed nowhere else.
      */
     fun importPackBytes(username: String, bytes: ByteArray): Boolean {
         if (username.isBlank() || bytes.isEmpty() || bytes.size > MAX_PACK_BYTES) return false
@@ -151,7 +195,6 @@ class CadenceControlsStore(context: Context) :
                     """.trimIndent(),
                     null,
                 ).use { cursor ->
-                    deleteControlsForUser(username)
                     while (cursor.moveToNext()) {
                         val rowUser = cursor.getString(0) ?: continue
                         if (!rowUser.equals(username, ignoreCase = true)) continue

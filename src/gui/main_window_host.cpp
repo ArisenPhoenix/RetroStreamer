@@ -46,18 +46,54 @@
 #include <thread>
 #ifdef ARCHSTREAMER_HAS_HOST
 #include "gui_host_runner.hpp"
+#include "host/emulator_orphan_reaper.hpp"
 #include "host/game_catalog_scanner.hpp"
 #include "host/gpu_select.hpp"
 #include "host/host_app_config.hpp"
 #include "host/media_capture.hpp"
 #include "host/save_profile.hpp"
 #include "host/standalone_emulator.hpp"
+#include <QGuiApplication>
+#endif
+
+#if defined(ARCHSTREAMER_HAS_HOST) && defined(Q_OS_LINUX)
+#include <sys/prctl.h>
+#include <csignal>
+#include <unistd.h>
 #endif
 
 
 namespace archstreamer::gui {
 
 #ifdef ARCHSTREAMER_HAS_HOST
+
+namespace {
+
+/**
+ * Make host_runner exit with us even when the GUI never gets to run
+ * `stop_host()` — SIGTERM from a stray pkill, SIGKILL, or a crash. Without
+ * this the child is reparented to init and keeps the control port bound, so
+ * the next Start Host cannot bind and dies immediately.
+ *
+ * Under Flatpak the child is flatpak-spawn rather than host_runner itself, so
+ * this only reaches the wrapper; the Start Host reclaim below is the backstop.
+ */
+void bind_host_process_lifetime([[maybe_unused]] QProcess* process) {
+#if defined(Q_OS_LINUX)
+    const auto owner = ::getpid();
+    // Runs in the child between fork() and exec(); PR_SET_PDEATHSIG survives exec.
+    process->setChildProcessModifier([owner] {
+        ::prctl(PR_SET_PDEATHSIG, SIGTERM);
+        // pdeathsig only fires on a *later* parent death, so close the window
+        // where the GUI already died while we were forking.
+        if (::getppid() != owner) {
+            ::_exit(1);
+        }
+    });
+#endif
+}
+
+} // namespace
 
 QWidget* MainWindow::build_host_tab() {
     auto* page = new QWidget(this);
@@ -142,7 +178,15 @@ QWidget* MainWindow::build_host_tab() {
         start_host();
     });
     connect(stop, &QPushButton::clicked, this, [this] {
+        const bool owned =
+            host_process_ != nullptr && host_process_->state() != QProcess::NotRunning;
         stop_host();
+        // This lives here, not in stop_host(), because the destructor calls that
+        // too. Without it the click is a silent no-op against a host_runner an
+        // earlier GUI left behind on this window's control port.
+        if (!owned) {
+            reclaim_matching_host_runners();
+        }
     });
     connect(load_games, &QPushButton::clicked, this, [this] {
         load_host_games();
@@ -468,14 +512,107 @@ void MainWindow::load_host_games() {
     }
 }
 
+/**
+ * Stop only a host_runner that is this window's own leftover: same control port,
+ * no conflicting GPU, and no live GUI supervising it. Anything else — a second
+ * window's host, another GPU, another port — is reported and left running.
+ *
+ * Returns false when our control port is taken by something we may not stop, so
+ * Start Host can refuse instead of launching a process that cannot bind.
+ */
+bool MainWindow::reclaim_matching_host_runners() {
+    const int owned =
+        host_process_ != nullptr ? static_cast<int>(host_process_->processId()) : 0;
+    const auto running = list_host_runner_processes(owned);
+    if (running.empty()) {
+        return true;
+    }
+
+    const int our_port = host_control_port_->value();
+    const auto our_gpu = selected_encode_gpu_id();
+
+    // Blocking, but only for as long as a reclaimed host takes to unwind.
+    QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+    bool port_is_free = true;
+    for (const auto& proc : running) {
+        const bool same_port = proc.control_port == our_port;
+        // An unnamed GPU on either side proves nothing; only a stated
+        // difference marks the process as somebody else's host.
+        const bool other_gpu =
+            !proc.gpu.empty() && !our_gpu.empty() && proc.gpu != our_gpu;
+        // A second window with these same settings looks identical on port and
+        // GPU alone, so matching those would let us kill a host that is still
+        // owned and streaming. Only an unsupervised one is a leftover.
+        const bool supervised = proc.owner_gui_pid != 0;
+
+        if (same_port && !other_gpu && !supervised) {
+            // This window's own host, left behind by a GUI that exited without
+            // running stop_host(). Reclaiming it is what Stop Host would have done.
+            if (terminate_host_runner(proc.pid)) {
+                append_log(
+                    host_log_,
+                    QString("Reclaimed host_runner (PID %1) on control port %2 — left over "
+                            "from a session that exited without stopping it.")
+                        .arg(proc.pid)
+                        .arg(proc.control_port));
+            } else {
+                port_is_free = false;
+                append_log(
+                    host_log_,
+                    QString("Could not stop host_runner (PID %1) on control port %2.")
+                        .arg(proc.pid)
+                        .arg(proc.control_port),
+                    GuiLogLevel::Quiet);
+            }
+            continue;
+        }
+
+        // Not ours to stop: another GUI still owns it, or it runs on a different
+        // port or GPU. Report it and leave it running.
+        QString note = QString("Another host_runner is running (PID %1").arg(proc.pid);
+        if (proc.control_port > 0) {
+            note += QString(", control port %1").arg(proc.control_port);
+        }
+        if (!proc.gpu.empty()) {
+            note += QString(", gpu %1").arg(QString::fromStdString(proc.gpu));
+        }
+        if (supervised) {
+            note += QString(", owned by ArchStreamer GUI %1").arg(proc.owner_gui_pid);
+        }
+        note += QStringLiteral(")");
+        if (same_port) {
+            port_is_free = false;
+            note += supervised
+                ? QString(" and that window is using control port %1. Left alone — stop the "
+                          "host from that window, or give this one another control port.")
+                      .arg(our_port)
+                : QString(" and it holds control port %1, which this window also wants. "
+                          "Left alone — stop it yourself or choose another control port.")
+                      .arg(our_port);
+        } else {
+            note += QStringLiteral(" — not this window's host, left alone.");
+        }
+        append_log(host_log_, note, GuiLogLevel::Quiet);
+    }
+    QGuiApplication::restoreOverrideCursor();
+    return port_is_free;
+}
+
 void MainWindow::start_host() {
     if (host_process_ != nullptr && host_process_->state() != QProcess::NotRunning) {
         append_log(host_log_, "Host is already running.");
         return;
     }
+    // A leftover on our control port would make the new process fail to bind and
+    // exit at once, so clear ours first and refuse when the port is someone else's.
+    if (!reclaim_matching_host_runners()) {
+        host_status_->setText("Host not started");
+        return;
+    }
 
     if (host_process_ == nullptr) {
         host_process_ = new QProcess(this);
+        bind_host_process_lifetime(host_process_);
         connect(host_process_, &QProcess::readyReadStandardOutput, this, [this] {
             const auto text = QString::fromLocal8Bit(host_process_->readAllStandardOutput()).trimmed();
             if (!text.isEmpty()) {

@@ -278,7 +278,27 @@ object RemoteSpec : SectionSpec {
                 enabled = !state.remote.busy && state.remote.selectedUserIndex >= 0,
             ),
         )
-        add(MenuOption.Custom("remote-user-list") { RemoteUserList(state, vm) })
+        // A row per presence line rather than one list widget: the cursor has to be able to
+        // land on a user, or Kick can only ever be reached by tapping and a TV cannot kick
+        // anyone. Ids carry the client and slot so the highlight survives a refresh.
+        if (state.remote.users.isEmpty()) {
+            add(small("remote-users-empty", "No remote users loaded yet."))
+        }
+        state.remote.users.forEachIndexed { index, row ->
+            add(
+                MenuOption.Action(
+                    id = "remote-user-${row.kind}-${row.clientId}-${row.slotIndex}",
+                    title = row.label(),
+                    onRun = { vm.selectRemoteUser(index) },
+                    style = if (index == state.remote.selectedUserIndex) {
+                        MenuOption.Action.Style.Filled
+                    } else {
+                        MenuOption.Action.Style.Tonal
+                    },
+                    enabled = !state.remote.busy,
+                ),
+            )
+        }
         if (state.remote.busy) {
             add(MenuOption.Custom("remote-busy") { MenuBusyIndicator() })
         }
@@ -454,12 +474,31 @@ object ControlsSpec : SectionSpec {
                 subtitle = if (state.controls.usePhysicalController) {
                     if (state.controls.physicalPadConnected) {
                         "Active: ${state.controls.physicalPadLabel.ifBlank { "gamepad" }}. " +
-                            "Home / Guide opens the menu. Face swaps still apply."
+                            "Home / Guide turns this menu on and off. Face swaps still apply."
                     } else {
                         "No pad connected — using touch overlay until one appears."
                     }
                 } else {
                     "Touch overlay (default). Enable when using a Bluetooth / USB pad."
+                },
+            ),
+        )
+        add(
+            MenuOption.Flipper(
+                id = "controls-use-keyboard",
+                title = "Keyboard plays games",
+                checked = state.controls.useKeyboard,
+                onChange = vm::setUseKeyboard,
+                subtitle = if (state.controls.useKeyboard) {
+                    if (state.controls.hasKeyboardActive) {
+                        "Active: arrows are the D-pad, F fast-forwards, P pauses. " +
+                            "Backspace opens this menu."
+                    } else {
+                        "On for when a keyboard appears — none is attached yet."
+                    }
+                } else {
+                    "Typing and menus only — the game hears nothing from the keyboard. " +
+                        "A TV remote is not affected."
                 },
             ),
         )

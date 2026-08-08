@@ -41,8 +41,6 @@ import kotlinx.coroutines.yield
 @Composable
 fun SoftKeyboardDialog(
     request: SoftKeyboardRequest,
-    /** False with a keyboard in use: the field takes focus without raising the IME. */
-    softKeyboard: Boolean,
     onSubmit: (text: String) -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -112,7 +110,6 @@ fun SoftKeyboardDialog(
                     keyboardOptions = KeyboardOptions(
                         capitalization = KeyboardCapitalization.Words,
                         imeAction = ImeAction.Done,
-                        showKeyboardOnFocus = softKeyboard,
                     ),
                     keyboardActions = KeyboardActions(
                         onDone = { trySubmit() },

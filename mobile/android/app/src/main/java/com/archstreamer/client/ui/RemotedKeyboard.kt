@@ -32,10 +32,14 @@ fun keyboardDpadMask(keyCode: Int): Int? = when (keyCode) {
     else -> null
 }
 
-/** Controller Home / Guide — toggles the nav drawer. */
+/**
+ * Controller Home / Guide — the PS or Xbox button — which turns the whole menu on and off.
+ * Pads report it as Mode or Home; a remote's or keyboard's Menu key means the same thing.
+ */
 fun isMenuHomeKey(keyCode: Int): Boolean =
     keyCode == KeyEvent.KEYCODE_BUTTON_MODE ||
-        keyCode == KeyEvent.KEYCODE_HOME
+        keyCode == KeyEvent.KEYCODE_HOME ||
+        keyCode == KeyEvent.KEYCODE_MENU
 
 /**
  * Whether a keyboard someone can actually type on is attached.

@@ -307,13 +307,16 @@ object RemoteHost {
         } else {
             shellSingleQuote(dbPath)
         }
-        return "DB=$dbArg; if [ ! -f \"\$DB\" ]; then exit 0; fi; " +
-            "sqlite3 -separator \$'\\t' \"\$DB\" " +
+        // Tab via printf, not $'\t': sshd runs the login shell, and under dash the $'…'
+        // form is not expanded, so every column would arrive glued together by a literal
+        // "$\t" and parse as nothing at all — with stderr dropped, silently.
+        return "DB=$dbArg; if [ ! -f \"\$DB\" ]; then exit 0; fi; TAB=\$(printf '\\t'); " +
+            "sqlite3 -separator \"\$TAB\" \"\$DB\" " +
             "\"SELECT 'A', username, slot, " +
             "CASE WHEN game_key!='' THEN game_key ELSE '' END, game_key " +
             "FROM sessions WHERE ended_at=0 AND username!='' " +
             "ORDER BY started_at DESC;\" 2>/dev/null; " +
-            "sqlite3 -separator \$'\\t' \"\$DB\" " +
+            "sqlite3 -separator \"\$TAB\" \"\$DB\" " +
             "\"SELECT 'C', username, client_id, slot, " +
             "CASE WHEN phase!='' THEN phase ELSE " +
             "CASE WHEN slot<0 THEN 'lobby' ELSE 'session' END END, " +

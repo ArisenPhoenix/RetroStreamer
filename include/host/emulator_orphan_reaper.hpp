@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace archstreamer {
 
@@ -9,6 +10,44 @@ namespace archstreamer {
  * Used so a second GPU host does not wipe the shared Users/Remote presence dir.
  */
 bool other_host_runner_alive();
+
+/**
+ * A live host_runner, reduced to the launch arguments that identify which
+ * configuration it belongs to.
+ */
+struct HostRunnerProcess {
+    int pid = 0;
+    /** --control-port value; 0 when the process did not name one. */
+    int control_port = 0;
+    /** --gpu value; empty when the process did not name one. */
+    std::string gpu;
+    /**
+     * PID of the live archstreamer_gui in its ancestry, or 0 when nothing
+     * supervises it. Only a 0 here marks a genuine leftover: a second GUI with
+     * the same settings otherwise looks identical to a host that is still owned
+     * and streaming to a client.
+     */
+    int owner_gui_pid = 0;
+};
+
+/**
+ * Live host_runner processes, skipping `ignore_pid` (pass the one the caller
+ * already owns, or 0 for none).
+ *
+ * A GUI that dies without running its destructor never stops its host_runner,
+ * which keeps holding the control port; the next Start Host then fails to bind
+ * and Stop Host cannot help, because the leftover belongs to no live QProcess.
+ * Reporting the control port, GPU, and owning GUI lets a caller tell its own
+ * leftover apart from a host it must not touch.
+ */
+std::vector<HostRunnerProcess> list_host_runner_processes(int ignore_pid = 0);
+
+/**
+ * Stop a host_runner this process does not own: SIGTERM, then SIGKILL if it is
+ * still alive after `grace_ms`. host_runner polls a stop flag cooperatively, so
+ * a wedged run loop needs the escalation. Returns true once the pid is gone.
+ */
+bool terminate_host_runner(int pid, int grace_ms = 3000);
 
 /**
  * Last-resort cleanup for emulator trees left behind when a previous host

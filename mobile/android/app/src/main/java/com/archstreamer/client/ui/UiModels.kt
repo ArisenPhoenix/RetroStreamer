@@ -139,7 +139,6 @@ data class ControlsState(
     val physicalInputActive: Boolean = false,
     /** Physical remap profile under edit (shared JSON document). */
     val editingMapProfile: ControllerMapProfile = ControllerMapProfile.DEFAULT,
-    /** A real keyboard is attached, so menu fields must not raise the on-screen one. */
     /**
      * A keyboard is in use, so the on-screen keyboard must stay down.
      *
@@ -149,6 +148,14 @@ data class ControlsState(
      * the strongest evidence there is.
      */
     val hasKeyboardActive: Boolean = false,
+    /**
+     * User preference: the keyboard plays games, the same way [usePhysicalController] says
+     * the pad does. Until it is set by hand it follows detection, so a keyboard works the
+     * moment it appears. Turning it off leaves the keyboard as a typing and menu device.
+     */
+    val useKeyboard: Boolean = false,
+    /** Effective play input: preference on and a keyboard seen. */
+    val keyboardInputActive: Boolean = false,
 )
 
 /** Game Options tab — pause/FF, discs, link cable. */

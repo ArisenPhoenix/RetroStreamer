@@ -29,6 +29,7 @@ import androidx.core.content.ContextCompat
 import com.archstreamer.client.net.ClientFileLog
 import com.archstreamer.client.ui.ArchStreamerApp
 import com.archstreamer.client.ui.ClientViewModel
+import com.archstreamer.client.ui.WithoutSoftKeyboard
 import com.archstreamer.client.ui.theme.ArchStreamerTheme
 
 class MainActivity : ComponentActivity() {
@@ -87,7 +88,11 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxSize(),
                         color = MaterialTheme.colorScheme.background,
                     ) {
-                        ArchStreamerApp(viewModel = viewModel)
+                        // One gate for every field in the app, dialogs included: with a
+                        // keyboard attached the IME is never asked for.
+                        WithoutSoftKeyboard(state.controls.hasKeyboardActive) {
+                            ArchStreamerApp(viewModel = viewModel)
+                        }
                     }
                 }
             }

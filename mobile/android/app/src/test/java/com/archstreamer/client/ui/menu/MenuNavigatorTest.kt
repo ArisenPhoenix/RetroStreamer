@@ -90,7 +90,37 @@ class MenuNavigatorTest {
     }
 
     @Test
-    fun `pill takes right until the last chip then declines`() {
+    fun `right off an option that cannot turn takes the next row`() {
+        val menu = listOf(
+            section(NavSection.Client, action("a"), action("b")),
+        )
+        val focus = MenuFocus(inOptions = true, section = NavSection.Client, optionId = "a")
+
+        val out = MenuNavigator.move(menu, focus, NavDir.Right)
+
+        assertEquals("b", out?.focus?.optionId)
+        assertNull(out?.effect)
+    }
+
+    @Test
+    fun `right off the last row enters the next section`() {
+        val menu = listOf(
+            section(NavSection.Client, action("a")),
+            section(NavSection.Remote, note("header"), action("target")),
+        )
+        val focus = MenuFocus(inOptions = true, section = NavSection.Client, optionId = "a")
+
+        val out = MenuNavigator.move(menu, focus, NavDir.Right)
+
+        assertEquals(NavSection.Remote, out?.focus?.section)
+        assertEquals("target", out?.focus?.optionId)
+        assertTrue(out?.focus?.inOptions == true)
+        // The pane has to swap to the section the cursor moved into.
+        assertEquals(MenuEffect.CloseDrawer, out?.effect)
+    }
+
+    @Test
+    fun `pill takes right until the last chip then moves on`() {
         var picked = -1
         val choices = List(3) { index ->
             MenuOption.Pill.Choice("chip$index") { picked = index }
@@ -108,16 +138,18 @@ class MenuNavigatorTest {
         assertEquals(2, picked)
         assertEquals("pill", moved?.focus?.optionId)
 
+        // Out of chips, so Right goes forwards to the row below instead.
         val atEnd = listOf(
             section(
                 NavSection.Stream,
                 MenuOption.Pill(id = "pill", title = "Pill", choices = choices, selectedIndex = 2),
+                action("below"),
             ),
         )
         picked = -1
         val declined = MenuNavigator.move(atEnd, focus, NavDir.Right)
         assertEquals(-1, picked)
-        assertEquals("pill", declined?.focus?.optionId)
+        assertEquals("below", declined?.focus?.optionId)
     }
 
     @Test

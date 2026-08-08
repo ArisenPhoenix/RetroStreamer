@@ -222,6 +222,7 @@ private:
 #ifdef ARCHSTREAMER_HAS_HOST
     void start_host();
     void stop_host();
+    bool reclaim_matching_host_runners();
     void stop_host_local_media();
     void sync_host_local_media();
 #endif

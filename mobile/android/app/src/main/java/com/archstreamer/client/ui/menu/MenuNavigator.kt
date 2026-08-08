@@ -41,9 +41,13 @@ data class NavOutcome(val focus: MenuFocus, val effect: MenuEffect? = null)
  * Pure focus movement over a built menu.
  *
  * Drawer column: Up/Down shift sections, Right or South enters the highlighted one.
- * Options column: the option gets first refusal on Left/Right, then Up/Down walk the
- * section's rows, wrapping at either end so the cursor cannot leave the section it entered.
- * Left (declined) and East return to the drawer.
+ *
+ * Options column, where the option always gets first refusal:
+ * - Up/Down move a row and never leave the section, wrapping at either end.
+ * - Right turns the option (a chip, a switch, a slider), else takes the next row, else the
+ *   next section — it is the way forwards.
+ * - Left turns the option the other way, else goes back a level: out to the drawer, since
+ *   the page is what the cursor entered. East does the same.
  *
  * Moving is not side-effect free: offering Left/Right to an option is how a pill changes
  * chips and a slider nudges, so those callbacks fire from [move].
@@ -96,11 +100,16 @@ object MenuNavigator {
         if (dir == NavDir.Left || dir == NavDir.Right) {
             val option = current.option(here.optionId)
             if (option != null && option.onHorizontal(dir)) return NavOutcome(here)
-            return if (dir == NavDir.Left) {
-                NavOutcome(here.copy(inOptions = false), MenuEffect.OpenDrawer)
-            } else {
-                NavOutcome(here)
+            if (dir == NavDir.Left) {
+                return NavOutcome(here.copy(inOptions = false), MenuEffect.OpenDrawer)
             }
+            // Nothing to turn, so Right carries on forwards: the next row of this section,
+            // and once they run out, into the next section.
+            current.nextOptionId(here.optionId, NavDir.Down)?.let { next ->
+                return NavOutcome(here.copy(optionId = next))
+            }
+            val ahead = sections[wrap(at + 1, sections.size)]
+            return enter(ahead, here.copy(section = ahead.id))
         }
 
         current.nextOptionId(here.optionId, dir)?.let { next ->

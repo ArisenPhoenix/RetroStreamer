@@ -181,9 +181,9 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
         }
     }
 
-    // Refusing the IME when a field takes focus is not enough on its own: tapping a field
-    // that already has focus asks for it again, and so does the IME restoring itself after
-    // a rotation or a pane swap. Watching for it to appear catches every one of those.
+    // Text fields cannot raise the IME while a keyboard is attached — see
+    // [WithoutSoftKeyboard] — but the system can still restore it across a rotation or a
+    // process restore, so put it away if it turns up anyway.
     val imeVisible = WindowInsets.isImeVisible
     LaunchedEffect(imeVisible, state.controls.hasKeyboardActive) {
         if (imeVisible && state.controls.hasKeyboardActive) keyboardController?.hide()
@@ -532,7 +532,6 @@ private fun SectionPane(
                 fieldFocus = fieldFocus,
                 onOptionTouched = viewModel::onMenuOptionTouched,
                 onFieldFocusChanged = viewModel::onMenuFieldFocus,
-                softKeyboard = !state.controls.hasKeyboardActive,
             )
         }
     }
@@ -571,9 +570,6 @@ private fun GamesSection(
             onValueChange = viewModel::onFilterChange,
             label = { Text("Filter") },
             singleLine = true,
-            keyboardOptions = KeyboardOptions(
-                showKeyboardOnFocus = !state.controls.hasKeyboardActive,
-            ),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp)
@@ -815,7 +811,6 @@ private fun PlayScreen(
         state.session.softKeyboard?.let { request ->
             SoftKeyboardDialog(
                 request = request,
-                softKeyboard = !state.controls.hasKeyboardActive,
                 onSubmit = viewModel::submitSoftKeyboard,
                 onCancel = viewModel::cancelSoftKeyboard,
             )

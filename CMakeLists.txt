@@ -112,6 +112,7 @@ set(ARCHSTREAMER_CORE_SOURCES
     src/common/client_logs.cpp
     src/common/controller_button_map.cpp
     src/common/controller_normalization.cpp
+    src/common/controls_db_pack.cpp
     src/common/discovery.cpp
     src/common/dlc_paths.cpp
     src/common/game_assets.cpp
@@ -231,7 +232,6 @@ add_library(archstreamer_client
     src/client/remoted_keyboard_source.cpp
     src/client/session_client.cpp
     src/client/session_service.cpp
-    src/common/controls_db_pack.cpp
 )
 if(ARCHSTREAMER_HAS_GST_LIBS)
     target_compile_definitions(archstreamer_client PUBLIC ARCHSTREAMER_HAS_GST_LIBS=1)
@@ -260,6 +260,9 @@ target_link_libraries(archstreamer_client
         archstreamer_controller
 )
 if(ARCHSTREAMER_SQLITE_TARGET)
+    # Set after add_subdirectory(runtime_cadence), so it cannot be linked where
+    # archstreamer_core is declared. controls_db_pack.cpp needs sqlite3.h.
+    target_link_libraries(archstreamer_core PRIVATE ${ARCHSTREAMER_SQLITE_TARGET})
     target_link_libraries(archstreamer_client PRIVATE ${ARCHSTREAMER_SQLITE_TARGET})
 endif()
 

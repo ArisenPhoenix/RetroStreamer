@@ -101,7 +101,6 @@ private fun rememberFieldEditor(
     onChange: (String) -> Unit,
     fieldFocus: MenuFieldFocus,
     onFieldFocusChanged: (String, Boolean) -> Unit,
-    softKeyboard: Boolean,
     keyboardType: KeyboardType = KeyboardType.Unspecified,
 ): FieldEditor {
     var text by remember(optionId) { mutableStateOf(incoming) }
@@ -115,10 +114,7 @@ private fun rememberFieldEditor(
             text = next
             onChange(next)
         },
-        keyboardOptions = KeyboardOptions(
-            keyboardType = keyboardType,
-            showKeyboardOnFocus = softKeyboard,
-        ),
+        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
         modifier = Modifier
             .fillMaxWidth()
             .focusRequester(fieldFocus.requesterFor(optionId))
@@ -137,8 +133,6 @@ fun MenuOptionList(
     fieldFocus: MenuFieldFocus,
     onOptionTouched: (String) -> Unit,
     onFieldFocusChanged: (String, Boolean) -> Unit,
-    /** False with a hardware keyboard attached: focusing a field must not raise the IME. */
-    softKeyboard: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -156,7 +150,6 @@ fun MenuOptionList(
                     fieldFocus = fieldFocus,
                     onOptionTouched = onOptionTouched,
                     onFieldFocusChanged = onFieldFocusChanged,
-                    softKeyboard = softKeyboard,
                 )
             }
         }
@@ -170,7 +163,6 @@ private fun MenuOptionRow(
     fieldFocus: MenuFieldFocus,
     onOptionTouched: (String) -> Unit,
     onFieldFocusChanged: (String, Boolean) -> Unit,
-    softKeyboard: Boolean,
 ) {
     when (option) {
         is MenuOption.Note -> NoteRow(option)
@@ -184,7 +176,6 @@ private fun MenuOptionRow(
                 onChange = option.onChange,
                 fieldFocus = fieldFocus,
                 onFieldFocusChanged = onFieldFocusChanged,
-                softKeyboard = softKeyboard,
             )
             OutlinedTextField(
                 value = editor.text,
@@ -218,7 +209,6 @@ private fun MenuOptionRow(
                 onChange = option.onChange,
                 fieldFocus = fieldFocus,
                 onFieldFocusChanged = onFieldFocusChanged,
-                softKeyboard = softKeyboard,
                 // Password variation: no suggestion strip, no last-character preview,
                 // and the IME does not learn what was typed.
                 keyboardType = KeyboardType.Password,
@@ -504,37 +494,3 @@ fun MenuBusyIndicator() {
     }
 }
 
-/** Remote presence rows. Touch-only selection; Kick selected acts on the highlight. */
-@Composable
-fun RemoteUserList(state: UiState, vm: ClientViewModel) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(max = 220.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        if (state.remote.users.isEmpty()) {
-            Text("No remote users loaded yet.", style = MaterialTheme.typography.bodySmall)
-            return@Column
-        }
-        state.remote.users.forEachIndexed { index, row ->
-            val selected = index == state.remote.selectedUserIndex
-            Text(
-                text = row.label(),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(
-                        if (selected) {
-                            MaterialTheme.colorScheme.primaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.surfaceVariant
-                        },
-                        RoundedCornerShape(8.dp),
-                    )
-                    .clickable { vm.selectRemoteUser(index) }
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-    }
-}

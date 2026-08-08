@@ -5,12 +5,14 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
 #include <mutex>
 #include <set>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -65,20 +67,46 @@ bool is_owner_process(const ProcEntry& entry) {
     return name_matches_owner(std::filesystem::path(first).filename().string());
 }
 
+bool is_host_runner(const ProcEntry& entry) {
+    const auto exe = strip_deleted_suffix(entry.exe_name);
+    if (exe == "host_runner" || exe == "host_runner.exe") {
+        return true;
+    }
+    // argv0 / flatpak-spawn wrappers still mention the binary name.
+    const auto first = entry.cmdline.substr(0, entry.cmdline.find(' '));
+    const auto base = std::filesystem::path(first).filename().string();
+    return strip_deleted_suffix(base) == "host_runner" ||
+        strip_deleted_suffix(base) == "host_runner.exe";
+}
+
+bool is_gui_process(const ProcEntry& entry) {
+    const auto exe = strip_deleted_suffix(entry.exe_name);
+    if (exe == "archstreamer_gui" || exe == "archstreamer_gui.exe") {
+        return true;
+    }
+    const auto first = entry.cmdline.substr(0, entry.cmdline.find(' '));
+    const auto base = std::filesystem::path(first).filename().string();
+    return strip_deleted_suffix(base) == "archstreamer_gui" ||
+        strip_deleted_suffix(base) == "archstreamer_gui.exe";
+}
+
+/** Value following `flag` in a snapshot cmdline, or empty when absent. */
+std::string cmdline_value(const std::string& cmdline, std::string_view flag) {
+    // read_cmdline() joins argv with spaces; ports and GPU ids never contain one.
+    std::istringstream in(cmdline);
+    std::string token;
+    while (in >> token) {
+        if (token == flag) {
+            std::string value;
+            return (in >> value) ? value : std::string{};
+        }
+    }
+    return {};
+}
+
 bool any_other_live_host(const std::vector<ProcEntry>& entries, pid_t self) {
     return std::any_of(entries.begin(), entries.end(), [self](const ProcEntry& entry) {
-        if (entry.pid == self) {
-            return false;
-        }
-        const auto exe = strip_deleted_suffix(entry.exe_name);
-        if (exe == "host_runner" || exe == "host_runner.exe") {
-            return true;
-        }
-        // argv0 / flatpak-spawn wrappers still mention the binary name.
-        const auto first = entry.cmdline.substr(0, entry.cmdline.find(' '));
-        const auto base = std::filesystem::path(first).filename().string();
-        return strip_deleted_suffix(base) == "host_runner" ||
-            strip_deleted_suffix(base) == "host_runner.exe";
+        return entry.pid != self && is_host_runner(entry);
     });
 }
 
@@ -231,6 +259,77 @@ std::string read_environ_token(const std::filesystem::path& environ_path) {
 
 bool other_host_runner_alive() {
     return any_other_live_host(snapshot_processes(), getpid());
+}
+
+std::vector<HostRunnerProcess> list_host_runner_processes(int ignore_pid) {
+    const auto self = getpid();
+    const auto entries = snapshot_processes();
+    std::map<pid_t, const ProcEntry*> by_pid;
+    for (const auto& entry : entries) {
+        by_pid.emplace(entry.pid, &entry);
+    }
+
+    // Bounded walk: /proc is a snapshot, so PID reuse could otherwise cycle.
+    const auto gui_ancestor_of = [&by_pid](pid_t pid) -> int {
+        for (int depth = 0; depth < 64 && pid > 1; ++depth) {
+            const auto it = by_pid.find(pid);
+            if (it == by_pid.end()) {
+                return 0;
+            }
+            if (is_gui_process(*it->second)) {
+                return static_cast<int>(it->second->pid);
+            }
+            pid = it->second->ppid;
+        }
+        return 0;
+    };
+
+    std::vector<HostRunnerProcess> found;
+    for (const auto& entry : entries) {
+        if (entry.pid == self || entry.pid == ignore_pid || !is_host_runner(entry)) {
+            continue;
+        }
+        HostRunnerProcess proc;
+        proc.pid = static_cast<int>(entry.pid);
+        proc.owner_gui_pid = gui_ancestor_of(entry.ppid);
+        const auto port = cmdline_value(entry.cmdline, "--control-port");
+        if (!port.empty()) {
+            char* end = nullptr;
+            const auto parsed = std::strtol(port.c_str(), &end, 10);
+            if (end != port.c_str() && parsed > 0 && parsed <= 65535) {
+                proc.control_port = static_cast<int>(parsed);
+            }
+        }
+        proc.gpu = cmdline_value(entry.cmdline, "--gpu");
+        found.push_back(std::move(proc));
+    }
+    return found;
+}
+
+bool terminate_host_runner(int pid, int grace_ms) {
+    const auto target = static_cast<pid_t>(pid);
+    if (target <= 1 || kill(target, 0) != 0) {
+        return true;
+    }
+    kill(target, SIGTERM);
+    // host_runner only notices SIGTERM when its run loop next polls the stop
+    // flag, so poll for the exit rather than assuming it was immediate.
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(std::max(grace_ms, 0));
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (kill(target, 0) != 0) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    kill(target, SIGKILL);
+    for (int i = 0; i < 20; ++i) {
+        if (kill(target, 0) != 0) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return kill(target, 0) != 0;
 }
 
 int reap_orphaned_emulator_processes() {

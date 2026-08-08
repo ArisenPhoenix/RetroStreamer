@@ -478,20 +478,22 @@ inline std::string remote_host_default_cadence_db_expr() {
  * Empty db_path → default XDG cadence.sqlite on the remote.
  */
 inline std::string remote_host_list_presence_shell(const std::string& db_path = {}) {
-    // sqlite3 -separator $'\t' keeps the same wire format as the old JSON scanner.
+    // Tab via printf, not $'\t': ssh runs the remote login shell, and dash does not expand
+    // the $'…' form, so the columns would arrive glued together by a literal "$\t" and
+    // parse as nothing — silently, since stderr is dropped.
     const std::string db_arg = db_path.empty()
         ? ("\"" + remote_host_default_cadence_db_expr() + "\"")
         : remote_shell_single_quote(db_path);
     std::string cmd;
     cmd += "DB=";
     cmd += db_arg;
-    cmd += "; if [ ! -f \"$DB\" ]; then exit 0; fi; ";
-    cmd += "sqlite3 -separator $'\\t' \"$DB\" "
+    cmd += "; if [ ! -f \"$DB\" ]; then exit 0; fi; TAB=$(printf '\\t'); ";
+    cmd += "sqlite3 -separator \"$TAB\" \"$DB\" "
            "\"SELECT 'A', username, slot, "
            "CASE WHEN game_key!='' THEN game_key ELSE '' END, game_key "
            "FROM sessions WHERE ended_at=0 AND username!='' "
            "ORDER BY started_at DESC;\" 2>/dev/null; ";
-    cmd += "sqlite3 -separator $'\\t' \"$DB\" "
+    cmd += "sqlite3 -separator \"$TAB\" \"$DB\" "
            "\"SELECT 'C', username, client_id, slot, "
            "CASE WHEN phase!='' THEN phase ELSE "
            "CASE WHEN slot<0 THEN 'lobby' ELSE 'session' END END, "

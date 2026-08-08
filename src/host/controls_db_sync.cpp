@@ -1,6 +1,9 @@
 #include "host/controls_db_sync.hpp"
 
+#include "common/controls_db_pack.hpp"
 #include "host/user_controls_db.hpp"
+
+#include <string>
 
 namespace archstreamer {
 
@@ -39,11 +42,34 @@ ByteBuffer handle_controls_db_packet(
             ack.message = error.empty() ? "invalid controls database" : error;
             return serialize_packet(ack);
         }
-        const auto path = user_controls_db_path_for(save_root, username);
-        if (!write_user_controls_db_file(path, push->db_bytes, &error)) {
+        // Merge, never replace: a client only pushes the kinds it knows about, and
+        // installing its file wholesale would drop the rest of the profile — an
+        // overlay_profiles row from a tablet dies the moment a TV pushes a button_map.
+        auto rows = import_controls_db_pack(push->db_bytes, username, &error);
+        if (!rows.has_value()) {
             ack.ok = false;
-            ack.message = error.empty() ? "failed to write controls database" : error;
+            ack.message = error.empty() ? "invalid controls database" : error;
             return serialize_packet(ack);
+        }
+        if (rows->empty()) {
+            ack.ok = false;
+            ack.message = "controls database has no rows for " + username;
+            return serialize_packet(ack);
+        }
+        const auto path = user_controls_db_path_for(save_root, username);
+        for (const auto& row : *rows) {
+            UserControlsRow stored;
+            // Store under the authenticated name, not the pack's spelling of it.
+            stored.username = username;
+            stored.kind = row.kind;
+            stored.document_json = row.document_json;
+            stored.version = row.version;
+            stored.updated_at = row.updated_at;
+            if (!upsert_user_controls_row(path, stored)) {
+                ack.ok = false;
+                ack.message = "failed to store " + row.kind;
+                return serialize_packet(ack);
+            }
         }
         ack.ok = true;
         ack.message = "ok";

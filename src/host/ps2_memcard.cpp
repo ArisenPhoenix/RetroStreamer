@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace archstreamer {
@@ -450,7 +451,7 @@ bool title_matches_game(std::string_view title_c, std::string_view game_c) {
 
 std::mutex g_ps2_cache_mu;
 bool g_ps2_scan_done = false;
-bool g_users_tab_opened = false;
+bool g_ps2_scan_running = false;
 std::unordered_map<std::string, std::optional<Ps2MemcardUsage>> g_ps2_cache;
 
 std::string cache_key(const std::filesystem::path& path) {
@@ -523,41 +524,37 @@ std::optional<Ps2MemcardUsage> parse_ps2_memcard_usage(const std::filesystem::pa
 
 std::optional<Ps2MemcardUsage> read_ps2_memcard_usage(const std::filesystem::path& path) {
     const auto key = cache_key(path);
+    std::lock_guard lock(g_ps2_cache_mu);
+    const auto it = g_ps2_cache.find(key);
+    return it == g_ps2_cache.end() ? std::nullopt : it->second;
+}
+
+void ps2_memcard_prewarm(const std::vector<std::filesystem::path>& paths) {
     {
         std::lock_guard lock(g_ps2_cache_mu);
-        if (const auto it = g_ps2_cache.find(key); it != g_ps2_cache.end()) {
-            return it->second;
+        if (g_ps2_scan_done || g_ps2_scan_running) {
+            return;
         }
-        // First parse only when Users has been opened and the one-shot has not fired.
-        if (g_ps2_scan_done || !g_users_tab_opened) {
-            return std::nullopt;
-        }
+        g_ps2_scan_running = true;
     }
-    auto usage = parse_ps2_memcard_usage(path);
-    std::lock_guard lock(g_ps2_cache_mu);
-    if (const auto it = g_ps2_cache.find(key); it != g_ps2_cache.end()) {
-        return it->second;
+    // Parse outside the lock so cache readers never wait on a multi-MiB image.
+    std::vector<std::pair<std::string, std::optional<Ps2MemcardUsage>>> parsed;
+    parsed.reserve(paths.size());
+    for (const auto& path : paths) {
+        parsed.emplace_back(cache_key(path), parse_ps2_memcard_usage(path));
     }
-    if (g_ps2_scan_done || !g_users_tab_opened) {
-        return std::nullopt;
+
+    std::lock_guard lock(g_ps2_cache_mu);
+    for (auto& [key, usage] : parsed) {
+        g_ps2_cache.insert_or_assign(key, std::move(usage));
     }
-    g_ps2_cache.emplace(key, usage);
-    return usage;
-}
-
-void ps2_memcard_set_users_tab_opened(bool opened) {
-    std::lock_guard lock(g_ps2_cache_mu);
-    g_users_tab_opened = opened;
-}
-
-bool ps2_memcard_users_tab_opened() {
-    std::lock_guard lock(g_ps2_cache_mu);
-    return g_users_tab_opened;
-}
-
-void ps2_memcard_finish_initial_scan() {
-    std::lock_guard lock(g_ps2_cache_mu);
+    g_ps2_scan_running = false;
     g_ps2_scan_done = true;
+}
+
+bool ps2_memcard_scan_complete() {
+    std::lock_guard lock(g_ps2_cache_mu);
+    return g_ps2_scan_done;
 }
 
 std::optional<std::uint64_t> ps2_memcard_bytes_for_game(

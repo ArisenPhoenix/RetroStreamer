@@ -354,8 +354,8 @@ void MainWindow::advertise_host() {
 
 void MainWindow::load_host_games() {
     try {
-        const auto rom_root = std::filesystem::path{host_rom_root_->text().toStdString()};
-        const auto meta_root = std::filesystem::path{host_meta_root_->text().toStdString()};
+        const auto rom_root = rom_root_path();
+        const auto meta_root = meta_root_path();
         if (!std::filesystem::exists(rom_root)) {
             host_game_picker_->setCatalog({});
             host_status_->setText("Host stopped; ROM root missing");
@@ -538,7 +538,7 @@ void MainWindow::start_host() {
     if (!std::filesystem::is_directory(save_root)) {
         host_status_->setText("Host not started; save root missing");
         QString message = QStringLiteral(
-            "Client save root does not exist or is not visible to this app: %1")
+            "Game Saves Root does not exist or is not visible to this app: %1")
                               .arg(QString::fromStdString(save_root.string()));
         if (running_inside_flatpak()) {
             message += QStringLiteral(
@@ -547,7 +547,7 @@ void MainWindow::start_host() {
                 "io.github.ArisenPhoenix.ArchStreamer)");
         } else {
             message += QStringLiteral(
-                " — create it in Settings (Create) or choose another directory.");
+                " — create it on the Paths tab (Create) or choose another directory.");
         }
         append_log(host_log_, message, GuiLogLevel::Quiet);
         return;
@@ -558,10 +558,10 @@ void MainWindow::start_host() {
     QStringList args;
     {
         archstreamer::HostAppConfig host_cfg;
-        host_cfg.rom_root = host_rom_root_->text().toStdString();
-        host_cfg.meta_root = host_meta_root_->text().toStdString();
+        host_cfg.rom_root = rom_root_path();
+        host_cfg.meta_root = meta_root_path();
         host_cfg.art_root = art_root_path();
-        host_cfg.save_root = save_root_path();
+        host_cfg.save_root = save_root;
         host_cfg.control_port = static_cast<std::uint16_t>(host_control_port_->value());
         host_cfg.input_port = static_cast<std::uint16_t>(host_input_port_->value());
         host_cfg.clients = static_cast<std::uint8_t>(host_clients_->value());
@@ -626,14 +626,12 @@ void MainWindow::start_host() {
     QString program;
     QStringList launch_args = args;
     if (running_inside_flatpak()) {
-        const auto native = resolve_native_host_runner(
-            settings_native_host_runner_ != nullptr ? settings_native_host_runner_->text()
-                                                    : QString{});
+        const auto native = resolve_native_host_runner(native_host_runner_override());
         if (native.isEmpty()) {
             host_status_->setText("Host failed to start");
             append_log(
                 host_log_,
-                "Flatpak Host needs a native host_runner. Set Settings → Native host_runner "
+                "Flatpak Host needs a native host_runner. Set Paths → Native host_runner "
                 "or ARCHSTREAMER_HOST_RUNNER to a host OS build (gamescope/uinput).",
                 GuiLogLevel::Quiet);
             return;

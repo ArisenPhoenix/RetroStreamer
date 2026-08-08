@@ -9,6 +9,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -44,6 +45,17 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    // TV remote Back: open menu → focus hamburger → exit (not D-pad Left).
+                    if (!viewModel.handleSystemBack()) {
+                        finish()
+                    }
+                }
+            },
+        )
         setContent {
             ArchStreamerTheme {
                 val state by viewModel.state.collectAsState()
@@ -52,8 +64,8 @@ class MainActivity : ComponentActivity() {
                         ensureNotificationPermission()
                     }
                 }
-                LaunchedEffect(state.usePhysicalController) {
-                    if (state.usePhysicalController) {
+                LaunchedEffect(state.controls.usePhysicalController) {
+                    if (state.controls.usePhysicalController) {
                         ensureBluetoothPermission()
                     }
                 }
@@ -95,6 +107,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        viewModel.noteKeyboardUse(event)
         // Real pads must hit the gamepad tracker before play-keyboard remotes, otherwise
         // DPAD_* keys are stolen as "keyboard D-pad" and BUTTON_* never update latestPad
         // when hasKeys filtering rejected the device.

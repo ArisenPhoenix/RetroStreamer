@@ -29,15 +29,18 @@ object PhysicalGamepad {
             )
         }
 
+    /**
+     * Android hands out SOURCE_GAMEPAD generously: Android TV's `virtual-remote` and
+     * `virtual-search` devices claim it, and many Bluetooth keyboards claim SOURCE_JOYSTICK.
+     * Counting those as pads hides the touch overlay and routes remote keys through the
+     * play tracker, so a pad has to prove itself with a pad button or a real stick.
+     */
     fun isGameController(device: InputDevice): Boolean {
         if (device.isVirtual) return false
         val sources = device.sources
         val gamepad = sources and InputDevice.SOURCE_GAMEPAD == InputDevice.SOURCE_GAMEPAD
         val joystick = sources and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK
-        // Real gamepads always qualify. Joystick-only is also used by many BT keyboards, so
-        // require at least one pad button before treating those as controllers.
-        if (gamepad) return true
-        if (!joystick) return false
+        if (!gamepad && !joystick) return false
         val padKeys = device.hasKeys(
             KeyEvent.KEYCODE_BUTTON_A,
             KeyEvent.KEYCODE_BUTTON_B,
@@ -48,7 +51,11 @@ object PhysicalGamepad {
             KeyEvent.KEYCODE_BUTTON_START,
             KeyEvent.KEYCODE_BUTTON_SELECT,
         )
-        return padKeys.any { it }
+        if (padKeys.any { it }) return true
+        // hasKeys under-reports on some HID pads, so sticks are the second signal. A
+        // remote has neither.
+        return device.getMotionRange(MotionEvent.AXIS_X) != null &&
+            device.getMotionRange(MotionEvent.AXIS_Y) != null
     }
 
     fun isGameControllerDeviceId(deviceId: Int): Boolean {
@@ -73,8 +80,8 @@ object PhysicalGamepad {
 
 /**
  * Accumulates KeyEvent / MotionEvent from a physical pad into [ControllerState].
- * Home / Mode opens the play menu. [actionFor] supplies overlay Action remaps
- * (e.g. Select → Fast-forward) so custom layouts apply to the physical pad.
+ * Home / Mode opens the play menu. [actionFor] supplies remapped Actions from the
+ * shared [ControllerMapProfile] pipeline (same remaps as the overlay).
  */
 class PhysicalGamepadTracker(
     private val actionFor: (OverlayControlKind) -> OverlayAction,
@@ -178,6 +185,18 @@ class PhysicalGamepadTracker(
 
         emit()
         return true
+    }
+
+    /** Synthetic remappable press (PadController.dispatch / tests). */
+    fun handleSyntheticRemappable(kind: OverlayControlKind, down: Boolean) {
+        when (kind) {
+            OverlayControlKind.ShoulderL2 -> leftTriggerButton = down
+            OverlayControlKind.ShoulderR2 -> rightTriggerButton = down
+            else -> Unit
+        }
+        dispatchAction(actionFor(kind), down, fromTriggerKind = kind)
+        refreshTriggers()
+        emit()
     }
 
     private fun dispatchAction(
@@ -350,6 +369,7 @@ class PhysicalGamepadTracker(
     companion object {
         private const val DEADZONE = 0.18f
 
+        /** Guide / Home / PS — opens the menu. Back stays with the remote's step-out. */
         private fun isMenuKey(keyCode: Int): Boolean =
             keyCode == KeyEvent.KEYCODE_BUTTON_MODE ||
                 keyCode == KeyEvent.KEYCODE_HOME

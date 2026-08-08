@@ -447,6 +447,12 @@ void append_meta_system_entries(
     GameMetaStore* meta,
     const std::unordered_set<std::string>& skip_catalog_ids);
 
+/** Memcard images PCSX2 keeps for one user, whether or not they exist yet. */
+std::vector<std::filesystem::path> ps2_memcard_paths(const std::filesystem::path& user_dir) {
+    const auto cards_dir = user_dir / "pcsx2" / "memcards";
+    return {cards_dir / "Mcd001.ps2", cards_dir / "Mcd002.ps2"};
+}
+
 void append_ps2_entries(
     std::vector<SaveGameEntry>& out,
     const std::string& username,
@@ -458,9 +464,8 @@ void append_ps2_entries(
 
     std::vector<Ps2MemcardUsage> cards;
     std::uint64_t capacity = 0;
-    const auto cards_dir = user_dir / "pcsx2" / "memcards";
-    for (const char* name : {"Mcd001.ps2", "Mcd002.ps2"}) {
-        if (auto usage = read_ps2_memcard_usage(cards_dir / name)) {
+    for (const auto& card_path : ps2_memcard_paths(user_dir)) {
+        if (auto usage = read_ps2_memcard_usage(card_path)) {
             capacity += usage->capacity_bytes;
             cards.push_back(std::move(*usage));
         }
@@ -1233,11 +1238,21 @@ std::vector<SaveGameEntry> list_save_games(
             out.push_back(std::move(game));
         }
     }
-    // Lock memcard disk reads only after a Users-tab pass actually allowed parsing.
-    if (ps2_memcard_users_tab_opened()) {
-        ps2_memcard_finish_initial_scan();
-    }
     return out;
+}
+
+std::vector<std::filesystem::path> list_ps2_memcard_images(
+    const std::filesystem::path& save_root) {
+    std::vector<std::filesystem::path> images;
+    for (const auto& user : list_save_users(save_root)) {
+        for (auto& card_path : ps2_memcard_paths(save_root / user)) {
+            std::error_code ec;
+            if (std::filesystem::is_regular_file(card_path, ec)) {
+                images.push_back(std::move(card_path));
+            }
+        }
+    }
+    return images;
 }
 
 std::vector<std::string> list_save_systems(

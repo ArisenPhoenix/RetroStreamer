@@ -41,13 +41,6 @@ QString host_runner_program() {
     return QStringLiteral("./build/host_runner");
 }
 
-bool running_inside_flatpak() {
-    if (qEnvironmentVariableIsSet("FLATPAK_ID")) {
-        return true;
-    }
-    return std::filesystem::exists("/.flatpak-info");
-}
-
 QString resolve_native_host_runner(const QString& configured) {
     if (!configured.trimmed().isEmpty() && QFileInfo::exists(configured.trimmed())) {
         return configured.trimmed();

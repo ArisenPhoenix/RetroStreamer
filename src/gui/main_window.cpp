@@ -5,6 +5,8 @@
 #include "game_picker_widget.hpp"
 #include "host_search_dialog.hpp"
 #include "pad_on_screen_keyboard.hpp"
+#include "paths_panel.hpp"
+#include "profile_controls.hpp"
 #include "common/catalog_paths.hpp"
 #include "common/catalog_presenter.hpp"
 #include "common/addresses.hpp"
@@ -12,7 +14,6 @@
 #include "common/discovery.hpp"
 #include "common/game_assets.hpp"
 #include "common/platform/paths.hpp"
-#include "common/steam_art_import.hpp"
 #include "client/client_media_playback.hpp"
 #include "client/game_filter.hpp"
 #include "client/audio_playback_device.hpp"
@@ -22,14 +23,10 @@
 #include "common/client_debug_log.hpp"
 #include "client/controls_sync.hpp"
 #include "archstreamer/runtime_cadence/cadence.hpp"
-#ifdef ARCHSTREAMER_HAS_HOST
-#include "host/user_controls_db.hpp"
-#endif
 
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
-#include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QGuiApplication>
@@ -39,7 +36,6 @@
 #include <QListWidget>
 #include <QMetaObject>
 #include <QPlainTextEdit>
-#include <QPixmapCache>
 #include <QProcess>
 #include <QPushButton>
 #include <QScreen>
@@ -64,11 +60,9 @@
 #include <thread>
 #ifdef ARCHSTREAMER_HAS_HOST
 #include "gui_host_runner.hpp"
-#include "host/game_catalog_scanner.hpp"
 #include "host/gpu_select.hpp"
 #include "host/host_app_config.hpp"
 #include "host/media_capture.hpp"
-#include "host/save_profile.hpp"
 #include "host/standalone_emulator.hpp"
 #endif
 
@@ -96,6 +90,8 @@ MainWindow::MainWindow() {
     tabs_->addTab(build_game_options_tab(), "Game Options");
     tabs_->addTab(build_profile_tab(), "Profile");
     tabs_->addTab(build_logs_tab(), "Logs");
+    // Paths before Settings: Settings load reads the roots this tab owns.
+    tabs_->addTab(build_paths_tab(), "Paths");
     tabs_->addTab(build_settings_tab(), "Settings");
     setCentralWidget(tabs_);
     load_persisted_settings();
@@ -120,6 +116,9 @@ MainWindow::~MainWindow() {
 #endif
     if (art_refresh_thread_.joinable()) {
         art_refresh_thread_.join();
+    }
+    if (ps2_prewarm_thread_.joinable()) {
+        ps2_prewarm_thread_.join();
     }
 }
 
@@ -963,41 +962,6 @@ std::filesystem::path MainWindow::controller_map_file_path() const {
 
 namespace {
 
-#ifdef ARCHSTREAMER_HAS_HOST
-bool upsert_controller_map_to_profile(
-    const std::filesystem::path& save_root,
-    const std::string& username,
-    const archstreamer::ControllerMapDocument& document) {
-    if (save_root.empty() || username.empty()) {
-        return false;
-    }
-    archstreamer::UserControlsRow row;
-    row.username = username;
-    row.kind = std::string(archstreamer::kControlsKindButtonMap);
-    row.document_json = archstreamer::controller_map_document_to_json(document);
-    row.version = archstreamer::ControllerMapDocumentVersion;
-    return archstreamer::upsert_user_controls_row(
-        archstreamer::user_controls_db_path_for(save_root, username),
-        row);
-}
-
-std::optional<archstreamer::ControllerMapDocument> load_controller_map_from_profile(
-    const std::filesystem::path& save_root,
-    const std::string& username) {
-    if (save_root.empty() || username.empty()) {
-        return std::nullopt;
-    }
-    auto found = archstreamer::find_user_controls_row(
-        archstreamer::user_controls_db_path_for(save_root, username),
-        username,
-        archstreamer::kControlsKindButtonMap);
-    if (!found.has_value()) {
-        return std::nullopt;
-    }
-    return archstreamer::controller_map_document_from_json(found->document_json);
-}
-#endif
-
 bool upsert_controller_map_to_cadence(
     const std::string& username,
     const archstreamer::ControllerMapDocument& document) {
@@ -1052,18 +1016,14 @@ void MainWindow::load_controller_map_document() {
     if (username.empty()) {
         username = std::string(archstreamer::cadence::kControlsDefaultUsername);
     }
-#ifdef ARCHSTREAMER_HAS_HOST
     if (auto document = load_controller_map_from_profile(save_root_path(), username);
         document.has_value()) {
         apply_document(*document);
         return;
     }
-#endif
     if (auto document = load_controller_map_from_cadence(username); document.has_value()) {
         apply_document(*document);
-#ifdef ARCHSTREAMER_HAS_HOST
         (void)upsert_controller_map_to_profile(save_root_path(), username, *document);
-#endif
         return;
     }
 
@@ -1071,13 +1031,9 @@ void MainWindow::load_controller_map_document() {
     const auto path = controller_map_file_path();
     if (auto document = archstreamer::controller_map_document_load_file(path); document.has_value()) {
         apply_document(*document);
-#ifdef ARCHSTREAMER_HAS_HOST
         if (!upsert_controller_map_to_profile(save_root_path(), username, *document)) {
             (void)upsert_controller_map_to_cadence(username, *document);
         }
-#else
-        (void)upsert_controller_map_to_cadence(username, *document);
-#endif
         return;
     }
 
@@ -1120,13 +1076,9 @@ void MainWindow::load_controller_map_document() {
         controller_map_prefs_->set_profile(family, profile);
     }
     if (migrated) {
-#ifdef ARCHSTREAMER_HAS_HOST
         if (!upsert_controller_map_to_profile(save_root_path(), username, document)) {
             (void)upsert_controller_map_to_cadence(username, document);
         }
-#else
-        (void)upsert_controller_map_to_cadence(username, document);
-#endif
         archstreamer::controller_map_document_save_file(path, document);
     }
     sync_controller_map_editor_ui();
@@ -1145,17 +1097,11 @@ void MainWindow::save_controller_map_document() {
     if (username.empty()) {
         username = std::string(archstreamer::cadence::kControlsDefaultUsername);
     }
-#ifdef ARCHSTREAMER_HAS_HOST
     if (!upsert_controller_map_to_profile(save_root_path(), username, document)) {
         if (!upsert_controller_map_to_cadence(username, document)) {
             archstreamer::controller_map_document_save_file(controller_map_file_path(), document);
         }
     }
-#else
-    if (!upsert_controller_map_to_cadence(username, document)) {
-        archstreamer::controller_map_document_save_file(controller_map_file_path(), document);
-    }
-#endif
 
     // Keep legacy keys in sync for older builds.
     const auto standard = document.profile(archstreamer::ControllerMapFamily::Standard);
@@ -1584,58 +1530,6 @@ QWidget* MainWindow::build_settings_tab() {
     auto* form_box = new QGroupBox("Local configuration", page);
     auto* form = new QFormLayout(form_box);
 
-    settings_art_root_ = new QLineEdit(form_box);
-    settings_art_root_->setPlaceholderText(QStringLiteral("…/ROMS/Art  (under your Gaming root)"));
-#ifdef ARCHSTREAMER_HAS_HOST
-    host_rom_root_ = new QLineEdit(form_box);
-    host_rom_root_->setPlaceholderText(QStringLiteral("…/ROMS/Games  (under your Gaming root)"));
-    host_meta_root_ = new QLineEdit(form_box);
-    host_meta_root_->setPlaceholderText(QStringLiteral("…/ROMS/Meta  (under your Gaming root)"));
-    const auto default_save_root =
-        QString::fromStdString(archstreamer::default_save_profile_root().string());
-    host_save_root_ = new QLineEdit(default_save_root, form_box);
-    host_save_root_->setToolTip(
-        "Directory where client usernames store saves, states, and emulator profiles.\n"
-        "Layout: <save-root>/<username>/…\n"
-        "Flatpak: path must be visible to this app (home is allowed; other disks need\n"
-        "flatpak override --filesystem=<path>:rw). Host sessions use the native host_runner\n"
-        "path on the host OS.");
-    host_save_root_browse_ = new QPushButton("Browse…", form_box);
-    host_save_root_create_ = new QPushButton("Create", form_box);
-    host_save_root_create_->setToolTip(
-        "Create this directory (and parents) if it is missing and writable.");
-    host_save_root_status_ = new QLabel(form_box);
-    host_save_root_status_->setWordWrap(true);
-    host_save_root_status_->setStyleSheet(QStringLiteral("color: #a33;"));
-    auto* save_root_row = new QWidget(form_box);
-    auto* save_root_layout = new QHBoxLayout(save_root_row);
-    save_root_layout->setContentsMargins(0, 0, 0, 0);
-    save_root_layout->addWidget(host_save_root_, 1);
-    save_root_layout->addWidget(host_save_root_browse_);
-    save_root_layout->addWidget(host_save_root_create_);
-#endif
-
-    form->addRow("Art root", settings_art_root_);
-#ifdef ARCHSTREAMER_HAS_HOST
-    form->addRow("ROM root", host_rom_root_);
-    form->addRow("Meta root", host_meta_root_);
-    form->addRow("Client save root", save_root_row);
-    form->addRow("", host_save_root_status_);
-#endif
-
-#ifdef ARCHSTREAMER_HAS_HOST
-    settings_native_host_runner_ = new QLineEdit(form_box);
-    settings_native_host_runner_->setPlaceholderText(
-        "auto (ARCHSTREAMER_HOST_RUNNER or common paths)");
-    settings_native_host_runner_->setToolTip(
-        "When running as a Flatpak, Host start uses flatpak-spawn --host on this binary.\n"
-        "Point it at a native host_runner built outside the sandbox (gamecope/uinput/Switch).");
-    form->addRow("Native host_runner", settings_native_host_runner_);
-    connect(settings_native_host_runner_, &QLineEdit::editingFinished, this, [this] {
-        persist_settings_if_idle();
-    });
-#endif
-
     settings_audio_out_ = new QComboBox(form_box);
     settings_audio_out_->setToolTip(
         "Playback device for Client receive audio and Host Watch stream locally.\n"
@@ -1681,41 +1575,6 @@ QWidget* MainWindow::build_settings_tab() {
     });
 #endif
 
-    connect(settings_art_root_, &QLineEdit::editingFinished, this, [this] {
-        apply_art_root_to_pickers();
-        persist_settings_if_idle();
-    });
-    connect(settings_art_root_, &QLineEdit::textChanged, this, [this](const QString&) {
-        apply_art_root_to_pickers();
-    });
-#ifdef ARCHSTREAMER_HAS_HOST
-    connect(host_rom_root_, &QLineEdit::editingFinished, this, [this] {
-        persist_settings_if_idle();
-    });
-    connect(host_meta_root_, &QLineEdit::editingFinished, this, [this] {
-        persist_settings_if_idle();
-    });
-    connect(host_save_root_, &QLineEdit::editingFinished, this, [this] {
-        update_save_root_status();
-        // If the resolved path is a real directory, remember it; otherwise keep typing.
-        const auto path = save_root_path();
-        if (std::filesystem::is_directory(path)) {
-            persist_valid_save_root(path);
-        } else {
-            persist_settings_if_idle();
-        }
-    });
-    connect(host_save_root_, &QLineEdit::textChanged, this, [this](const QString&) {
-        update_save_root_status();
-    });
-    connect(host_save_root_browse_, &QPushButton::clicked, this, [this] {
-        browse_save_root();
-    });
-    connect(host_save_root_create_, &QPushButton::clicked, this, [this] {
-        create_save_root();
-    });
-    update_save_root_status();
-#endif
     connect(settings_session_timeout_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
         persist_settings_if_idle();
     });
@@ -1742,19 +1601,15 @@ QWidget* MainWindow::build_settings_tab() {
     auto* left = new QVBoxLayout();
     left->addWidget(form_box);
     left->addWidget(new QLabel(
-#ifdef ARCHSTREAMER_HAS_HOST
-        "Art / ROM / Meta roots are used by the local host and Steam art import.\n"
-        "Clients cache host art under ~/.cache/archstreamer/hosts/<host>/Art.\n"
-        "Steam account ID is on the Profile tab.\n"
-        "Stream quality, capture, and GPU options live on the Stream tab.\n"
-        "Log level and Send logs live on the Logs tab.",
-#else
-        "Art root is used for local Steam import when available.\n"
-        "Clients cache host art under the ArchStreamer cache directory.\n"
-        "Steam account ID is on the Profile tab.\n"
-        "Stream quality options live on the Stream tab.\n"
-        "Log level and Send logs live on the Logs tab.",
-#endif
+        QStringLiteral(
+            "Filesystem roots live on the Paths tab.\n"
+            "Steam account ID is on the Profile tab.\n"
+            "%1\n"
+            "Log level and Send logs live on the Logs tab.")
+            .arg(host_runtime_available()
+                     ? QStringLiteral(
+                           "Stream quality, capture, and GPU options live on the Stream tab.")
+                     : QStringLiteral("Stream quality options live on the Stream tab.")),
         page));
     left->addWidget(build_updates_group(page));
     left->addStretch();
@@ -1904,11 +1759,9 @@ void MainWindow::place_pad_osk_over_video() {
     if (client_video_controller_ != nullptr) {
         video = client_video_controller_->surface();
     }
-#ifdef ARCHSTREAMER_HAS_HOST
     if (video == nullptr && host_local_video_controller_ != nullptr) {
         video = host_local_video_controller_->surface();
     }
-#endif
 
     QRect anchor;
     if (video != nullptr && video->isVisible()) {
@@ -1941,22 +1794,18 @@ void MainWindow::prepare_video_for_pad_osk() {
     if (client_video_controller_) {
         client_video_controller_->suspendFullScreenForOverlay();
     }
-#ifdef ARCHSTREAMER_HAS_HOST
     if (host_local_video_controller_) {
         host_local_video_controller_->suspendFullScreenForOverlay();
     }
-#endif
 }
 
 void MainWindow::restore_video_window_focus() {
     if (client_video_controller_) {
         client_video_controller_->resumeFullScreenAfterOverlay();
     }
-#ifdef ARCHSTREAMER_HAS_HOST
     if (host_local_video_controller_) {
         host_local_video_controller_->resumeFullScreenAfterOverlay();
     }
-#endif
     // Deferred: Qt is still tearing the dialog down and will hand focus back to this
     // window, which would land on top of whatever we raise right now.
     QTimer::singleShot(150, this, [this] {
@@ -1964,12 +1813,10 @@ void MainWindow::restore_video_window_focus() {
             client_video_controller_->raiseVideo();
             return;
         }
-#ifdef ARCHSTREAMER_HAS_HOST
         if (host_local_video_controller_) {
             host_local_video_controller_->raiseVideo();
             return;
         }
-#endif
         archstreamer::raise_video_window();
     });
 }

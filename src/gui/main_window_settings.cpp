@@ -18,42 +18,29 @@
 
 #include <QCheckBox>
 #include <QComboBox>
-#include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
-#include <QHBoxLayout>
-#include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
-#include <QMetaObject>
 #include <QPlainTextEdit>
-#include <QPixmapCache>
 #include <QProcess>
-#include <QPushButton>
 #include <QRegularExpression>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QTabWidget>
 #include <QTimer>
-#include <QVBoxLayout>
 #include <QWidget>
-#include <QFileInfo>
-#include <QDir>
 #include <QCoreApplication>
 
 #include <chrono>
 #include <exception>
 #include <iostream>
 #include <optional>
-#include <thread>
 #ifdef ARCHSTREAMER_HAS_HOST
-#include "gui_host_runner.hpp"
-#include "host/game_catalog_scanner.hpp"
 #include "host/gpu_select.hpp"
 #include "host/host_app_config.hpp"
 #include "host/media_capture.hpp"
-#include "host/save_profile.hpp"
 #include "host/standalone_emulator.hpp"
 #endif
 
@@ -246,7 +233,7 @@ std::string MainWindow::selected_audio_output_id() const {
 void MainWindow::load_persisted_settings() {
     restoring_settings_ = true;
     QSettings settings("ArchStreamer", "ArchStreamer");
-    const auto art_root = settings.value("paths/artRoot", archstreamer::DefaultArtRoot).toString();
+    load_path_settings(settings);
     const auto account = settings.value("steam/accountId").toString().trimmed();
     const auto session_timeout = settings.value("host/sessionTimeoutSeconds", 30).toInt();
     const auto log_level = settings.value("ui/logLevel", static_cast<int>(GuiLogLevel::Normal)).toInt();
@@ -266,9 +253,6 @@ void MainWindow::load_persisted_settings() {
     }
     if (profile_host_name_ != nullptr) {
         profile_host_name_->setText(host_name);
-    }
-    if (settings_art_root_ != nullptr) {
-        settings_art_root_->setText(art_root);
     }
     if (profile_steam_account_ != nullptr) {
         profile_steam_account_->setText(account);
@@ -301,18 +285,11 @@ void MainWindow::load_persisted_settings() {
     }
     apply_debug_log_flags_from_ui();
 #ifdef ARCHSTREAMER_HAS_HOST
-    if (settings_native_host_runner_ != nullptr) {
-        const QSignalBlocker blocker(settings_native_host_runner_);
-        settings_native_host_runner_->setText(
-            settings.value("host/nativeHostRunner").toString());
-    }
     if (settings_allow_new_users_ != nullptr) {
         const QSignalBlocker blocker(settings_allow_new_users_);
         settings_allow_new_users_->setChecked(
             settings.value("host/allowNewUsers", false).toBool());
     }
-#endif
-#ifdef ARCHSTREAMER_HAS_HOST
     if (settings_gpu_ != nullptr) {
         const auto gpu_id = settings.value(
             "graphics/encodeGpuId",
@@ -539,23 +516,6 @@ void MainWindow::load_persisted_settings() {
     }
 
 #ifdef ARCHSTREAMER_HAS_HOST
-    if (host_rom_root_ != nullptr) {
-        host_rom_root_->setText(
-            settings.value("host/romRoot", archstreamer::DefaultRomRoot).toString());
-    }
-    if (host_meta_root_ != nullptr) {
-        host_meta_root_->setText(
-            settings.value("host/metaRoot", archstreamer::DefaultMetaRoot).toString());
-    }
-    if (host_save_root_ != nullptr) {
-        const auto default_save =
-            QString::fromStdString(archstreamer::default_save_profile_root().string());
-        const QSignalBlocker blocker(host_save_root_);
-        const QString stored = settings.value(QStringLiteral("host/saveRoot")).toString().trimmed();
-        // Missing or blank → show the live default, not an empty field.
-        host_save_root_->setText(stored.isEmpty() ? default_save : stored);
-        update_save_root_status();
-    }
     if (host_control_port_ != nullptr) {
         host_control_port_->setValue(
             qBound(settings.value("host/controlPort", 45555).toInt(), 1, 65535));
@@ -622,7 +582,7 @@ void MainWindow::save_persisted_settings() {
         return;
     }
     QSettings settings("ArchStreamer", "ArchStreamer");
-    settings.setValue("paths/artRoot", QString::fromStdString(art_root_path().string()));
+    save_path_settings(settings);
     settings.setValue("steam/accountId", QString::fromStdString(steam_account_id_text()));
     settings.setValue("profile/username", QString::fromStdString(profile_client_username()));
     settings.setValue("profile/hostName", QString::fromStdString(profile_host_name()));
@@ -648,14 +608,9 @@ void MainWindow::save_persisted_settings() {
         settings.setValue("client/logAudio", logs_audio_->isChecked());
     }
 #ifdef ARCHSTREAMER_HAS_HOST
-    if (settings_native_host_runner_ != nullptr) {
-        settings.setValue("host/nativeHostRunner", settings_native_host_runner_->text().trimmed());
-    }
     if (settings_allow_new_users_ != nullptr) {
         settings.setValue("host/allowNewUsers", settings_allow_new_users_->isChecked());
     }
-#endif
-#ifdef ARCHSTREAMER_HAS_HOST
     if (settings_gpu_ != nullptr) {
         const auto encode_id = QString::fromStdString(selected_encode_gpu_id());
         settings.setValue("graphics/encodeGpuId", encode_id);
@@ -783,21 +738,6 @@ void MainWindow::save_persisted_settings() {
     }
 
 #ifdef ARCHSTREAMER_HAS_HOST
-    if (host_rom_root_ != nullptr) {
-        settings.setValue("host/romRoot", host_rom_root_->text().trimmed());
-    }
-    if (host_meta_root_ != nullptr) {
-        settings.setValue("host/metaRoot", host_meta_root_->text().trimmed());
-    }
-    if (host_save_root_ != nullptr) {
-        // Never persist blank: resolve to the path the host would actually use.
-        const QString resolved = QString::fromStdString(save_root_path().string());
-        if (host_save_root_->text().trimmed().isEmpty()) {
-            const QSignalBlocker blocker(host_save_root_);
-            host_save_root_->setText(resolved);
-        }
-        settings.setValue(QStringLiteral("host/saveRoot"), resolved);
-    }
     if (host_control_port_ != nullptr) {
         settings.setValue("host/controlPort", host_control_port_->value());
     }
@@ -940,162 +880,6 @@ int MainWindow::session_timeout_seconds() const {
     return settings_session_timeout_->value();
 }
 
-std::filesystem::path MainWindow::art_root_path() const {
-    if (settings_art_root_ != nullptr && !settings_art_root_->text().trimmed().isEmpty()) {
-        return std::filesystem::path{settings_art_root_->text().trimmed().toStdString()};
-    }
-    return std::filesystem::path{archstreamer::DefaultArtRoot};
-}
-
-#ifdef ARCHSTREAMER_HAS_HOST
-
-namespace {
-
-QString expand_user_path(QString path) {
-    path = path.trimmed();
-    if (path == QLatin1String("~")) {
-        return QDir::homePath();
-    }
-    if (path.startsWith(QLatin1String("~/"))) {
-        return QDir::homePath() + path.mid(1);
-    }
-    return path;
-}
-
-} // namespace
-
-std::filesystem::path MainWindow::save_root_path() const {
-    if (host_save_root_ != nullptr && !host_save_root_->text().trimmed().isEmpty()) {
-        return std::filesystem::path{
-            expand_user_path(host_save_root_->text()).toStdString()};
-    }
-    return archstreamer::default_save_profile_root();
-}
-
-void MainWindow::sync_save_root_field_to_path(const std::filesystem::path& path) {
-    if (host_save_root_ == nullptr) {
-        return;
-    }
-    const QString text = QString::fromStdString(path.string());
-    if (host_save_root_->text().trimmed() != text) {
-        const QSignalBlocker blocker(host_save_root_);
-        host_save_root_->setText(text);
-    }
-    update_save_root_status();
-}
-
-void MainWindow::persist_valid_save_root(const std::filesystem::path& path) {
-    if (!std::filesystem::is_directory(path)) {
-        return;
-    }
-    std::error_code ec;
-    const auto absolute = std::filesystem::absolute(path, ec);
-    const auto stored = ec ? path : absolute;
-    sync_save_root_field_to_path(stored);
-    if (restoring_settings_) {
-        return;
-    }
-    QSettings settings(QStringLiteral("ArchStreamer"), QStringLiteral("ArchStreamer"));
-    settings.setValue(
-        QStringLiteral("host/saveRoot"),
-        QString::fromStdString(stored.string()));
-}
-
-void MainWindow::update_save_root_status() {
-    if (host_save_root_status_ == nullptr || host_save_root_create_ == nullptr) {
-        return;
-    }
-    // Keep the field populated with the live default when blank.
-    if (host_save_root_ != nullptr && host_save_root_->text().trimmed().isEmpty()) {
-        const QSignalBlocker blocker(host_save_root_);
-        host_save_root_->setText(
-            QString::fromStdString(archstreamer::default_save_profile_root().string()));
-    }
-    const auto path = save_root_path();
-    const QString qpath = QString::fromStdString(path.string());
-    const QFileInfo info(qpath);
-    if (info.isDir()) {
-        host_save_root_status_->clear();
-        host_save_root_create_->setEnabled(false);
-        return;
-    }
-    host_save_root_create_->setEnabled(true);
-    QString message = QStringLiteral("Directory does not exist: %1").arg(qpath);
-    if (info.exists() && !info.isDir()) {
-        message = QStringLiteral("Path exists but is not a directory: %1").arg(qpath);
-        host_save_root_create_->setEnabled(false);
-    } else if (running_inside_flatpak()) {
-        message += QStringLiteral(
-            "\nFlatpak cannot see or create this path unless it is under home "
-            "(or granted via: flatpak override --user "
-            "--filesystem=<path>:rw io.github.ArisenPhoenix.ArchStreamer). "
-            "Create it on the host, or choose a visible directory.");
-    } else {
-        message += QStringLiteral(" — create it or choose another location.");
-    }
-    host_save_root_status_->setText(message);
-}
-
-void MainWindow::browse_save_root() {
-    if (host_save_root_ == nullptr) {
-        return;
-    }
-    const auto current = QString::fromStdString(save_root_path().string());
-    const QString start =
-        QFileInfo(current).isDir() ? current : QFileInfo(current).absolutePath();
-    const QString chosen = QFileDialog::getExistingDirectory(
-        this,
-        QStringLiteral("Client save root"),
-        start.isEmpty() ? QDir::homePath() : start);
-    if (chosen.isEmpty()) {
-        return;
-    }
-    host_save_root_->setText(chosen);
-    update_save_root_status();
-    persist_valid_save_root(save_root_path());
-}
-
-void MainWindow::create_save_root() {
-    if (host_save_root_ == nullptr) {
-        return;
-    }
-    const auto path = save_root_path();
-    const QString qpath = QString::fromStdString(path.string());
-    if (QFileInfo(qpath).isDir()) {
-        persist_valid_save_root(path);
-        return;
-    }
-    if (QFileInfo(qpath).exists()) {
-        update_save_root_status();
-        if (settings_log_ != nullptr) {
-            append_log(
-                settings_log_,
-                QStringLiteral("Save root exists but is not a directory: %1").arg(qpath),
-                GuiLogLevel::Quiet);
-        }
-        return;
-    }
-    if (!QDir().mkpath(qpath)) {
-        QString detail = QStringLiteral("Could not create save root: %1").arg(qpath);
-        if (running_inside_flatpak()) {
-            detail += QStringLiteral(
-                " (Flatpak may lack write access — grant with flatpak override "
-                "--filesystem=<path>:rw, or create the directory on the host OS)");
-        }
-        if (settings_log_ != nullptr) {
-            append_log(settings_log_, detail, GuiLogLevel::Quiet);
-        }
-        update_save_root_status();
-        return;
-    }
-    if (settings_log_ != nullptr) {
-        append_log(settings_log_, QStringLiteral("Created save root: %1").arg(qpath));
-    }
-    persist_valid_save_root(path);
-}
-
-#endif
-
 std::string MainWindow::steam_account_id_text() const {
     if (profile_steam_account_ == nullptr) {
         return {};
@@ -1153,25 +937,10 @@ void MainWindow::refresh_recent_settings_keys() {
                 QStringLiteral("client/recent_game_ids/%1/%2/%3").arg(user, host, port));
         }
     }
-#ifdef ARCHSTREAMER_HAS_HOST
     if (host_game_picker_ != nullptr) {
         const auto user = sanitize(QString::fromStdString(profile_client_username()));
         host_game_picker_->setRecentSettingsKey(
             QStringLiteral("host/recent_game_ids/%1").arg(user));
-    }
-#endif
-}
-
-void MainWindow::apply_art_root_to_pickers() {
-    const auto art_root = art_root_path();
-#ifdef ARCHSTREAMER_HAS_HOST
-    if (host_game_picker_ != nullptr) {
-        host_game_picker_->setArtRoot(art_root);
-    }
-#endif
-    // Don't overwrite client host-art cache after a successful Connect.
-    if (client_game_picker_ != nullptr && !client_catalog_loaded_) {
-        client_game_picker_->setArtRoot(art_root);
     }
 }
 
@@ -1190,96 +959,6 @@ void MainWindow::detect_steam_account() {
         profile_log_,
         QString("Detected Steam account %1 (%2)")
             .arg(text, QString::fromStdString(account->config_dir.string())));
-}
-
-void MainWindow::refresh_art_from_steam() {
-#ifndef ARCHSTREAMER_HAS_HOST
-    append_log(
-        settings_log_,
-        "Steam art refresh from a local ROM catalog requires a host-capable build.");
-#else
-    if (art_refresh_thread_.joinable()) {
-        if (art_refreshing_.load()) {
-            append_log(settings_log_, "Art refresh already running.");
-            return;
-        }
-        art_refresh_thread_.join();
-    }
-
-    const auto rom_root = host_rom_root_ != nullptr
-        ? std::filesystem::path{host_rom_root_->text().toStdString()}
-        : art_root_path().parent_path() / "Games";
-    const auto meta_root = host_meta_root_ != nullptr
-        ? std::filesystem::path{host_meta_root_->text().toStdString()}
-        : art_root_path().parent_path() / "Meta";
-    const auto art_root = art_root_path();
-    const auto steam_account_id = steam_account_id_text();
-
-    append_log(
-        settings_log_,
-        steam_account_id.empty()
-            ? "Refreshing art from Steam grid (auto-detect account)..."
-            : QString("Refreshing art from Steam account %1...")
-                .arg(QString::fromStdString(steam_account_id)));
-    art_refreshing_ = true;
-    art_refresh_thread_ = std::thread([this, rom_root, meta_root, art_root, steam_account_id] {
-        QString message;
-        try {
-            const auto catalog = archstreamer::scan_game_catalog(
-                rom_root,
-                archstreamer::LibretroCoreRegistry::ubuntu_defaults(),
-                meta_root);
-            const auto list = catalog.list();
-            std::vector<archstreamer::GameArtImportTarget> targets;
-            targets.reserve(list.games.size());
-            for (const auto& game : list.games) {
-                archstreamer::GameArtImportTarget target;
-                target.asset_key = game.asset_key;
-                target.display_name = game.display_name;
-                target.canonical_name = game.canonical_name;
-                if (const auto hosted = catalog.find_hosted(game.id); hosted.has_value()) {
-                    target.content_path = hosted->get().content_path;
-                }
-                targets.push_back(std::move(target));
-            }
-
-            archstreamer::SteamArtImportOptions options;
-            options.steam_account_id = steam_account_id;
-            options.replace_when_different = true;
-            const auto result = archstreamer::import_steam_grid_art(targets, art_root, options);
-            message = QString(
-                "Art refresh done: account=%1 shortcuts=%2 matched=%3 copied=%4 replaced=%5 skipped=%6 unmatched=%7")
-                .arg(QString::fromStdString(result.resolved_account_id))
-                .arg(result.shortcuts_read)
-                .arg(result.matched_games)
-                .arg(result.files_copied)
-                .arg(result.files_replaced)
-                .arg(result.files_skipped)
-                .arg(result.unmatched_shortcuts.size());
-            if (result.shortcuts_read == 0) {
-                message += " (no Steam shortcuts found)";
-            }
-        } catch (const std::exception& error) {
-            message = QString("Art refresh failed: %1").arg(error.what());
-        }
-
-        QMetaObject::invokeMethod(
-            this,
-            [this, message = std::move(message)] {
-                art_refreshing_ = false;
-                append_log(settings_log_, message);
-                QPixmapCache::clear();
-                apply_art_root_to_pickers();
-                if (host_game_picker_ != nullptr) {
-                    host_game_picker_->refreshArtDisplay();
-                }
-                if (client_game_picker_ != nullptr) {
-                    client_game_picker_->refreshArtDisplay();
-                }
-            },
-            Qt::QueuedConnection);
-    });
-#endif
 }
 
 } // namespace archstreamer::gui

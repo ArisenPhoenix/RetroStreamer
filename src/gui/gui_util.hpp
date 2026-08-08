@@ -17,4 +17,7 @@ QString mode_name(GameSessionMode mode);
 GameSessionMode selected_mode(const QComboBox* combo);
 ClientParticipantRole selected_client_role(const QComboBox* combo);
 
+/** Sandbox detection; changes how paths and child processes must be reached. */
+bool running_inside_flatpak();
+
 } // namespace archstreamer::gui

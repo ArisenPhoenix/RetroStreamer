@@ -70,6 +70,14 @@ std::vector<SaveGameEntry> list_save_games(
     std::string_view system_filter = {},
     const SaveNameHints& hints = {});
 
+/**
+ * PS2 memcard images that exist under save_root, across every user. Directory
+ * listing only; feed the result to `ps2_memcard_prewarm()` on a worker thread
+ * so `list_save_games` can report PS2 sizes without blocking on a disk parse.
+ */
+std::vector<std::filesystem::path> list_ps2_memcard_images(
+    const std::filesystem::path& save_root);
+
 /** Distinct system_key values present for the user (or all users). */
 std::vector<std::string> list_save_systems(
     const std::filesystem::path& save_root,

@@ -1,6 +1,7 @@
 package com.archstreamer.client.ui
 
 import android.app.Application
+import android.content.res.Configuration
 import android.hardware.input.InputManager
 import android.os.Handler
 import android.os.Looper
@@ -41,6 +42,17 @@ import com.archstreamer.client.protocol.Protocol
 import com.archstreamer.client.protocol.SoftKeyboardRequest
 import com.archstreamer.client.protocol.SoftKeyboardResponse
 import com.archstreamer.client.protocol.systemSupportsLink
+import com.archstreamer.client.ui.games.GamesRow
+import com.archstreamer.client.ui.games.RECENTS_GROUP
+import com.archstreamer.client.ui.games.gamesCursor
+import com.archstreamer.client.ui.games.gamesRows
+import com.archstreamer.client.ui.games.stepGamesCursor
+import com.archstreamer.client.ui.menu.AppMenu
+import com.archstreamer.client.ui.menu.MenuEffect
+import com.archstreamer.client.ui.menu.MenuNavigator
+import com.archstreamer.client.ui.menu.MenuSection
+import com.archstreamer.client.ui.menu.NavDir
+import com.archstreamer.client.ui.menu.NavOutcome
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -70,173 +82,9 @@ enum class NavSection(val title: String) {
     GameOptions("Game Options"),
     Profile("Profile"),
     Settings("Settings"),
-}
 
-data class UiState(
-    val section: NavSection = NavSection.Client,
-    val playing: Boolean = false,
-    val connected: Boolean = false,
-    val host: String = "",
-    /** Optional backup IP (WireGuard, etc.); tried when Host IP is unreachable. */
-    val altHost: String = "",
-    val controlPort: String = Protocol.DEFAULT_CONTROL_PORT.toString(),
-    val inputPort: String = Protocol.DEFAULT_INPUT_PORT.toString(),
-    /** Save-profile username. Empty / placeholder "android" cannot edit or sync controls. */
-    val username: String = "",
-    /** True when [username] is a real save profile (not blank / not the android placeholder). */
-    val hasProfileUsername: Boolean = false,
-    /** Authenticated LobbyPresence or live session — required before Pull/Push. */
-    val controlsSyncReady: Boolean = false,
-    val password: String = "",
-    val newPassword: String = "",
-    val confirmPassword: String = "",
-    /** Used on Profile when main password is empty (change-password current). */
-    val changeCurrentPassword: String = "",
-    val passwordStatus: String = "",
-    /** When set, join is blocked waiting for a forced password change dialog. */
-    val forcePasswordChange: Boolean = false,
-    val forcePasswordDraft: String = "",
-    val forcePasswordConfirm: String = "",
-    val busy: Boolean = false,
-    val status: String = "Connect to a host on the Client tab.",
-    val games: List<GameInfo> = emptyList(),
-    /** Host catalog_offerings revision — used to skip full GameList when unchanged. */
-    val catalogRevision: Long = 0L,
-    /** Unfiltered offerings kept across Disconnect for revision cache hits. */
-    val catalogCacheGames: List<GameInfo> = emptyList(),
-    /** Per-user blocks cache (independent revision from catalog offerings). */
-    val blocksRevision: Long = 0L,
-    val blockedGameIds: List<String> = emptyList(),
-    val filter: String = "",
-    val selectedGame: GameInfo? = null,
-    val mediaHint: String = "",
-    val videoPlayer: RtpVideoPlayer? = null,
-    val receiveVideo: Boolean = true,
-    val receiveAudio: Boolean = true,
-    /** Non-null while the host SoftKeyboard / manual OSK dialog should show. */
-    val softKeyboard: SoftKeyboardRequest? = null,
-    /** Host melonDS top/bottom panes (follows swap); drives DS touch hit target. */
-    val dsScreenLayout: DsScreenLayout? = null,
-    /** Heartbeat wanted frame rate (mobile defaults 30 fps / Medium tier). */
-    val streamQuality: MediaQualityTier = MediaQualityTier.Medium,
-    /** Heartbeat wanted encode bitrate (mobile defaults 3.5 Mbps). */
-    val streamBitrate: MediaStreamBitrate = MediaStreamBitrate.Kbps3500,
-    /** Heartbeat wanted encode size (mobile defaults 540p). */
-    val streamSize: MediaStreamSize = MediaStreamSize.P540,
-    /** Heartbeat wanted stream feel (default Low latency = current host encode). */
-    val streamFeel: MediaStreamFeel = MediaStreamFeel.LowLatency,
-    val padLayout: PadLayout = PadLayout.Standard,
-    val overlayOpacity: Float = OverlayProfile.DEFAULT_OPACITY,
-    val swapNw: Boolean = false,
-    val swapSe: Boolean = false,
-    /** Resolved pad chrome for play / editor (defaults or custom). */
-    val overlayItems: List<OverlayItem> = OverlayPresets.forLayout(PadLayout.Standard),
-    /** Active orientation for custom resolve / editor. */
-    val overlayOrientation: OverlayOrientation = OverlayOrientation.Landscape,
-    /** In-play / options layout editor active. */
-    val overlayEditing: Boolean = false,
-    /** Name dialog after finishing the visual editor. */
-    val overlayEditNaming: Boolean = false,
-    /** Draft name for the single custom layout slot. */
-    val overlayEditNameDraft: String = OverlayCustomLayout.DEFAULT_NAME,
-    /** Draft custom being edited (both orientations). */
-    val overlayEditLandscape: List<OverlayItem> = emptyList(),
-    val overlayEditPortrait: List<OverlayItem> = emptyList(),
-    /** Family currently edited in Controls. */
-    val editingOverlayFamily: OverlaySystemFamily = OverlaySystemFamily.Standard,
-    /** Snapshot of the profile under edit (mirrors prefs). */
-    val editingOverlayProfile: OverlayProfile = OverlayProfile.DEFAULT,
-    /** Expanded system-name headers on the Games list (includes [RECENT_GROUP]). */
-    val expandedSystems: Set<String> = emptySet(),
-    /**
-     * Game ids recently started on this host (most recent first). Resolved against
-     * [games] when rendering the Recents group.
-     */
-    val recentGameIds: List<String> = emptyList(),
-    /** Boxart/grid thumbnails keyed by assetKey. */
-    val artByAssetKey: Map<String, android.graphics.Bitmap> = emptyMap(),
-    /** When set, Games list highlights this title — tap again to reclaim a reserved seat. */
-    val reconnectHintGameId: String? = null,
-    /** Play-menu FF latch (hold is separate; UI switch shows latch only). */
-    val fastForward: Boolean = false,
-    /** Explicit host pause (EmulatorControl); play-menu switch + auto menu-open pause. */
-    val paused: Boolean = false,
-    /** Multi-disc playlist labels from the active game (empty when single-file). */
-    val playlistDiscs: List<String> = emptyList(),
-    /** Host-confirmed disc index (0-based). */
-    val discIndex: Int = 0,
-    val discStatus: String = "",
-    /** True when the active game's system supports link (GBA / NDS / Switch). */
-    val linkCapable: Boolean = false,
-    val linkPeerDraft: String = "",
-    val linkStatus: String = "",
-    val linkStatusKind: LinkStatus? = null,
-    /**
-     * User preference: physical USB/BT pad instead of the touch overlay.
-     * Default is virtual unless a controller was already present on first launch.
-     */
-    val usePhysicalController: Boolean = false,
-    /** At least one non-virtual gamepad/joystick is currently attached. */
-    val physicalPadConnected: Boolean = false,
-    /** Label of the first connected pad (empty when none). */
-    val physicalPadLabel: String = "",
-    /**
-     * Effective play input: preference on, a pad is present, and not in overlay edit.
-     * When true the touch overlay is hidden and pad events drive [ControllerState].
-     */
-    val physicalInputActive: Boolean = false,
-    /** Physical remap profile under edit (shared JSON document). */
-    val editingMapProfile: ControllerMapProfile = ControllerMapProfile.DEFAULT,
-    /** Live LAN/VPN hosts from UDP discovery (ASDISC). */
-    val discoveredHosts: List<DiscoveredHost> = emptyList(),
-    /** Short discovery status for the Client tab. */
-    val discoveryStatus: String = "",
-    /** How many recent app sessions to include when sending logs. */
-    val logSessions: String = "3",
-    val logSendStatus: String = "",
-    /**
-     * Settings → Debug: append touch/physical/keyboard pad events and UDP sends
-     * to the on-device client log (use Send logs to host to retrieve).
-     */
-    val logControls: Boolean = false,
-    /**
-     * Settings → Debug: append TCP/UDP connection open/close/lifecycle lines
-     * (`conn:` prefix) to the on-device client log.
-     */
-    val logConnections: Boolean = false,
-    // Remote tab (SSH) — password is session-only, not persisted.
-    val remoteSshHost: String = "",
-    val remoteSshUser: String = "",
-    val remoteSshPassword: String = "",
-    val remoteSshPort: String = "22",
-    val remoteDirectory: String = "",
-    val remoteRomRoot: String = "",
-    val remoteBinary: String = "./host_runner",
-    /** Optional remote start script (Path B); blank = start host_runner (Path A). */
-    val remoteStartScript: String = "",
-    /** Optional GPU preference for Ensure Host (fuzzy match); blank = host default. */
-    val remoteGpu: String = "",
-    val remoteBaseControlPort: String = Protocol.DEFAULT_CONTROL_PORT.toString(),
-    val remoteBaseInputPort: String = Protocol.DEFAULT_INPUT_PORT.toString(),
-    val remoteStatus: String =
-        "Ensure Host probes the base port, reuses a free lobby, or SSH-starts host_runner " +
-            "(or an optional start script with ports + GPU).",
-    val remoteBusy: Boolean = false,
-    val remoteTrackedControlPort: Int = 0,
-    val remoteUsers: List<RemoteHost.PresenceRow> = emptyList(),
-    val remoteSelectedUserIndex: Int = -1,
-) {
-    /**
-     * Host admin: Profile username matches Remote SSH user → Remote stays available
-     * while playing (kick/stop without leaving the session). Always available offline.
-     */
-    fun canAccessRemoteDuringPlay(): Boolean {
-        val profile = username.trim()
-        val sshUser = remoteSshUser.trim()
-        return ClientViewModel.isProfileUsername(profile) &&
-            sshUser.isNotEmpty() &&
-            profile.equals(sshUser, ignoreCase = true)
-    }
+    /** Session actions (pause, fast-forward, resync, leave) — only while connected. */
+    Session("Session"),
 }
 
 class ClientViewModel(application: Application) : AndroidViewModel(application) {
@@ -249,83 +97,134 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private var passwordChangeLatch: java.util.concurrent.CountDownLatch? = null
     @Volatile private var passwordChangeResult: String = ""
 
-    private val _state = MutableStateFlow(
-        UiState(
-            host = prefs.getString(KEY_HOST, "").orEmpty(),
-            altHost = prefs.getString(KEY_ALT_HOST, "").orEmpty(),
-            controlPort = prefs.getString(KEY_CONTROL_PORT, Protocol.DEFAULT_CONTROL_PORT.toString())
-                .orEmpty()
-                .ifBlank { Protocol.DEFAULT_CONTROL_PORT.toString() },
-            inputPort = prefs.getString(KEY_INPUT_PORT, Protocol.DEFAULT_INPUT_PORT.toString())
-                .orEmpty()
-                .ifBlank { Protocol.DEFAULT_INPUT_PORT.toString() },
-            username = prefs.getString(KEY_USERNAME, "").orEmpty().let { raw ->
-                if (raw.equals(PLACEHOLDER_USERNAME, ignoreCase = true)) {
-                    prefs.edit().remove(KEY_USERNAME).apply()
-                    ""
-                } else {
-                    raw
-                }
-            },
-            hasProfileUsername = isProfileUsername(
-                prefs.getString(KEY_USERNAME, "").orEmpty(),
-            ),
-            streamQuality = qualityFromPrefs(),
-            streamBitrate = bitrateFromPrefs(),
-            streamSize = sizeFromPrefs(),
-            streamFeel = feelFromPrefs(),
-            logSessions = prefs.getString(KEY_LOG_SESSIONS, "3").orEmpty().ifBlank { "3" },
-            logControls = prefs.getBoolean(KEY_LOG_CONTROLS, false),
-            logConnections = prefs.getBoolean(KEY_LOG_CONNECTIONS, false),
-            editingOverlayFamily = OverlaySystemFamily.Standard,
-            editingOverlayProfile = overlayProfiles[OverlaySystemFamily.Standard]
-                ?: OverlayProfile.DEFAULT,
-            editingMapProfile = buttonMapDocument.profile(ControllerMapFamily.Standard),
-            recentGameIds = loadRecentGameIds(
-                prefs.getString(KEY_HOST, "").orEmpty(),
-                prefs.getString(KEY_CONTROL_PORT, Protocol.DEFAULT_CONTROL_PORT.toString())
-                    .orEmpty()
-                    .ifBlank { Protocol.DEFAULT_CONTROL_PORT.toString() },
-            ),
-            usePhysicalController = resolveInitialPreferPhysical(),
-            remoteSshHost = prefs.getString(KEY_REMOTE_SSH_HOST, "").orEmpty(),
-            remoteSshUser = prefs.getString(KEY_REMOTE_SSH_USER, "").orEmpty(),
-            remoteSshPort = prefs.getString(KEY_REMOTE_SSH_PORT, "22").orEmpty().ifBlank { "22" },
-            remoteDirectory = prefs.getString(KEY_REMOTE_DIRECTORY, "").orEmpty(),
-            remoteRomRoot = prefs.getString(KEY_REMOTE_ROM_ROOT, "").orEmpty(),
-            remoteBinary = prefs.getString(KEY_REMOTE_BINARY, "./host_runner").orEmpty()
-                .ifBlank { "./host_runner" },
-            remoteStartScript = prefs.getString(KEY_REMOTE_START_SCRIPT, "").orEmpty(),
-            remoteGpu = prefs.getString(KEY_REMOTE_GPU, "").orEmpty(),
-            remoteBaseControlPort = prefs.getString(
-                KEY_REMOTE_BASE_CONTROL,
-                Protocol.DEFAULT_CONTROL_PORT.toString(),
-            ).orEmpty().ifBlank { Protocol.DEFAULT_CONTROL_PORT.toString() },
-            remoteBaseInputPort = prefs.getString(
-                KEY_REMOTE_BASE_INPUT,
-                Protocol.DEFAULT_INPUT_PORT.toString(),
-            ).orEmpty().ifBlank { Protocol.DEFAULT_INPUT_PORT.toString() },
-            remoteTrackedControlPort = prefs.getInt(KEY_REMOTE_TRACKED_CONTROL, 0),
-        ).let { base ->
-            val pads = PhysicalGamepad.connectedPads()
-            val connected = pads.isNotEmpty()
-            base.copy(
-                physicalPadConnected = connected,
-                physicalPadLabel = pads.firstOrNull()?.name.orEmpty(),
-                physicalInputActive = base.usePhysicalController && connected && !base.overlayEditing,
-            )
-        },
-    )
+    private val _state = MutableStateFlow(initialUiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
-    private val _playMenuRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
-    /** Home / Guide on a physical pad → open the play drawer. */
-    val playMenuRequests: SharedFlow<Unit> = _playMenuRequests.asSharedFlow()
+    private fun initialUiState(): UiState {
+        val host = prefs.getString(KEY_HOST, "").orEmpty()
+        val controlPort = prefs.getString(KEY_CONTROL_PORT, Protocol.DEFAULT_CONTROL_PORT.toString())
+            .orEmpty()
+            .ifBlank { Protocol.DEFAULT_CONTROL_PORT.toString() }
+        val inputPort = prefs.getString(KEY_INPUT_PORT, Protocol.DEFAULT_INPUT_PORT.toString())
+            .orEmpty()
+            .ifBlank { Protocol.DEFAULT_INPUT_PORT.toString() }
+        val username = prefs.getString(KEY_USERNAME, "").orEmpty().let { raw ->
+            if (raw.equals(PLACEHOLDER_USERNAME, ignoreCase = true)) {
+                prefs.edit().remove(KEY_USERNAME).apply()
+                ""
+            } else {
+                raw
+            }
+        }
+        val base = UiState(
+            client = ClientState(
+                host = host,
+                altHost = prefs.getString(KEY_ALT_HOST, "").orEmpty(),
+            ),
+            remote = RemoteState(
+                sshHost = prefs.getString(KEY_REMOTE_SSH_HOST, "").orEmpty(),
+                sshUser = prefs.getString(KEY_REMOTE_SSH_USER, "").orEmpty(),
+                sshPort = prefs.getString(KEY_REMOTE_SSH_PORT, "22").orEmpty().ifBlank { "22" },
+                directory = prefs.getString(KEY_REMOTE_DIRECTORY, "").orEmpty(),
+                romRoot = prefs.getString(KEY_REMOTE_ROM_ROOT, "").orEmpty(),
+                binary = prefs.getString(KEY_REMOTE_BINARY, "./host_runner").orEmpty()
+                    .ifBlank { "./host_runner" },
+                startScript = prefs.getString(KEY_REMOTE_START_SCRIPT, "").orEmpty(),
+                gpu = prefs.getString(KEY_REMOTE_GPU, "").orEmpty(),
+                baseControlPort = prefs.getString(
+                    KEY_REMOTE_BASE_CONTROL,
+                    Protocol.DEFAULT_CONTROL_PORT.toString(),
+                ).orEmpty().ifBlank { Protocol.DEFAULT_CONTROL_PORT.toString() },
+                baseInputPort = prefs.getString(
+                    KEY_REMOTE_BASE_INPUT,
+                    Protocol.DEFAULT_INPUT_PORT.toString(),
+                ).orEmpty().ifBlank { Protocol.DEFAULT_INPUT_PORT.toString() },
+                trackedControlPort = prefs.getInt(KEY_REMOTE_TRACKED_CONTROL, 0),
+            ),
+            games = GamesState(
+                recentGameIds = loadRecentGameIds(host, controlPort),
+            ),
+            stream = StreamState(
+                quality = qualityFromPrefs(),
+                bitrate = bitrateFromPrefs(),
+                size = sizeFromPrefs(),
+                feel = feelFromPrefs(),
+            ),
+            controls = ControlsState(
+                editingOverlayFamily = OverlaySystemFamily.Standard,
+                editingOverlayProfile = overlayProfiles[OverlaySystemFamily.Standard]
+                    ?: OverlayProfile.DEFAULT,
+                editingMapProfile = buttonMapDocument.profile(ControllerMapFamily.Standard),
+                usePhysicalController = resolveInitialPreferPhysical(),
+            ),
+            profile = ProfileState(
+                username = username,
+                hasProfileUsername = isProfileUsername(username),
+            ),
+            settings = SettingsState(
+                controlPort = controlPort,
+                inputPort = inputPort,
+                logSessions = prefs.getString(KEY_LOG_SESSIONS, "3").orEmpty().ifBlank { "3" },
+                logControls = prefs.getBoolean(KEY_LOG_CONTROLS, false),
+                logConnections = prefs.getBoolean(KEY_LOG_CONNECTIONS, false),
+            ),
+        )
+        val pads = PhysicalGamepad.connectedPads()
+        val padConnected = pads.isNotEmpty()
+        return base.copy(
+            controls = base.controls.copy(
+                physicalPadConnected = padConnected,
+                physicalPadLabel = pads.firstOrNull()?.name.orEmpty(),
+                physicalInputActive = base.controls.usePhysicalController &&
+                    padConnected &&
+                    !base.controls.overlayEditing,
+                hasKeyboardActive = hardwareKeyboardPresent(),
+            ),
+        )
+    }
 
-    private val _playMenuCommands =
-        MutableSharedFlow<PlayMenuCommand>(extraBufferCapacity = 8)
-    /** D-pad / Enter / Esc while the play drawer is open. */
-    val playMenuCommands: SharedFlow<PlayMenuCommand> = _playMenuCommands.asSharedFlow()
+    private inline fun updateClient(transform: ClientState.() -> ClientState) {
+        _state.update { it.copy(client = it.client.transform()) }
+    }
+
+    private inline fun updateRemote(transform: RemoteState.() -> RemoteState) {
+        _state.update { it.copy(remote = it.remote.transform()) }
+    }
+
+    private inline fun updateGames(transform: GamesState.() -> GamesState) {
+        _state.update { it.copy(games = it.games.transform()) }
+    }
+
+    private inline fun updateStream(transform: StreamState.() -> StreamState) {
+        _state.update { it.copy(stream = it.stream.transform()) }
+    }
+
+    private inline fun updateControls(transform: ControlsState.() -> ControlsState) {
+        _state.update { it.copy(controls = it.controls.transform()) }
+    }
+
+    private inline fun updateGameOptions(transform: GameOptionsState.() -> GameOptionsState) {
+        _state.update { it.copy(gameOptions = it.gameOptions.transform()) }
+    }
+
+    private inline fun updateProfile(transform: ProfileState.() -> ProfileState) {
+        _state.update { it.copy(profile = it.profile.transform()) }
+    }
+
+    private inline fun updateSettings(transform: SettingsState.() -> SettingsState) {
+        _state.update { it.copy(settings = it.settings.transform()) }
+    }
+
+    private inline fun updateSession(transform: SessionState.() -> SessionState) {
+        _state.update { it.copy(session = it.session.transform()) }
+    }
+
+    private val _menuEffects = MutableSharedFlow<MenuEffect>(extraBufferCapacity = 8)
+    /**
+     * Drawer open/close and IME focus — the only parts of navigation the composition has
+     * to perform. Focus itself lives in [UiState.menu].
+     */
+    val menuEffects: SharedFlow<MenuEffect> = _menuEffects.asSharedFlow()
 
     private var session: JoinedPlaySession? = null
     /** Open control TCP after Connect (Users-tab Connected) until play/disconnect. */
@@ -359,7 +258,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     /** Ignore pre-first-frame zeros (stream still starting). */
     private var everDecodedVideoFrames = false
     private var latestPad = ControllerState()
-    /** Last overlay/physical pad logged while [UiState.logControls] is on (dedupe spam). */
+    /** Last overlay/physical pad logged while [SettingsState.logControls] is on (dedupe spam). */
     private var lastLoggedSourcePad: ControllerState? = null
     /** Held RemotedKey bits (desktop remoted keyboard subset). */
     private val remotedKeysHeld = AtomicInteger(0)
@@ -367,22 +266,43 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private val keyboardDpadBits = AtomicInteger(0)
     private var menuHatUp = false
     private var menuHatDown = false
+    private var menuHatLeft = false
+    private var menuHatRight = false
     /** Stylus samples from the UI thread; drained on the input IO loop (avoid NetworkOnMainThread). */
     private val pendingDsTouches =
         java.util.concurrent.ConcurrentLinkedQueue<Triple<Int, Int, Boolean>>()
-    private val gamepadTracker = PhysicalGamepadTracker(
-        actionFor = { kind -> overlayActionFor(kind) },
-        onState = { pad -> onPhysicalPadState(pad) },
-        onMenuClick = {
-            if (menuDrawerOpen) {
-                _playMenuCommands.tryEmit(PlayMenuCommand.Close)
+
+    private val padPipeline = MappedPadPipeline(
+        map = {
+            val family = if (_state.value.playing) {
+                sessionFamily
             } else {
-                requestPlayMenu()
+                _state.value.controls.editingOverlayFamily
             }
+            mapProfileFor(family)
         },
-        onFastForward = { held -> setFastForwardHold(held) },
+        sink = { swapped ->
+            latestPad = swapped
+            val p = mapProfileFor(
+                if (_state.value.playing) sessionFamily else _state.value.controls.editingOverlayFamily,
+            )
+            logControlPad(
+                "pad",
+                swapped,
+                "swapNw=${p.swapNw} swapSe=${p.swapSe}",
+            )
+        },
+        onMenu = { toggleMenuDrawer() },
+        onFfHold = { held -> setFastForwardHold(held) },
         onScreenSwap = { triggerScreenSwap() },
     )
+
+    private val physicalPad = PhysicalPadController(padPipeline)
+    private val overlayPad = OverlayPadController(padPipeline)
+
+    /** Physical KeyEvent/MotionEvent tracker (same remaps as overlay via [padPipeline]). */
+    private val gamepadTracker: PhysicalGamepadTracker get() = physicalPad.gamepadTracker
+
     private val inputManager = application.getSystemService(InputManager::class.java)
     private val inputDeviceListener = object : InputManager.InputDeviceListener {
         override fun onInputDeviceAdded(deviceId: Int) = refreshPhysicalPads()
@@ -395,6 +315,11 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
      * (control editing is the only time we relax pause so the game stays live).
      */
     private var menuDrawerOpen = false
+    /**
+     * After Back opens the drawer, a second Back parks focus on the hamburger
+     * (exit arm). A third Back with this set lets the Activity finish.
+     */
+    private var backMenuChromeFocused = false
     /** Last pause On/Off actually sent — dedupe only, never used to invert. */
     private var lastSentMenuPause: Boolean? = null
     /** Live session system key — used to resolve Auto layout and apply live edits. */
@@ -419,7 +344,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 wasPlaying = snap.playing
                 val app = getApplication<Application>()
                 if (snap.playing) {
-                    val title = snap.selectedGame?.title()
+                    val title = snap.games.selected?.title()
                         ?: snap.status.removePrefix("Playing ").takeIf { it.isNotBlank() }
                     SessionKeepAliveService.start(app, title)
                 } else {
@@ -481,14 +406,11 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private fun reloadControlsFromLocalStore() {
         overlayProfiles = loadOverlayProfiles().toMutableMap()
         buttonMapDocument = loadButtonMapDocument()
-        val family = _state.value.editingOverlayFamily
+        val family = _state.value.controls.editingOverlayFamily
         _state.update {
-            it.copy(
-                editingOverlayProfile = overlayProfiles[family] ?: OverlayProfile.DEFAULT,
-                editingMapProfile = buttonMapDocument.profile(
+            it.copy(controls = it.controls.copy(editingOverlayProfile = overlayProfiles[family] ?: OverlayProfile.DEFAULT, editingMapProfile = buttonMapDocument.profile(
                     OverlaySystemFamily.toMapFamily(family),
-                ),
-            )
+                )))
         }
     }
 
@@ -576,7 +498,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         buttonMapDocument = buttonMapDocument.withProfile(mapFamily, next)
         persistButtonMapDocument()
         _state.update {
-            if (it.editingOverlayFamily == family) it.copy(editingMapProfile = next) else it
+            if (it.controls.editingOverlayFamily == family) it.copy(controls = it.controls.copy(editingMapProfile = next)) else it
         }
     }
 
@@ -601,7 +523,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun updateEditingMapProfile(transform: (ControllerMapProfile) -> ControllerMapProfile) {
         if (profileUsernameOrNull() == null) return
-        val overlayFamily = _state.value.editingOverlayFamily
+        val overlayFamily = _state.value.controls.editingOverlayFamily
         val mapFamily = OverlaySystemFamily.toMapFamily(overlayFamily)
         val next = transform(mapProfileFor(overlayFamily))
         buttonMapDocument = buttonMapDocument.withProfile(mapFamily, next)
@@ -614,10 +536,12 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         _state.update {
             val live = !it.playing || sessionFamily == overlayFamily
             it.copy(
-                editingMapProfile = next,
-                editingOverlayProfile = overlay,
-                swapNw = if (live) next.swapNw else it.swapNw,
-                swapSe = if (live) next.swapSe else it.swapSe,
+                controls = it.controls.copy(
+                    editingMapProfile = next,
+                    editingOverlayProfile = overlay,
+                    swapNw = if (live) next.swapNw else it.controls.swapNw,
+                    swapSe = if (live) next.swapSe else it.controls.swapSe,
+                ),
             )
         }
         applyLiveOverlayFrom(overlayFamily, overlay)
@@ -625,10 +549,10 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun applyLiveOverlayFrom(family: OverlaySystemFamily, profile: OverlayProfile) {
         if (!_state.value.playing || family != sessionFamily) return
-        val orientation = _state.value.overlayOrientation
+        val orientation = _state.value.controls.overlayOrientation
         val mapProfile = mapProfileFor(family)
-        _state.update {
-            it.copy(
+        updateControls {
+            copy(
                 padLayout = profile.resolveLayout(sessionSystemKey),
                 overlayOpacity = profile.clampedOpacity(),
                 swapNw = mapProfile.swapNw,
@@ -641,14 +565,15 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private fun publishEditing(family: OverlaySystemFamily) {
         val profile = profileFor(family)
         val mapProfile = mapProfileFor(family)
-        val orientation = _state.value.overlayOrientation
-        _state.update {
-            it.copy(
+        val snap = _state.value
+        val orientation = snap.controls.overlayOrientation
+        updateControls {
+            copy(
                 editingOverlayFamily = family,
                 editingOverlayProfile = profile,
                 editingMapProfile = mapProfile,
-                overlayItems = if (it.playing) {
-                    it.overlayItems
+                overlayItems = if (snap.playing) {
+                    overlayItems
                 } else {
                     profile.resolveItems(null, orientation)
                 },
@@ -660,21 +585,21 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     fun setOverlayOrientation(isPortrait: Boolean) {
         val orientation = OverlayOrientation.fromPortrait(isPortrait)
         val snap = _state.value
-        if (snap.overlayOrientation == orientation) return
-        if (snap.overlayEditing) {
+        if (snap.controls.overlayOrientation == orientation) return
+        if (snap.controls.overlayEditing) {
             // Persist current draft into the orientation we're leaving, then show the other.
-            val leaving = snap.overlayOrientation
+            val leaving = snap.controls.overlayOrientation
             val landscape = if (leaving == OverlayOrientation.Landscape) {
-                snap.overlayItems
+                snap.controls.overlayItems
             } else {
-                snap.overlayEditLandscape
+                snap.controls.overlayEditLandscape
             }
             val portrait = if (leaving == OverlayOrientation.Portrait) {
-                snap.overlayItems
+                snap.controls.overlayItems
             } else {
-                snap.overlayEditPortrait
+                snap.controls.overlayEditPortrait
             }
-            val preset = profileFor(snap.editingOverlayFamily)
+            val preset = profileFor(snap.controls.editingOverlayFamily)
                 .resolveLayout(if (snap.playing) sessionSystemKey else null)
                 .let { OverlayPresets.forLayout(it) }
             val nextLandscape = landscape.ifEmpty { preset }
@@ -683,25 +608,13 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 OverlayOrientation.Landscape -> nextLandscape
                 OverlayOrientation.Portrait -> nextPortrait
             }
-            _state.update {
-                it.copy(
-                    overlayOrientation = orientation,
-                    overlayEditLandscape = nextLandscape,
-                    overlayEditPortrait = nextPortrait,
-                    overlayItems = shown,
-                )
-            }
+            updateControls { copy(overlayOrientation = orientation, overlayEditLandscape = nextLandscape, overlayEditPortrait = nextPortrait, overlayItems = shown) }
             return
         }
-        val family = if (snap.playing) sessionFamily else snap.editingOverlayFamily
+        val family = if (snap.playing) sessionFamily else snap.controls.editingOverlayFamily
         val profile = profileFor(family)
         val systemKey = if (snap.playing) sessionSystemKey else null
-        _state.update {
-            it.copy(
-                overlayOrientation = orientation,
-                overlayItems = profile.resolveItems(systemKey, orientation),
-            )
-        }
+        updateControls { copy(overlayOrientation = orientation, overlayItems = profile.resolveItems(systemKey, orientation)) }
     }
 
     fun setEditingOverlayFamily(family: OverlaySystemFamily) {
@@ -746,17 +659,15 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     fun resetOverlayProfile() {
         if (profileUsernameOrNull() == null) return
-        val family = _state.value.editingOverlayFamily
+        val family = _state.value.controls.editingOverlayFamily
         OverlayProfileStore.reset(prefs, family)
         overlayProfiles[family] = OverlayProfile.DEFAULT
         persistOverlayProfiles()
         publishEditing(family)
         applyLiveOverlayFrom(family, OverlayProfile.DEFAULT)
         if (!_state.value.playing) {
-            val orientation = _state.value.overlayOrientation
-            _state.update {
-                it.copy(overlayItems = OverlayProfile.DEFAULT.resolveItems(null, orientation))
-            }
+            val orientation = _state.value.controls.overlayOrientation
+            updateControls { copy(overlayItems = OverlayProfile.DEFAULT.resolveItems(null, orientation)) }
         }
     }
 
@@ -764,13 +675,13 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     fun beginOverlayEdit() {
         if (profileUsernameOrNull() == null) return
         val snap = _state.value
-        val family = if (snap.playing) sessionFamily else snap.editingOverlayFamily
+        val family = if (snap.playing) sessionFamily else snap.controls.editingOverlayFamily
         val profile = profileFor(family)
         val systemKey = if (snap.playing) sessionSystemKey else null
         val preset = OverlayPresets.forLayout(profile.resolveLayout(systemKey))
         val landscape = profile.custom?.landscape?.ifEmpty { null } ?: preset
         val portrait = profile.custom?.portrait?.ifEmpty { null } ?: preset
-        val orientation = snap.overlayOrientation
+        val orientation = snap.controls.overlayOrientation
         val shown = when (orientation) {
             OverlayOrientation.Landscape -> landscape
             OverlayOrientation.Portrait -> portrait
@@ -778,14 +689,17 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         _state.update {
             it.copy(
                 section = if (it.playing) NavSection.Games else it.section,
-                overlayEditing = true,
-                overlayEditNaming = false,
-                editingOverlayFamily = family,
-                editingOverlayProfile = profile,
-                overlayEditLandscape = landscape,
-                overlayEditPortrait = portrait,
-                overlayItems = shown,
-                overlayEditNameDraft = profile.custom?.name ?: OverlayCustomLayout.DEFAULT_NAME,
+                controls = it.controls.copy(
+                    overlayEditing = true,
+                    overlayEditNaming = false,
+                    editingOverlayFamily = family,
+                    editingOverlayProfile = profile,
+                    overlayEditLandscape = landscape,
+                    overlayEditPortrait = portrait,
+                    overlayItems = shown,
+                    overlayEditNameDraft = profile.custom?.name
+                        ?: OverlayCustomLayout.DEFAULT_NAME,
+                ),
             )
         }
         // Relax pause only for control editing (live game under the editor).
@@ -794,18 +708,12 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun updateOverlayItems(items: List<OverlayItem>) {
-        if (!_state.value.overlayEditing) return
+        if (!_state.value.controls.overlayEditing) return
         val clamped = items.map { it.clamped() }
         _state.update { snap ->
-            when (snap.overlayOrientation) {
-                OverlayOrientation.Landscape -> snap.copy(
-                    overlayItems = clamped,
-                    overlayEditLandscape = clamped,
-                )
-                OverlayOrientation.Portrait -> snap.copy(
-                    overlayItems = clamped,
-                    overlayEditPortrait = clamped,
-                )
+            when (snap.controls.overlayOrientation) {
+                OverlayOrientation.Landscape -> snap.copy(controls = snap.controls.copy(overlayItems = clamped, overlayEditLandscape = clamped))
+                OverlayOrientation.Portrait -> snap.copy(controls = snap.controls.copy(overlayItems = clamped, overlayEditPortrait = clamped))
             }
         }
     }
@@ -813,54 +721,45 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     /** Done in the visual editor → name (or rename) the single custom slot. */
     fun finishOverlayEdit() {
         val snap = _state.value
-        if (!snap.overlayEditing) return
+        if (!snap.controls.overlayEditing) return
         // Flush current orientation into the draft pair.
-        val landscape = if (snap.overlayOrientation == OverlayOrientation.Landscape) {
-            snap.overlayItems
+        val landscape = if (snap.controls.overlayOrientation == OverlayOrientation.Landscape) {
+            snap.controls.overlayItems
         } else {
-            snap.overlayEditLandscape
+            snap.controls.overlayEditLandscape
         }
-        val portrait = if (snap.overlayOrientation == OverlayOrientation.Portrait) {
-            snap.overlayItems
+        val portrait = if (snap.controls.overlayOrientation == OverlayOrientation.Portrait) {
+            snap.controls.overlayItems
         } else {
-            snap.overlayEditPortrait
+            snap.controls.overlayEditPortrait
         }
-        val existingName = profileFor(snap.editingOverlayFamily).custom?.name
+        val existingName = profileFor(snap.controls.editingOverlayFamily).custom?.name
             ?: OverlayCustomLayout.DEFAULT_NAME
-        _state.update {
-            it.copy(
-                overlayEditNaming = true,
-                overlayEditNameDraft = existingName,
-                overlayEditLandscape = landscape,
-                overlayEditPortrait = portrait,
-            )
-        }
+        updateControls { copy(overlayEditNaming = true, overlayEditNameDraft = existingName, overlayEditLandscape = landscape, overlayEditPortrait = portrait) }
     }
 
     fun setOverlayEditNameDraft(value: String) {
-        _state.update {
-            it.copy(overlayEditNameDraft = value.take(OverlayCustomLayout.MAX_NAME_LEN))
-        }
+        updateControls { copy(overlayEditNameDraft = value.take(OverlayCustomLayout.MAX_NAME_LEN)) }
     }
 
     fun cancelOverlayEditNaming() {
-        _state.update { it.copy(overlayEditNaming = false) }
+        updateControls { copy(overlayEditNaming = false) }
     }
 
     fun confirmOverlayEditName() {
-        val name = _state.value.overlayEditNameDraft
+        val name = _state.value.controls.overlayEditNameDraft
         saveOverlayCustom(name)
     }
 
     private fun saveOverlayCustom(rawName: String) {
         if (profileUsernameOrNull() == null) return
         val snap = _state.value
-        if (!snap.overlayEditing) return
-        val family = snap.editingOverlayFamily
+        if (!snap.controls.overlayEditing) return
+        val family = snap.controls.editingOverlayFamily
         val custom = OverlayCustomLayout(
             name = rawName,
-            landscape = snap.overlayEditLandscape,
-            portrait = snap.overlayEditPortrait,
+            landscape = snap.controls.overlayEditLandscape,
+            portrait = snap.controls.overlayEditPortrait,
         ).let { it.copy(name = it.clampedName()) }
         val next = profileFor(family).copy(
             layoutMode = OverlayLayoutMode.Custom,
@@ -869,18 +768,12 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         overlayProfiles[family] = next
         OverlayProfileStore.save(prefs, family, next)
         persistOverlayProfiles()
-        syncButtonMapRemapsFromItems(family, custom.itemsFor(snap.overlayOrientation))
+        syncButtonMapRemapsFromItems(family, custom.itemsFor(snap.controls.overlayOrientation))
         _state.update {
-            it.copy(
-                overlayEditing = false,
-                overlayEditNaming = false,
-                editingOverlayProfile = next,
-                overlayItems = next.resolveItems(
+            it.copy(controls = it.controls.copy(overlayEditing = false, overlayEditNaming = false, editingOverlayProfile = next, overlayItems = next.resolveItems(
                     if (it.playing) sessionSystemKey else null,
-                    it.overlayOrientation,
-                ),
-                overlayEditNameDraft = custom.name,
-            )
+                    it.controls.overlayOrientation,
+                ), overlayEditNameDraft = custom.name))
         }
         applyLiveOverlayFrom(family, next)
         syncMenuPause()
@@ -890,18 +783,14 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     /** Discard in-progress editor without saving. */
     fun cancelOverlayEdit() {
         val snap = _state.value
-        if (!snap.overlayEditing) return
-        val family = snap.editingOverlayFamily
+        if (!snap.controls.overlayEditing) return
+        val family = snap.controls.editingOverlayFamily
         val profile = profileFor(family)
         _state.update {
-            it.copy(
-                overlayEditing = false,
-                overlayEditNaming = false,
-                overlayItems = profile.resolveItems(
+            it.copy(controls = it.controls.copy(overlayEditing = false, overlayEditNaming = false, overlayItems = profile.resolveItems(
                     if (it.playing) sessionSystemKey else null,
-                    it.overlayOrientation,
-                ),
-            )
+                    it.controls.overlayOrientation,
+                )))
         }
         syncMenuPause()
         refreshPhysicalPads()
@@ -921,55 +810,179 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun refreshPhysicalPads(preferPhysical: Boolean = _state.value.usePhysicalController) {
+    fun refreshPhysicalPads(preferPhysical: Boolean = _state.value.controls.usePhysicalController) {
         val pads = PhysicalGamepad.connectedPads()
         val connected = pads.isNotEmpty()
         val label = pads.firstOrNull()?.name.orEmpty()
-        val editing = _state.value.overlayEditing
+        val editing = _state.value.controls.overlayEditing
         val active = preferPhysical && connected && !editing
-        val wasActive = _state.value.physicalInputActive
-        _state.update {
-            it.copy(
-                usePhysicalController = preferPhysical,
-                physicalPadConnected = connected,
-                physicalPadLabel = label,
-                physicalInputActive = active,
-            )
-        }
+        val wasActive = _state.value.controls.physicalInputActive
+        // Once seen, a keyboard stays seen: see [ControlsState.hasKeyboardActive].
+        val keyboard = _state.value.controls.hasKeyboardActive || hardwareKeyboardPresent()
+        val before = _state.value.controls
+        updateControls { copy(usePhysicalController = preferPhysical, physicalPadConnected = connected, physicalPadLabel = label, physicalInputActive = active, hasKeyboardActive = keyboard) }
         if (wasActive != active) {
             gamepadTracker.reset()
             latestPad = ControllerState()
         }
+        // A single connect can fire a burst of device callbacks; only say something when
+        // the answer actually moved.
+        if (before.physicalPadConnected != connected ||
+            before.physicalPadLabel != label ||
+            before.physicalInputActive != active ||
+            before.hasKeyboardActive != keyboard
+        ) {
+            logControl("devices pads=${pads.map { it.name }} keyboard=$keyboard")
+        }
+    }
+
+    /**
+     * A keypress from something you can type on. Called for every key event, before anyone
+     * decides what it means, because this is the one signal a dozing Bluetooth keyboard
+     * cannot hide from.
+     */
+    fun noteKeyboardUse(event: KeyEvent) {
+        if (_state.value.controls.hasKeyboardActive) return
+        if (!isTypingKeyboardDeviceId(event.deviceId)) return
+        updateControls { copy(hasKeyboardActive = true) }
+        logControl("keyboard active device=${event.deviceId}")
+    }
+
+    /**
+     * Device list first, then the platform's own answer: some Bluetooth keyboards do not
+     * report an alphabetic [android.view.InputDevice], but do flip the configuration.
+     * Re-read on device add / remove / change and on configuration change.
+     */
+    private fun hardwareKeyboardPresent(): Boolean {
+        if (hardwareKeyboardConnected()) return true
+        val config = getApplication<Application>().resources.configuration
+        return config.keyboard == Configuration.KEYBOARD_QWERTY &&
+            config.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
     }
 
     fun requestPlayMenu() {
-        _playMenuRequests.tryEmit(Unit)
+        _menuEffects.tryEmit(MenuEffect.OpenDrawer)
+    }
+
+    private fun toggleMenuDrawer() {
+        if (menuDrawerOpen) {
+            _menuEffects.tryEmit(MenuEffect.CloseDrawer)
+        } else {
+            requestPlayMenu()
+        }
+    }
+
+/**
+ * System / TV remote Back (not D-pad Left). Accidental-exit guard:
+ * 1) dismiss OSK / dialogs / overlay editor, or stop typing in a field
+ * 2) leave in-play settings panes back to the game
+ * 3) step out of a section's options back to the drawer
+ * 4) if menu closed → open menu
+ * 5) if menu open but hamburger not focused → focus hamburger
+ * 6) if hamburger already focused → return false (Activity finishes)
+ *
+ * Home / Guide still toggles the drawer (see gamepad tracker / menu keys).
+ */
+fun handleSystemBack(): Boolean {
+    val snap = _state.value
+    if (snap.session.softKeyboard != null) {
+        cancelSoftKeyboard()
+        return true
+    }
+    if (snap.profile.forcePasswordChange) {
+        cancelForcePasswordChange()
+        return true
+    }
+    if (snap.controls.overlayEditNaming) {
+        cancelOverlayEditNaming()
+        return true
+    }
+    if (snap.controls.overlayEditing) {
+        cancelOverlayEdit()
+        return true
+    }
+    if (snap.menu.editing) {
+        onMenuLeaveOption()
+        return true
+    }
+    if (snap.playPaneVisible()) {
+        backMenuChromeFocused = false
+        returnToPlay()
+        return true
+    }
+    if (snap.menu.inOptions) {
+        backMenuChromeFocused = false
+        onMenuLeaveOption()
+        return true
+    }
+    if (!menuDrawerOpen) {
+        backMenuChromeFocused = false
+        requestPlayMenu()
+        return true
+    }
+    if (!backMenuChromeFocused) {
+        backMenuChromeFocused = true
+        _menuEffects.tryEmit(MenuEffect.FocusHamburger)
+        return true
+    }
+    backMenuChromeFocused = false
+    return false
+}
+
+/** True while Back has parked focus on the hamburger (exit arm). */
+fun isBackMenuChromeFocused(): Boolean = backMenuChromeFocused
+
+fun clearBackMenuChromeFocus() {
+    backMenuChromeFocused = false
+}
+
+    /**
+     * True when the section/option model owns directional input rather than the game:
+     * the drawer is open, there is no live play surface, or a settings pane covers it.
+     * Dialogs and the overlay editor keep their own input.
+     */
+    private fun menuOwnsInput(snap: UiState = _state.value): Boolean {
+        if (snap.session.softKeyboard != null) return false
+        if (snap.profile.forcePasswordChange) return false
+        if (snap.controls.overlayEditing || snap.controls.overlayEditNaming) return false
+        return menuDrawerOpen || !snap.playing || snap.playPaneVisible()
     }
 
     /** @return true if consumed as physical play input. */
     fun onGamepadKeyEvent(event: KeyEvent): Boolean {
-        if (menuDrawerOpen && _state.value.playing) {
-            return handlePlayMenuGamepadKey(event)
-        }
-        if (!_state.value.physicalInputActive) return false
+        logPadKey(event)
+        if (menuOwnsInput()) return handleMenuGamepadKey(event)
+        if (!_state.value.controls.physicalInputActive) return false
         return gamepadTracker.handleKeyEvent(event)
+    }
+
+    /**
+     * Name every pad key press when Log controls is on. A Guide button that reports an
+     * unexpected code — or one the system swallows before we see it — is otherwise
+     * invisible.
+     */
+    private fun logPadKey(event: KeyEvent) {
+        if (!_state.value.settings.logControls) return
+        if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount > 0) return
+        ClientFileLog.append(
+            "ctrl: pad key ${KeyEvent.keyCodeToString(event.keyCode)} " +
+                "(${event.keyCode}) device=${event.deviceId}",
+        )
     }
 
     /** @return true if consumed as physical play input. */
     fun onGamepadMotionEvent(event: MotionEvent): Boolean {
-        if (menuDrawerOpen && _state.value.playing) {
-            return handlePlayMenuGamepadMotion(event)
-        }
-        if (!_state.value.physicalInputActive) return false
+        if (menuOwnsInput()) return handleMenuGamepadMotion(event)
+        if (!_state.value.controls.physicalInputActive) return false
         return gamepadTracker.handleMotionEvent(event)
     }
 
     /**
-     * Hardware keyboard while playing.
+     * Hardware keyboard / TV remote.
      *
      * Priority:
      * 1. Soft keyboard dialog up → leave keys alone (Enter/Backspace type in the OSK).
-     * 2. Play menu open → keys navigate/select/close the drawer only.
+     * 2. Menu owns input (drawer open, offline, or a settings pane over play) → navigate.
      * 3. Otherwise → Backspace opens menu; arrows = joypad D-pad; P/Space/Enter/… remoted.
      *
      * Events from a real [PhysicalGamepad] device are left to [onGamepadKeyEvent]
@@ -977,37 +990,29 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun onPlayKeyEvent(event: KeyEvent): Boolean {
         val snap = _state.value
-        if (!snap.playing) return false
         // OSK owns Enter/Backspace/letters while its dialog is showing.
-        if (snap.softKeyboard != null) return false
-        if (snap.section == NavSection.Controls ||
-            snap.section == NavSection.GameOptions ||
-            snap.section == NavSection.Stream ||
-            snap.section == NavSection.Settings ||
-            snap.section == NavSection.Remote
-        ) {
-            return false
-        }
+        if (snap.session.softKeyboard != null) return false
         if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_UP) {
-            return false
-        }
-        // Pad devices: only Backspace opens the menu from this path; face/D-pad stay on tracker.
-        if (PhysicalGamepad.isGameControllerDeviceId(event.deviceId)) {
-            if (menuDrawerOpen) return false
-            if (event.keyCode == KeyEvent.KEYCODE_DEL) {
-                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                    requestPlayMenu()
-                }
-                return true
-            }
             return false
         }
         val down = event.action == KeyEvent.ACTION_DOWN
         val edge = down && event.repeatCount == 0
         val keyCode = event.keyCode
+        val fromPad = PhysicalGamepad.isGameControllerDeviceId(event.deviceId)
 
-        if (menuDrawerOpen) {
-            return handlePlayMenuKey(keyCode, edge)
+        if (menuOwnsInput(snap)) {
+            // Pads already had their turn in [onGamepadKeyEvent].
+            if (fromPad) return false
+            return handleMenuKey(event, edge)
+        }
+        if (!snap.playing) return false
+        // Pad devices: only Backspace opens the menu from this path; face/D-pad stay on tracker.
+        if (fromPad) {
+            if (keyCode == KeyEvent.KEYCODE_DEL) {
+                if (edge) requestPlayMenu()
+                return true
+            }
+            return false
         }
 
         // Backspace → play menu (never remoted on mobile while playing).
@@ -1047,80 +1052,337 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     fun isPhysicalGamepadDevice(deviceId: Int): Boolean =
         PhysicalGamepad.isGameControllerDeviceId(deviceId)
 
-    private fun handlePlayMenuKey(keyCode: Int, edge: Boolean): Boolean {
-        if (isPlayMenuCloseKey(keyCode)) {
-            if (edge) _playMenuCommands.tryEmit(PlayMenuCommand.Close)
-            return true
-        }
-        if (isPlayMenuActivateKey(keyCode)) {
-            if (edge) _playMenuCommands.tryEmit(PlayMenuCommand.Activate)
-            return true
-        }
-        when (keyCode) {
-            KeyEvent.KEYCODE_DPAD_UP -> {
-                if (edge) _playMenuCommands.tryEmit(PlayMenuCommand.MoveUp)
-                return true
-            }
-            KeyEvent.KEYCODE_DPAD_DOWN -> {
-                if (edge) _playMenuCommands.tryEmit(PlayMenuCommand.MoveDown)
-                return true
-            }
-            else -> Unit
-        }
-        // Consume other remoted keys so they do not hit the host while the menu owns input.
-        if (keyCode == KeyEvent.KEYCODE_F ||
-            keyCode == KeyEvent.KEYCODE_P ||
-            remotedKeyBitFromAndroidKeyCode(keyCode) != null
-        ) {
-            return true
-        }
-        return false
+    // ---- Section / option navigation -------------------------------------------------
+
+    private var menuBuiltFor: UiState? = null
+    private var menuBuilt: List<MenuSection> = emptyList()
+
+    /**
+     * The menu for [snap], assembled once per state.
+     *
+     * [UiState] is immutable, so instance identity is a sound cache key, and the drawer,
+     * the option pane and the key handlers then share a single build instead of each doing
+     * their own. Main thread only.
+     */
+    fun menuFor(snap: UiState): List<MenuSection> {
+        if (menuBuiltFor === snap) return menuBuilt
+        val built = AppMenu.sections(snap, this)
+        menuBuiltFor = snap
+        menuBuilt = built
+        return built
     }
 
-    private fun handlePlayMenuGamepadKey(event: KeyEvent): Boolean {
-        if (!PhysicalGamepad.isGameControllerDeviceId(event.deviceId)) return false
-        if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_UP) {
-            return true
-        }
-        val edge = event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0
-        val keyCode = event.keyCode
-        // Keyboard-like keys on hybrid devices: let [onPlayKeyEvent] own them (already ran).
-        if (keyCode == KeyEvent.KEYCODE_DEL ||
-            keyCode == KeyEvent.KEYCODE_ENTER ||
-            keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER ||
-            keyCode == KeyEvent.KEYCODE_ESCAPE ||
-            keyCode == KeyEvent.KEYCODE_SPACE ||
-            keyCode == KeyEvent.KEYCODE_P ||
-            keyCode == KeyEvent.KEYCODE_TAB ||
-            keyCode == KeyEvent.KEYCODE_F ||
-            keyCode == KeyEvent.KEYCODE_F1 ||
-            keyCode == KeyEvent.KEYCODE_F8
-        ) {
-            return false
-        }
-        when (keyCode) {
-            KeyEvent.KEYCODE_BUTTON_MODE, KeyEvent.KEYCODE_HOME -> {
-                if (edge) _playMenuCommands.tryEmit(PlayMenuCommand.Close)
-            }
-            KeyEvent.KEYCODE_DPAD_UP -> {
-                if (edge) _playMenuCommands.tryEmit(PlayMenuCommand.MoveUp)
-            }
-            KeyEvent.KEYCODE_DPAD_DOWN -> {
-                if (edge) _playMenuCommands.tryEmit(PlayMenuCommand.MoveDown)
-            }
-            KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_DPAD_CENTER -> {
-                if (edge) _playMenuCommands.tryEmit(PlayMenuCommand.Activate)
-            }
-            KeyEvent.KEYCODE_BUTTON_B -> {
-                if (edge) _playMenuCommands.tryEmit(PlayMenuCommand.Close)
-            }
-            else -> Unit
-        }
-        // Swallow remaining pad buttons while the menu owns controls.
+    private fun menuSections(snap: UiState = _state.value): List<MenuSection> = menuFor(snap)
+
+    /** True when there is a cursor to move: the drawer is up, or we are inside options. */
+    private fun menuCursorActive(snap: UiState = _state.value): Boolean =
+        menuDrawerOpen || snap.menu.inOptions
+
+    /** Anything on screen that a direction can move: the menu columns or the Games list. */
+    private fun navCursorActive(snap: UiState = _state.value): Boolean =
+        menuCursorActive(snap) || gamesPaneOwnsCursor(snap)
+
+    /**
+     * One door for every direction, whoever sent it: a pad's d-pad — which arrives as hat
+     * axes on most pads and as DPAD keys on others — a keyboard's arrows, or a remote's
+     * ring. Whatever owns the cursor answers; nothing about the device reaches past here.
+     */
+    fun onNavDirection(dir: NavDir): Boolean {
+        if (gamesPaneOwnsCursor()) return onGamesDirection(dir)
+        return onMenuDirection(dir)
+    }
+
+    /** Select, from a pad's South, a remote's OK, or Enter. */
+    fun onNavActivate(): Boolean {
+        if (gamesPaneOwnsCursor()) return onGamesActivate()
+        return onMenuActivate()
+    }
+
+    /** @return true when the menu consumed the direction. */
+    fun onMenuDirection(dir: NavDir): Boolean {
+        val snap = _state.value
+        if (snap.menu.editing) return false
+        // Drawer closed with no option cursor (the Games list): leave input to the pane.
+        if (!menuCursorActive(snap)) return false
+        val started = System.nanoTime()
+        val outcome = MenuNavigator.move(menuSections(snap), snap.menu, dir) ?: return false
+        applyMenuOutcome(outcome)
+        logSlowNav(dir.name, started)
         return true
     }
 
-    private fun handlePlayMenuGamepadMotion(event: MotionEvent): Boolean {
+    /** South / Enter: enter a section from the drawer, or fire the focused option. */
+    fun onMenuActivate(): Boolean {
+        val snap = _state.value
+        if (snap.menu.editing) return false
+        if (!menuCursorActive(snap)) return false
+        val started = System.nanoTime()
+        val outcome = MenuNavigator.activate(menuSections(snap), snap.menu) ?: return false
+        applyMenuOutcome(outcome)
+        logSlowNav("activate", started)
+        return true
+    }
+
+    /**
+     * Menu work that outlasts a frame, so a "navigation feels slow" report can be pinned on
+     * this side or on rendering. Covers building the menu, the move and publishing state —
+     * not the recomposition that follows.
+     */
+    private fun logSlowNav(what: String, startedNanos: Long) {
+        val spentMs = (System.nanoTime() - startedNanos) / 1_000_000
+        if (spentMs >= 8) logControl("nav $what took ${spentMs}ms")
+    }
+
+    private var paneOpenedSection: NavSection? = null
+    private var paneOpenedNanos = 0L
+
+    /** Stamps a section entry so [notePaneShown] can report the wait that is felt. */
+    private fun markPaneOpening(section: NavSection) {
+        paneOpenedSection = section
+        paneOpenedNanos = System.nanoTime()
+    }
+
+    /** The option pane finished composing for [section] after being entered. */
+    fun notePaneShown(section: NavSection) {
+        if (paneOpenedSection != section) return
+        paneOpenedSection = null
+        val spentMs = (System.nanoTime() - paneOpenedNanos) / 1_000_000
+        logControl("pane $section shown after ${spentMs}ms")
+    }
+
+    /** Cost of materialising one section's rows, separate from composing them. */
+    fun noteOptionsBuilt(section: NavSection, rows: Int, startedNanos: Long) {
+        val spentMs = (System.nanoTime() - startedNanos) / 1_000_000
+        if (spentMs >= 4) logControl("options $section rows=$rows built in ${spentMs}ms")
+    }
+
+    /**
+     * The Games pane runs its own cursor: the section owns no options because the catalog
+     * is not a fixed list, so directions and Select belong to the list while it is up.
+     */
+    private fun gamesPaneOwnsCursor(snap: UiState = _state.value): Boolean =
+        !menuDrawerOpen &&
+            !snap.playing &&
+            snap.connected &&
+            snap.section == NavSection.Games
+
+    /**
+     * Up/Down walk the rows. Left is the way to the filter once there is text to edit, and
+     * the way back to the drawer from the filter itself or from an empty one. Right has no
+     * meaning here — a group opens with Select — so it is swallowed rather than remoted.
+     */
+    private fun onGamesDirection(dir: NavDir): Boolean {
+        val snap = _state.value
+        val rows = gamesRows(snap.games)
+        val here = gamesCursor(rows, snap.games.cursorKey) ?: return false
+        when (dir) {
+            NavDir.Up, NavDir.Down -> {
+                val next = stepGamesCursor(rows, here.key, dir) ?: return true
+                updateGames { copy(cursorKey = next.key) }
+                logControl("games cursor $dir → ${next.key}")
+            }
+            NavDir.Right -> Unit
+            NavDir.Left ->
+                if (here !is GamesRow.Filter && snap.games.filter.isNotEmpty()) {
+                    updateGames { copy(cursorKey = GamesRow.FILTER_KEY) }
+                } else {
+                    _menuEffects.tryEmit(MenuEffect.OpenDrawer)
+                }
+        }
+        return true
+    }
+
+    /** Select: type in the filter, open or close a group, or start the game. */
+    private fun onGamesActivate(): Boolean {
+        val snap = _state.value
+        val rows = gamesRows(snap.games)
+        when (val here = gamesCursor(rows, snap.games.cursorKey)) {
+            null -> return false
+            is GamesRow.Filter -> {
+                updateGames { copy(filterEditing = true) }
+                _menuEffects.tryEmit(MenuEffect.FocusField(GamesRow.FILTER_KEY))
+            }
+            is GamesRow.Header -> toggleSystemExpanded(here.system)
+            is GamesRow.Entry -> startGame(here.game)
+        }
+        return true
+    }
+
+    /**
+     * Type-to-filter.
+     *
+     * With a keyboard attached the letters go to the filter from anywhere in the list, and
+     * Backspace trims it before it counts as stepping out. Without one the filter is
+     * reached by moving up to it, which is what raises the on-screen keyboard.
+     */
+    private fun handleGamesTyping(event: KeyEvent): Boolean {
+        val snap = _state.value
+        if (!snap.controls.hasKeyboardActive) return false
+        if (PhysicalGamepad.isGameControllerDeviceId(event.deviceId)) return false
+        val down = event.action == KeyEvent.ACTION_DOWN
+        if (event.keyCode == KeyEvent.KEYCODE_DEL) {
+            val filter = snap.games.filter
+            if (filter.isEmpty()) return false
+            if (down) onFilterChange(filter.dropLast(1))
+            return true
+        }
+        val typed = event.unicodeChar.toChar()
+        if (typed.code <= ' '.code || typed.code == DELETE_CHAR) return false
+        if (down) onFilterChange(snap.games.filter + typed)
+        return true
+    }
+
+    /** The Games filter gained or lost IME focus (touch, or [MenuEffect.FocusField]). */
+    fun onGamesFilterFocus(focused: Boolean) {
+        if (_state.value.games.filterEditing == focused) return
+        updateGames { copy(filterEditing = focused) }
+    }
+
+    /** Touch on a row puts the cursor there, so the pad carries on from what was tapped. */
+    fun onGamesRowTouched(rowKey: String) {
+        updateGames { copy(cursorKey = rowKey) }
+    }
+
+    /** East / B: stop typing, else step back out to the drawer column. */
+    fun onMenuLeaveOption(): Boolean {
+        val outcome = MenuNavigator.leaveOptions(_state.value.menu) ?: return false
+        applyMenuOutcome(outcome)
+        return true
+    }
+
+    /** The real text field gained or lost IME focus (touch, or [MenuEffect.FocusField]). */
+    fun onMenuFieldFocus(optionId: String, focused: Boolean) {
+        _state.update { snap ->
+            val menu = snap.menu
+            when {
+                focused -> snap.copy(
+                    menu = menu.copy(
+                        inOptions = true,
+                        section = snap.section,
+                        optionId = optionId,
+                        editing = true,
+                    ),
+                )
+                menu.editing && menu.optionId == optionId ->
+                    snap.copy(menu = menu.copy(editing = false))
+                else -> snap
+            }
+        }
+    }
+
+    /** Touch moved the cursor: keep the model in step with the finger. */
+    fun onMenuOptionTouched(optionId: String) {
+        _state.update {
+            it.copy(menu = it.menu.copy(inOptions = true, section = it.section, optionId = optionId))
+        }
+    }
+
+    /** Drawer entry tapped: show the pane and drop the cursor on its first option. */
+    fun openSectionFromDrawer(section: NavSection) {
+        markPaneOpening(section)
+        selectSection(section)
+        val snap = _state.value
+        val first = menuSections(snap).firstOrNull { it.id == section }?.firstFocusableId()
+        _state.update {
+            it.copy(
+                menu = it.menu.copy(
+                    inOptions = first != null,
+                    section = section,
+                    optionId = first.orEmpty(),
+                    editing = false,
+                ),
+            )
+        }
+    }
+
+    private fun applyMenuOutcome(outcome: NavOutcome) {
+        val before = _state.value.section
+        _state.update { it.copy(menu = outcome.focus) }
+        // Leaving the drawer reveals a pane, and a section with no options of its own still
+        // has to become the visible one — Games owns its list instead of options, so keying
+        // this off landing on an option left it unreachable.
+        val entered = outcome.effect == MenuEffect.CloseDrawer
+        if ((entered || outcome.focus.inOptions) && outcome.focus.section != before) {
+            markPaneOpening(outcome.focus.section)
+            selectSection(outcome.focus.section)
+        }
+        outcome.effect?.let { _menuEffects.tryEmit(it) }
+    }
+
+    /** Keyboard / TV-remote keys while the menu owns input. */
+    private fun handleMenuKey(event: KeyEvent, edge: Boolean): Boolean {
+        val keyCode = event.keyCode
+        val snap = _state.value
+        val inGames = gamesPaneOwnsCursor(snap)
+        if (snap.menu.editing || snap.games.filterEditing) {
+            // Typing owns arrows, Backspace, and letters; only Esc / East let go.
+            if (keyCode == KeyEvent.KEYCODE_ESCAPE || isMenuLeaveFieldsKey(keyCode)) {
+                if (edge) leaveTextField()
+                return true
+            }
+            return false
+        }
+        if (keyCode == KeyEvent.KEYCODE_ESCAPE ||
+            keyCode == KeyEvent.KEYCODE_DEL ||
+            isMenuLeaveFieldsKey(keyCode)
+        ) {
+            if (inGames && handleGamesTyping(event)) return true
+            if (edge) leaveOrCloseMenu()
+            return true
+        }
+        if (isMenuHomeKey(keyCode)) {
+            if (edge) toggleMenuDrawer()
+            return true
+        }
+        navDirForKey(keyCode)?.let { dir ->
+            if (!navCursorActive(snap)) return false
+            if (edge) onNavDirection(dir)
+            return true
+        }
+        if (isMenuActivateKey(keyCode)) {
+            if (!navCursorActive(snap)) return false
+            if (edge) onNavActivate()
+            return true
+        }
+        if (inGames && handleGamesTyping(event)) return true
+        // Swallow remoted keys so they cannot reach the host while the menu owns input.
+        if (!menuDrawerOpen) return false
+        return keyCode == KeyEvent.KEYCODE_F ||
+            keyCode == KeyEvent.KEYCODE_P ||
+            remotedKeyBitFromAndroidKeyCode(keyCode) != null
+    }
+
+    /** Give up whichever field is holding the IME. */
+    private fun leaveTextField() {
+        if (_state.value.games.filterEditing) {
+            updateGames { copy(filterEditing = false) }
+            return
+        }
+        onMenuLeaveOption()
+    }
+
+    private fun leaveOrCloseMenu() {
+        // The Games list has no option column to step back through: it goes to the drawer.
+        if (gamesPaneOwnsCursor()) {
+            _menuEffects.tryEmit(MenuEffect.OpenDrawer)
+            return
+        }
+        if (onMenuLeaveOption()) return
+        if (menuDrawerOpen) _menuEffects.tryEmit(MenuEffect.CloseDrawer)
+    }
+
+    private fun handleMenuGamepadKey(event: KeyEvent): Boolean {
+        if (!PhysicalGamepad.isGameControllerDeviceId(event.deviceId)) return false
+        if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_UP) {
+            return menuDrawerOpen
+        }
+        val edge = event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0
+        if (handleMenuKey(event, edge)) return true
+        // An open drawer owns the whole pad; a pane may still want the leftovers.
+        return menuDrawerOpen
+    }
+
+    private fun handleMenuGamepadMotion(event: MotionEvent): Boolean {
         if (!PhysicalGamepad.isGameControllerDeviceId(event.deviceId)) return false
         val sources = event.source
         val fromStick =
@@ -1129,14 +1391,29 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 sources and android.view.InputDevice.SOURCE_GAMEPAD ==
                 android.view.InputDevice.SOURCE_GAMEPAD
         if (!fromStick) return false
+        val hatX = event.getAxisValue(MotionEvent.AXIS_HAT_X)
         val hatY = event.getAxisValue(MotionEvent.AXIS_HAT_Y)
-        val up = hatY < -0.5f
-        val down = hatY > 0.5f
-        if (up && !menuHatUp) _playMenuCommands.tryEmit(PlayMenuCommand.MoveUp)
-        if (down && !menuHatDown) _playMenuCommands.tryEmit(PlayMenuCommand.MoveDown)
+        val up = hatY < -HAT_EDGE
+        val down = hatY > HAT_EDGE
+        val left = hatX < -HAT_EDGE
+        val right = hatX > HAT_EDGE
+        // Same door as arrow keys and DPAD codes: a hat is just how this pad spells them.
+        if (up && !menuHatUp) onNavDirection(NavDir.Up)
+        if (down && !menuHatDown) onNavDirection(NavDir.Down)
+        if (left && !menuHatLeft) onNavDirection(NavDir.Left)
+        if (right && !menuHatRight) onNavDirection(NavDir.Right)
         menuHatUp = up
         menuHatDown = down
+        menuHatLeft = left
+        menuHatRight = right
         return true
+    }
+
+    private fun resetMenuHats() {
+        menuHatUp = false
+        menuHatDown = false
+        menuHatLeft = false
+        menuHatRight = false
     }
 
     private fun setRemotedKey(bit: Int, down: Boolean) {
@@ -1172,32 +1449,6 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         return latestPad.copy(buttons = latestPad.buttons or kb)
     }
 
-    private fun onPhysicalPadState(state: ControllerState) {
-        if (!_state.value.physicalInputActive) {
-            logControl("physical pad ignored (physicalInputActive=false) ${formatPad(state)}")
-            return
-        }
-        if (menuDrawerOpen) {
-            logControl("physical pad ignored (menuDrawerOpen) ${formatPad(state)}")
-            return
-        }
-        // Remaps come from the overlay Action editor; face swaps from the shared map profile.
-        val map = mapProfileFor(sessionFamily)
-        val swapped = ControllerState.applyFaceButtonSwaps(state, map.swapNw, map.swapSe)
-        latestPad = swapped
-        logControlPad(
-            "physical",
-            swapped,
-            "swapNw=${map.swapNw} swapSe=${map.swapSe}",
-        )
-    }
-
-    /** Overlay Action remap for a control kind (Custom layout); else the kind default. */
-    private fun overlayActionFor(kind: OverlayControlKind): OverlayAction {
-        val item = _state.value.overlayItems.firstOrNull { it.kind == kind }
-        return item?.resolvedAction() ?: kind.defaultAction
-    }
-
     private fun resolveInitialPreferPhysical(): Boolean {
         if (prefs.contains(KEY_USE_PHYSICAL)) {
             return prefs.getBoolean(KEY_USE_PHYSICAL, false)
@@ -1210,7 +1461,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun updateEditingProfile(transform: (OverlayProfile) -> OverlayProfile) {
         if (profileUsernameOrNull() == null) return
-        val family = _state.value.editingOverlayFamily
+        val family = _state.value.controls.editingOverlayFamily
         val next = transform(profileFor(family))
         overlayProfiles[family] = next
         OverlayProfileStore.save(prefs, family, next)
@@ -1256,10 +1507,10 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun applyStreamPrefsToSession() {
         val snap = _state.value
-        session?.wantedTier = snap.streamQuality.id
-        session?.wantedSize = snap.streamSize.id
-        session?.wantedFeel = snap.streamFeel.id
-        session?.wantedBitrate = snap.streamBitrate.id
+        session?.wantedTier = snap.stream.quality.id
+        session?.wantedSize = snap.stream.size.id
+        session?.wantedFeel = snap.stream.feel.id
+        session?.wantedBitrate = snap.stream.bitrate.id
         // Android always requests Hybrid; portrait stacking is client-side.
         session?.displayLayout = DisplayLayoutPreference.Landscape.id
     }
@@ -1273,6 +1524,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 section == NavSection.GameOptions ||
                 section == NavSection.Stream ||
                 section == NavSection.Settings ||
+                section == NavSection.Session ||
                 remoteOk
             ) {
                 if (section == NavSection.Controls) {
@@ -1283,23 +1535,19 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             }
             endSession()
             _state.update {
-                it.copy(
-                    playing = false,
-                    videoPlayer = null,
-                    selectedGame = null,
-                    mediaHint = "",
-                    softKeyboard = null,
-                )
+                it.copy(playing = false, games = it.games.copy(selected = null), stream = it.stream.copy(mediaHint = ""), session = it.session.copy(videoPlayer = null, softKeyboard = null))
             }
         }
         if (section == NavSection.Games && !_state.value.connected) {
             _state.update {
-                it.copy(
-                    section = NavSection.Client,
-                    status = "Connect on the Client tab before browsing games.",
-                )
+                it.copy(section = NavSection.Client, status = "Connect on the Client tab before browsing games.")
             }
             return
+        }
+        if (section == NavSection.Games) {
+            // Entering the list starts at the top — Recents when there is one — rather than
+            // wherever the cursor was left the last time.
+            updateGames { copy(cursorKey = null, filterEditing = false) }
         }
         _state.update { it.copy(section = section) }
     }
@@ -1307,7 +1555,13 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     /** Dismiss overlay/stream settings and return to the live play surface. */
     fun returnToPlay() {
         if (!_state.value.playing) return
-        _state.update { it.copy(section = NavSection.Games) }
+        _state.update {
+            it.copy(
+                section = NavSection.Games,
+                // Drop the option cursor so the pad drives the game again.
+                menu = it.menu.copy(inOptions = false, editing = false),
+            )
+        }
     }
 
     fun onHostChange(value: String) {
@@ -1315,10 +1569,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         hostEditSuppressUntilMs = System.currentTimeMillis() + HOST_EDIT_SUPPRESS_MS
         prefs.edit().putString(KEY_HOST, host).apply()
         _state.update {
-            it.copy(
-                host = host,
-                recentGameIds = loadRecentGameIds(host, it.controlPort),
-            )
+            it.copy(client = it.client.copy(host = host), games = it.games.copy(recentGameIds = loadRecentGameIds(host, it.settings.controlPort)))
         }
     }
 
@@ -1328,7 +1579,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         if (trimmed.isEmpty() || HostAddresses.looksLikeIp(trimmed)) {
             prefs.edit().putString(KEY_ALT_HOST, trimmed).apply()
         }
-        _state.update { it.copy(altHost = value) }
+        updateClient { copy(altHost = value) }
     }
 
     fun selectDiscoveredHost(host: DiscoveredHost) {
@@ -1352,12 +1603,18 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         }
         _state.update {
             it.copy(
-                host = host.address,
-                controlPort = control,
-                inputPort = input,
-                recentGameIds = loadRecentGameIds(host.address, control),
-                discoveryStatus = label,
                 status = if (it.connected || it.playing) it.status else label,
+                client = it.client.copy(
+                    host = host.address,
+                    discoveryStatus = label,
+                ),
+                games = it.games.copy(
+                    recentGameIds = loadRecentGameIds(host.address, control),
+                ),
+                settings = it.settings.copy(
+                    controlPort = control,
+                    inputPort = input,
+                ),
             )
         }
     }
@@ -1385,21 +1642,19 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         discoveryJob = viewModelScope.launch(Dispatchers.IO) {
             val browser = runCatching { HostDiscovery() }.getOrElse { error ->
                 withContext(Dispatchers.Main) {
-                    _state.update {
-                        it.copy(discoveryStatus = "Host search unavailable: ${error.message}")
-                    }
+                    updateClient { copy(discoveryStatus = "Host search unavailable: ${error.message}") }
                 }
                 return@launch
             }
             try {
                 withContext(Dispatchers.Main) {
-                    _state.update { it.copy(discoveryStatus = "Looking for a host…") }
+                    updateClient { copy(discoveryStatus = "Looking for a host…") }
                 }
                 while (isActive) {
                     val playing = _state.value.playing
                     if (!playing) {
-                        val saved = _state.value.host.trim()
-                        val alt = _state.value.altHost.trim()
+                        val saved = _state.value.client.host.trim()
+                        val alt = _state.value.client.altHost.trim()
                         val seeds = linkedSetOf<String>()
                         if (saved.isNotEmpty() && !HostDiscovery.isLoopback(saved)) {
                             seeds.add(saved)
@@ -1429,33 +1684,47 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /** Equal as far as the host picker is concerned: identity and ports, not freshness. */
+    private fun sameHostsOnScreen(
+        shown: List<DiscoveredHost>,
+        live: List<DiscoveredHost>,
+    ): Boolean =
+        shown.size == live.size &&
+            shown.indices.all { i ->
+                val a = shown[i]
+                val b = live[i]
+                a.username == b.username &&
+                    a.address == b.address &&
+                    a.controlPort == b.controlPort &&
+                    a.inputPort == b.inputPort
+            }
+
     private fun applyDiscoveryTick(live: List<DiscoveredHost>) {
-        _state.update { it.copy(discoveredHosts = live) }
+        // Every announce refreshes lastSeenMs, which nothing on screen reads. Publishing
+        // it anyway made the state differ once a second and recomposed the whole UI —
+        // including whatever field is being typed in — for a list that had not changed.
+        if (!sameHostsOnScreen(_state.value.client.discoveredHosts, live)) {
+            updateClient { copy(discoveredHosts = live) }
+        }
         if (_state.value.playing || _state.value.busy) return
         if (System.currentTimeMillis() < hostEditSuppressUntilMs) return
 
-        val saved = _state.value.host.trim()
+        val saved = _state.value.client.host.trim()
         val savedLive = live.firstOrNull { it.address == saved }
         if (savedLive != null) {
             // Keep saved address; refresh ports from announce if they drifted.
-            if (savedLive.controlPort.toString() != _state.value.controlPort ||
-                savedLive.inputPort.toString() != _state.value.inputPort
+            if (savedLive.controlPort.toString() != _state.value.settings.controlPort ||
+                savedLive.inputPort.toString() != _state.value.settings.inputPort
             ) {
                 prefs.edit()
                     .putString(KEY_CONTROL_PORT, savedLive.controlPort.toString())
                     .putString(KEY_INPUT_PORT, savedLive.inputPort.toString())
                     .apply()
                 _state.update {
-                    it.copy(
-                        controlPort = savedLive.controlPort.toString(),
-                        inputPort = savedLive.inputPort.toString(),
-                        discoveryStatus = "Using ${savedLive.username} @ ${savedLive.address}",
-                    )
+                    it.copy(client = it.client.copy(discoveryStatus = "Using ${savedLive.username} @ ${savedLive.address}"), settings = it.settings.copy(controlPort = savedLive.controlPort.toString(), inputPort = savedLive.inputPort.toString()))
                 }
             } else {
-                _state.update {
-                    it.copy(discoveryStatus = "Using ${savedLive.username} @ ${savedLive.address}")
-                }
+                updateClient { copy(discoveryStatus = "Using ${savedLive.username} @ ${savedLive.address}") }
             }
             discoveryAttempts = 0
             return
@@ -1476,7 +1745,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             } else {
                 "No host found yet — check Wi‑Fi/VPN or enter an IP."
             }
-            _state.update { it.copy(discoveryStatus = looking) }
+            updateClient { copy(discoveryStatus = looking) }
         }
     }
 
@@ -1484,103 +1753,101 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         val port = value.trim()
         prefs.edit().putString(KEY_CONTROL_PORT, port).apply()
         _state.update {
-            it.copy(
-                controlPort = port,
-                recentGameIds = loadRecentGameIds(it.host, port),
-            )
+            it.copy(games = it.games.copy(recentGameIds = loadRecentGameIds(it.client.host, port)), settings = it.settings.copy(controlPort = port))
         }
     }
 
     fun onInputPortChange(value: String) {
         val port = value.trim()
-        _state.update { it.copy(inputPort = port) }
+        updateSettings { copy(inputPort = port) }
         prefs.edit().putString(KEY_INPUT_PORT, port).apply()
     }
 
     fun onRemoteSshHostChange(value: String) {
-        _state.update { it.copy(remoteSshHost = value) }
+        updateRemote { copy(sshHost = value) }
         prefs.edit().putString(KEY_REMOTE_SSH_HOST, value.trim()).apply()
     }
 
     fun onRemoteSshUserChange(value: String) {
-        _state.update { it.copy(remoteSshUser = value) }
+        updateRemote { copy(sshUser = value) }
         prefs.edit().putString(KEY_REMOTE_SSH_USER, value.trim()).apply()
     }
 
     fun onRemoteSshPasswordChange(value: String) {
-        _state.update { it.copy(remoteSshPassword = value) }
+        updateRemote { copy(sshPassword = value) }
     }
 
     fun onRemoteSshPortChange(value: String) {
-        _state.update { it.copy(remoteSshPort = value) }
+        updateRemote { copy(sshPort = value) }
         prefs.edit().putString(KEY_REMOTE_SSH_PORT, value.trim()).apply()
     }
 
     fun onRemoteDirectoryChange(value: String) {
-        _state.update { it.copy(remoteDirectory = value) }
+        updateRemote { copy(directory = value) }
         prefs.edit().putString(KEY_REMOTE_DIRECTORY, value.trim()).apply()
     }
 
     fun onRemoteRomRootChange(value: String) {
-        _state.update { it.copy(remoteRomRoot = value) }
+        updateRemote { copy(romRoot = value) }
         prefs.edit().putString(KEY_REMOTE_ROM_ROOT, value.trim()).apply()
     }
 
     fun onRemoteBinaryChange(value: String) {
-        _state.update { it.copy(remoteBinary = value) }
+        updateRemote { copy(binary = value) }
         prefs.edit().putString(KEY_REMOTE_BINARY, value.trim()).apply()
     }
 
     fun onRemoteStartScriptChange(value: String) {
-        _state.update { it.copy(remoteStartScript = value) }
+        updateRemote { copy(startScript = value) }
         prefs.edit().putString(KEY_REMOTE_START_SCRIPT, value.trim()).apply()
     }
 
     fun onRemoteGpuChange(value: String) {
-        _state.update { it.copy(remoteGpu = value) }
+        updateRemote { copy(gpu = value) }
         prefs.edit().putString(KEY_REMOTE_GPU, value.trim()).apply()
     }
 
     fun onRemoteBaseControlPortChange(value: String) {
-        _state.update { it.copy(remoteBaseControlPort = value) }
+        updateRemote { copy(baseControlPort = value) }
         prefs.edit().putString(KEY_REMOTE_BASE_CONTROL, value.trim()).apply()
     }
 
     fun onRemoteBaseInputPortChange(value: String) {
-        _state.update { it.copy(remoteBaseInputPort = value) }
+        updateRemote { copy(baseInputPort = value) }
         prefs.edit().putString(KEY_REMOTE_BASE_INPUT, value.trim()).apply()
     }
 
     private fun setRemoteStatus(status: String, busy: Boolean? = null) {
         ClientFileLog.append("[remote] $status")
-        _state.update {
-            if (busy == null) it.copy(remoteStatus = status)
-            else it.copy(remoteBusy = busy, remoteStatus = status)
+        if (busy == null) {
+            updateRemote { copy(status = status) }
+        } else {
+            updateRemote { copy(busy = busy, status = status) }
         }
     }
 
     fun ensureRemoteHost() {
         val snap = _state.value
-        if (snap.remoteBusy) return
-        val host = snap.remoteSshHost.trim()
-        val user = snap.remoteSshUser.trim()
-        val password = snap.remoteSshPassword
-        val directory = snap.remoteDirectory.trim()
-        val romRoot = snap.remoteRomRoot.trim()
-        val binary = snap.remoteBinary.trim().ifBlank { "./host_runner" }
-        val startScript = snap.remoteStartScript.trim()
-        val wantGpu = snap.remoteGpu.trim()
-        val sshPort = snap.remoteSshPort.trim().toIntOrNull() ?: RemoteHost.DEFAULT_SSH_PORT
-        val baseControl = snap.remoteBaseControlPort.trim().toIntOrNull()
+        if (snap.remote.busy) return
+        val host = snap.remote.sshHost.trim()
+        val user = snap.remote.sshUser.trim()
+        val password = snap.remote.sshPassword
+        val directory = snap.remote.directory.trim()
+        val romRoot = snap.remote.romRoot.trim()
+        val binary = snap.remote.binary.trim().ifBlank { "./host_runner" }
+        val startScript = snap.remote.startScript.trim()
+        val wantGpu = snap.remote.gpu.trim()
+        val sshPort = snap.remote.sshPort.trim().toIntOrNull() ?: RemoteHost.DEFAULT_SSH_PORT
+        val baseControl = snap.remote.baseControlPort.trim().toIntOrNull()
             ?: Protocol.DEFAULT_CONTROL_PORT
-        val baseInput = snap.remoteBaseInputPort.trim().toIntOrNull()
+        val baseInput = snap.remote.baseInputPort.trim().toIntOrNull()
             ?: Protocol.DEFAULT_INPUT_PORT
 
         // Fields already persist on each change; flush again so a failed Ensure still keeps them.
         prefs.edit()
             .putString(KEY_REMOTE_SSH_HOST, host)
             .putString(KEY_REMOTE_SSH_USER, user)
-            .putString(KEY_REMOTE_SSH_PORT, snap.remoteSshPort.trim().ifBlank { "22" })
+            .putString(KEY_REMOTE_SSH_PORT, snap.remote.sshPort.trim().ifBlank { "22" })
             .putString(KEY_REMOTE_DIRECTORY, directory)
             .putString(KEY_REMOTE_ROM_ROOT, romRoot)
             .putString(KEY_REMOTE_BINARY, binary)
@@ -1622,15 +1889,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                     .apply()
                 ClientFileLog.append("[remote] $status")
                 _state.update {
-                    it.copy(
-                        remoteBusy = false,
-                        remoteStatus = status,
-                        host = host,
-                        controlPort = control.toString(),
-                        inputPort = input.toString(),
-                        remoteTrackedControlPort = control,
-                        recentGameIds = loadRecentGameIds(host, control.toString()),
-                    )
+                    it.copy(client = it.client.copy(host = host), remote = it.remote.copy(busy = false, status = status, trackedControlPort = control), games = it.games.copy(recentGameIds = loadRecentGameIds(host, control.toString())), settings = it.settings.copy(controlPort = control.toString(), inputPort = input.toString()))
                 }
                 refreshRemoteUsers()
             }
@@ -1764,20 +2023,20 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     fun stopRemoteHost() {
         val snap = _state.value
-        if (snap.remoteBusy) return
-        val host = snap.remoteSshHost.trim()
-        val user = snap.remoteSshUser.trim()
-        val password = snap.remoteSshPassword
-        val directory = snap.remoteDirectory.trim()
-        val binary = snap.remoteBinary.trim().ifBlank { "./host_runner" }
-        val wantGpu = snap.remoteGpu.trim()
-        val sshPort = snap.remoteSshPort.trim().toIntOrNull() ?: RemoteHost.DEFAULT_SSH_PORT
-        val baseControl = snap.remoteBaseControlPort.trim().toIntOrNull()
+        if (snap.remote.busy) return
+        val host = snap.remote.sshHost.trim()
+        val user = snap.remote.sshUser.trim()
+        val password = snap.remote.sshPassword
+        val directory = snap.remote.directory.trim()
+        val binary = snap.remote.binary.trim().ifBlank { "./host_runner" }
+        val wantGpu = snap.remote.gpu.trim()
+        val sshPort = snap.remote.sshPort.trim().toIntOrNull() ?: RemoteHost.DEFAULT_SSH_PORT
+        val baseControl = snap.remote.baseControlPort.trim().toIntOrNull()
             ?: Protocol.DEFAULT_CONTROL_PORT
-        val baseInput = snap.remoteBaseInputPort.trim().toIntOrNull()
+        val baseInput = snap.remote.baseInputPort.trim().toIntOrNull()
             ?: Protocol.DEFAULT_INPUT_PORT
-        var control = if (snap.remoteTrackedControlPort > 0) {
-            snap.remoteTrackedControlPort
+        var control = if (snap.remote.trackedControlPort > 0) {
+            snap.remote.trackedControlPort
         } else {
             baseControl
         }
@@ -1850,15 +2109,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             if (ssh.ok) {
                 var msg = "Stopped remote host on control port $control."
                 if (resolvedLabel.isNotEmpty()) msg += " ($resolvedLabel)"
-                _state.update {
-                    it.copy(
-                        remoteBusy = false,
-                        remoteStatus = msg,
-                        remoteTrackedControlPort = 0,
-                        remoteUsers = emptyList(),
-                        remoteSelectedUserIndex = -1,
-                    )
-                }
+                updateRemote { copy(busy = false, status = msg, trackedControlPort = 0, users = emptyList(), selectedUserIndex = -1) }
             } else {
                 setRemoteStatus("SSH stop failed: ${ssh.error}", busy = false)
             }
@@ -1866,19 +2117,19 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun selectRemoteUser(index: Int) {
-        _state.update { it.copy(remoteSelectedUserIndex = index) }
+        updateRemote { copy(selectedUserIndex = index) }
     }
 
     fun refreshRemoteUsers() {
         val snap = _state.value
-        if (snap.remoteBusy) {
+        if (snap.remote.busy) {
             setRemoteStatus("Remote action already running.")
             return
         }
-        val host = snap.remoteSshHost.trim()
-        val user = snap.remoteSshUser.trim()
-        val password = snap.remoteSshPassword
-        val sshPort = snap.remoteSshPort.trim().toIntOrNull() ?: RemoteHost.DEFAULT_SSH_PORT
+        val host = snap.remote.sshHost.trim()
+        val user = snap.remote.sshUser.trim()
+        val password = snap.remote.sshPassword
+        val sshPort = snap.remote.sshPort.trim().toIntOrNull() ?: RemoteHost.DEFAULT_SSH_PORT
         if (host.isEmpty() || user.isEmpty()) {
             setRemoteStatus("SSH host and user are required.")
             return
@@ -1905,33 +2156,26 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
             val rows = actives + connected
-            _state.update {
-                it.copy(
-                    remoteBusy = false,
-                    remoteUsers = rows,
-                    remoteSelectedUserIndex = -1,
-                    remoteStatus = "Remote users: ${rows.size} row(s).",
-                )
-            }
+            updateRemote { copy(busy = false, users = rows, selectedUserIndex = -1, status = "Remote users: ${rows.size} row(s).") }
         }
     }
 
     fun kickRemoteUser() {
         val snap = _state.value
-        if (snap.remoteBusy) {
+        if (snap.remote.busy) {
             setRemoteStatus("Remote action already running.")
             return
         }
-        val index = snap.remoteSelectedUserIndex
-        val row = snap.remoteUsers.getOrNull(index)
+        val index = snap.remote.selectedUserIndex
+        val row = snap.remote.users.getOrNull(index)
         if (row == null) {
             setRemoteStatus("Select a remote user row first.")
             return
         }
-        val host = snap.remoteSshHost.trim()
-        val user = snap.remoteSshUser.trim()
-        val password = snap.remoteSshPassword
-        val sshPort = snap.remoteSshPort.trim().toIntOrNull() ?: RemoteHost.DEFAULT_SSH_PORT
+        val host = snap.remote.sshHost.trim()
+        val user = snap.remote.sshUser.trim()
+        val password = snap.remote.sshPassword
+        val sshPort = snap.remote.sshPort.trim().toIntOrNull() ?: RemoteHost.DEFAULT_SSH_PORT
         if (host.isEmpty() || user.isEmpty()) {
             setRemoteStatus("SSH host and user are required.")
             return
@@ -1968,11 +2212,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             prefs.edit().putString(KEY_USERNAME, username).apply()
         }
         _state.update {
-            it.copy(
-                username = username,
-                hasProfileUsername = isProfileUsername(username) || profileUsernameOrNull() != null,
-                recentGameIds = loadRecentGameIds(it.host, it.controlPort),
-            )
+            it.copy(games = it.games.copy(recentGameIds = loadRecentGameIds(it.client.host, it.settings.controlPort)), profile = it.profile.copy(username = username, hasProfileUsername = isProfileUsername(username) || profileUsernameOrNull() != null))
         }
         reloadControlsFromLocalStore()
         refreshControlsSyncReady()
@@ -1980,17 +2220,15 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     /** Re-fill Profile from SharedPreferences if the UI field was cleared without a new name. */
     private fun rehydrateUsernameFromPrefs() {
-        if (isProfileUsername(_state.value.username.trim())) return
+        if (isProfileUsername(_state.value.profile.username.trim())) return
         val stored = profileUsernameOrNull() ?: return
-        _state.update {
-            it.copy(username = stored, hasProfileUsername = true)
-        }
+        updateProfile { copy(username = stored, hasProfileUsername = true) }
     }
 
     /** Saved profile name for host sessions — never the "android" placeholder. */
     private fun sessionUsernameOrNull(): String? {
         rehydrateUsernameFromPrefs()
-        val fromState = _state.value.username.trim()
+        val fromState = _state.value.profile.username.trim()
         if (isProfileUsername(fromState)) {
             return fromState
         }
@@ -2102,97 +2340,77 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun onPasswordChange(value: String) {
-        _state.update { it.copy(password = value) }
+        updateClient { copy(password = value) }
     }
 
     fun onNewPasswordChange(value: String) {
-        _state.update { it.copy(newPassword = value) }
+        updateProfile { copy(newPassword = value) }
     }
 
     fun onConfirmPasswordChange(value: String) {
-        _state.update { it.copy(confirmPassword = value) }
+        updateProfile { copy(confirmPassword = value) }
     }
 
     fun onChangeCurrentPasswordChange(value: String) {
-        _state.update { it.copy(changeCurrentPassword = value) }
+        updateProfile { copy(changeCurrentPassword = value) }
     }
 
     fun onForcePasswordDraftChange(value: String) {
-        _state.update { it.copy(forcePasswordDraft = value) }
+        updateProfile { copy(forcePasswordDraft = value) }
     }
 
     fun onForcePasswordConfirmChange(value: String) {
-        _state.update { it.copy(forcePasswordConfirm = value) }
+        updateProfile { copy(forcePasswordConfirm = value) }
     }
 
     fun submitForcePasswordChange() {
         val snap = _state.value
-        val first = snap.forcePasswordDraft
-        val second = snap.forcePasswordConfirm
+        val first = snap.profile.forcePasswordDraft
+        val second = snap.profile.forcePasswordConfirm
         if (first.isEmpty() || first != second) {
-            _state.update { it.copy(passwordStatus = "New passwords must match and not be empty.") }
+            updateProfile { copy(passwordStatus = "New passwords must match and not be empty.") }
             return
         }
         passwordChangeResult = first
         passwordChangeLatch?.countDown()
         _state.update {
-            it.copy(
-                forcePasswordChange = false,
-                forcePasswordDraft = "",
-                forcePasswordConfirm = "",
-                password = first,
-                passwordStatus = "",
-            )
+            it.copy(client = it.client.copy(password = first), profile = it.profile.copy(forcePasswordChange = false, forcePasswordDraft = "", forcePasswordConfirm = "", passwordStatus = ""))
         }
     }
 
     fun cancelForcePasswordChange() {
         passwordChangeResult = ""
         passwordChangeLatch?.countDown()
-        _state.update {
-            it.copy(
-                forcePasswordChange = false,
-                forcePasswordDraft = "",
-                forcePasswordConfirm = "",
-            )
-        }
+        updateProfile { copy(forcePasswordChange = false, forcePasswordDraft = "", forcePasswordConfirm = "") }
     }
 
     fun changePasswordOnHost() {
         if (_state.value.busy) return
-        val host = _state.value.host.trim()
+        val host = _state.value.client.host.trim()
         if (host.isEmpty()) {
-            _state.update { it.copy(passwordStatus = "Set a Host IP on the Client tab first.") }
+            updateProfile { copy(passwordStatus = "Set a Host IP on the Client tab first.") }
             return
         }
-        val controlPort = _state.value.controlPort.toIntOrNull() ?: Protocol.DEFAULT_CONTROL_PORT
+        val controlPort = _state.value.settings.controlPort.toIntOrNull() ?: Protocol.DEFAULT_CONTROL_PORT
         val username = sessionUsernameOrNull()
         if (username == null) {
             _state.update {
-                it.copy(
-                    passwordStatus = "Set a Profile username before changing password.",
-                    section = NavSection.Profile,
-                )
+                it.copy(section = NavSection.Profile, profile = it.profile.copy(passwordStatus = "Set a Profile username before changing password."))
             }
             return
         }
-        val current = _state.value.password.ifEmpty { _state.value.changeCurrentPassword }
-        val newPw = _state.value.newPassword
-        val confirm = _state.value.confirmPassword
+        val current = _state.value.client.password.ifEmpty { _state.value.profile.changeCurrentPassword }
+        val newPw = _state.value.profile.newPassword
+        val confirm = _state.value.profile.confirmPassword
         if (current.isEmpty()) {
-            _state.update {
-                it.copy(
-                    passwordStatus =
-                        "Enter your password on the Client tab, or Current password here.",
-                )
-            }
+            updateProfile { copy(passwordStatus = "Enter your password on the Client tab, or Current password here.") }
             return
         }
         if (newPw.isEmpty() || newPw != confirm) {
-            _state.update { it.copy(passwordStatus = "New passwords must match and not be empty.") }
+            updateProfile { copy(passwordStatus = "New passwords must match and not be empty.") }
             return
         }
-        _state.update { it.copy(busy = true, passwordStatus = "Changing password…") }
+        _state.update { it.copy(busy = true, profile = it.profile.copy(passwordStatus = "Changing password…")) }
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
@@ -2209,24 +2427,12 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             result.fold(
                 onSuccess = { message ->
                     _state.update {
-                        it.copy(
-                            busy = false,
-                            passwordStatus = message,
-                            password = if (message == "password updated") newPw else it.password,
-                            changeCurrentPassword =
-                                if (message == "password updated") "" else it.changeCurrentPassword,
-                            newPassword = if (message == "password updated") "" else it.newPassword,
-                            confirmPassword =
-                                if (message == "password updated") "" else it.confirmPassword,
-                        )
+                        it.copy(busy = false, client = it.client.copy(password = if (message == "password updated") newPw else it.client.password), profile = it.profile.copy(passwordStatus = message, changeCurrentPassword = if (message == "password updated") "" else it.profile.changeCurrentPassword, newPassword = if (message == "password updated") "" else it.profile.newPassword, confirmPassword = if (message == "password updated") "" else it.profile.confirmPassword))
                     }
                 },
                 onFailure = { error ->
                     _state.update {
-                        it.copy(
-                            busy = false,
-                            passwordStatus = "Change password failed: ${error.message}",
-                        )
+                        it.copy(busy = false, profile = it.profile.copy(passwordStatus = "Change password failed: ${error.message}"))
                     }
                 },
             )
@@ -2235,12 +2441,12 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     fun onLogSessionsChange(value: String) {
         val sessions = value.trim().filter { it.isDigit() }.ifBlank { "3" }
-        _state.update { it.copy(logSessions = sessions) }
+        updateSettings { copy(logSessions = sessions) }
         prefs.edit().putString(KEY_LOG_SESSIONS, sessions).apply()
     }
 
     fun setLogControls(enabled: Boolean) {
-        _state.update { it.copy(logControls = enabled) }
+        updateSettings { copy(logControls = enabled) }
         prefs.edit().putBoolean(KEY_LOG_CONTROLS, enabled).apply()
         lastLoggedSourcePad = null
         ClientFileLog.append(
@@ -2249,7 +2455,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setLogConnections(enabled: Boolean) {
-        _state.update { it.copy(logConnections = enabled) }
+        updateSettings { copy(logConnections = enabled) }
         prefs.edit().putBoolean(KEY_LOG_CONNECTIONS, enabled).apply()
         ClientFileLog.logConnections = enabled
         ClientFileLog.append(
@@ -2259,7 +2465,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     /** Append a controls-debug line when Settings → Debug → Log controls is on. */
     private fun logControl(message: String) {
-        if (!_state.value.logControls) return
+        if (!_state.value.settings.logControls) return
         ClientFileLog.append("ctrl: $message")
     }
 
@@ -2269,7 +2475,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             " triggers=${pad.leftTrigger}/${pad.rightTrigger}"
 
     private fun logControlPad(source: String, pad: ControllerState, extra: String = "") {
-        if (!_state.value.logControls) return
+        if (!_state.value.settings.logControls) return
         val prev = lastLoggedSourcePad
         if (prev != null && pad.sameControlsAs(prev)) return
         lastLoggedSourcePad = pad
@@ -2280,23 +2486,21 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     fun sendLogsToHost() {
         if (_state.value.busy) return
         val snap = _state.value
-        val primary = snap.host.trim()
+        val primary = snap.client.host.trim()
         if (primary.isEmpty()) {
-            _state.update { it.copy(logSendStatus = "Set a Host IP on the Client tab first.") }
+            updateSettings { copy(logSendStatus = "Set a Host IP on the Client tab first.") }
             return
         }
-        val alt = snap.altHost.trim()
+        val alt = snap.client.altHost.trim()
         if (alt.isNotEmpty() && !HostAddresses.looksLikeIp(alt)) {
-            _state.update {
-                it.copy(logSendStatus = "Alt IP must look like an IP address, or leave it blank.")
-            }
+            updateSettings { copy(logSendStatus = "Alt IP must look like an IP address, or leave it blank.") }
             return
         }
         val candidates = HostAddresses.connectCandidates(primary, alt)
-        val controlPort = snap.controlPort.toIntOrNull() ?: Protocol.DEFAULT_CONTROL_PORT
-        val sessions = (snap.logSessions.toIntOrNull() ?: 3).coerceIn(1, 20)
+        val controlPort = snap.settings.controlPort.toIntOrNull() ?: Protocol.DEFAULT_CONTROL_PORT
+        val sessions = (snap.settings.logSessions.toIntOrNull() ?: 3).coerceIn(1, 20)
         val username = sessionUsernameOrNull() ?: "android-client"
-        _state.update { it.copy(busy = true, logSendStatus = "Sending logs…") }
+        _state.update { it.copy(busy = true, settings = it.settings.copy(logSendStatus = "Sending logs…")) }
         ClientFileLog.append("Send logs requested ($sessions session(s)) → $primary:$controlPort")
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
@@ -2330,14 +2534,14 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 onSuccess = { message ->
                     ClientFileLog.append("Send logs ok: $message")
                     _state.update {
-                        it.copy(busy = false, logSendStatus = message, status = message)
+                        it.copy(busy = false, status = message, settings = it.settings.copy(logSendStatus = message))
                     }
                 },
                 onFailure = { error ->
                     val msg = "Send logs failed: ${error.message}"
                     ClientFileLog.append(msg)
                     _state.update {
-                        it.copy(busy = false, logSendStatus = msg, status = msg)
+                        it.copy(busy = false, status = msg, settings = it.settings.copy(logSendStatus = msg))
                     }
                 },
             )
@@ -2345,13 +2549,13 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun onFilterChange(value: String) {
-        _state.update { state ->
-            val filter = value.trim().lowercase()
+        val filter = value.trim().lowercase()
+        updateGames {
             val expanded = if (filter.isEmpty()) {
-                state.expandedSystems
+                expandedSystems
             } else {
                 // Auto-expand systems (and Recents) that still have matches under the filter.
-                val matched = state.games.filter {
+                val matched = items.filter {
                     it.title().lowercase().contains(filter) ||
                         it.version.lowercase().contains(filter) ||
                         it.systemName.lowercase().contains(filter) ||
@@ -2360,7 +2564,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 val systems = matched
                     .map { it.systemName.ifBlank { it.systemKey.ifBlank { "Other" } } }
                     .toMutableSet()
-                val recentHit = state.recentGameIds.any { id ->
+                val recentHit = recentGameIds.any { id ->
                     matched.any { it.id == id }
                 }
                 if (recentHit) {
@@ -2368,22 +2572,22 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 systems
             }
-            state.copy(filter = value, expandedSystems = expanded)
+            copy(filter = value, expandedSystems = expanded)
         }
     }
 
     fun toggleSystemExpanded(systemName: String) {
-        _state.update { state ->
-            val next = state.expandedSystems.toMutableSet()
+        updateGames {
+            val next = expandedSystems.toMutableSet()
             if (!next.add(systemName)) next.remove(systemName)
-            state.copy(expandedSystems = next)
+            copy(expandedSystems = next)
         }
     }
 
-    fun setReceiveVideo(value: Boolean) = _state.update { it.copy(receiveVideo = value) }
+    fun setReceiveVideo(value: Boolean) = updateStream { copy(receiveVideo = value) }
 
     fun setReceiveAudio(value: Boolean) {
-        _state.update { it.copy(receiveAudio = value) }
+        updateStream { copy(receiveAudio = value) }
         val active = session
         if (active != null) {
             viewModelScope.launch(Dispatchers.IO) {
@@ -2392,57 +2596,67 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                         ClientFileLog.conn("receive audio toggle failed: ${err.message ?: err}")
                     }
                 _state.update {
-                    it.copy(
-                        status = if (value) "Audio on." else "Audio muted.",
-                    )
+                    it.copy(status = if (value) "Audio on." else "Audio muted.")
                 }
             }
         }
     }
 
     fun setStreamQuality(tier: MediaQualityTier) {
-        _state.update { it.copy(streamQuality = tier) }
+        updateStream { copy(quality = tier) }
         prefs.edit().putInt(KEY_STREAM_QUALITY, tier.id).apply()
         applyStreamPrefsToSession()
     }
 
     fun setStreamBitrate(bitrate: MediaStreamBitrate) {
-        _state.update { it.copy(streamBitrate = bitrate) }
+        updateStream { copy(bitrate = bitrate) }
         prefs.edit().putInt(KEY_STREAM_BITRATE, bitrate.id).apply()
         applyStreamPrefsToSession()
     }
 
     fun setStreamSize(size: MediaStreamSize) {
-        _state.update { it.copy(streamSize = size) }
+        updateStream { copy(size = size) }
         prefs.edit().putInt(KEY_STREAM_SIZE, size.id).apply()
         applyStreamPrefsToSession()
     }
 
     fun setStreamFeel(feel: MediaStreamFeel) {
-        _state.update { it.copy(streamFeel = feel) }
+        updateStream { copy(feel = feel) }
         prefs.edit().putInt(KEY_STREAM_FEEL, feel.id).apply()
         applyStreamPrefsToSession()
     }
 
-    /** Drawer open during play → pause (unless control editing relaxed it). */
-    fun onPlayMenuOpened() {
+    /**
+     * Drawer open: park the cursor on the section whose pane is showing, and during play
+     * pause (unless control editing relaxed it).
+     */
+    fun onMenuDrawerOpened() {
         menuDrawerOpen = true
         logControl("menuDrawerOpen=true (pads muted for UDP)")
         clearRemotedKeys()
         clearKeyboardDpad()
-        menuHatUp = false
-        menuHatDown = false
+        resetMenuHats()
         gamepadTracker.reset()
         latestPad = ControllerState()
+        _state.update {
+            // Opened over the live play surface there is no current pane, so start on
+            // Controls the way the old play menu did.
+            val target = if (it.playing && !it.playPaneVisible()) {
+                NavSection.Controls
+            } else {
+                it.section
+            }
+            it.copy(menu = MenuNavigator.atDrawer(menuSections(it), target))
+        }
         syncMenuPause()
     }
 
     /** Drawer closed → unpause (unless drawer re-opens before this applies). */
-    fun onPlayMenuClosed() {
+    fun onMenuDrawerClosed() {
         menuDrawerOpen = false
+        backMenuChromeFocused = false
         logControl("menuDrawerOpen=false (pads unmuted)")
-        menuHatUp = false
-        menuHatDown = false
+        resetMenuHats()
         clearRemotedKeys()
         clearKeyboardDpad()
         syncMenuPause()
@@ -2472,7 +2686,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             if (!_state.value.playing) return@launch
             val hasFrames = session?.videoPlayer?.hasDecodedFrames() == true
             val wantPaused =
-                menuDrawerOpen && !_state.value.overlayEditing && hasFrames
+                menuDrawerOpen && !_state.value.controls.overlayEditing && hasFrames
             // Initial Closed while playing / drawer open before first frame: do not poke.
             if (lastSentMenuPause == null && !wantPaused) return@launch
             if (lastSentMenuPause == wantPaused) return@launch
@@ -2491,7 +2705,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         menuPauseJob = null
         if (lastSentMenuPause != true) {
             lastSentMenuPause = false
-            _state.update { it.copy(paused = false) }
+            updateGameOptions { copy(paused = false) }
             return
         }
         pushEmulatorControls(
@@ -2509,7 +2723,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     fun setPaused(enabled: Boolean, force: Boolean = false) {
         if (!_state.value.playing) return
         if (enabled && session?.videoPlayer?.hasDecodedFrames() != true) return
-        if (!force && _state.value.paused == enabled) return
+        if (!force && _state.value.gameOptions.paused == enabled) return
         menuPauseJob?.cancel()
         menuPauseJob = null
         pushEmulatorControls(pause = enabled, force = force)
@@ -2522,7 +2736,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     fun setFastForward(enabled: Boolean) {
         if (!_state.value.playing) return
         ffMenuLatched = enabled
-        _state.update { it.copy(fastForward = enabled) }
+        updateGameOptions { copy(fastForward = enabled) }
         publishEffectiveFastForward()
     }
 
@@ -2581,9 +2795,9 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         val active = session ?: return
         menuPauseJob?.cancel()
         menuPauseJob = null
-        val next = !_state.value.paused
+        val next = !_state.value.gameOptions.paused
         lastSentMenuPause = next
-        _state.update { it.copy(paused = next) }
+        updateGameOptions { copy(paused = next) }
         clearRemotedKeys()
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
@@ -2611,7 +2825,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         val active = session ?: return
         if (pause != null) {
             lastSentMenuPause = pause
-            _state.update { it.copy(paused = pause) }
+            updateGameOptions { copy(paused = pause) }
         }
         // Remoted P/Space must not fight absolute pause intents on the same session.
         clearRemotedKeys()
@@ -2776,8 +2990,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     fun connect() {
         val snap = _state.value
-        val primary = snap.host.trim()
-        val altDraft = snap.altHost.trim()
+        val primary = snap.client.host.trim()
+        val altDraft = snap.client.altHost.trim()
         if (primary.isBlank()) {
             _state.update { it.copy(status = "Host IP is required.") }
             return
@@ -2789,15 +3003,11 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
         val candidates = HostAddresses.connectCandidates(primary, altDraft)
-        val port = snap.controlPort.toIntOrNull() ?: Protocol.DEFAULT_CONTROL_PORT
+        val port = snap.settings.controlPort.toIntOrNull() ?: Protocol.DEFAULT_CONTROL_PORT
         val sessionUser = sessionUsernameOrNull()
-        if (sessionUser == null && snap.password.isNotEmpty()) {
+        if (sessionUser == null && snap.client.password.isNotEmpty()) {
             _state.update {
-                it.copy(
-                    status = "Set a Profile username before connecting with a password.",
-                    section = NavSection.Profile,
-                    passwordStatus = "Username required — blank falls through to a throwaway “android” save.",
-                )
+                it.copy(status = "Set a Profile username before connecting with a password.", section = NavSection.Profile, profile = it.profile.copy(passwordStatus = "Username required — blank falls through to a throwaway “android” save."))
             }
             return
         }
@@ -2805,19 +3015,19 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         // Username is owned by onUsernameChange — never overwrite with a blank field.
         prefs.edit()
             .putString(KEY_HOST, primary)
-            .putString(KEY_CONTROL_PORT, snap.controlPort)
-            .putString(KEY_INPUT_PORT, snap.inputPort)
+            .putString(KEY_CONTROL_PORT, snap.settings.controlPort)
+            .putString(KEY_INPUT_PORT, snap.settings.inputPort)
             .apply()
 
         viewModelScope.launch {
             _state.update { it.copy(busy = true, status = "Fetching catalog from $primary:$port…") }
             clearLobbyPresence()
             val username = sessionUser
-            val password = snap.password
+            val password = snap.client.password
             runCatching {
                 withContext(Dispatchers.IO) {
-                    val knownRev = snap.catalogRevision
-                    val knownGames = snap.catalogCacheGames.ifEmpty { snap.games }
+                    val knownRev = snap.games.catalogRevision
+                    val knownGames = snap.games.catalogCacheGames.ifEmpty { snap.games.items }
                     var lastError: Throwable? = null
                     for ((index, host) in candidates.withIndex()) {
                         if (index > 0) {
@@ -2837,8 +3047,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                                     password,
                                     knownRevision = knownRev,
                                     knownGames = knownGames,
-                                    knownBlocksRevision = snap.blocksRevision,
-                                    knownBlockedIds = snap.blockedGameIds,
+                                    knownBlocksRevision = snap.games.blocksRevision,
+                                    knownBlockedIds = snap.games.blockedGameIds,
                                 )
                             } else {
                                 CatalogFetcher.fetch(
@@ -2866,7 +3076,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             }.onSuccess { (host, catalog, presence) ->
                 lobbyPresence = presence
                 ClientFileLog.append("Catalog loaded: ${catalog.games.size} games from $host:$port")
-                val recentIds = loadRecentGameIds(host, snap.controlPort)
+                val recentIds = loadRecentGameIds(host, snap.settings.controlPort)
                 val expanded = if (recentIds.any { id -> catalog.games.any { it.id == id } }) {
                     setOf(RECENT_GROUP)
                 } else {
@@ -2884,29 +3094,29 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                         connected = true,
                         // Host IP / Alt IP prefs stay as entered; art/join use reachable host.
                         section = NavSection.Games,
-                        games = catalog.games,
-                        catalogRevision = catalog.catalogRevision,
-                        catalogCacheGames = catalog.cacheGames,
-                        blocksRevision = catalog.blocksRevision,
-                        blockedGameIds = catalog.blockedGameIds,
-                        recentGameIds = recentIds,
-                        expandedSystems = expanded,
-                        artByAssetKey = emptyMap(),
+                        games = it.games.copy(
+                            items = catalog.games,
+                            catalogRevision = catalog.catalogRevision,
+                            catalogCacheGames = catalog.cacheGames,
+                            blocksRevision = catalog.blocksRevision,
+                            blockedGameIds = catalog.blockedGameIds,
+                            recentGameIds = recentIds,
+                            expandedSystems = expanded,
+                            artByAssetKey = emptyMap(),
+                        ),
                         status = "Loaded ${catalog.games.size} games from $host" +
                             (if (viaAlt) " (Alt IP)" else "") +
                             " (rev ${catalog.catalogRevision}).$presenceNote",
-                        controlsSyncReady = profileUsernameOrNull() != null && presence != null,
+                        controls = it.controls.copy(
+                            syncReady = profileUsernameOrNull() != null && presence != null,
+                        ),
                     )
                 }
                 startArtPrefetch(catalog.games, host, port, catalog.catalogRevision)
             }.onFailure { err ->
                 clearLobbyPresence()
                 _state.update {
-                    it.copy(
-                        busy = false,
-                        connected = false,
-                        status = "Connect failed: ${err.message ?: err}",
-                    )
+                    it.copy(busy = false, connected = false, status = "Connect failed: ${err.message ?: err}")
                 }
             }
         }
@@ -2929,8 +3139,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 catalogRevision = catalogRevision,
                 isActive = { isActive && _state.value.connected },
             ) { assetKey, bitmap ->
-                _state.update { state ->
-                    state.copy(artByAssetKey = state.artByAssetKey + (assetKey to bitmap))
+                updateGames {
+                    copy(artByAssetKey = artByAssetKey + (assetKey to bitmap))
                 }
             }
         }
@@ -2949,13 +3159,14 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 section = NavSection.Client,
                 // Keep catalogRevision + catalogCacheGames so the next Connect can
                 // take the host unchanged short-circuit without an empty UI.
-                games = it.catalogCacheGames.ifEmpty { it.games },
-                selectedGame = null,
-                mediaHint = "",
-                videoPlayer = null,
-                softKeyboard = null,
-                artByAssetKey = emptyMap(),
-                expandedSystems = emptySet(),
+                games = it.games.copy(
+                    items = it.games.catalogCacheGames.ifEmpty { it.games.items },
+                    selected = null,
+                    artByAssetKey = emptyMap(),
+                    expandedSystems = emptySet(),
+                ),
+                stream = it.stream.copy(mediaHint = ""),
+                session = it.session.copy(videoPlayer = null, softKeyboard = null),
                 status = "Disconnected.",
             )
         }
@@ -2963,8 +3174,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     fun startGame(game: GameInfo) {
         val snap = _state.value
-        val primary = snap.host.trim()
-        val altDraft = snap.altHost.trim()
+        val primary = snap.client.host.trim()
+        val altDraft = snap.client.altHost.trim()
         if (primary.isBlank()) {
             _state.update {
                 it.copy(status = "Host IP is required.", section = NavSection.Client)
@@ -2973,53 +3184,37 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         }
         if (altDraft.isNotEmpty() && !HostAddresses.looksLikeIp(altDraft)) {
             _state.update {
-                it.copy(
-                    status = "Alt IP must look like an IP address (e.g. 10.6.0.2), or leave it blank.",
-                    section = NavSection.Client,
-                )
+                it.copy(status = "Alt IP must look like an IP address (e.g. 10.6.0.2), or leave it blank.", section = NavSection.Client)
             }
             return
         }
         val candidates = HostAddresses.connectCandidates(primary, altDraft)
-        val controlPort = snap.controlPort.toIntOrNull() ?: Protocol.DEFAULT_CONTROL_PORT
-        val inputPort = snap.inputPort.toIntOrNull() ?: Protocol.DEFAULT_INPUT_PORT
+        val controlPort = snap.settings.controlPort.toIntOrNull() ?: Protocol.DEFAULT_CONTROL_PORT
+        val inputPort = snap.settings.inputPort.toIntOrNull() ?: Protocol.DEFAULT_INPUT_PORT
         val username = sessionUsernameOrNull()
         if (username == null) {
             _state.update {
-                it.copy(
-                    status = "Set a Profile username before joining — saves are keyed by that name.",
-                    section = NavSection.Profile,
-                    passwordStatus = "Username required (never join as the “android” placeholder).",
-                )
+                it.copy(status = "Set a Profile username before joining — saves are keyed by that name.", section = NavSection.Profile, profile = it.profile.copy(passwordStatus = "Username required (never join as the “android” placeholder)."))
             }
             return
         }
-        val password = snap.password
+        val password = snap.client.password
         if (password.isEmpty()) {
             _state.update {
-                it.copy(
-                    status = "Enter your password on the Client tab.",
-                    section = NavSection.Client,
-                    passwordStatus = "Password required before joining.",
-                )
+                it.copy(status = "Enter your password on the Client tab.", section = NavSection.Client, profile = it.profile.copy(passwordStatus = "Password required before joining."))
             }
             return
         }
 
         viewModelScope.launch {
             _state.update {
-                it.copy(
-                    busy = true,
-                    status = "Starting ${game.title()}…",
-                    selectedGame = game,
-                    softKeyboard = null,
-                )
+                it.copy(busy = true, status = "Starting ${game.title()}…", games = it.games.copy(selected = game), session = it.session.copy(softKeyboard = null))
             }
             runCatching {
                 withContext(Dispatchers.IO) {
                     clearLobbyPresence()
                     endSessionLocked()
-                    val preferPhysical = snap.usePhysicalController
+                    val preferPhysical = snap.controls.usePhysicalController
                     val pads = PhysicalGamepad.connectedPads()
                     val usePad = preferPhysical && pads.isNotEmpty()
                     val pad = pads.firstOrNull()
@@ -3041,7 +3236,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                                 username,
                                 password,
                                 game,
-                                receiveAudio = snap.receiveAudio,
+                                receiveAudio = snap.stream.receiveAudio,
                                 displayLayout = DisplayLayoutPreference.Landscape.id,
                                 controllerName = if (usePad) {
                                     pad?.name ?: "Android Gamepad"
@@ -3053,20 +3248,13 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                                 } else {
                                     "android-touch-0"
                                 },
-                                knownCatalogRevision = snap.catalogRevision,
-                                knownBlocksRevision = snap.blocksRevision,
+                                knownCatalogRevision = snap.games.catalogRevision,
+                                knownBlocksRevision = snap.games.blocksRevision,
                                 onPasswordChangeRequired = {
                                     val latch = java.util.concurrent.CountDownLatch(1)
                                     passwordChangeLatch = latch
                                     passwordChangeResult = ""
-                                    _state.update {
-                                        it.copy(
-                                            forcePasswordChange = true,
-                                            forcePasswordDraft = "",
-                                            forcePasswordConfirm = "",
-                                            passwordStatus = "Host requires a new password.",
-                                        )
-                                    }
+                                    updateProfile { copy(forcePasswordChange = true, forcePasswordDraft = "", forcePasswordConfirm = "", passwordStatus = "Host requires a new password.") }
                                     latch.await()
                                     passwordChangeLatch = null
                                     passwordChangeResult.also {
@@ -3099,56 +3287,62 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 sessionFamily = OverlaySystemFamily.fromSystemKey(game.systemKey)
                 val profile = profileFor(sessionFamily)
                 val mapProfile = mapProfileFor(sessionFamily)
-                val recentIds = rememberRecentGame(game.id, host, snap.controlPort)
+                val recentIds = rememberRecentGame(game.id, host, snap.settings.controlPort)
+                val mediaHint = run {
+                    val video = joined.videoPlayer
+                    val audio = joined.audioPlayer
+                    when {
+                        video != null && audio != null ->
+                            "Video :${video.port} · Audio :${audio.port}"
+                        video != null ->
+                            "Video UDP :${video.port} (no audio URI — check Receive audio)"
+                        media != null ->
+                            "No video bind — ${media.videoUri}"
+                        else ->
+                            "No MediaEndpoint from host"
+                    }
+                }
+                val discStatus = if (game.playlistDiscs.size >= 2) {
+                    "Disc 1 / ${game.playlistDiscs.size}"
+                } else {
+                    ""
+                }
+                val orientation = _state.value.controls.overlayOrientation
                 _state.update {
                     it.copy(
                         busy = false,
                         playing = true,
-                        host = host,
-                        recentGameIds = recentIds,
-                        videoPlayer = joined.videoPlayer,
-                        padLayout = profile.resolveLayout(game.systemKey),
-                        overlayOpacity = profile.clampedOpacity(),
-                        swapNw = mapProfile.swapNw,
-                        swapSe = mapProfile.swapSe,
-                        overlayItems = profile.resolveItems(
-                            game.systemKey,
-                            _state.value.overlayOrientation,
-                        ),
-                        overlayEditing = false,
-                        editingOverlayFamily = sessionFamily,
-                        editingOverlayProfile = profile,
-                        editingMapProfile = mapProfile,
-                        reconnectHintGameId = null,
-                        playlistDiscs = game.playlistDiscs,
-                        discIndex = 0,
-                        discStatus = if (game.playlistDiscs.size >= 2) {
-                            "Disc 1 / ${game.playlistDiscs.size}"
-                        } else {
-                            ""
-                        },
-                        linkCapable = systemSupportsLink(game.systemKey),
-                        linkPeerDraft = "",
-                        linkStatus = "",
-                        linkStatusKind = null,
                         status = "Playing ${game.title()}",
-                        controlsSyncReady = profileUsernameOrNull() != null,
-                        paused = false,
-                        fastForward = false,
-                        mediaHint = run {
-                            val video = joined.videoPlayer
-                            val audio = joined.audioPlayer
-                            when {
-                                video != null && audio != null ->
-                                    "Video :${video.port} · Audio :${audio.port}"
-                                video != null ->
-                                    "Video UDP :${video.port} (no audio URI — check Receive audio)"
-                                media != null ->
-                                    "No video bind — ${media.videoUri}"
-                                else ->
-                                    "No MediaEndpoint from host"
-                            }
-                        },
+                        client = it.client.copy(host = host),
+                        games = it.games.copy(
+                            recentGameIds = recentIds,
+                            reconnectHintGameId = null,
+                        ),
+                        stream = it.stream.copy(mediaHint = mediaHint),
+                        controls = it.controls.copy(
+                            padLayout = profile.resolveLayout(game.systemKey),
+                            overlayOpacity = profile.clampedOpacity(),
+                            swapNw = mapProfile.swapNw,
+                            swapSe = mapProfile.swapSe,
+                            overlayItems = profile.resolveItems(game.systemKey, orientation),
+                            overlayEditing = false,
+                            editingOverlayFamily = sessionFamily,
+                            editingOverlayProfile = profile,
+                            editingMapProfile = mapProfile,
+                            syncReady = profileUsernameOrNull() != null,
+                        ),
+                        gameOptions = it.gameOptions.copy(
+                            playlistDiscs = game.playlistDiscs,
+                            discIndex = 0,
+                            discStatus = discStatus,
+                            linkCapable = systemSupportsLink(game.systemKey),
+                            linkPeerDraft = "",
+                            linkStatus = "",
+                            linkStatusKind = null,
+                            paused = false,
+                            fastForward = false,
+                        ),
+                        session = it.session.copy(videoPlayer = joined.videoPlayer),
                     )
                 }
                 // Grace reconnect / fresh join: pause Off only. FF stays default Off on
@@ -3169,16 +3363,17 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                         busy = false,
                         playing = false,
                         section = NavSection.Games,
-                        videoPlayer = null,
-                        softKeyboard = null,
-                        padLayout = PadLayout.Standard,
-                        reconnectHintGameId = if (canReconnect) game.id else null,
                         status = if (canReconnect) {
                             "Host still has your seat for ~60s. Tap ${game.title()} again to reconnect " +
                                 "(same username). Leave session ends it immediately."
                         } else {
                             "Start failed: $msg"
                         },
+                        games = it.games.copy(
+                            reconnectHintGameId = if (canReconnect) game.id else null,
+                        ),
+                        controls = it.controls.copy(padLayout = PadLayout.Standard),
+                        session = it.session.copy(videoPlayer = null, softKeyboard = null),
                     )
                 }
             }
@@ -3187,7 +3382,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     fun onPadState(state: ControllerState) {
         val snap = _state.value
-        if (snap.physicalInputActive) {
+        if (snap.controls.physicalInputActive) {
             if (state.buttons != 0 ||
                 state.leftTrigger != 0 ||
                 state.rightTrigger != 0 ||
@@ -3196,19 +3391,18 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             ) {
                 logControl(
                     "overlay ignored (physicalInputActive) ${formatPad(state)} " +
-                        "pad=${snap.physicalPadLabel.ifBlank { "?" }}",
+                        "pad=${snap.controls.physicalPadLabel.ifBlank { "?" }}",
                 )
             }
             return
         }
-        val swapped = ControllerState.applyFaceButtonSwaps(state, snap.swapNw, snap.swapSe)
-        latestPad = swapped
-        logControlPad(
-            "overlay",
-            swapped,
-            "swapNw=${snap.swapNw} swapSe=${snap.swapSe} menuOpen=$menuDrawerOpen",
-        )
+        // Shared face swaps from ControllerMapProfile (same as physical).
+        overlayPad.ingestFixed(state)
     }
+
+    /** Shared map-aware action for overlay chrome while playing. */
+    fun playOverlayAction(item: OverlayItem): OverlayAction =
+        overlayPad.playActionFor(item)
 
     /** Remoted DS stylus; coords are normalized 0..65535 within the bottom screen. */
     fun onDsTouch(normX: Int, normY: Int, pressed: Boolean) {
@@ -3233,109 +3427,107 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             it.copy(
                 playing = false,
                 section = NavSection.Games,
-                selectedGame = null,
-                mediaHint = "",
-                videoPlayer = null,
-                softKeyboard = null,
-                dsScreenLayout = null,
-                padLayout = PadLayout.Standard,
-                overlayItems = OverlayPresets.forLayout(PadLayout.Standard),
-                overlayEditing = false,
-                reconnectHintGameId = null,
-                fastForward = false,
-                paused = false,
-                playlistDiscs = emptyList(),
-                discIndex = 0,
-                discStatus = "",
-                linkCapable = false,
-                linkPeerDraft = "",
-                linkStatus = "",
-                linkStatusKind = null,
                 status = "Left session.",
+                games = it.games.copy(
+                    selected = null,
+                    reconnectHintGameId = null,
+                ),
+                stream = it.stream.copy(mediaHint = ""),
+                controls = it.controls.copy(
+                    padLayout = PadLayout.Standard,
+                    overlayItems = OverlayPresets.forLayout(PadLayout.Standard),
+                    overlayEditing = false,
+                ),
+                gameOptions = it.gameOptions.copy(
+                    fastForward = false,
+                    paused = false,
+                    playlistDiscs = emptyList(),
+                    discIndex = 0,
+                    discStatus = "",
+                    linkCapable = false,
+                    linkPeerDraft = "",
+                    linkStatus = "",
+                    linkStatusKind = null,
+                ),
+                session = it.session.copy(
+                    videoPlayer = null,
+                    softKeyboard = null,
+                    dsScreenLayout = null,
+                ),
             )
         }
         refreshPhysicalPads()
     }
 
     fun onLinkPeerChange(value: String) {
-        _state.update { it.copy(linkPeerDraft = value) }
+        updateGameOptions { copy(linkPeerDraft = value) }
     }
 
     fun requestDiscSetIndex(index: Int) {
-        val game = _state.value.selectedGame ?: return
-        val discs = _state.value.playlistDiscs
+        val game = _state.value.games.selected ?: return
+        val discs = _state.value.gameOptions.playlistDiscs
         if (!_state.value.playing || discs.size < 2) return
         val clamped = index.coerceIn(0, discs.lastIndex)
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 session?.sendDiscControl(game.id, DiscControlAction.SetIndex, clamped)
             }.onFailure { err ->
-                _state.update {
-                    it.copy(discStatus = "Disc failed: ${err.message ?: err}")
-                }
+                updateGameOptions { copy(discStatus = "Disc failed: ${err.message ?: err}") }
             }
         }
     }
 
     fun requestDiscNext() {
-        val game = _state.value.selectedGame ?: return
-        if (!_state.value.playing || _state.value.playlistDiscs.size < 2) return
+        val game = _state.value.games.selected ?: return
+        if (!_state.value.playing || _state.value.gameOptions.playlistDiscs.size < 2) return
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 session?.sendDiscControl(game.id, DiscControlAction.Next)
             }.onFailure { err ->
-                _state.update {
-                    it.copy(discStatus = "Disc failed: ${err.message ?: err}")
-                }
+                updateGameOptions { copy(discStatus = "Disc failed: ${err.message ?: err}") }
             }
         }
     }
 
     fun requestDiscPrev() {
-        val game = _state.value.selectedGame ?: return
-        if (!_state.value.playing || _state.value.playlistDiscs.size < 2) return
+        val game = _state.value.games.selected ?: return
+        if (!_state.value.playing || _state.value.gameOptions.playlistDiscs.size < 2) return
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 session?.sendDiscControl(game.id, DiscControlAction.Prev)
             }.onFailure { err ->
-                _state.update {
-                    it.copy(discStatus = "Disc failed: ${err.message ?: err}")
-                }
+                updateGameOptions { copy(discStatus = "Disc failed: ${err.message ?: err}") }
             }
         }
     }
 
     fun requestLink() {
         val snap = _state.value
-        val game = snap.selectedGame ?: return
-        if (!snap.playing || !snap.linkCapable) return
-        val peer = snap.linkPeerDraft.trim()
+        val game = snap.games.selected ?: return
+        if (!snap.playing || !snap.gameOptions.linkCapable) return
+        val peer = snap.gameOptions.linkPeerDraft.trim()
         if (peer.isEmpty()) {
-            _state.update { it.copy(linkStatus = "Enter the other player's username.") }
+            updateGameOptions { copy(linkStatus = "Enter the other player's username.") }
             return
         }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 session?.sendLinkRequest(game.id, peer, LinkAction.Request)
             }.onFailure { err ->
-                _state.update {
-                    it.copy(linkStatus = "Link failed: ${err.message ?: err}")
-                }
+                updateGameOptions { copy(linkStatus = "Link failed: ${err.message ?: err}") }
             }
         }
     }
 
     fun cancelLink() {
         val snap = _state.value
-        val game = snap.selectedGame ?: return
-        if (!snap.playing || !snap.linkCapable) return
+        val game = snap.games.selected ?: return
+        if (!snap.playing || !snap.gameOptions.linkCapable) return
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 session?.sendLinkRequest(game.id, "", LinkAction.Cancel)
             }.onFailure { err ->
-                _state.update {
-                    it.copy(linkStatus = "Link cancel failed: ${err.message ?: err}")
-                }
+                updateGameOptions { copy(linkStatus = "Link cancel failed: ${err.message ?: err}") }
             }
         }
     }
@@ -3358,10 +3550,10 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun submitSoftKeyboard(text: String) {
-        val request = _state.value.softKeyboard ?: return
+        val request = _state.value.session.softKeyboard ?: return
         val maxLen = request.maxLength.coerceIn(1, 64)
         val cleaned = sanitizeSoftKeyboardText(text, maxLen).trim()
-        _state.update { it.copy(softKeyboard = null) }
+        updateSession { copy(softKeyboard = null) }
         if (cleaned.isEmpty()) {
             cancelSoftKeyboard()
             return
@@ -3385,8 +3577,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun cancelSoftKeyboard() {
-        val request = _state.value.softKeyboard
-        _state.update { it.copy(softKeyboard = null) }
+        val request = _state.value.session.softKeyboard
+        updateSession { copy(softKeyboard = null) }
         if (request == null) return
         // Host-driven cancel: empty + not accepted. Watcher must not invent text;
         // if the game dialog is still Ready it publishes another SoftKeyboardRequest.
@@ -3403,7 +3595,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun showSoftKeyboard(request: SoftKeyboardRequest) {
-        val current = _state.value.softKeyboard
+        val current = _state.value.session.softKeyboard
         // Avoid rebuilding (and wiping typed text) for a duplicate host poll of the same id.
         if (current != null && current.requestId == request.requestId && request.requestId != 0L) {
             return
@@ -3412,14 +3604,11 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         clearRemotedKeys()
         clearKeyboardDpad()
         _state.update {
-            it.copy(
-                softKeyboard = request,
-                status = if (request.prompt.isBlank()) {
+            it.copy(status = if (request.prompt.isBlank()) {
                     "Host requested software keyboard."
                 } else {
                     "Host requested software keyboard: ${request.prompt}"
-                },
-            )
+                }, session = it.session.copy(softKeyboard = request))
         }
     }
 
@@ -3460,7 +3649,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                             "udp pad ${formatPad(pad)} copies=$copies " +
                                 "menuOpen=$menuDrawerOpen " +
                                 "kbDpad=0x${keyboardDpadBits.get().toString(16)} " +
-                                "physicalActive=${_state.value.physicalInputActive}",
+                                "physicalActive=${_state.value.controls.physicalInputActive}",
                         )
                     }
                     val sentOk = runCatching {
@@ -3480,7 +3669,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                     }
                 }
                 val keys =
-                    if (menuDrawerOpen || _state.value.softKeyboard != null) {
+                    if (menuDrawerOpen || _state.value.session.softKeyboard != null) {
                         0
                     } else {
                         remotedKeysHeld.get()
@@ -3491,7 +3680,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                     if (keysChanged || lastSentKeys < 0) {
                         logControl(
                             "udp keys=0x${keys.toString(16)} " +
-                                "menuOpen=$menuDrawerOpen osk=${_state.value.softKeyboard != null}",
+                                "menuOpen=$menuDrawerOpen osk=${_state.value.session.softKeyboard != null}",
                         )
                     }
                     val keysOk = runCatching {
@@ -3529,7 +3718,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 // frames exist so we still pause for a long-open menu after init.
                 if (menuDrawerOpen &&
                     lastSentMenuPause != true &&
-                    !_state.value.overlayEditing &&
+                    !_state.value.controls.overlayEditing &&
                     active.videoPlayer?.hasDecodedFrames() == true
                 ) {
                     syncMenuPause()
@@ -3564,22 +3753,17 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                     }
                     is IncomingPacket.SoftKeyboard -> showSoftKeyboard(packet.value)
                     is IncomingPacket.DsScreens -> {
-                        _state.update { it.copy(dsScreenLayout = packet.value) }
+                        updateSession { copy(dsScreenLayout = packet.value) }
                     }
                     is IncomingPacket.DiscControl -> {
                         val response = packet.value
-                        _state.update {
-                            it.copy(
-                                discIndex = response.discIndex.coerceAtLeast(0),
-                                discStatus = if (response.ok) {
+                        updateGameOptions { copy(discIndex = response.discIndex.coerceAtLeast(0), discStatus = if (response.ok) {
                                     response.message.ifBlank {
                                         "Disc ${response.discIndex + 1} / ${response.discCount}"
                                     }
                                 } else {
                                     "Disc failed: ${response.message}"
-                                },
-                            )
-                        }
+                                }) }
                     }
                     is IncomingPacket.Link -> {
                         val response = packet.value
@@ -3591,14 +3775,11 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                             else -> "Link"
                         }
                         _state.update {
-                            it.copy(
-                                linkStatusKind = response.status,
-                                linkStatus = if (response.message.isNotBlank()) {
+                            it.copy(gameOptions = it.gameOptions.copy(linkStatusKind = response.status, linkStatus = if (response.message.isNotBlank()) {
                                     "$prefix: ${response.message}"
                                 } else {
                                     prefix
-                                },
-                            )
+                                }))
                         }
                     }
                     is IncomingPacket.VideoPending -> {
@@ -3613,10 +3794,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                         val promoted = session?.promoteVideo(packet.value)
                         if (promoted != null) {
                             _state.update {
-                                it.copy(
-                                    videoPlayer = promoted,
-                                    mediaHint = "Video UDP :${promoted.port}",
-                                )
+                                it.copy(stream = it.stream.copy(mediaHint = "Video UDP :${promoted.port}"), session = it.session.copy(videoPlayer = promoted))
                             }
                             // Staging Ready means frames exist; apply deferred drawer pause.
                             if (menuDrawerOpen) syncMenuPause()
@@ -3657,24 +3835,27 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         reconnectHint: Boolean = true,
     ) {
         if (session == null && !_state.value.playing) return
-        val gameId = _state.value.selectedGame?.id
+        val gameId = _state.value.games.selected?.id
         endSession(sendLeave = sendLeave)
         _state.update {
             it.copy(
                 playing = false,
                 section = NavSection.Games,
-                mediaHint = "",
-                videoPlayer = null,
-                softKeyboard = null,
-                playlistDiscs = emptyList(),
-                discIndex = 0,
-                discStatus = "",
-                linkCapable = false,
-                linkPeerDraft = "",
-                linkStatus = "",
-                linkStatusKind = null,
-                reconnectHintGameId = if (reconnectHint) gameId else null,
                 status = message,
+                games = it.games.copy(
+                    reconnectHintGameId = if (reconnectHint) gameId else null,
+                ),
+                stream = it.stream.copy(mediaHint = ""),
+                gameOptions = it.gameOptions.copy(
+                    playlistDiscs = emptyList(),
+                    discIndex = 0,
+                    discStatus = "",
+                    linkCapable = false,
+                    linkPeerDraft = "",
+                    linkStatus = "",
+                    linkStatusKind = null,
+                ),
+                session = it.session.copy(videoPlayer = null, softKeyboard = null),
             )
         }
     }
@@ -3685,7 +3866,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 (lobbyPresence?.isConnected() == true) ||
                     (_state.value.playing && session != null)
                 )
-        _state.update { it.copy(controlsSyncReady = ready) }
+        updateControls { copy(syncReady = ready) }
     }
 
     private fun clearLobbyPresence() {
@@ -3771,7 +3952,10 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     companion object {
-        const val RECENT_GROUP = "Recents"
+        const val RECENT_GROUP = RECENTS_GROUP
+
+        /** DEL as a character, which no field should ever receive as text. */
+        private const val DELETE_CHAR = 127
         /** Local join placeholder — never used for SQL persistence or host sync. */
         const val PLACEHOLDER_USERNAME = "android"
 
@@ -3815,6 +3999,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         private const val HOST_EDIT_SUPPRESS_MS = 4_000L
         /** Wait for drawer settle; coalesce flash Open→Closed before poking the host. */
         private const val MENU_PAUSE_DEBOUNCE_MS = 250L
+        /** Hat axis magnitude that counts as a D-pad press while navigating menus. */
+        private const val HAT_EDGE = 0.5f
         /** Ignore FF button bounce before rate-limit clock. */
         private const val FF_COALESCE_MS = 80L
         /** Max one FF EmulatorControl edge per second (Ryujinx F1 cycle). */

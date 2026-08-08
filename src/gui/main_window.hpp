@@ -9,6 +9,7 @@
 #include "game_picker_widget.hpp"
 #include "gui_logging.hpp"
 #include "pad_on_screen_keyboard.hpp"
+#include "paths_panel.hpp"
 
 #ifdef ARCHSTREAMER_HAS_HOST
 #include "client/client_media_playback.hpp"
@@ -37,6 +38,7 @@ class QListWidget;
 class QPlainTextEdit;
 class QProcess;
 class QPushButton;
+class QSettings;
 class QSpinBox;
 class QTabWidget;
 class QTableWidget;
@@ -57,13 +59,16 @@ public:
      *  this wins when set (see load_persisted_settings). */
     void set_session_update_branch(const QString& branch);
 
-#ifdef ARCHSTREAMER_HAS_HOST
-    /** For Catalog ops (filesystem renames). */
-    std::filesystem::path save_root_path_for_catalog() const;
-    std::filesystem::path art_root_path_for_catalog() const;
-    std::filesystem::path rom_root_path_for_catalog() const;
-    std::filesystem::path dlc_root_path_for_catalog() const;
-#endif
+    /**
+     * Roots from the Paths tab, `~`-expanded. Empty when the row is blank or the
+     * build has no such row, so callers decide what a missing root means.
+     * Public because Catalog ops (filesystem renames) resolve them too.
+     */
+    std::filesystem::path art_root_path() const;
+    std::filesystem::path rom_root_path() const;
+    std::filesystem::path meta_root_path() const;
+    std::filesystem::path save_root_path() const;
+    std::filesystem::path dlc_root_path() const;
 
 private:
     QWidget* build_client_tab();
@@ -73,6 +78,7 @@ private:
     QWidget* build_game_options_tab();
     QWidget* build_profile_tab();
     QWidget* build_logs_tab();
+    QWidget* build_paths_tab();
     QWidget* build_settings_tab();
     void apply_debug_log_flags_from_ui();
     void append_logs_tab(const QString& text, GuiLogLevel level = GuiLogLevel::Normal);
@@ -129,6 +135,7 @@ private:
     void refresh_saves_browser();
     void refresh_saves_system_combo();
     void refresh_saves_browser_list();
+    void start_ps2_memcard_prewarm();
     void update_saves_action_enabled();
     bool saves_host_busy() const;
     bool confirm_saves_destructive(const QString& title, const QString& detail);
@@ -156,15 +163,20 @@ private:
     void apply_log_level_from_settings();
     GuiLogLevel current_log_level() const;
     int session_timeout_seconds() const;
-    std::filesystem::path art_root_path() const;
-#ifdef ARCHSTREAMER_HAS_HOST
-    std::filesystem::path save_root_path() const;
+
+    // Paths tab (main_window_paths.cpp). Every one of these tolerates a build
+    // whose host-only rows were never created.
+    void connect_path_fields();
+    void load_path_settings(QSettings& settings);
+    void save_path_settings(QSettings& settings);
+    /** Flatpak override for the host_runner binary; empty means auto-detect. */
+    QString native_host_runner_override() const;
     void update_save_root_status();
     void browse_save_root();
     void create_save_root();
     void sync_save_root_field_to_path(const std::filesystem::path& path);
     void persist_valid_save_root(const std::filesystem::path& path);
-#endif
+
     std::string steam_account_id_text() const;
     std::string profile_client_username() const;
     std::string profile_host_name() const;
@@ -229,15 +241,18 @@ private:
     std::atomic_bool client_connecting_ = false;
     std::atomic_bool client_session_live_ = false;
     std::atomic_bool art_refreshing_ = false;
+    // One-shot PS2 memcard parse; the Users tab renders while it runs.
+    std::atomic_bool ps2_prewarm_running_ = false;
+    bool ps2_prewarm_started_ = false;
     std::thread client_connect_thread_;
     std::thread client_thread_;
     std::thread art_refresh_thread_;
+    std::thread ps2_prewarm_thread_;
 #ifdef ARCHSTREAMER_HAS_HOST
     QProcess* host_process_ = nullptr;
     QStringList host_debug_args_;
     std::unique_ptr<HostDiscoveryAnnouncer> host_announcer_;
     std::unique_ptr<ClientMediaPlayback> host_local_receiver_;
-    std::unique_ptr<ClientVideoController> host_local_video_controller_;
     QTimer* host_local_media_poll_timer_ = nullptr;
     QTimer* host_advertise_timer_ = nullptr;
 #endif
@@ -330,9 +345,13 @@ private:
     QTimer* client_auto_pick_timer_ = nullptr;
     int client_auto_pick_attempts_ = 0;
 
+    /** Every filesystem root the GUI owns; host-only rows stay null client-side. */
+    PathsPanel paths_;
+    /** Null in a client-only build; art helpers null-check instead of guarding. */
+    GamePickerWidget* host_game_picker_ = nullptr;
+    std::unique_ptr<ClientVideoController> host_local_video_controller_;
+
 #ifdef ARCHSTREAMER_HAS_HOST
-    QLineEdit* host_rom_root_ = nullptr;
-    QLineEdit* host_meta_root_ = nullptr;
     QSpinBox* host_control_port_ = nullptr;
     QSpinBox* host_input_port_ = nullptr;
     QSpinBox* host_video_port_ = nullptr;
@@ -347,7 +366,6 @@ private:
     QCheckBox* host_local_media_ = nullptr;
     QCheckBox* host_advertise_ = nullptr;
     QLabel* host_status_ = nullptr;
-    GamePickerWidget* host_game_picker_ = nullptr;
     QPlainTextEdit* host_log_ = nullptr;
 
     QLabel* saves_root_label_ = nullptr;
@@ -392,7 +410,6 @@ private:
     QPushButton* profile_change_password_ = nullptr;
     QPlainTextEdit* profile_log_ = nullptr;
 
-    QLineEdit* settings_art_root_ = nullptr;
     QSpinBox* settings_session_timeout_ = nullptr;
     QComboBox* settings_log_level_ = nullptr;
     QSpinBox* settings_log_sessions_ = nullptr;
@@ -411,12 +428,7 @@ private:
     QString session_update_branch_;
     bool update_busy_ = false;
 #ifdef ARCHSTREAMER_HAS_HOST
-    QLineEdit* host_save_root_ = nullptr;
-    QLabel* host_save_root_status_ = nullptr;
-    QPushButton* host_save_root_browse_ = nullptr;
-    QPushButton* host_save_root_create_ = nullptr;
     QCheckBox* settings_allow_new_users_ = nullptr;
-    QLineEdit* settings_native_host_runner_ = nullptr;
     QComboBox* settings_gpu_ = nullptr;
     QCheckBox* settings_separate_render_gpu_ = nullptr;
     QComboBox* settings_render_gpu_ = nullptr;

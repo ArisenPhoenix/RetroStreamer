@@ -8,15 +8,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
@@ -24,21 +23,17 @@ import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -46,12 +41,8 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.NavigationDrawerItem
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -68,91 +59,75 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import android.content.res.Configuration
-import com.archstreamer.client.net.HostAddresses
+import androidx.compose.foundation.lazy.rememberLazyListState
 import com.archstreamer.client.protocol.GameInfo
-import com.archstreamer.client.protocol.MediaQualityTier
-import com.archstreamer.client.protocol.MediaStreamBitrate
-import com.archstreamer.client.protocol.MediaStreamFeel
-import com.archstreamer.client.protocol.MediaStreamSize
+import com.archstreamer.client.ui.games.GamesRow
+import com.archstreamer.client.ui.games.gamesCursor
+import com.archstreamer.client.ui.games.gamesRows
+import com.archstreamer.client.ui.menu.MenuDrawerSections
+import com.archstreamer.client.ui.menu.cursorChrome
+import com.archstreamer.client.ui.menu.MenuEffect
+import com.archstreamer.client.ui.menu.MenuFieldFocus
+import com.archstreamer.client.ui.menu.MenuOptionList
+import com.archstreamer.client.ui.menu.MenuSection
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import android.graphics.Bitmap as AndroidBitmap
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ArchStreamerApp(viewModel: ClientViewModel) {
     val state by viewModel.state.collectAsState()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-    var playMenuFocus by remember { mutableStateOf(PlayMenuFocusItem.Controls) }
-    val playMenuItems = remember(state.username, state.remoteSshUser) {
-        playMenuFocusItems(includeRemote = state.canAccessRemoteDuringPlay())
-    }
-    LaunchedEffect(playMenuItems) {
-        if (playMenuFocus !in playMenuItems) {
-            playMenuFocus = playMenuItems.firstOrNull() ?: PlayMenuFocusItem.Controls
-        }
+    var hamburgerFocused by remember { mutableStateOf(false) }
+    val hamburgerFocusRequester = remember { FocusRequester() }
+    val fieldFocus = remember { MenuFieldFocus() }
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    // Drawer entries and their options both come from the spec list, so what is drawn and
+    // what the navigator can reach are the same thing — literally the same build, shared
+    // with the key handlers through the view model.
+    val sections = remember(state) { viewModel.menuFor(state) }
+
+    // A section can vanish under us — Disconnect while the Session pane is showing — so
+    // fall back instead of stranding the user on an empty pane. The live play surface
+    // deliberately has no section of its own.
+    LaunchedEffect(sections.map { it.id }, state.section, state.playing) {
+        val onPlaySurface = state.playing && !state.playPaneVisible()
+        if (onPlaySurface || sections.any { it.id == state.section }) return@LaunchedEffect
+        sections.firstOrNull { it.enabled }?.let { viewModel.selectSection(it.id) }
     }
 
     fun openDrawer() {
+        hamburgerFocused = false
+        viewModel.clearBackMenuChromeFocus()
         scope.launch { drawerState.open() }
     }
 
     fun closeDrawer() {
+        hamburgerFocused = false
+        viewModel.clearBackMenuChromeFocus()
         scope.launch { drawerState.close() }
-    }
-
-    fun activatePlayMenuItem(item: PlayMenuFocusItem) {
-        when (item) {
-            PlayMenuFocusItem.Controls -> {
-                viewModel.selectSection(NavSection.Controls)
-                closeDrawer()
-            }
-            PlayMenuFocusItem.GameOptions -> {
-                viewModel.selectSection(NavSection.GameOptions)
-                closeDrawer()
-            }
-            PlayMenuFocusItem.Stream -> {
-                viewModel.selectSection(NavSection.Stream)
-                closeDrawer()
-            }
-            PlayMenuFocusItem.Settings -> {
-                viewModel.selectSection(NavSection.Settings)
-                closeDrawer()
-            }
-            PlayMenuFocusItem.Remote -> {
-                viewModel.selectSection(NavSection.Remote)
-                closeDrawer()
-            }
-            PlayMenuFocusItem.Pause -> viewModel.setPaused(!state.paused, force = true)
-            PlayMenuFocusItem.FastForward -> viewModel.setFastForward(!state.fastForward)
-            PlayMenuFocusItem.EditControls -> {
-                viewModel.beginOverlayEdit()
-                closeDrawer()
-            }
-            PlayMenuFocusItem.SoftKeyboard -> {
-                viewModel.openManualSoftKeyboard()
-                closeDrawer()
-            }
-            PlayMenuFocusItem.ResyncAv -> viewModel.resyncAv()
-            PlayMenuFocusItem.Leave -> {
-                viewModel.leavePlay()
-                closeDrawer()
-            }
-            PlayMenuFocusItem.Disconnect -> {
-                viewModel.disconnect()
-                closeDrawer()
-            }
-        }
     }
 
     // Close any nav drawer left open from Client/Games before play so we do not
@@ -167,92 +142,75 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
     // targetValue — so a flash Open→Closed (cutover / press-through) never pauses.
     // Absolute rule: drawer open → pause On (only after decoded frames); closed → Off.
     // Control editing relaxes pause (see ClientViewModel.syncMenuPause).
-    LaunchedEffect(drawerState, state.playing) {
-        if (!state.playing) return@LaunchedEffect
+    LaunchedEffect(drawerState) {
         snapshotFlow { drawerState.currentValue }
             .distinctUntilChanged()
             .collect { value ->
+                hamburgerFocused = false
                 when (value) {
-                    DrawerValue.Open -> {
-                        playMenuFocus = PlayMenuFocusItem.Controls
-                        viewModel.onPlayMenuOpened()
-                    }
-                    DrawerValue.Closed -> viewModel.onPlayMenuClosed()
+                    DrawerValue.Open -> viewModel.onMenuDrawerOpened()
+                    DrawerValue.Closed -> viewModel.onMenuDrawerClosed()
                 }
             }
     }
 
     LaunchedEffect(viewModel) {
-        viewModel.playMenuRequests.collect {
-            openDrawer()
+        viewModel.menuEffects.collect { effect ->
+            when (effect) {
+                MenuEffect.OpenDrawer -> openDrawer()
+                MenuEffect.CloseDrawer -> closeDrawer()
+                MenuEffect.FocusHamburger -> {
+                    hamburgerFocused = true
+                    runCatching { hamburgerFocusRequester.requestFocus() }
+                }
+                is MenuEffect.FocusField -> fieldFocus.request(effect.optionId)
+            }
         }
     }
 
-    LaunchedEffect(viewModel) {
-        viewModel.playMenuCommands.collect { cmd ->
-            when (cmd) {
-                PlayMenuCommand.MoveUp -> {
-                    val i = playMenuItems.indexOf(playMenuFocus)
-                    playMenuFocus = playMenuItems[(i - 1 + playMenuItems.size) % playMenuItems.size]
-                }
-                PlayMenuCommand.MoveDown -> {
-                    val i = playMenuItems.indexOf(playMenuFocus)
-                    playMenuFocus = playMenuItems[(i + 1) % playMenuItems.size]
-                }
-                PlayMenuCommand.Activate -> activatePlayMenuItem(playMenuFocus)
-                PlayMenuCommand.Close -> closeDrawer()
-            }
+    // A field holds the IME only while something is being typed in — a menu option or the
+    // Games filter. Clearing on the way down covers every exit, including the ones that
+    // never reach the navigator: the drawer opening, a pane swap, or the field leaving the
+    // composition entirely. Losing the focus owner that way does not always close the
+    // keyboard, so hide it as well.
+    val editingText = state.menu.editing || state.games.filterEditing
+    LaunchedEffect(editingText) {
+        if (!editingText) {
+            focusManager.clearFocus()
+            keyboardController?.hide()
         }
+    }
+
+    // Refusing the IME when a field takes focus is not enough on its own: tapping a field
+    // that already has focus asks for it again, and so does the IME restoring itself after
+    // a rotation or a pane swap. Watching for it to appear catches every one of those.
+    val imeVisible = WindowInsets.isImeVisible
+    LaunchedEffect(imeVisible, state.controls.hasKeyboardActive) {
+        if (imeVisible && state.controls.hasKeyboardActive) keyboardController?.hide()
     }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
-        gesturesEnabled = (!state.playing || drawerState.isOpen) && !state.overlayEditing,
+        gesturesEnabled = (!state.playing || drawerState.isOpen) && !state.controls.overlayEditing,
         drawerContent = {
             AppDrawer(
                 state = state,
-                focusedItem = if (state.playing && drawerState.isOpen) playMenuFocus else null,
+                sections = sections,
+                hamburgerFocused = hamburgerFocused,
                 onSelect = { section ->
-                    viewModel.selectSection(section)
-                    closeDrawer()
-                },
-                onLeavePlay = {
-                    viewModel.leavePlay()
-                    closeDrawer()
-                },
-                onOpenSoftKeyboard = {
-                    // Explicitly unpause before OSK; drawer close will also send Off (no-op).
-                    viewModel.openManualSoftKeyboard()
-                    closeDrawer()
-                },
-                onEditControls = {
-                    viewModel.beginOverlayEdit()
-                    closeDrawer()
-                },
-                onResyncAv = {
-                    viewModel.resyncAv()
-                },
-                onPausedChange = { enabled -> viewModel.setPaused(enabled, force = true) },
-                onFastForwardChange = viewModel::setFastForward,
-                onDisconnect = {
-                    viewModel.disconnect()
+                    viewModel.openSectionFromDrawer(section)
                     closeDrawer()
                 },
                 onClose = { closeDrawer() },
             )
         },
     ) {
-        if (state.playing &&
-            (state.section == NavSection.Controls ||
-                state.section == NavSection.GameOptions ||
-                state.section == NavSection.Stream ||
-                state.section == NavSection.Settings ||
-                (state.section == NavSection.Remote && state.canAccessRemoteDuringPlay()))
-        ) {
+        if (state.playPaneVisible()) {
             Scaffold(
-                // System bars via Scaffold; IME via imePadding on content so focused
-                // fields can scroll above the keyboard (edge-to-edge ignores adjustResize).
-                contentWindowInsets = WindowInsets.systemBars.union(WindowInsets.displayCutout),
+                // The IME belongs in the same union as the system bars: edge-to-edge
+                // ignores adjustResize, and padding for both separately stacks the
+                // navigation bar under the keyboard, which jitters as the IME animates.
+                contentWindowInsets = PaneInsets,
                 topBar = {
                     TopAppBar(
                         title = { Text(state.section.title) },
@@ -264,65 +222,78 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
                     )
                 },
             ) { padding ->
-                Box(
-                    modifier = Modifier
-                        .padding(padding)
-                        .imePadding()
-                        .fillMaxSize(),
-                ) {
-                    when (state.section) {
-                        NavSection.Controls -> ControlsSection(state, viewModel)
-                        NavSection.GameOptions -> GameOptionsSection(state, viewModel)
-                        NavSection.Stream -> StreamSection(state, viewModel)
-                        NavSection.Settings -> SettingsSection(state, viewModel)
-                        NavSection.Remote -> RemoteSection(state, viewModel)
-                        else -> Unit
-                    }
-                }
+                SectionPane(
+                    state = state,
+                    viewModel = viewModel,
+                    sections = sections,
+                    fieldFocus = fieldFocus,
+                    modifier = Modifier.padding(padding),
+                )
             }
         } else if (state.playing) {
             PlayScreen(
                 state = state,
                 viewModel = viewModel,
                 onOpenMenu = { openDrawer() },
+                hamburgerFocusRequester = hamburgerFocusRequester,
+                hamburgerFocused = hamburgerFocused,
+                onHamburgerFocused = { focused ->
+                    hamburgerFocused = focused
+                    if (!focused && viewModel.isBackMenuChromeFocused()) {
+                        viewModel.clearBackMenuChromeFocus()
+                    }
+                },
             )
         } else {
             Scaffold(
-                contentWindowInsets = WindowInsets.systemBars.union(WindowInsets.displayCutout),
+                contentWindowInsets = PaneInsets,
                 topBar = {
                     TopAppBar(
                         title = { Text(state.section.title) },
                         navigationIcon = {
-                            IconButton(onClick = { openDrawer() }) {
+                            val interaction = remember { MutableInteractionSource() }
+                            IconButton(
+                                onClick = { openDrawer() },
+                                modifier = Modifier
+                                    .focusRequester(hamburgerFocusRequester)
+                                    .onFocusChanged { focusState ->
+                                        hamburgerFocused = focusState.isFocused
+                                        if (!focusState.isFocused && viewModel.isBackMenuChromeFocused()) {
+                                            viewModel.clearBackMenuChromeFocus()
+                                        }
+                                    }
+                                    .focusable(interactionSource = interaction)
+                                    .then(
+                                        if (hamburgerFocused) {
+                                            Modifier.border(
+                                                width = 2.dp,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                shape = CircleShape,
+                                            )
+                                        } else {
+                                            Modifier
+                                        },
+                                    ),
+                            ) {
                                 Icon(Icons.Filled.Menu, contentDescription = "Menu")
                             }
                         },
                     )
                 },
             ) { padding ->
-                Box(
-                    modifier = Modifier
-                        .padding(padding)
-                        .imePadding()
-                        .fillMaxSize(),
-                ) {
-                    when (state.section) {
-                        NavSection.Client -> ClientSection(state, viewModel)
-                        NavSection.Remote -> RemoteSection(state, viewModel)
-                        NavSection.Games -> GamesSection(state, viewModel)
-                        NavSection.Stream -> StreamSection(state, viewModel)
-                        NavSection.Controls -> ControlsSection(state, viewModel)
-                        NavSection.GameOptions -> GameOptionsSection(state, viewModel)
-                        NavSection.Profile -> ProfileSection(state, viewModel)
-                        NavSection.Settings -> SettingsSection(state, viewModel)
-                    }
-                }
+                SectionPane(
+                    state = state,
+                    viewModel = viewModel,
+                    sections = sections,
+                    fieldFocus = fieldFocus,
+                    modifier = Modifier.padding(padding),
+                )
             }
         }
         }
 
         // Offline layout editor (Controls → Customize). While playing, PlayScreen hosts it.
-        if (state.overlayEditing && !state.playing) {
+        if (state.controls.overlayEditing && !state.playing) {
             Dialog(
                 onDismissRequest = viewModel::cancelOverlayEdit,
                 properties = DialogProperties(
@@ -344,8 +315,8 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
                 ) {
                     GamepadOverlay(
                         modifier = Modifier.fillMaxSize(),
-                        items = state.overlayItems,
-                        opacity = state.overlayOpacity,
+                        items = state.controls.overlayItems,
+                        opacity = state.controls.overlayOpacity,
                         editing = true,
                         onItemsChange = viewModel::updateOverlayItems,
                         onDoneEditing = viewModel::finishOverlayEdit,
@@ -354,13 +325,13 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
             }
         }
 
-        if (state.overlayEditNaming) {
+        if (state.controls.overlayEditNaming) {
             AlertDialog(
                 onDismissRequest = viewModel::cancelOverlayEditNaming,
                 title = { Text("Name custom layout") },
                 text = {
                     OutlinedTextField(
-                        value = state.overlayEditNameDraft,
+                        value = state.controls.overlayEditNameDraft,
                         onValueChange = viewModel::setOverlayEditNameDraft,
                         label = { Text("Name") },
                         singleLine = true,
@@ -380,7 +351,7 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
             )
         }
 
-        if (state.forcePasswordChange) {
+        if (state.profile.forcePasswordChange) {
             AlertDialog(
                 onDismissRequest = viewModel::cancelForcePasswordChange,
                 title = { Text("Choose a new password") },
@@ -388,23 +359,29 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("The host requires you to change the default password before joining.")
                         OutlinedTextField(
-                            value = state.forcePasswordDraft,
+                            value = state.profile.forcePasswordDraft,
                             onValueChange = viewModel::onForcePasswordDraftChange,
                             label = { Text("New password") },
                             singleLine = true,
                             visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Password,
+                            ),
                             modifier = Modifier.fillMaxWidth(),
                         )
                         OutlinedTextField(
-                            value = state.forcePasswordConfirm,
+                            value = state.profile.forcePasswordConfirm,
                             onValueChange = viewModel::onForcePasswordConfirmChange,
                             label = { Text("Confirm new password") },
                             singleLine = true,
                             visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Password,
+                            ),
                             modifier = Modifier.fillMaxWidth(),
                         )
-                        if (state.passwordStatus.isNotBlank()) {
-                            Text(state.passwordStatus, color = MaterialTheme.colorScheme.error)
+                        if (state.profile.passwordStatus.isNotBlank()) {
+                            Text(state.profile.passwordStatus, color = MaterialTheme.colorScheme.error)
                         }
                     }
                 },
@@ -422,25 +399,33 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
         }
     }
 
+/**
+ * What a settings pane must stay clear of. A union takes the largest value per side, so
+ * the keyboard replaces the navigation bar inset instead of stacking on top of it.
+ */
+private val PaneInsets: WindowInsets
+    @Composable get() = WindowInsets.systemBars
+        .union(WindowInsets.displayCutout)
+        .union(WindowInsets.ime)
+
+/**
+ * Section drawer: chrome, then one row per available section. Highlighting lives in
+ * [MenuDrawerSections] so the cursor and the visible pane can both be shown.
+ */
 @Composable
 private fun AppDrawer(
     state: UiState,
-    focusedItem: PlayMenuFocusItem? = null,
+    sections: List<MenuSection>,
+    hamburgerFocused: Boolean = false,
     onSelect: (NavSection) -> Unit,
-    onLeavePlay: () -> Unit,
-    onOpenSoftKeyboard: () -> Unit,
-    onEditControls: () -> Unit,
-    onResyncAv: () -> Unit,
-    onPausedChange: (Boolean) -> Unit,
-    onFastForwardChange: (Boolean) -> Unit,
-    onDisconnect: () -> Unit,
     onClose: () -> Unit,
 ) {
     ModalDrawerSheet(modifier = Modifier.width(300.dp)) {
+        // Title, session and connection state stay put; only the section list scrolls,
+        // so the status is still readable however far down the list the cursor is.
         Column(
             modifier = Modifier
                 .fillMaxHeight()
-                .verticalScroll(rememberScrollState())
                 .padding(vertical = 12.dp),
         ) {
             Row(
@@ -450,14 +435,41 @@ private fun AppDrawer(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("ArchStreamer", style = MaterialTheme.typography.titleLarge)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.Menu,
+                        contentDescription = "Menu",
+                        modifier = Modifier
+                            .then(
+                                if (hamburgerFocused) {
+                                    Modifier.border(
+                                        width = 2.dp,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        shape = CircleShape,
+                                    )
+                                } else {
+                                    Modifier
+                                },
+                            )
+                            .padding(4.dp),
+                        tint = if (hamburgerFocused) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                    )
+                    Text("ArchStreamer", style = MaterialTheme.typography.titleLarge)
+                }
                 IconButton(onClick = onClose) {
                     Icon(Icons.Filled.Close, contentDescription = "Close menu")
                 }
             }
             if (state.playing) {
-                val gameName = state.selectedGame?.title()?.takeIf { it.isNotBlank() }
-                    ?: state.selectedGame?.id
+                val gameName = state.games.selected?.title()?.takeIf { it.isNotBlank() }
+                    ?: state.games.selected?.id
                     ?: "In session"
                 Text(
                     gameName,
@@ -468,7 +480,7 @@ private fun AppDrawer(
             }
             Text(
                 if (state.connected || state.playing) {
-                    "Connected · ${state.host}"
+                    "Connected · ${state.client.host}"
                 } else {
                     "Not connected"
                 },
@@ -477,504 +489,66 @@ private fun AppDrawer(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-            // While playing: only session actions + overlay/stream settings (no full nav).
-            if (!state.playing) {
-                NavSection.entries.forEach { section ->
-                    val enabled = section != NavSection.Games || state.connected
-                    NavigationDrawerItem(
-                        label = {
-                            Text(
-                                section.title,
-                                color = if (enabled) {
-                                    MaterialTheme.colorScheme.onSurface
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                                },
-                            )
-                        },
-                        selected = state.section == section,
-                        onClick = { if (enabled) onSelect(section) },
-                        modifier = Modifier.padding(horizontal = 12.dp),
-                    )
-                }
-            } else {
-                NavigationDrawerItem(
-                    label = { Text(NavSection.Controls.title) },
-                    selected = focusedItem == PlayMenuFocusItem.Controls,
-                    onClick = { onSelect(NavSection.Controls) },
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                )
-                NavigationDrawerItem(
-                    label = { Text(NavSection.GameOptions.title) },
-                    selected = focusedItem == PlayMenuFocusItem.GameOptions,
-                    onClick = { onSelect(NavSection.GameOptions) },
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                )
-                NavigationDrawerItem(
-                    label = { Text(NavSection.Stream.title) },
-                    selected = focusedItem == PlayMenuFocusItem.Stream,
-                    onClick = { onSelect(NavSection.Stream) },
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                )
-                NavigationDrawerItem(
-                    label = { Text(NavSection.Settings.title) },
-                    selected = focusedItem == PlayMenuFocusItem.Settings,
-                    onClick = { onSelect(NavSection.Settings) },
-                    modifier = Modifier.padding(horizontal = 12.dp),
-                )
-                if (state.canAccessRemoteDuringPlay()) {
-                    NavigationDrawerItem(
-                        label = { Text(NavSection.Remote.title) },
-                        selected = focusedItem == PlayMenuFocusItem.Remote,
-                        onClick = { onSelect(NavSection.Remote) },
-                        modifier = Modifier.padding(horizontal = 12.dp),
-                    )
-                }
-            }
-
-            if (state.playing || state.connected) {
-                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-            }
-            if (state.playing) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp)
-                        .then(
-                            if (focusedItem == PlayMenuFocusItem.Pause) {
-                                Modifier
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(MaterialTheme.colorScheme.secondaryContainer)
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                            } else {
-                                Modifier
-                            },
-                        ),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("Pause")
-                    Switch(
-                        checked = state.paused,
-                        onCheckedChange = onPausedChange,
-                    )
-                }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp)
-                        .then(
-                            if (focusedItem == PlayMenuFocusItem.FastForward) {
-                                Modifier
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(MaterialTheme.colorScheme.secondaryContainer)
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                            } else {
-                                Modifier
-                            },
-                        ),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("Fast-forward")
-                    Switch(
-                        checked = state.fastForward,
-                        onCheckedChange = onFastForwardChange,
-                    )
-                }
-                TextButton(
-                    onClick = onEditControls,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp)
-                        .then(
-                            if (focusedItem == PlayMenuFocusItem.EditControls) {
-                                Modifier.background(
-                                    MaterialTheme.colorScheme.secondaryContainer,
-                                    RoundedCornerShape(12.dp),
-                                )
-                            } else {
-                                Modifier
-                            },
-                        ),
-                ) {
-                    Text("Edit controls")
-                }
-                TextButton(
-                    onClick = onOpenSoftKeyboard,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp)
-                        .then(
-                            if (focusedItem == PlayMenuFocusItem.SoftKeyboard) {
-                                Modifier.background(
-                                    MaterialTheme.colorScheme.secondaryContainer,
-                                    RoundedCornerShape(12.dp),
-                                )
-                            } else {
-                                Modifier
-                            },
-                        ),
-                ) {
-                    Text("Software keyboard (failsafe)")
-                }
-                TextButton(
-                    onClick = onResyncAv,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp)
-                        .then(
-                            if (focusedItem == PlayMenuFocusItem.ResyncAv) {
-                                Modifier.background(
-                                    MaterialTheme.colorScheme.secondaryContainer,
-                                    RoundedCornerShape(12.dp),
-                                )
-                            } else {
-                                Modifier
-                            },
-                        ),
-                ) {
-                    Text("Resync A/V")
-                }
-                if (state.status.contains("audio", ignoreCase = true) ||
-                    state.status.contains("A/V", ignoreCase = true)
-                ) {
-                    Text(
-                        state.status,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                TextButton(
-                    onClick = onLeavePlay,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp)
-                        .then(
-                            if (focusedItem == PlayMenuFocusItem.Leave) {
-                                Modifier.background(
-                                    MaterialTheme.colorScheme.secondaryContainer,
-                                    RoundedCornerShape(12.dp),
-                                )
-                            } else {
-                                Modifier
-                            },
-                        ),
-                ) {
-                    Text("Leave session")
-                }
-            }
-            if (state.connected || state.playing) {
-                TextButton(
-                    onClick = onDisconnect,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp)
-                        .then(
-                            if (focusedItem == PlayMenuFocusItem.Disconnect) {
-                                Modifier.background(
-                                    MaterialTheme.colorScheme.secondaryContainer,
-                                    RoundedCornerShape(12.dp),
-                                )
-                            } else {
-                                Modifier
-                            },
-                        ),
-                ) {
-                    Text("Disconnect")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ClientSection(state: UiState, viewModel: ClientViewModel) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("Client Session", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "Searches Wi‑Fi and VPN for a running host. If your saved IP is down, a live one is selected automatically.",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        OutlinedTextField(
-            value = state.host,
-            onValueChange = viewModel::onHostChange,
-            label = { Text("Host IP") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("192.168.x.x or 10.6.0.x") },
-        )
-        OutlinedTextField(
-            value = state.altHost,
-            onValueChange = viewModel::onAltHostChange,
-            label = { Text("Alt IP") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("optional — e.g. WireGuard 10.6.0.x") },
-            supportingText = {
-                Text("Tried when Host IP is unreachable. Must look like an IP address.")
-            },
-            isError = state.altHost.isNotBlank() &&
-                !HostAddresses.looksLikeIp(state.altHost),
-        )
-        OutlinedTextField(
-            value = state.password,
-            onValueChange = viewModel::onPasswordChange,
-            label = { Text("Password (session only)") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        if (state.discoveryStatus.isNotBlank()) {
-            Text(state.discoveryStatus, style = MaterialTheme.typography.bodySmall)
-        }
-        if (state.discoveredHosts.isNotEmpty()) {
-            Text("Found hosts", style = MaterialTheme.typography.labelLarge)
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                state.discoveredHosts.forEach { host ->
-                    val selected = host.address == state.host
-                    FilterChip(
-                        selected = selected,
-                        onClick = { viewModel.selectDiscoveredHost(host) },
-                        label = {
-                            Text("${host.username} @ ${host.address}")
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
-        }
-        Button(
-            onClick = viewModel::connect,
-            enabled = !state.busy,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(if (state.busy) "Connecting…" else if (state.connected) "Reconnect" else "Connect")
-        }
-        if (state.connected) {
-            TextButton(onClick = viewModel::disconnect) { Text("Disconnect") }
-        }
-        if (state.busy) {
-            CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
-        }
-        Text(state.status, style = MaterialTheme.typography.bodySmall)
-    }
-}
-
-@Composable
-private fun RemoteSection(state: UiState, viewModel: ClientViewModel) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("Remote host (SSH)", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "Ensure Host probes the base control port, reuses a free lobby, or SSH-starts " +
-                "host_runner (or an optional start script with ports + GPU). " +
-                "Optional GPU fuzzy-matches remote GPUs (host_runner --list-gpus). " +
-                "Successful ensure writes IP/ports onto the Client tab.",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        OutlinedTextField(
-            value = state.remoteSshHost,
-            onValueChange = viewModel::onRemoteSshHostChange,
-            label = { Text("SSH host") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = state.remoteSshUser,
-            onValueChange = viewModel::onRemoteSshUserChange,
-            label = { Text("SSH user") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = state.remoteSshPassword,
-            onValueChange = viewModel::onRemoteSshPasswordChange,
-            label = { Text("SSH password (not saved)") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = state.remoteSshPort,
-            onValueChange = viewModel::onRemoteSshPortChange,
-            label = { Text("SSH port") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = state.remoteDirectory,
-            onValueChange = viewModel::onRemoteDirectoryChange,
-            label = { Text("Remote directory") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("/home/user/ArchStreamer/build") },
-        )
-        OutlinedTextField(
-            value = state.remoteRomRoot,
-            onValueChange = viewModel::onRemoteRomRootChange,
-            label = { Text("Remote ROM root") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = state.remoteBinary,
-            onValueChange = viewModel::onRemoteBinaryChange,
-            label = { Text("host_runner path") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("./host_runner or …/build/host_runner") },
-            supportingText = {
-                Text(
-                    "Path A, or GPU listing. If you paste the build directory, " +
-                        "/host_runner is appended. With a start script, only used for --list-gpus.",
-                )
-            },
-        )
-        OutlinedTextField(
-            value = state.remoteStartScript,
-            onValueChange = viewModel::onRemoteStartScriptChange,
-            label = { Text("Start script (optional)") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("/home/user/bin/archstreamer-start") },
-            supportingText = {
-                Text(
-                    "Path B: blank = start host_runner with full args. Set = run this script " +
-                        "with ports + GPU only (script owns ROM root / host_runner).",
-                )
-            },
-        )
-        OutlinedTextField(
-            value = state.remoteGpu,
-            onValueChange = viewModel::onRemoteGpuChange,
-            label = { Text("GPU (optional)") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("e.g. 3060, amd, nvidia:1") },
-            supportingText = {
-                Text("Blank = host default. Set to reuse/start on a matched remote GPU.")
-            },
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = state.remoteBaseControlPort,
-                onValueChange = viewModel::onRemoteBaseControlPortChange,
-                label = { Text("Base control") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-            )
-            OutlinedTextField(
-                value = state.remoteBaseInputPort,
-                onValueChange = viewModel::onRemoteBaseInputPortChange,
-                label = { Text("Base input") },
-                singleLine = true,
+            MenuDrawerSections(
+                sections = sections,
+                focus = state.menu,
+                currentSection = state.section,
+                onSelect = onSelect,
                 modifier = Modifier.weight(1f),
             )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = viewModel::ensureRemoteHost,
-                enabled = !state.remoteBusy,
-                modifier = Modifier.weight(1f),
-            ) {
-                Text(if (state.remoteBusy) "Working…" else "Ensure Host")
-            }
-            OutlinedButton(
-                onClick = viewModel::stopRemoteHost,
-                enabled = !state.remoteBusy,
-                modifier = Modifier.weight(1f),
-            ) {
-                Text("Stop Host")
-            }
-        }
-        Text("Remote users", style = MaterialTheme.typography.titleSmall)
-        Text(
-            "Lists Connected/Active from the host saves root. Kick uses the same markers as Users. " +
-                "Stop Host uses the tracked port, or the GPU field to find that instance.",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(
-                onClick = viewModel::refreshRemoteUsers,
-                enabled = !state.remoteBusy,
-                modifier = Modifier.weight(1f),
-            ) {
-                Text("Refresh users")
-            }
-            OutlinedButton(
-                onClick = viewModel::kickRemoteUser,
-                enabled = !state.remoteBusy && state.remoteSelectedUserIndex >= 0,
-                modifier = Modifier.weight(1f),
-            ) {
-                Text("Kick selected")
-            }
-        }
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 220.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            if (state.remoteUsers.isEmpty()) {
-                Text(
-                    "No remote users loaded yet.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            } else {
-                state.remoteUsers.forEachIndexed { index, row ->
-                    val selected = index == state.remoteSelectedUserIndex
-                    Text(
-                        text = row.label(),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(
-                                if (selected) {
-                                    MaterialTheme.colorScheme.primaryContainer
-                                } else {
-                                    MaterialTheme.colorScheme.surfaceVariant
-                                },
-                                RoundedCornerShape(8.dp),
-                            )
-                            .clickable { viewModel.selectRemoteUser(index) }
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-            }
-        }
-        if (state.remoteBusy) {
-            CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
-        }
-        OutlinedTextField(
-            value = state.remoteStatus,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text("Status / errors") },
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 140.dp, max = 240.dp),
-            minLines = 6,
-            maxLines = 16,
-        )
     }
 }
 
+/**
+ * The options column. Every section renders from its spec; the games catalog keeps its
+ * own lazy list because it owns its own input.
+ */
 @Composable
-private fun GamesSection(state: UiState, viewModel: ClientViewModel) {
+private fun SectionPane(
+    state: UiState,
+    viewModel: ClientViewModel,
+    sections: List<MenuSection>,
+    fieldFocus: MenuFieldFocus,
+    modifier: Modifier = Modifier,
+) {
+    val section = sections.firstOrNull { it.id == state.section }
+    // Reports how long entering a section took, composing every row included.
+    LaunchedEffect(state.section) { viewModel.notePaneShown(state.section) }
+    Box(modifier = modifier.fillMaxSize()) {
+        when {
+            state.section == NavSection.Games -> GamesSection(state, viewModel, fieldFocus)
+            section == null -> Box(
+                Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("Not available right now.")
+            }
+            else -> MenuOptionList(
+                section = section,
+                focusedOptionId = state.menu
+                    .takeIf { it.inOptions && it.section == section.id }
+                    ?.optionId,
+                fieldFocus = fieldFocus,
+                onOptionTouched = viewModel::onMenuOptionTouched,
+                onFieldFocusChanged = viewModel::onMenuFieldFocus,
+                softKeyboard = !state.controls.hasKeyboardActive,
+            )
+        }
+    }
+}
+
+/**
+ * The catalog. Rows come from [gamesRows] so the cursor the view model moves and the rows
+ * drawn here are the same list; the filter is pinned above and is the row above the top of
+ * the list.
+ */
+@Composable
+private fun GamesSection(
+    state: UiState,
+    viewModel: ClientViewModel,
+    fieldFocus: MenuFieldFocus,
+) {
     if (!state.connected) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Connect on the Client tab first.")
@@ -982,40 +556,37 @@ private fun GamesSection(state: UiState, viewModel: ClientViewModel) {
         return
     }
 
-    val filter = state.filter.trim().lowercase()
-    val games = if (filter.isEmpty()) {
-        state.games
-    } else {
-        state.games.filter {
-            it.title().lowercase().contains(filter) ||
-                it.version.lowercase().contains(filter) ||
-                it.systemName.lowercase().contains(filter) ||
-                it.systemKey.lowercase().contains(filter)
-        }
+    val rows = gamesRows(state.games)
+    val cursor = gamesCursor(rows, state.games.cursorKey)
+    val listRows = rows.filterNot { it is GamesRow.Filter }
+    val listState = rememberLazyListState()
+    val cursorIndex = listRows.indexOfFirst { it.key == cursor?.key }
+    LaunchedEffect(cursorIndex) {
+        if (cursorIndex >= 0) runCatching { listState.animateScrollToItem(cursorIndex) }
     }
-    val byId = games.associateBy { it.id }
-    val recentGames = state.recentGameIds.mapNotNull { byId[it] }
-    val grouped = games
-        .groupBy { it.systemName.ifBlank { it.systemKey.ifBlank { "Other" } } }
-        .toList()
-        .sortedBy { it.first.lowercase() }
 
     Column(modifier = Modifier.fillMaxSize()) {
         OutlinedTextField(
-            value = state.filter,
+            value = state.games.filter,
             onValueChange = viewModel::onFilterChange,
             label = { Text("Filter") },
             singleLine = true,
+            keyboardOptions = KeyboardOptions(
+                showKeyboardOnFocus = !state.controls.hasKeyboardActive,
+            ),
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .cursorChrome(cursor is GamesRow.Filter)
+                .focusRequester(fieldFocus.requesterFor(GamesRow.FILTER_KEY))
+                .onFocusChanged { viewModel.onGamesFilterFocus(it.isFocused) },
         )
         Text(
             state.status,
             modifier = Modifier.padding(horizontal = 16.dp),
             style = MaterialTheme.typography.bodySmall,
         )
-        if (state.reconnectHintGameId != null) {
+        if (state.games.reconnectHintGameId != null) {
             Text(
                 "Reconnect: tap the highlighted game (same username as before).",
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -1029,48 +600,32 @@ private fun GamesSection(state: UiState, viewModel: ClientViewModel) {
             }
         } else {
             LazyColumn(
+                state = listState,
                 contentPadding = PaddingValues(vertical = 8.dp),
                 modifier = Modifier.fillMaxSize(),
             ) {
-                if (recentGames.isNotEmpty()) {
-                    val recentExpanded = ClientViewModel.RECENT_GROUP in state.expandedSystems
-                    item(key = "hdr-${ClientViewModel.RECENT_GROUP}") {
-                        SystemGroupHeader(
-                            title = ClientViewModel.RECENT_GROUP,
-                            count = recentGames.size,
-                            expanded = recentExpanded,
+                items(listRows, key = { it.key }) { row ->
+                    val onCursor = row.key == cursor?.key
+                    when (row) {
+                        is GamesRow.Filter -> Unit
+                        is GamesRow.Header -> SystemGroupHeader(
+                            title = row.system,
+                            count = row.count,
+                            expanded = row.expanded,
+                            onCursor = onCursor,
                             onClick = {
-                                viewModel.toggleSystemExpanded(ClientViewModel.RECENT_GROUP)
+                                viewModel.onGamesRowTouched(row.key)
+                                viewModel.toggleSystemExpanded(row.system)
                             },
                         )
-                    }
-                    if (recentExpanded) {
-                        items(recentGames, key = { "recent-${it.id}" }) { game ->
-                            GameRow(
-                                game = game,
-                                art = state.artByAssetKey[game.assetKey],
-                                highlight = game.id == state.reconnectHintGameId,
-                            ) { viewModel.startGame(game) }
-                        }
-                    }
-                }
-                grouped.forEach { (systemName, systemGames) ->
-                    val expanded = systemName in state.expandedSystems
-                    item(key = "hdr-$systemName") {
-                        SystemGroupHeader(
-                            title = systemName,
-                            count = systemGames.size,
-                            expanded = expanded,
-                            onClick = { viewModel.toggleSystemExpanded(systemName) },
-                        )
-                    }
-                    if (expanded) {
-                        items(systemGames, key = { it.id }) { game ->
-                            GameRow(
-                                game = game,
-                                art = state.artByAssetKey[game.assetKey],
-                                highlight = game.id == state.reconnectHintGameId,
-                            ) { viewModel.startGame(game) }
+                        is GamesRow.Entry -> GameRow(
+                            game = row.game,
+                            art = state.games.artByAssetKey[row.game.assetKey],
+                            highlight = row.game.id == state.games.reconnectHintGameId,
+                            onCursor = onCursor,
+                        ) {
+                            viewModel.onGamesRowTouched(row.key)
+                            viewModel.startGame(row.game)
                         }
                     }
                 }
@@ -1084,11 +639,13 @@ private fun SystemGroupHeader(
     title: String,
     count: Int,
     expanded: Boolean,
+    onCursor: Boolean,
     onClick: () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .cursorChrome(onCursor, RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1115,6 +672,7 @@ private fun GameRow(
     game: GameInfo,
     art: AndroidBitmap? = null,
     highlight: Boolean = false,
+    onCursor: Boolean = false,
     onClick: () -> Unit,
 ) {
     ListItem(
@@ -1136,6 +694,7 @@ private fun GameRow(
         },
         modifier = Modifier
             .fillMaxWidth()
+            .cursorChrome(onCursor, RoundedCornerShape(12.dp))
             .clickable(onClick = onClick),
     )
 }
@@ -1168,647 +727,23 @@ private fun GameArtThumb(art: AndroidBitmap?) {
 }
 
 @Composable
-private fun StreamSection(state: UiState, viewModel: ClientViewModel) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("Client stream", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "Heartbeats tell the host which encode ladder to send. " +
-                "Mobile defaults are 30 fps @ 3.5 Mbps, 540p, Low latency.",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Text("Frame rate", style = MaterialTheme.typography.titleSmall)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(
-                selected = state.streamQuality == MediaQualityTier.Low,
-                onClick = { viewModel.setStreamQuality(MediaQualityTier.Low) },
-                label = { Text("20") },
-            )
-            FilterChip(
-                selected = state.streamQuality == MediaQualityTier.Medium,
-                onClick = { viewModel.setStreamQuality(MediaQualityTier.Medium) },
-                label = { Text("30") },
-            )
-            FilterChip(
-                selected = state.streamQuality == MediaQualityTier.High,
-                onClick = { viewModel.setStreamQuality(MediaQualityTier.High) },
-                label = { Text("60") },
-            )
-        }
-        Text("Bitrate", style = MaterialTheme.typography.titleSmall)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(
-                selected = state.streamBitrate == MediaStreamBitrate.Kbps800,
-                onClick = { viewModel.setStreamBitrate(MediaStreamBitrate.Kbps800) },
-                label = { Text("0.8") },
-            )
-            FilterChip(
-                selected = state.streamBitrate == MediaStreamBitrate.Kbps3500,
-                onClick = { viewModel.setStreamBitrate(MediaStreamBitrate.Kbps3500) },
-                label = { Text("3.5") },
-            )
-            FilterChip(
-                selected = state.streamBitrate == MediaStreamBitrate.Kbps8000,
-                onClick = { viewModel.setStreamBitrate(MediaStreamBitrate.Kbps8000) },
-                label = { Text("8") },
-            )
-            FilterChip(
-                selected = state.streamBitrate == MediaStreamBitrate.Kbps12000,
-                onClick = { viewModel.setStreamBitrate(MediaStreamBitrate.Kbps12000) },
-                label = { Text("12") },
-            )
-            FilterChip(
-                selected = state.streamBitrate == MediaStreamBitrate.Kbps25000,
-                onClick = { viewModel.setStreamBitrate(MediaStreamBitrate.Kbps25000) },
-                label = { Text("25") },
-            )
-        }
-        Text("Mbps", style = MaterialTheme.typography.bodySmall)
-        Text("Size", style = MaterialTheme.typography.titleSmall)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(
-                selected = state.streamSize == MediaStreamSize.P540,
-                onClick = { viewModel.setStreamSize(MediaStreamSize.P540) },
-                label = { Text("540p") },
-            )
-            FilterChip(
-                selected = state.streamSize == MediaStreamSize.P720,
-                onClick = { viewModel.setStreamSize(MediaStreamSize.P720) },
-                label = { Text("720p") },
-            )
-            FilterChip(
-                selected = state.streamSize == MediaStreamSize.P1080,
-                onClick = { viewModel.setStreamSize(MediaStreamSize.P1080) },
-                label = { Text("1080p") },
-            )
-        }
-        Text("Stream feel", style = MaterialTheme.typography.titleSmall)
-        Text(
-            "Low latency = snappier controls; Smooth = more buffer (closer to older feel).",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(
-                selected = state.streamFeel == MediaStreamFeel.LowLatency,
-                onClick = { viewModel.setStreamFeel(MediaStreamFeel.LowLatency) },
-                label = { Text("Low latency") },
-            )
-            FilterChip(
-                selected = state.streamFeel == MediaStreamFeel.Balanced,
-                onClick = { viewModel.setStreamFeel(MediaStreamFeel.Balanced) },
-                label = { Text("Balanced") },
-            )
-            FilterChip(
-                selected = state.streamFeel == MediaStreamFeel.Smooth,
-                onClick = { viewModel.setStreamFeel(MediaStreamFeel.Smooth) },
-                label = { Text("Smooth") },
-            )
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Receive video")
-            Switch(checked = state.receiveVideo, onCheckedChange = viewModel::setReceiveVideo)
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Receive audio")
-            Switch(checked = state.receiveAudio, onCheckedChange = viewModel::setReceiveAudio)
-        }
-        Text(
-            "Off mutes game sound on this device (stream can stay up).",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        if (state.mediaHint.isNotBlank()) {
-            Text(state.mediaHint, style = MaterialTheme.typography.bodySmall)
-        }
-    }
-}
-
-@Composable
-private fun ControlsSection(state: UiState, viewModel: ClientViewModel) {
-    val profile = state.editingOverlayProfile
-    val canEdit = state.hasProfileUsername
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("Overlay controller", style = MaterialTheme.typography.titleMedium)
-        if (!canEdit) {
-            Text(
-                "Set a save-profile username on the Profile tab before editing controls. " +
-                    "The default “android” name is local-only and is not synced.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.error,
-            )
-        } else {
-            Text(
-                "Defaults follow the game system. Edit a family to override layout, " +
-                    "face swaps, opacity, and one named custom (separate landscape / portrait). " +
-                    "While editing a custom, select a control and use Action to remap " +
-                    "(e.g. Select → Fast-forward, add Screen swap for DS). Remaps apply to " +
-                    "the touch overlay and to a physical controller.",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-
-        Text("Input source", style = MaterialTheme.typography.titleSmall)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Use physical controller")
-                Text(
-                    if (state.usePhysicalController) {
-                        if (state.physicalPadConnected) {
-                            "Active: ${state.physicalPadLabel.ifBlank { "gamepad" }}. " +
-                                "Home / Guide opens the menu. Face swaps still apply."
-                        } else {
-                            "No pad connected — using touch overlay until one appears."
-                        }
-                    } else {
-                        "Touch overlay (default). Enable when using a Bluetooth / USB pad."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Switch(
-                checked = state.usePhysicalController,
-                onCheckedChange = viewModel::setUsePhysicalController,
-            )
-        }
-
-        if (!canEdit) return@Column
-
-        if (state.playing) {
-            Text(
-                "Playing now — edits to ${state.editingOverlayFamily.title} update the overlay immediately.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
-
-        Text("System family", style = MaterialTheme.typography.titleSmall)
-        OverlaySystemFamily.entries.chunked(2).forEach { row ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                row.forEach { family ->
-                    FilterChip(
-                        selected = state.editingOverlayFamily == family,
-                        onClick = { viewModel.setEditingOverlayFamily(family) },
-                        label = { Text(family.title) },
-                    )
-                }
-            }
-        }
-
-        Text("Layout", style = MaterialTheme.typography.titleSmall)
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            OverlayLayoutMode.builtins.chunked(3).forEach { row ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    row.forEach { mode ->
-                        FilterChip(
-                            selected = profile.layoutMode == mode,
-                            onClick = { viewModel.setOverlayLayoutMode(mode) },
-                            label = { Text(mode.title) },
-                        )
-                    }
-                }
-            }
-            profile.custom?.let { custom ->
-                FilterChip(
-                    selected = profile.layoutMode == OverlayLayoutMode.Custom,
-                    onClick = { viewModel.setOverlayLayoutMode(OverlayLayoutMode.Custom) },
-                    label = { Text(custom.clampedName()) },
-                )
-            }
-        }
-
-        Text("Face buttons", style = MaterialTheme.typography.titleSmall)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Swap NW (Y ↔ X)")
-            Switch(
-                checked = state.editingMapProfile.swapNw,
-                onCheckedChange = viewModel::setOverlaySwapNw,
-            )
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Swap SE (A ↔ B)")
-            Switch(
-                checked = state.editingMapProfile.swapSe,
-                onCheckedChange = viewModel::setOverlaySwapSe,
-            )
-        }
-
-        Text(
-            "Opacity ${(profile.clampedOpacity() * 100).toInt()}%",
-            style = MaterialTheme.typography.titleSmall,
-        )
-        Slider(
-            value = profile.clampedOpacity(),
-            onValueChange = viewModel::setOverlayOpacity,
-            valueRange = OverlayProfile.MIN_OPACITY..OverlayProfile.MAX_OPACITY,
-        )
-
-        FilledTonalButton(
-            onClick = viewModel::beginOverlayEdit,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(
-                if (profile.custom != null) {
-                    "Edit custom layout"
-                } else {
-                    "Create custom layout"
-                },
-            )
-        }
-
-        if (profile.custom != null) {
-            TextButton(onClick = viewModel::clearOverlayCustom) {
-                Text("Remove custom layout")
-            }
-        }
-
-        TextButton(onClick = viewModel::resetOverlayProfile) {
-            Text("Reset ${state.editingOverlayFamily.title} to defaults")
-        }
-
-        HorizontalDivider()
-        Text("Controls sync", style = MaterialTheme.typography.titleMedium)
-        Text(
-            when {
-                !state.hasProfileUsername ->
-                    "Set a save-profile username first before pull/push."
-                !state.controlsSyncReady ->
-                    "Connect to a host with your password (or join a session) before syncing."
-                else ->
-                    "Pull or push this username's button maps and overlay profiles " +
-                        "(SQL pack under the host save profile). Manual only — " +
-                        "runtime remaps stay in memory after load."
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OutlinedButton(
-                onClick = viewModel::pullControlsFromHost,
-                enabled = !state.busy && state.controlsSyncReady,
-                modifier = Modifier.weight(1f),
-            ) {
-                Text("Pull from host")
-            }
-            Button(
-                onClick = viewModel::pushControlsToHost,
-                enabled = !state.busy && state.controlsSyncReady,
-                modifier = Modifier.weight(1f),
-            ) {
-                Text("Push to host")
-            }
-        }
-    }
-}
-
-@Composable
-private fun GameOptionsSection(state: UiState, viewModel: ClientViewModel) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("Disc control", style = MaterialTheme.typography.titleMedium)
-        if (state.playing && state.playlistDiscs.size >= 2) {
-            Text(
-                state.discStatus.ifBlank {
-                    "Disc ${state.discIndex + 1} / ${state.playlistDiscs.size}"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text("Select disc", style = MaterialTheme.typography.titleSmall)
-            state.playlistDiscs.withIndex().chunked(2).forEach { row ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    row.forEach { (index, label) ->
-                        FilterChip(
-                            selected = state.discIndex == index,
-                            onClick = { viewModel.requestDiscSetIndex(index) },
-                            label = {
-                                Text(
-                                    label.ifBlank { "Disc ${index + 1}" },
-                                    maxLines = 1,
-                                )
-                            },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                    if (row.size == 1) {
-                        Spacer(modifier = Modifier.weight(1f))
-                    }
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedButton(
-                    onClick = viewModel::requestDiscPrev,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text("Previous")
-                }
-                OutlinedButton(
-                    onClick = viewModel::requestDiscNext,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text("Next")
-                }
-            }
-        } else {
-            Text(
-                "Join a multi-disc session (.m3u) to swap discs here.",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-
-        HorizontalDivider()
-        Text("Link with player", style = MaterialTheme.typography.titleMedium)
-        if (state.playing && state.linkCapable) {
-            Text(
-                "Both players type each other's username and tap Request. " +
-                    "The host matches when the requests are mutual.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            OutlinedTextField(
-                value = state.linkPeerDraft,
-                onValueChange = viewModel::onLinkPeerChange,
-                label = { Text("Other player's username") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            if (state.linkStatus.isNotBlank()) {
-                Text(
-                    state.linkStatus,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Button(
-                    onClick = viewModel::requestLink,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text("Request link")
-                }
-                OutlinedButton(
-                    onClick = viewModel::cancelLink,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text("Cancel")
-                }
-            }
-        } else {
-            Text(
-                if (state.playing) {
-                    "This session is not link-capable."
-                } else {
-                    "Join a link-capable session (GBA / DS / Switch) to request a peer."
-                },
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-
-        HorizontalDivider()
-        Text(
-            "While playing: menu → Software keyboard opens the OSK even if the host " +
-                "did not detect a dialog.",
-            style = MaterialTheme.typography.bodySmall,
-        )
-    }
-}
-
-@Composable
-private fun ProfileSection(state: UiState, viewModel: ClientViewModel) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("Identity", style = MaterialTheme.typography.titleMedium)
-        OutlinedTextField(
-            value = state.username,
-            onValueChange = viewModel::onUsernameChange,
-            label = { Text("Username (save profile)") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Text(
-            "Required before Connect/Join — host saves are keyed by this name. " +
-                "It is stored on the phone and survives disconnect and app restart. " +
-                "Session password is on the Client tab.",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Text("Change password", style = MaterialTheme.typography.titleMedium)
-        if (state.password.isEmpty()) {
-            OutlinedTextField(
-                value = state.changeCurrentPassword,
-                onValueChange = viewModel::onChangeCurrentPasswordChange,
-                label = { Text("Current password") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        OutlinedTextField(
-            value = state.newPassword,
-            onValueChange = viewModel::onNewPasswordChange,
-            label = { Text("New password") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = state.confirmPassword,
-            onValueChange = viewModel::onConfirmPasswordChange,
-            label = { Text("Confirm new password") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Button(
-            onClick = viewModel::changePasswordOnHost,
-            enabled = !state.busy,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("Change password on host")
-        }
-        if (state.passwordStatus.isNotBlank()) {
-            Text(state.passwordStatus)
-        }
-    }
-}
-
-@Composable
-private fun SettingsSection(state: UiState, viewModel: ClientViewModel) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("Local configuration", style = MaterialTheme.typography.titleMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = state.controlPort,
-                onValueChange = viewModel::onControlPortChange,
-                label = { Text("Control port") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-            )
-            OutlinedTextField(
-                value = state.inputPort,
-                onValueChange = viewModel::onInputPortChange,
-                label = { Text("Input port") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-            )
-        }
-        Text(
-            "Host IP and Alt IP are on the Client tab. Ports match the desktop host defaults (45555 / 45454).",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        HorizontalDivider()
-        Text("Diagnostics", style = MaterialTheme.typography.titleMedium)
-        OutlinedTextField(
-            value = state.logSessions,
-            onValueChange = viewModel::onLogSessionsChange,
-            label = { Text("Sessions to send") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            supportingText = { Text("Recent app sessions from the on-device log file (1–20).") },
-        )
-        Button(
-            onClick = viewModel::sendLogsToHost,
-            enabled = !state.busy,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(if (state.busy) "Sending…" else "Send logs to host")
-        }
-        if (state.logSendStatus.isNotBlank()) {
-            Text(state.logSendStatus, style = MaterialTheme.typography.bodySmall)
-        }
-        HorizontalDivider()
-        Text("Debug", style = MaterialTheme.typography.titleMedium)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Log controls")
-                Text(
-                    if (state.logControls) {
-                        "On — overlay, physical pad, keyboard, and UDP pad/key changes " +
-                            "are written to the on-device log (lines prefixed ctrl:). " +
-                            "Use Send logs to host after a play session."
-                    } else {
-                        "Off — no per-control spam. Enable to diagnose dead buttons / " +
-                            "keyboard vs touch merge."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Switch(
-                checked = state.logControls,
-                onCheckedChange = viewModel::setLogControls,
-            )
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Log connections")
-                Text(
-                    if (state.logConnections) {
-                        "On — TCP connect/close, session/media bind lifecycle, and " +
-                            "per-second RTP video stats (rx/lost/gaps/frames) while playing " +
-                            "(lines prefixed conn:). Use Send logs to host after a play session."
-                    } else {
-                        "Off — no connection lifecycle or RTP loss lines. Enable to diagnose " +
-                            "drops, rebinds, join ordering, and green/stutter from packet loss."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Switch(
-                checked = state.logConnections,
-                onCheckedChange = viewModel::setLogConnections,
-            )
-        }
-    }
-}
-
-@Composable
 private fun PlayScreen(
     state: UiState,
     viewModel: ClientViewModel,
     onOpenMenu: () -> Unit,
+    hamburgerFocusRequester: FocusRequester = FocusRequester.Default,
+    hamburgerFocused: Boolean = false,
+    onHamburgerFocused: (Boolean) -> Unit = {},
 ) {
-    val dualScreen = state.padLayout == PadLayout.DualScreen
+    val dualScreen = state.controls.padLayout == PadLayout.DualScreen
     val configuration = LocalConfiguration.current
     val isPortrait = configuration.orientation == Configuration.ORIENTATION_PORTRAIT
-    LaunchedEffect(isPortrait, state.overlayEditing, state.playing) {
+    LaunchedEffect(isPortrait, state.controls.overlayEditing, state.playing) {
         viewModel.setOverlayOrientation(isPortrait)
     }
     val unlockOrientation = dualScreen ||
-        state.overlayEditing ||
-        state.editingOverlayProfile.layoutMode == OverlayLayoutMode.Custom
+        state.controls.overlayEditing ||
+        state.controls.editingOverlayProfile.layoutMode == OverlayLayoutMode.Custom
     if (unlockOrientation) {
         UnlockSensorOrientationWhileVisible()
     } else {
@@ -1817,28 +752,29 @@ private fun PlayScreen(
     KeepScreenOnWhileVisible()
     Box(modifier = Modifier.fillMaxSize()) {
         StreamVideoView(
-            player = state.videoPlayer,
+            player = state.session.videoPlayer,
             modifier = Modifier.fillMaxSize(),
             dualScreen = dualScreen,
             portraitStack = isPortrait,
-            emphBottom = DsTouchMapping.layoutEmphasizesBottom(state.dsScreenLayout),
+            emphBottom = DsTouchMapping.layoutEmphasizesBottom(state.session.dsScreenLayout),
         )
         // Stylus under pad chrome: overlapping face/dpad/shoulders win hit-testing.
         // Empty areas of the pad pass through so the bottom screen stays tappable.
-        if (dualScreen && !state.overlayEditing) {
+        if (dualScreen && !state.controls.overlayEditing) {
             DsBottomTouchOverlay(
                 modifier = Modifier.fillMaxSize(),
                 portraitHybridStack = isPortrait,
-                layout = state.dsScreenLayout,
+                layout = state.session.dsScreenLayout,
                 onTouch = viewModel::onDsTouch,
             )
         }
-        if (!state.physicalInputActive || state.overlayEditing) {
+        if (!state.controls.physicalInputActive || state.controls.overlayEditing) {
             GamepadOverlay(
                 modifier = Modifier.fillMaxSize(),
-                items = state.overlayItems,
-                opacity = state.overlayOpacity,
-                editing = state.overlayEditing,
+                items = state.controls.overlayItems,
+                opacity = state.controls.overlayOpacity,
+                editing = state.controls.overlayEditing,
+                playActionFor = viewModel::playOverlayAction,
                 onState = viewModel::onPadState,
                 onMenuClick = onOpenMenu,
                 onFastForwardHold = viewModel::setFastForwardHold,
@@ -1846,20 +782,40 @@ private fun PlayScreen(
                 onItemsChange = viewModel::updateOverlayItems,
                 onDoneEditing = viewModel::finishOverlayEdit,
             )
-        } else {
-            // Physical pad: Home/Guide opens the menu; keep a small fallback control.
+        }
+        // Hamburger: always available for Back exit-arm focus (and as a touch fallback
+        // when a physical pad hides the overlay menu control).
+        if (!state.controls.overlayEditing) {
+            val interaction = remember { MutableInteractionSource() }
             IconButton(
                 onClick = onOpenMenu,
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(8.dp),
+                    .padding(8.dp)
+                    .focusRequester(hamburgerFocusRequester)
+                    .onFocusChanged { focusState ->
+                        onHamburgerFocused(focusState.isFocused)
+                    }
+                    .focusable(interactionSource = interaction)
+                    .then(
+                        if (hamburgerFocused) {
+                            Modifier.border(
+                                width = 2.dp,
+                                color = MaterialTheme.colorScheme.primary,
+                                shape = CircleShape,
+                            )
+                        } else {
+                            Modifier
+                        },
+                    ),
             ) {
                 Icon(Icons.Filled.Menu, contentDescription = "Menu", tint = Color.White)
             }
         }
-        state.softKeyboard?.let { request ->
+        state.session.softKeyboard?.let { request ->
             SoftKeyboardDialog(
                 request = request,
+                softKeyboard = !state.controls.hasKeyboardActive,
                 onSubmit = viewModel::submitSoftKeyboard,
                 onCancel = viewModel::cancelSoftKeyboard,
             )

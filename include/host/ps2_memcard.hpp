@@ -33,23 +33,24 @@ struct Ps2MemcardUsage {
 };
 
 /**
- * Parse a PS2 memory-card image for per-save and total capacity.
- * Soft-fail: returns nullopt if the file is missing, unreadable, or not a
- * Sony PS2 Memory Card Format image.
- *
- * Disk parse runs only when `!scan_done && users_tab_opened`. After
- * `ps2_memcard_finish_initial_scan()`, later calls use the cache only.
+ * Cached summary of a PS2 memory-card image. Never reads the disk, so it is
+ * safe on a UI thread: it yields nullopt until `ps2_memcard_prewarm()` has
+ * parsed that path, and callers simply report an unknown size until then.
  */
 std::optional<Ps2MemcardUsage> read_ps2_memcard_usage(const std::filesystem::path& path);
 
-/** Allow the first memcard parse (call when the Users tab is selected). */
-void ps2_memcard_set_users_tab_opened(bool opened);
+/**
+ * Parse `paths` into the cache. Multi-MiB images make this slow enough to
+ * freeze a UI, so call it from a worker thread. Runs once per process: a
+ * second call (or a concurrent one) returns without touching the disk.
+ *
+ * Soft-fail per image: one that is missing, unreadable, or not in Sony PS2
+ * Memory Card Format caches as nullopt rather than failing the pass.
+ */
+void ps2_memcard_prewarm(const std::vector<std::filesystem::path>& paths);
 
-/** True after `ps2_memcard_set_users_tab_opened(true)`. */
-bool ps2_memcard_users_tab_opened();
-
-/** Stop further memcard disk reads; subsequent lookups use the init cache only. */
-void ps2_memcard_finish_initial_scan();
+/** True once a `ps2_memcard_prewarm()` pass has finished. */
+bool ps2_memcard_scan_complete();
 
 /**
  * Best-effort match of a catalog title to a memcard folder name

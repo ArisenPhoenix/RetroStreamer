@@ -20,7 +20,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
@@ -30,10 +36,13 @@ import kotlinx.coroutines.yield
 /**
  * Host SoftKeyboardRequest UI — submit one string (or cancel).
  * Matches desktop PadOnScreenKeyboard semantics over TCP SoftKeyboardResponse.
+ * D-pad / B / A work for controller navigation between field and buttons.
  */
 @Composable
 fun SoftKeyboardDialog(
     request: SoftKeyboardRequest,
+    /** False with a keyboard in use: the field takes focus without raising the IME. */
+    softKeyboard: Boolean,
     onSubmit: (text: String) -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -41,18 +50,38 @@ fun SoftKeyboardDialog(
     var text by remember(request.requestId) {
         mutableStateOf(sanitizeSoftKeyboardText(request.initialText, maxLen))
     }
-    val focusRequester = remember { FocusRequester() }
+    val fieldFocus = remember { FocusRequester() }
+    val okFocus = remember { FocusRequester() }
+    val cancelFocus = remember { FocusRequester() }
 
     LaunchedEffect(request.requestId) {
-        // Wait until the TextField has the FocusRequester modifier applied.
-        // A waking BT keyboard can tear composition mid-focus; unguarded
-        // requestFocus() throws IllegalStateException and kills the process.
         yield()
-        runCatching { focusRequester.requestFocus() }
+        runCatching { fieldFocus.requestFocus() }
+    }
+
+    fun trySubmit() {
+        val trimmed = text.trim()
+        if (trimmed.isNotEmpty()) onSubmit(trimmed)
     }
 
     AlertDialog(
         onDismissRequest = onCancel,
+        modifier = Modifier.onPreviewKeyEvent { event ->
+            if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+            when (event.key) {
+                Key.Back, Key.Escape, Key.ButtonB -> {
+                    onCancel()
+                    true
+                }
+                // Desktop's pad keyboard accepts on R2 or Start; match it so the same
+                // muscle memory submits here.
+                Key.ButtonR2, Key.ButtonStart -> {
+                    trySubmit()
+                    true
+                }
+                else -> false
+            }
+        },
         title = {
             Text(
                 request.prompt.ifBlank { "Software Keyboard" },
@@ -74,16 +103,19 @@ fun SoftKeyboardDialog(
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .focusRequester(focusRequester),
+                        .focusRequester(fieldFocus)
+                        .focusProperties {
+                            next = okFocus
+                            down = okFocus
+                        }
+                        .controllerFocusRing(),
                     keyboardOptions = KeyboardOptions(
                         capitalization = KeyboardCapitalization.Words,
                         imeAction = ImeAction.Done,
+                        showKeyboardOnFocus = softKeyboard,
                     ),
                     keyboardActions = KeyboardActions(
-                        onDone = {
-                            val trimmed = text.trim()
-                            if (trimmed.isNotEmpty()) onSubmit(trimmed)
-                        },
+                        onDone = { trySubmit() },
                     ),
                     supportingText = {
                         Text("${text.length} / $maxLen")
@@ -93,18 +125,37 @@ fun SoftKeyboardDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = {
-                    val trimmed = text.trim()
-                    if (trimmed.isNotEmpty()) onSubmit(trimmed)
-                },
+                onClick = { trySubmit() },
                 enabled = text.trim().isNotEmpty(),
+                modifier = Modifier
+                    .focusRequester(okFocus)
+                    .focusProperties {
+                        previous = fieldFocus
+                        next = cancelFocus
+                        up = fieldFocus
+                        left = cancelFocus
+                        right = cancelFocus
+                    }
+                    .controllerFocusable(enabled = text.trim().isNotEmpty()),
             ) {
                 Text("OK")
             }
         },
         dismissButton = {
             Row(modifier = Modifier.padding(end = 4.dp)) {
-                TextButton(onClick = onCancel) {
+                TextButton(
+                    onClick = onCancel,
+                    modifier = Modifier
+                        .focusRequester(cancelFocus)
+                        .focusProperties {
+                            previous = okFocus
+                            next = fieldFocus
+                            up = fieldFocus
+                            left = okFocus
+                            right = okFocus
+                        }
+                        .controllerFocusable(),
+                ) {
                     Text("Cancel")
                 }
             }

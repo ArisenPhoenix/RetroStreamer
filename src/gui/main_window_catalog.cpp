@@ -1,7 +1,6 @@
 #include "main_window.hpp"
 
 #ifdef ARCHSTREAMER_HAS_HOST
-#include "common/dlc_paths.hpp"
 #include "common/game_identity.hpp"
 #include "host/catalog_ops.hpp"
 #include "host/game_meta_edit_log.hpp"
@@ -94,10 +93,10 @@ CatalogFsOptions catalog_fs_from_window(const MainWindow* window, bool apply_fil
     CatalogFsOptions fs;
     fs.apply_filesystem = apply_filesystem;
     if (window != nullptr) {
-        fs.save_root = window->save_root_path_for_catalog();
-        fs.art_root = window->art_root_path_for_catalog();
-        fs.rom_root = window->rom_root_path_for_catalog();
-        fs.dlc_root = window->dlc_root_path_for_catalog();
+        fs.save_root = window->save_root_path();
+        fs.art_root = window->art_root_path();
+        fs.rom_root = window->rom_root_path();
+        fs.dlc_root = window->dlc_root_path();
     }
     return fs;
 }
@@ -314,33 +313,6 @@ bool edit_game_meta_dialog(QWidget* parent, GameMetaRecord& row, bool* apply_fs)
 }
 
 } // namespace
-
-// Public path accessors for catalog ops (implemented via existing private helpers).
-std::filesystem::path MainWindow::save_root_path_for_catalog() const {
-    return save_root_path();
-}
-
-std::filesystem::path MainWindow::art_root_path_for_catalog() const {
-    return art_root_path();
-}
-
-std::filesystem::path MainWindow::rom_root_path_for_catalog() const {
-    if (host_rom_root_ != nullptr) {
-        const auto text = host_rom_root_->text().trimmed();
-        if (!text.isEmpty()) {
-            return std::filesystem::path{text.toStdString()};
-        }
-    }
-    return {};
-}
-
-std::filesystem::path MainWindow::dlc_root_path_for_catalog() const {
-    const auto rom = rom_root_path_for_catalog();
-    if (!rom.empty()) {
-        return default_dlc_root_for(rom);
-    }
-    return resolve_dlc_root();
-}
 
 QWidget* MainWindow::build_catalog_tab() {
     auto* page = new QWidget(this);

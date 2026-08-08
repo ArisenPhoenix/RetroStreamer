@@ -1,9 +1,7 @@
 #include "main_window.hpp"
 
 #include "gui_logging.hpp"
-#ifdef ARCHSTREAMER_HAS_HOST
-#include "gui_host_runner.hpp"
-#endif
+#include "gui_util.hpp"
 
 #include <QComboBox>
 #include <QCoreApplication>
@@ -236,7 +234,6 @@ QWidget* MainWindow::build_updates_group(QWidget* parent) {
     auto* box = new QGroupBox("Updates", parent);
     auto* form = new QFormLayout(box);
 
-#ifdef ARCHSTREAMER_HAS_HOST
     if (running_inside_flatpak()) {
         auto* note = new QLabel(
             "Self-update is disabled inside Flatpak. Update the Flatpak package instead.",
@@ -245,7 +242,6 @@ QWidget* MainWindow::build_updates_group(QWidget* parent) {
         form->addRow(note);
         return box;
     }
-#endif
 
     settings_update_repo_ = new QLineEdit(box);
     settings_update_repo_->setPlaceholderText(
@@ -363,12 +359,10 @@ void MainWindow::check_for_updates() {
     if (update_busy_) {
         return;
     }
-#ifdef ARCHSTREAMER_HAS_HOST
     if (running_inside_flatpak()) {
         set_update_status(QStringLiteral("Self-update is disabled inside Flatpak."));
         return;
     }
-#endif
 
     const auto repo = update_repo_path();
     if (const auto problem = explain_repo_problem(repo); !problem.isEmpty()) {
@@ -505,12 +499,10 @@ void MainWindow::apply_updates() {
     if (update_busy_) {
         return;
     }
-#ifdef ARCHSTREAMER_HAS_HOST
     if (running_inside_flatpak()) {
         set_update_status(QStringLiteral("Self-update is disabled inside Flatpak."));
         return;
     }
-#endif
 
     const auto repo = update_repo_path();
     if (const auto problem = explain_repo_problem(repo); !problem.isEmpty()) {

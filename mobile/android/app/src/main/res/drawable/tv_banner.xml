@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Leanback home banner (320×180). Placeholder until a designed asset exists. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <size android:width="320dp" android:height="180dp" />
+            <solid android:color="#121816" />
+        </shape>
+    </item>
+    <item
+        android:bottom="56dp"
+        android:left="24dp"
+        android:right="24dp"
+        android:top="56dp">
+        <shape android:shape="rectangle">
+            <corners android:radius="8dp" />
+            <solid android:color="#2A3D34" />
+        </shape>
+    </item>
+</layer-list>

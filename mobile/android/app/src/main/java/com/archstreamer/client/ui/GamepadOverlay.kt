@@ -76,6 +76,8 @@ fun GamepadOverlay(
     items: List<OverlayItem>,
     opacity: Float = OverlayProfile.DEFAULT_OPACITY,
     editing: Boolean = false,
+    /** Play-time action resolver (shared map for remappable sources). Defaults to item action. */
+    playActionFor: (OverlayItem) -> OverlayAction = { it.resolvedAction() },
     onState: (ControllerState) -> Unit = {},
     onMenuClick: () -> Unit = {},
     onFastForwardHold: (Boolean) -> Unit = {},
@@ -99,6 +101,11 @@ fun GamepadOverlay(
     val onFastForwardHoldLatest by rememberUpdatedState(onFastForwardHold)
     val onScreenSwapLatest by rememberUpdatedState(onScreenSwap)
     val onMenuClickLatest by rememberUpdatedState(onMenuClick)
+    val playActionForLatest by rememberUpdatedState(playActionFor)
+
+    /** Editor shows item actions; play uses the shared map for remappable sources. */
+    fun actionForItem(item: OverlayItem): OverlayAction =
+        if (editing) item.resolvedAction() else playActionForLatest(item)
 
     fun emit() {
         if (editing) return
@@ -302,8 +309,8 @@ fun GamepadOverlay(
                         ),
                 ) {
                     val label = item.displayLabel()
-                    val useFfIcon = item.resolvedAction() == OverlayAction.FastForward
-                    val useSwapIcon = item.resolvedAction() == OverlayAction.ScreenSwap
+                    val useFfIcon = actionForItem(item) == OverlayAction.FastForward
+                    val useSwapIcon = actionForItem(item) == OverlayAction.ScreenSwap
                     when (item.kind) {
                         OverlayControlKind.Menu -> {
                             MenuPadButton(
@@ -311,8 +318,8 @@ fun GamepadOverlay(
                                 size = unitBtn * 0.9f,
                                 enabled = !editing,
                                 onClick = {
-                                    applyAction(item.resolvedAction(), true)
-                                    applyAction(item.resolvedAction(), false)
+                                    applyAction(actionForItem(item), true)
+                                    applyAction(actionForItem(item), false)
                                 },
                             )
                         }
@@ -331,7 +338,7 @@ fun GamepadOverlay(
                                 height = unitBtn * 0.72f,
                                 colors = colors,
                                 enabled = !editing,
-                                onPress = { down -> applyAction(item.resolvedAction(), down) },
+                                onPress = { down -> applyAction(actionForItem(item), down) },
                             )
                         }
                         OverlayControlKind.Select,
@@ -344,7 +351,7 @@ fun GamepadOverlay(
                                 mask = 0,
                                 size = unitBtn * 0.85f,
                                 colors = colors,
-                                onButton = { _, down -> applyAction(item.resolvedAction(), down) },
+                                onButton = { _, down -> applyAction(actionForItem(item), down) },
                                 enabled = !editing,
                             )
                         }
@@ -354,7 +361,7 @@ fun GamepadOverlay(
                                 colors = colors,
                                 enabled = !editing,
                                 onAxis = { x, y ->
-                                    when (item.resolvedAction()) {
+                                    when (actionForItem(item)) {
                                         OverlayAction.RightStick -> {
                                             rightX = x
                                             rightY = y
@@ -374,7 +381,7 @@ fun GamepadOverlay(
                                 colors = colors,
                                 enabled = !editing,
                                 onAxis = { x, y ->
-                                    when (item.resolvedAction()) {
+                                    when (actionForItem(item)) {
                                         OverlayAction.LeftStick -> {
                                             leftX = x
                                             leftY = y

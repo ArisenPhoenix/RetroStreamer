@@ -514,14 +514,20 @@ if(Qt6Widgets_FOUND)
         src/gui/main_window.hpp
         src/gui/main_window.cpp
         src/gui/main_window_client.cpp
+        src/gui/main_window_paths.cpp
         src/gui/main_window_remote.cpp
         src/gui/main_window_settings.cpp
         src/gui/main_window_game_options.cpp
         src/gui/main_window_update.cpp
+        src/gui/paths_panel.cpp
+        src/gui/paths_panel.hpp
+        src/gui/profile_controls.hpp
         src/gui/remote_ssh.cpp
         src/gui/remote_ssh.hpp
         src/tools/archstreamer_gui.cpp
     )
+    # Host-dependent halves of the portable GUI headers above; CMake picks one
+    # side so the window code never tests ARCHSTREAMER_HAS_HOST itself.
     if(ARCHSTREAMER_BUILD_HOST)
         list(APPEND ARCHSTREAMER_GUI_SOURCES
             src/gui/gui_host_runner.cpp
@@ -529,6 +535,13 @@ if(Qt6Widgets_FOUND)
             src/gui/main_window_host.cpp
             src/gui/main_window_saves.cpp
             src/gui/main_window_catalog.cpp
+            src/gui/paths_panel_host.cpp
+            src/gui/profile_controls_host.cpp
+        )
+    else()
+        list(APPEND ARCHSTREAMER_GUI_SOURCES
+            src/gui/paths_panel_client.cpp
+            src/gui/profile_controls_client.cpp
         )
     endif()
     list(APPEND ARCHSTREAMER_GUI_SOURCES branding/archstreamer.qrc)

@@ -22,7 +22,6 @@
 #include <QClipboard>
 #include <QColor>
 #include <QComboBox>
-#include <QDir>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -34,6 +33,7 @@
 #include <QListWidget>
 #include <QMenu>
 #include <QMessageBox>
+#include <QMetaObject>
 #include <QProcess>
 #include <QPushButton>
 #include <QScrollBar>
@@ -49,6 +49,7 @@
 #include <algorithm>
 #include <exception>
 #include <optional>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -180,17 +181,6 @@ void restore_selected_saves_identity(QTreeWidget* tree, const QString& identity)
             stack.push_back(item->child(i));
         }
     }
-}
-
-QString expand_user_path_local(QString path) {
-    path = path.trimmed();
-    if (path == QLatin1String("~")) {
-        return QDir::homePath();
-    }
-    if (path.startsWith(QLatin1String("~/"))) {
-        return QDir::homePath() + path.mid(1);
-    }
-    return path;
 }
 
 QString format_bytes(std::uint64_t bytes) {
@@ -501,15 +491,16 @@ QWidget* MainWindow::build_saves_tab() {
     });
     saves_refresh_timer_->start();
 
-    // Users is never the startup tab; open the gate for the one-shot PS2 scan here.
-    // Re-entry still refreshes Connected/Active (PS2 parse stays one-shot via its flags).
+    // Users is never the startup tab; kick off the one-shot PS2 scan on first entry.
+    // Re-entry still refreshes Connected/Active.
     if (tabs_ != nullptr) {
         connect(tabs_, &QTabWidget::currentChanged, this, [this](int index) {
             if (tabs_ == nullptr || tabs_->tabText(index) != QLatin1String("Users")) {
                 return;
             }
-            if (!ps2_memcard_users_tab_opened()) {
-                ps2_memcard_set_users_tab_opened(true);
+            const bool first_entry = !ps2_prewarm_started_;
+            start_ps2_memcard_prewarm();
+            if (first_entry) {
                 refresh_saves_browser();
                 return;
             }
@@ -517,6 +508,38 @@ QWidget* MainWindow::build_saves_tab() {
         });
     }
     return page;
+}
+
+void MainWindow::start_ps2_memcard_prewarm() {
+    if (ps2_prewarm_started_) {
+        return;
+    }
+    ps2_prewarm_started_ = true;
+    ps2_prewarm_running_ = true;
+
+    // Parsing every user's memcard images takes seconds; keep it off the GUI
+    // thread so the tree paints now and gains PS2 sizes once this lands.
+    ps2_prewarm_thread_ = std::thread([this, root = save_root_path()] {
+        QString failure;
+        try {
+            ps2_memcard_prewarm(list_ps2_memcard_images(root));
+        } catch (const std::exception& error) {
+            failure = QString::fromUtf8(error.what());
+        }
+        QMetaObject::invokeMethod(
+            this,
+            [this, failure = std::move(failure)] {
+                ps2_prewarm_running_ = false;
+                if (!failure.isEmpty()) {
+                    append_log(
+                        host_log_,
+                        QStringLiteral("[users] PS2 memory card scan failed: %1").arg(failure),
+                        GuiLogLevel::Quiet);
+                }
+                refresh_saves_browser_list();
+            },
+            Qt::QueuedConnection);
+    });
 }
 
 bool MainWindow::saves_host_busy() const {
@@ -629,18 +652,14 @@ void MainWindow::refresh_saves_browser() {
 
     saves_hints_ = {};
     try {
-        const auto rom = host_rom_root_ != nullptr ? host_rom_root_->text().trimmed() : QString();
+        const auto rom = rom_root_path();
         std::optional<GameCatalog> scanned;
-        if (!rom.isEmpty()) {
-            std::filesystem::path meta;
-            if (host_meta_root_ != nullptr && !host_meta_root_->text().trimmed().isEmpty()) {
-                meta = expand_user_path_local(host_meta_root_->text()).toStdString();
-            }
+        if (!rom.empty()) {
             // Syncs game_meta; Users tab treats the meta DB as authoritative.
             scanned = scan_game_catalog(
-                expand_user_path_local(rom).toStdString(),
+                rom,
                 LibretroCoreRegistry::ubuntu_defaults(),
-                meta);
+                meta_root_path());
         }
         saves_hints_ = hints_from_meta_store();
         // Bootstrap only when the meta DB is empty (first run / open failure).
@@ -796,10 +815,16 @@ void MainWindow::refresh_saves_browser_list() {
         row.save_stem_mismatch = game.save_stem_mismatch;
         row.expected_save_stem = QString::fromStdString(game.expected_save_stem);
         row.display_name = name;
-        row.size_text = game.capacity_bytes > 0
-            ? QStringLiteral("%1 / %2")
-                  .arg(format_bytes(game.bytes), format_bytes(game.capacity_bytes))
-            : format_bytes(game.bytes);
+        if (game.system_key == "ps2" && !ps2_memcard_scan_complete()) {
+            // PS2 sizes come out of the memcard images. Until the background scan
+            // lands they would all read "0 B", which looks like an empty save.
+            row.size_text = QStringLiteral("…");
+        } else if (game.capacity_bytes > 0) {
+            row.size_text = QStringLiteral("%1 / %2")
+                .arg(format_bytes(game.bytes), format_bytes(game.capacity_bytes));
+        } else {
+            row.size_text = format_bytes(game.bytes);
+        }
         row.bytes = game.bytes;
         row.path_tip = QString::fromStdString(game.primary_path.string());
         if (game.save_stem_mismatch && !game.expected_save_stem.empty()) {
@@ -1046,6 +1071,9 @@ void MainWindow::refresh_saves_browser_list() {
         status += QStringLiteral(" — %1 active, %2 connected")
             .arg(active_shown)
             .arg(connected_shown);
+    }
+    if (ps2_prewarm_running_.load()) {
+        status += QStringLiteral(" — reading PS2 memory cards…");
     }
     saves_status_->setText(status);
     update_saves_action_enabled();

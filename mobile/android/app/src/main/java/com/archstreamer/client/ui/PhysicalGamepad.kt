@@ -37,6 +37,11 @@ object PhysicalGamepad {
      */
     fun isGameController(device: InputDevice): Boolean {
         if (device.isVirtual) return false
+        if (device.keyboardType == InputDevice.KEYBOARD_TYPE_ALPHABETIC &&
+            device.hasKeys(KeyEvent.KEYCODE_A, KeyEvent.KEYCODE_M, KeyEvent.KEYCODE_Z).all { it }
+        ) {
+            return false
+        }
         val sources = device.sources
         val gamepad = sources and InputDevice.SOURCE_GAMEPAD == InputDevice.SOURCE_GAMEPAD
         val joystick = sources and InputDevice.SOURCE_JOYSTICK == InputDevice.SOURCE_JOYSTICK

@@ -19,10 +19,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
@@ -36,6 +34,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -52,11 +51,16 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import android.view.KeyEvent as AndroidKeyEvent
 import com.archstreamer.client.ui.ClientViewModel
 import com.archstreamer.client.ui.NavSection
 import com.archstreamer.client.ui.UiState
@@ -109,8 +113,8 @@ private fun rememberFieldEditor(
 ): FieldEditor {
     var text by remember(optionId) { mutableStateOf(incoming) }
     var typing by remember(optionId) { mutableStateOf(false) }
-    LaunchedEffect(optionId, incoming, typing) {
-        if (!typing && incoming != text) text = incoming
+    LaunchedEffect(optionId, incoming) {
+        if (incoming != text) text = incoming
     }
     return FieldEditor(
         text = text,
@@ -123,8 +127,9 @@ private fun rememberFieldEditor(
             .fillMaxWidth()
             .focusRequester(fieldFocus.requesterFor(optionId))
             .onFocusChanged {
-                typing = it.isFocused
-                onFieldFocusChanged(optionId, it.isFocused)
+                val ownsFocus = it.isFocused || it.hasFocus
+                typing = ownsFocus
+                onFieldFocusChanged(optionId, ownsFocus)
             },
     )
 }
@@ -160,7 +165,11 @@ fun MenuOptionList(
         if (target < 0) return@LaunchedEffect
         val visible = listState.layoutInfo.visibleItemsInfo
         if (visible.isNotEmpty() && visible.none { it.index == target }) {
-            runCatching { listState.animateScrollToItem(target) }
+            if (useLightweightTextRows) {
+                runCatching { listState.scrollToItem(target) }
+            } else {
+                runCatching { listState.animateScrollToItem(target) }
+            }
         }
     }
     LazyColumn(
@@ -219,29 +228,44 @@ private fun MenuOptionRow(
                 onFieldFocusChanged = onFieldFocusChanged,
             )
             LaunchedEffect(option.id) { fieldFocus.request(option.id) }
-            OutlinedTextField(
-                value = editor.text,
-                onValueChange = editor.onText,
-                label = { Text(option.title) },
-                readOnly = option.readOnly,
-                singleLine = option.minLines == 1,
-                minLines = option.minLines,
-                maxLines = option.maxLines,
-                isError = option.isError,
-                enabled = option.enabled,
-                placeholder = if (option.placeholder.isNotBlank()) {
-                    { Text(option.placeholder) }
-                } else {
-                    null
-                },
-                supportingText = if (option.supporting.isNotBlank()) {
-                    { Text(option.supporting) }
-                } else {
-                    null
-                },
-                keyboardOptions = editor.keyboardOptions,
-                modifier = editor.modifier,
-            )
+            if (useLightweightTextRows && editing) {
+                TvHardwareTextField(
+                    optionId = option.id,
+                    value = option.value,
+                    onValueChange = option.onChange,
+                    label = option.title,
+                    enabled = option.enabled,
+                    isError = option.isError,
+                    placeholder = option.placeholder,
+                    supporting = option.supporting,
+                    keyboardOptions = editor.keyboardOptions,
+                    modifier = editor.modifier,
+                )
+            } else {
+                OutlinedTextField(
+                    value = editor.text,
+                    onValueChange = editor.onText,
+                    label = { Text(option.title) },
+                    readOnly = option.readOnly,
+                    singleLine = option.minLines == 1,
+                    minLines = option.minLines,
+                    maxLines = option.maxLines,
+                    isError = option.isError,
+                    enabled = option.enabled,
+                    placeholder = if (option.placeholder.isNotBlank()) {
+                        { Text(option.placeholder) }
+                    } else {
+                        null
+                    },
+                    supportingText = if (option.supporting.isNotBlank()) {
+                        { Text(option.supporting) }
+                    } else {
+                        null
+                    },
+                    keyboardOptions = editor.keyboardOptions,
+                    modifier = editor.modifier,
+                )
+            }
         }
 
         is MenuOption.PasswordInput -> MenuRow(
@@ -273,21 +297,35 @@ private fun MenuOptionRow(
                 keyboardType = KeyboardType.Password,
             )
             LaunchedEffect(option.id) { fieldFocus.request(option.id) }
-            OutlinedTextField(
-                value = editor.text,
-                onValueChange = editor.onText,
-                label = { Text(option.title) },
-                singleLine = true,
-                enabled = option.enabled,
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = editor.keyboardOptions,
-                supportingText = if (option.supporting.isNotBlank()) {
-                    { Text(option.supporting) }
-                } else {
-                    null
-                },
-                modifier = editor.modifier,
-            )
+            if (useLightweightTextRows && editing) {
+                TvHardwareTextField(
+                    optionId = option.id,
+                    value = option.value,
+                    onValueChange = option.onChange,
+                    label = option.title,
+                    enabled = option.enabled,
+                    supporting = option.supporting,
+                    keyboardOptions = editor.keyboardOptions,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = editor.modifier,
+                )
+            } else {
+                OutlinedTextField(
+                    value = editor.text,
+                    onValueChange = editor.onText,
+                    label = { Text(option.title) },
+                    singleLine = true,
+                    enabled = option.enabled,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = editor.keyboardOptions,
+                    supportingText = if (option.supporting.isNotBlank()) {
+                        { Text(option.supporting) }
+                    } else {
+                        null
+                    },
+                    modifier = editor.modifier,
+                )
+            }
         }
 
         is MenuOption.Flipper -> MenuRow(
@@ -298,6 +336,14 @@ private fun MenuOptionRow(
             },
             enabled = option.enabled,
         ) {
+            if (useLightweightTextRows) {
+                TextOptionDisplay(
+                    title = option.title,
+                    value = if (option.checked) "On" else "Off",
+                    supporting = option.subtitle,
+                )
+                return@MenuRow
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -324,29 +370,53 @@ private fun MenuOptionRow(
         }
 
         is MenuOption.Pill -> MenuRow(focused) {
-            Text(option.title, style = MaterialTheme.typography.titleSmall)
-            PillChips(option, onOptionTouched)
+            if (useLightweightTextRows) {
+                TextOptionDisplay(
+                    title = option.title,
+                    value = option.choices.getOrNull(option.selectedIndex)?.label.orEmpty(),
+                    supporting = "",
+                )
+            } else {
+                Text(option.title, style = MaterialTheme.typography.titleSmall)
+                PillChips(option, onOptionTouched)
+            }
         }
 
         is MenuOption.Slider -> MenuRow(focused) {
-            Text(option.title, style = MaterialTheme.typography.titleSmall)
-            Slider(
-                value = option.value,
-                onValueChange = { value ->
-                    onOptionTouched(option.id)
-                    option.onChange(value)
-                },
-                valueRange = option.range,
-                steps = option.steps,
-                enabled = option.enabled,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .focusProperties { canFocus = false },
-            )
+            if (useLightweightTextRows) {
+                TextOptionDisplay(
+                    title = option.title,
+                    value = if (option.range.endInclusive <= 1f) {
+                        "${(option.value * 100f).toInt()}%"
+                    } else {
+                        option.value.toInt().toString()
+                    },
+                    supporting = "",
+                )
+            } else {
+                Text(option.title, style = MaterialTheme.typography.titleSmall)
+                Slider(
+                    value = option.value,
+                    onValueChange = { value ->
+                        onOptionTouched(option.id)
+                        option.onChange(value)
+                    },
+                    valueRange = option.range,
+                    steps = option.steps,
+                    enabled = option.enabled,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusProperties { canFocus = false },
+                )
+            }
         }
 
         is MenuOption.Action -> MenuRow(focused) {
-            ActionButton(option, onOptionTouched)
+            if (useLightweightTextRows) {
+                TextOptionDisplay(title = option.title, value = "", supporting = "")
+            } else {
+                ActionButton(option, onOptionTouched)
+            }
         }
     }
 }
@@ -383,6 +453,196 @@ private fun TextInputDisplay(
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
             },
+        )
+    }
+}
+
+@Composable
+private fun TvHardwareTextField(
+    optionId: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    enabled: Boolean,
+    modifier: Modifier,
+    isError: Boolean = false,
+    placeholder: String = "",
+    supporting: String = "",
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    visualTransformation: VisualTransformation = VisualTransformation.None,
+) {
+    var fieldValue by remember(optionId) {
+        mutableStateOf(TextFieldValue(value, selection = TextRange(value.length)))
+    }
+    val immediateFieldValue = remember(optionId) {
+        mutableStateOf(TextFieldValue(value, selection = TextRange(value.length)))
+    }
+    var committedText by remember(optionId) { mutableStateOf(value) }
+    var dirty by remember(optionId) { mutableStateOf(false) }
+    LaunchedEffect(value) {
+        if (value == committedText || dirty) return@LaunchedEffect
+        committedText = value
+        if (value == fieldValue.text) return@LaunchedEffect
+        val next = TextFieldValue(value, selection = TextRange(value.length))
+        immediateFieldValue.value = next
+        fieldValue = next
+    }
+
+    fun edit(next: TextFieldValue) {
+        val cleaned = next.text.lineSequence().firstOrNull().orEmpty()
+        val cursor = next.selection.start.coerceIn(0, cleaned.length)
+        val normalized = TextFieldValue(cleaned, selection = TextRange(cursor))
+        immediateFieldValue.value = normalized
+        fieldValue = normalized
+        dirty = normalized.text != committedText
+    }
+
+    fun flush() {
+        val text = immediateFieldValue.value.text
+        if (text != committedText) {
+            committedText = text
+            dirty = false
+            onValueChange(text)
+        }
+    }
+
+    DisposableEffect(optionId) {
+        onDispose { flush() }
+    }
+
+    OutlinedTextField(
+        value = fieldValue,
+        onValueChange = { next ->
+            // Phone/tablet use the normal field path. On TV this still lets paste/selection
+            // updates from Compose stay coherent if the platform ever supplies them.
+            edit(next)
+        },
+        label = { Text(label) },
+        singleLine = true,
+        enabled = enabled,
+        isError = isError,
+        placeholder = if (placeholder.isNotBlank()) {
+            { Text(placeholder) }
+        } else {
+            null
+        },
+        supportingText = if (supporting.isNotBlank()) {
+            { Text(supporting) }
+        } else {
+            null
+        },
+        keyboardOptions = keyboardOptions,
+        visualTransformation = visualTransformation,
+        modifier = modifier.onPreviewKeyEvent { event ->
+            val native = event.nativeKeyEvent
+            if (native.action != AndroidKeyEvent.ACTION_DOWN) {
+                return@onPreviewKeyEvent false
+            }
+            when (native.keyCode) {
+                AndroidKeyEvent.KEYCODE_DPAD_LEFT -> {
+                    val next = immediateFieldValue.value.moveCursor(-1)
+                    immediateFieldValue.value = next
+                    fieldValue = next
+                    true
+                }
+                AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    val next = immediateFieldValue.value.moveCursor(1)
+                    immediateFieldValue.value = next
+                    fieldValue = next
+                    true
+                }
+                AndroidKeyEvent.KEYCODE_DEL -> {
+                    edit(immediateFieldValue.value.deleteSelectionOrAdjacent(forward = false))
+                    true
+                }
+                AndroidKeyEvent.KEYCODE_FORWARD_DEL -> {
+                    edit(immediateFieldValue.value.deleteSelectionOrAdjacent(forward = true))
+                    true
+                }
+                else -> {
+                    val typed = printableTextChar(native.unicodeChar)
+                    if (typed == null) {
+                        false
+                    } else {
+                        edit(immediateFieldValue.value.replaceSelection(typed))
+                        true
+                    }
+                }
+            }
+        },
+    )
+}
+
+private fun TextFieldValue.moveCursor(delta: Int): TextFieldValue {
+    val cursor = if (selection.collapsed) {
+        selection.start
+    } else if (delta < 0) {
+        selection.min
+    } else {
+        selection.max
+    }
+    return copy(selection = TextRange((cursor + delta).coerceIn(0, text.length)))
+}
+
+private fun TextFieldValue.replaceSelection(char: Char): TextFieldValue {
+    val start = selection.min.coerceIn(0, text.length)
+    val end = selection.max.coerceIn(start, text.length)
+    val next = text.substring(0, start) + char + text.substring(end)
+    val cursor = start + 1
+    return TextFieldValue(next, selection = TextRange(cursor))
+}
+
+private fun TextFieldValue.deleteSelectionOrAdjacent(forward: Boolean): TextFieldValue {
+    val start = selection.min.coerceIn(0, text.length)
+    val end = selection.max.coerceIn(start, text.length)
+    if (start != end) {
+        val next = text.removeRange(start, end)
+        return TextFieldValue(next, selection = TextRange(start))
+    }
+    return if (forward) {
+        if (start >= text.length) this else TextFieldValue(
+            text.removeRange(start, start + 1),
+            selection = TextRange(start),
+        )
+    } else {
+        if (start <= 0) this else TextFieldValue(
+            text.removeRange(start - 1, start),
+            selection = TextRange(start - 1),
+        )
+    }
+}
+
+private const val DELETE_CHAR = 127
+
+private fun printableTextChar(codePoint: Int): Char? =
+    when {
+        codePoint == ' '.code -> ' '
+        codePoint <= ' '.code -> null
+        codePoint == DELETE_CHAR -> null
+        else -> codePoint.toChar()
+    }
+
+@Composable
+private fun TextOptionDisplay(
+    title: String,
+    value: String,
+    supporting: String,
+) {
+    Text(title, style = MaterialTheme.typography.titleSmall)
+    if (value.isNotBlank()) {
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+    if (supporting.isNotBlank()) {
+        Text(
+            supporting,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -462,6 +722,11 @@ private fun NoteRow(option: MenuOption.Note) {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun Modifier.revealWhenFocused(focused: Boolean): Modifier {
+    val configuration = LocalConfiguration.current
+    val isTv =
+        configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
+            Configuration.UI_MODE_TYPE_TELEVISION
+    if (isTv) return this
     val requester = remember { BringIntoViewRequester() }
     LaunchedEffect(focused) {
         if (focused) runCatching { requester.bringIntoView() }
@@ -526,8 +791,23 @@ fun MenuDrawerSections(
     onSelect: (NavSection) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier.verticalScroll(rememberScrollState())) {
-        sections.forEach { section ->
+    val listState = rememberLazyListState()
+    val configuration = LocalConfiguration.current
+    val isTv =
+        configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
+            Configuration.UI_MODE_TYPE_TELEVISION
+    LaunchedEffect(focus.section, focus.inOptions, sections) {
+        if (focus.inOptions) return@LaunchedEffect
+        val target = sections.indexOfFirst { it.id == focus.section }
+        if (target < 0) return@LaunchedEffect
+        if (isTv) {
+            runCatching { listState.scrollToItem(target) }
+        } else {
+            runCatching { listState.animateScrollToItem(target) }
+        }
+    }
+    LazyColumn(state = listState, modifier = modifier) {
+        items(sections, key = { it.id }) { section ->
             DrawerSectionRow(
                 section = section,
                 cursorHere = !focus.inOptions && focus.section == section.id,
@@ -545,6 +825,10 @@ private fun DrawerSectionRow(
     paneHere: Boolean,
     onSelect: (NavSection) -> Unit,
 ) {
+    val configuration = LocalConfiguration.current
+    val isTv =
+        configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
+            Configuration.UI_MODE_TYPE_TELEVISION
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -560,7 +844,7 @@ private fun DrawerSectionRow(
                             SolidColor(MaterialTheme.colorScheme.primary),
                             DrawerRowShape,
                         )
-                    paneHere -> Modifier
+                    paneHere && !isTv -> Modifier
                         .background(MaterialTheme.colorScheme.secondaryContainer)
                     else -> Modifier
                 },

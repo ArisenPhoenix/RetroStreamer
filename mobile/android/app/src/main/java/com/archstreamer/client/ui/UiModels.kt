@@ -13,6 +13,7 @@ import com.archstreamer.client.protocol.MediaStreamSize
 import com.archstreamer.client.protocol.Protocol
 import com.archstreamer.client.protocol.SoftKeyboardRequest
 import com.archstreamer.client.ui.menu.MenuFocus
+import android.graphics.Bitmap as AndroidBitmap
 
 /** Client tab — join host / discovery. */
 data class ClientState(
@@ -215,6 +216,12 @@ data class SettingsState(
     val logConnections: Boolean = false,
 )
 
+/** Device-to-device form pairing via QR code. Controls are synced through DB push/pull. */
+data class PairingState(
+    val receiveQr: AndroidBitmap? = null,
+    val status: String = "",
+)
+
 /** Live play surface — video, OSK, DS layout (not a drawer tab). */
 data class SessionState(
     val videoPlayer: RtpVideoPlayer? = null,
@@ -242,6 +249,7 @@ data class UiState(
     val gameOptions: GameOptionsState = GameOptionsState(),
     val profile: ProfileState = ProfileState(),
     val settings: SettingsState = SettingsState(),
+    val pairing: PairingState = PairingState(),
     val session: SessionState = SessionState(),
     /** Drawer / option cursor for controller and remote navigation. */
     val menu: MenuFocus = MenuFocus(),

@@ -31,9 +31,13 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.archstreamer.client.net.ClientFileLog
 import com.archstreamer.client.ui.ArchStreamerApp
+import com.archstreamer.client.ui.ClientActivityEffect
 import com.archstreamer.client.ui.ClientViewModel
 import com.archstreamer.client.ui.WithoutSoftKeyboard
+import com.archstreamer.client.ui.isMenuHomeKey
 import com.archstreamer.client.ui.theme.ArchStreamerTheme
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 
 class MainActivity : ComponentActivity() {
     private val viewModel: ClientViewModel by viewModels()
@@ -44,6 +48,11 @@ class MainActivity : ComponentActivity() {
     private val bluetoothPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
             viewModel.refreshPhysicalPads()
+        }
+
+    private val pairQrScanner =
+        registerForActivityResult(ScanContract()) { result ->
+            viewModel.onPairScanResult(result.contents)
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -96,6 +105,22 @@ class MainActivity : ComponentActivity() {
                         ensureBluetoothPermission()
                     }
                 }
+                LaunchedEffect(viewModel) {
+                    viewModel.activityEffects.collect { effect ->
+                        when (effect) {
+                            ClientActivityEffect.LaunchPairQrScanner -> {
+                                pairQrScanner.launch(
+                                    ScanOptions().apply {
+                                        setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                                        setPrompt("Scan ArchStreamer form-sync QR")
+                                        setBeepEnabled(false)
+                                        setOrientationLocked(false)
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
                 Box(modifier = Modifier.fillMaxSize()) {
                     // Compose alone does not always receive keyboard attach/detach
                     // config callbacks; a View sink keeps Activity from missing them
@@ -139,6 +164,7 @@ class MainActivity : ComponentActivity() {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         viewModel.noteKeyboardUse(event)
+        if (isMenuHomeKey(event.keyCode) && viewModel.onMenuHomeKeyEvent(event)) return true
         // Real pads must hit the gamepad tracker before play-keyboard remotes, otherwise
         // DPAD_* keys are stolen as "keyboard D-pad" and BUTTON_* never update latestPad
         // when hasKeys filtering rejected the device.

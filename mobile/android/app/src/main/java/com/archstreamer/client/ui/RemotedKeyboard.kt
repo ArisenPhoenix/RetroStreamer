@@ -7,13 +7,12 @@ import com.archstreamer.client.protocol.RemotedKey
 import com.archstreamer.client.ui.menu.NavDir
 
 /**
- * Remoted-key bits for host VirtualKeyboard (Space FF hold on RetroArch, …).
+ * Remoted-key bits for host VirtualKeyboard.
  * Arrow keys are intentionally omitted — on mobile they map to joypad D-pad while playing.
- * Keyboard F / remapped pad / overlay = hold EmulatorControl FF.
- * Play-menu switch = latch. Pause (P) is EmulatorControl absolute, not remoted.
+ * Keyboard Space / remapped pad / overlay = hold EmulatorControl FF.
+ * Keyboard F / play-menu switch = latch. Pause (P) is EmulatorControl, not remoted.
  */
 fun remotedKeyBitFromAndroidKeyCode(keyCode: Int): Int? = when (keyCode) {
-    KeyEvent.KEYCODE_SPACE -> RemotedKey.SPACE
     KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> RemotedKey.ENTER
     KeyEvent.KEYCODE_ESCAPE -> RemotedKey.ESCAPE
     KeyEvent.KEYCODE_TAB -> RemotedKey.TAB
@@ -38,6 +37,7 @@ fun keyboardDpadMask(keyCode: Int): Int? = when (keyCode) {
  */
 fun isMenuHomeKey(keyCode: Int): Boolean =
     keyCode == KeyEvent.KEYCODE_BUTTON_MODE ||
+        keyCode == KeyEvent.KEYCODE_GUIDE ||
         keyCode == KeyEvent.KEYCODE_HOME ||
         keyCode == KeyEvent.KEYCODE_MENU
 

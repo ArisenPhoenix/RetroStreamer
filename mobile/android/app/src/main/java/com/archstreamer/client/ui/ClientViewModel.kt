@@ -23,6 +23,12 @@ import com.archstreamer.client.net.JoinedPlaySession
 import com.archstreamer.client.net.RemoteHost
 import com.archstreamer.client.net.RemoteHostPortBlock
 import com.archstreamer.client.net.SessionJoiner
+import com.archstreamer.client.pair.PairClient
+import com.archstreamer.client.pair.PairListenSession
+import com.archstreamer.client.pair.PairProfile
+import com.archstreamer.client.pair.PairQr
+import com.archstreamer.client.pair.PairServer
+import com.archstreamer.client.pair.PairTarget
 import com.archstreamer.client.protocol.IncomingPacket
 import com.archstreamer.client.protocol.PacketCodec
 import com.archstreamer.client.protocol.ControllerState
@@ -50,6 +56,7 @@ import com.archstreamer.client.ui.games.stepGamesCursor
 import com.archstreamer.client.ui.menu.AppMenu
 import com.archstreamer.client.ui.menu.MenuEffect
 import com.archstreamer.client.ui.menu.MenuNavigator
+import com.archstreamer.client.ui.menu.MenuOption
 import com.archstreamer.client.ui.menu.MenuSection
 import com.archstreamer.client.ui.menu.NavDir
 import com.archstreamer.client.ui.menu.NavOutcome
@@ -85,6 +92,10 @@ enum class NavSection(val title: String) {
 
     /** Session actions (pause, fast-forward, resync, leave) — only while connected. */
     Session("Session"),
+}
+
+sealed interface ClientActivityEffect {
+    data object LaunchPairQrScanner : ClientActivityEffect
 }
 
 class ClientViewModel(application: Application) : AndroidViewModel(application) {
@@ -186,13 +197,19 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         )
         val pads = PhysicalGamepad.connectedPads()
         val padConnected = pads.isNotEmpty()
+        val preferPhysical = if (isTvDevice() && padConnected) {
+            true
+        } else {
+            base.controls.usePhysicalController
+        }
         val keyboard = hardwareKeyboardPresent()
         val useKeyboard = keyboardPreference(keyboard)
         return base.copy(
             controls = base.controls.copy(
+                usePhysicalController = preferPhysical,
                 physicalPadConnected = padConnected,
                 physicalPadLabel = pads.firstOrNull()?.name.orEmpty(),
-                physicalInputActive = base.controls.usePhysicalController &&
+                physicalInputActive = preferPhysical &&
                     padConnected &&
                     !base.controls.overlayEditing,
                 hasKeyboardActive = keyboard,
@@ -244,8 +261,12 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
      * to perform. Focus itself lives in [UiState.menu].
      */
     val menuEffects: SharedFlow<MenuEffect> = _menuEffects.asSharedFlow()
+    private val _activityEffects = MutableSharedFlow<ClientActivityEffect>(extraBufferCapacity = 4)
+    val activityEffects: SharedFlow<ClientActivityEffect> = _activityEffects.asSharedFlow()
+    private val textCursorByField = mutableMapOf<String, Int>()
 
     private var session: JoinedPlaySession? = null
+    private var pairListenSession: PairListenSession? = null
     /** Open control TCP after Connect (Users-tab Connected) until play/disconnect. */
     private var lobbyPresence: ControlConnection? = null
     /** In-flight ControlsDb reply while playing (session control loop delivers it). */
@@ -901,13 +922,14 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         val connected = pads.isNotEmpty()
         val label = pads.firstOrNull()?.name.orEmpty()
         val editing = _state.value.controls.overlayEditing
-        val active = preferPhysical && connected && !editing
+        val effectivePreferPhysical = if (isTvDevice() && connected) true else preferPhysical
+        val active = effectivePreferPhysical && connected && !editing
         val wasActive = _state.value.controls.physicalInputActive
         // Once seen, a keyboard stays seen: see [ControlsState.hasKeyboardActive].
         val keyboard = _state.value.controls.hasKeyboardActive || hardwareKeyboardPresent()
         val useKeyboard = keyboardPreference(keyboard)
         val before = _state.value.controls
-        updateControls { copy(usePhysicalController = preferPhysical, physicalPadConnected = connected, physicalPadLabel = label, physicalInputActive = active, hasKeyboardActive = keyboard, useKeyboard = useKeyboard, keyboardInputActive = useKeyboard && keyboard) }
+        updateControls { copy(usePhysicalController = effectivePreferPhysical, physicalPadConnected = connected, physicalPadLabel = label, physicalInputActive = active, hasKeyboardActive = keyboard, useKeyboard = useKeyboard, keyboardInputActive = useKeyboard && keyboard) }
         if (wasActive != active) {
             gamepadTracker.reset()
             latestPad = ControllerState()
@@ -917,6 +939,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         if (before.physicalPadConnected != connected ||
             before.physicalPadLabel != label ||
             before.physicalInputActive != active ||
+            before.usePhysicalController != effectivePreferPhysical ||
             before.hasKeyboardActive != keyboard ||
             before.keyboardInputActive != (useKeyboard && keyboard)
         ) {
@@ -971,7 +994,36 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun requestPlayMenu() {
+        if (isTvDevice()) {
+            openTvPlayMenu()
+            return
+        }
         _menuEffects.tryEmit(MenuEffect.OpenDrawer)
+    }
+
+    private fun openTvPlayMenu() {
+        val snap = _state.value
+        if (menuDrawerOpen && snap.playPaneVisible()) return
+        val target = if (snap.playing && !snap.playPaneVisible()) {
+            NavSection.Controls
+        } else {
+            snap.section
+        }
+        markPaneOpening(target)
+        menuDrawerOpen = true
+        backMenuChromeFocused = false
+        clearRemotedKeys()
+        clearKeyboardDpad()
+        resetMenuHats()
+        gamepadTracker.reset()
+        latestPad = ControllerState()
+        _state.update {
+            it.copy(
+                section = target,
+                menu = MenuNavigator.atDrawer(menuSections(it), target),
+            )
+        }
+        syncMenuPause()
     }
 
     /**
@@ -1069,6 +1121,17 @@ fun clearBackMenuChromeFocus() {
     }
 
     /** @return true if consumed as physical play input. */
+    fun onMenuHomeKeyEvent(event: KeyEvent): Boolean {
+        if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_UP) {
+            return true
+        }
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            toggleMenuDrawer()
+        }
+        return true
+    }
+
+    /** @return true if consumed as physical play input. */
     fun onGamepadKeyEvent(event: KeyEvent): Boolean {
         logPadKey(event)
         if (menuOwnsInput()) return handleMenuGamepadKey(event)
@@ -1102,8 +1165,9 @@ fun clearBackMenuChromeFocus() {
      *
      * Priority:
      * 1. Soft keyboard dialog up → leave keys alone (Enter/Backspace type in the OSK).
-     * 2. Menu owns input (drawer open, offline, or a settings pane over play) → navigate.
-     * 3. Otherwise → Backspace opens menu; arrows = joypad D-pad; P/Space/Enter/… remoted,
+     * 2. Menu owns input (drawer open, offline, or a settings pane over play) -> navigate.
+     * 3. Otherwise -> Backspace opens menu; arrows = joypad D-pad; P/F toggle
+     *    emulator controls, Space holds FF, and Enter/... may be remoted,
      *    unless the keyboard has been switched off for games
      *    ([ControlsState.keyboardInputActive]).
      *
@@ -1137,6 +1201,11 @@ fun clearBackMenuChromeFocus() {
             return false
         }
 
+        if (isMenuHomeKey(keyCode)) {
+            if (edge) toggleMenuDrawer()
+            return true
+        }
+
         // Backspace → play menu (never remoted on mobile while playing).
         if (keyCode == KeyEvent.KEYCODE_DEL) {
             if (edge) requestPlayMenu()
@@ -1156,16 +1225,21 @@ fun clearBackMenuChromeFocus() {
             return true
         }
 
-        // F → hold EmulatorControl fast-forward (down=on, up=off). Not a toggle —
-        // menu latch is the only sticky On.
+        // F toggles the FF latch. Space below is the hold-to-FF key.
         if (keyCode == KeyEvent.KEYCODE_F) {
+            if (edge) setFastForward(!snap.gameOptions.fastForward)
+            return true
+        }
+
+        // Space holds EmulatorControl fast-forward (down=on, up=off).
+        if (keyCode == KeyEvent.KEYCODE_SPACE) {
             setFastForwardHold(down)
             return true
         }
 
-        // P → one-shot PauseToggle (host F5). Not absolute On/Off — melonDS/Ryujinx
+        // P -> one-shot PauseToggle (host F5). Not absolute On/Off - melonDS/Ryujinx
         // F5 is a toggle; absolute + host cache desyncs when a tap misses (FF is fine
-        // because it is a Space hold). Menu pause switch still uses absolute setPaused.
+        // because Space is a hold). Menu pause switch still uses absolute setPaused.
         if (keyCode == KeyEvent.KEYCODE_P) {
             if (edge) {
                 triggerPauseToggle()
@@ -1202,6 +1276,10 @@ fun clearBackMenuChromeFocus() {
     }
 
     private fun menuSections(snap: UiState = _state.value): List<MenuSection> = menuFor(snap)
+
+    private fun isTvDevice(): Boolean =
+        getApplication<Application>().resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
+            Configuration.UI_MODE_TYPE_TELEVISION
 
     /** True when there is a cursor to move: the drawer is up, or we are inside options. */
     private fun menuCursorActive(snap: UiState = _state.value): Boolean =
@@ -1324,7 +1402,11 @@ fun clearBackMenuChromeFocus() {
                 if (here !is GamesRow.Filter && snap.games.filter.isNotEmpty()) {
                     updateGames { copy(cursorKey = GamesRow.FILTER_KEY) }
                 } else {
-                    _menuEffects.tryEmit(MenuEffect.OpenDrawer)
+                    if (isTvDevice()) {
+                        onTvOfflineMenuShown()
+                    } else {
+                        _menuEffects.tryEmit(MenuEffect.OpenDrawer)
+                    }
                 }
         }
         return true
@@ -1356,7 +1438,6 @@ fun clearBackMenuChromeFocus() {
     private fun handleGamesTyping(event: KeyEvent): Boolean {
         val snap = _state.value
         if (!snap.controls.hasKeyboardActive) return false
-        if (PhysicalGamepad.isGameControllerDeviceId(event.deviceId)) return false
         val down = event.action == KeyEvent.ACTION_DOWN
         if (event.keyCode == KeyEvent.KEYCODE_DEL) {
             val filter = snap.games.filter
@@ -1364,8 +1445,7 @@ fun clearBackMenuChromeFocus() {
             if (down) onFilterChange(filter.dropLast(1))
             return true
         }
-        val typed = event.unicodeChar.toChar()
-        if (typed.code <= ' '.code || typed.code == DELETE_CHAR) return false
+        val typed = printableTextChar(event.unicodeChar) ?: return false
         if (down) onFilterChange(snap.games.filter + typed)
         return true
     }
@@ -1433,6 +1513,34 @@ fun clearBackMenuChromeFocus() {
         }
     }
 
+    /** TV offline uses a permanent section rail, not a modal drawer. */
+    fun onTvOfflineMenuShown() {
+        menuDrawerOpen = true
+        backMenuChromeFocused = false
+        clearRemotedKeys()
+        clearKeyboardDpad()
+        resetMenuHats()
+        _state.update { snap ->
+            if (snap.menu.inOptions || snap.menu.section == snap.section) {
+                snap
+            } else {
+                snap.copy(menu = MenuNavigator.atDrawer(menuSections(snap), snap.section))
+            }
+        }
+    }
+
+    /** Touch/remote click on the permanent TV rail: show pane and keep cursor on rail. */
+    fun selectTvOfflineSection(section: NavSection) {
+        markPaneOpening(section)
+        selectSection(section)
+        val wasMenuOpen = menuDrawerOpen
+        menuDrawerOpen = section != NavSection.Games
+        _state.update {
+            it.copy(menu = MenuNavigator.atDrawer(menuSections(it), section))
+        }
+        if (_state.value.playing && wasMenuOpen != menuDrawerOpen) syncMenuPause()
+    }
+
     private fun applyMenuOutcome(outcome: NavOutcome) {
         val before = _state.value.section
         _state.update { it.copy(menu = outcome.focus) }
@@ -1444,6 +1552,10 @@ fun clearBackMenuChromeFocus() {
             markPaneOpening(outcome.focus.section)
             selectSection(outcome.focus.section)
         }
+        if (isTvDevice() && entered && outcome.focus.section == NavSection.Games) {
+            menuDrawerOpen = false
+            syncMenuPause()
+        }
         outcome.effect?.let { _menuEffects.tryEmit(it) }
     }
 
@@ -1453,13 +1565,30 @@ fun clearBackMenuChromeFocus() {
         val snap = _state.value
         val inGames = gamesPaneOwnsCursor(snap)
         if (snap.menu.editing || snap.games.filterEditing) {
-            // Typing owns arrows, Backspace, and letters; only Esc / East let go.
+            navDirForKey(keyCode)?.let { dir ->
+                if (dir == NavDir.Up || dir == NavDir.Down) {
+                    if (edge) {
+                        leaveTextField()
+                        onNavDirection(dir)
+                    }
+                    return true
+                }
+                return false
+            }
+            if (isMenuActivateKey(keyCode)) {
+                if (edge) leaveTextField()
+                return true
+            }
             if (keyCode == KeyEvent.KEYCODE_ESCAPE || isMenuLeaveFieldsKey(keyCode)) {
                 if (edge) leaveTextField()
                 return true
             }
+            if (snap.games.filterEditing && handleHardwareTextFieldKey(event, snap)) {
+                return true
+            }
             return false
         }
+        if (handleFocusedTextFieldKey(event, snap)) return true
         if (keyCode == KeyEvent.KEYCODE_ESCAPE ||
             keyCode == KeyEvent.KEYCODE_DEL ||
             isMenuLeaveFieldsKey(keyCode)
@@ -1469,7 +1598,13 @@ fun clearBackMenuChromeFocus() {
             return true
         }
         if (isMenuHomeKey(keyCode)) {
-            if (edge) toggleMenuDrawer()
+            if (edge) {
+                if (snap.playing) {
+                    toggleMenuDrawer()
+                } else {
+                    onTvOfflineMenuShown()
+                }
+            }
             return true
         }
         navDirForKey(keyCode)?.let { dir ->
@@ -1489,6 +1624,216 @@ fun clearBackMenuChromeFocus() {
             keyCode == KeyEvent.KEYCODE_P ||
             remotedKeyBitFromAndroidKeyCode(keyCode) != null
     }
+
+    /**
+     * Hardware keyboards need to type even when the platform text-input session is suppressed
+     * to keep Android TV's OSK from flashing. This covers the common no-cursor edits needed by
+     * connection fields; touch/phone soft-keyboard editing still goes through Compose.
+     */
+    private fun handleHardwareTextFieldKey(event: KeyEvent, snap: UiState): Boolean {
+        if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_UP) {
+            return true
+        }
+        val down = event.action == KeyEvent.ACTION_DOWN
+        if (event.keyCode == KeyEvent.KEYCODE_DEL) {
+            if (down) deleteHardwareTextFieldChar(snap, forward = false)
+            return true
+        }
+        if (event.keyCode == KeyEvent.KEYCODE_FORWARD_DEL) {
+            if (down) deleteHardwareTextFieldChar(snap, forward = true)
+            return true
+        }
+        if (isMenuActivateKey(event.keyCode)) {
+            if (down && event.repeatCount == 0) leaveTextField()
+            return true
+        }
+        val codePoint = event.unicodeChar
+        val typed = printableTextChar(codePoint) ?: return false
+        if (down) appendHardwareTextFieldChar(snap, typed)
+        return true
+    }
+
+    /** Start editing a focused text row as soon as a hardware keyboard types into it. */
+    private fun handleFocusedTextFieldKey(event: KeyEvent, snap: UiState): Boolean {
+        if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_UP) {
+            return false
+        }
+        val option = focusedTextOption(snap) ?: return false
+        val down = event.action == KeyEvent.ACTION_DOWN
+        if (navDirForKey(event.keyCode) != null ||
+            isMenuActivateKey(event.keyCode) ||
+            event.keyCode == KeyEvent.KEYCODE_ESCAPE ||
+            isMenuLeaveFieldsKey(event.keyCode)
+        ) {
+            return false
+        }
+        if (event.keyCode == KeyEvent.KEYCODE_DEL) {
+            if (down) {
+                _state.update { it.copy(menu = it.menu.copy(editing = true)) }
+                deleteHardwareTextOptionCharAtEnd(option, forward = false)
+            }
+            return true
+        }
+        if (event.keyCode == KeyEvent.KEYCODE_FORWARD_DEL) {
+            if (down) {
+                _state.update { it.copy(menu = it.menu.copy(editing = true)) }
+                deleteHardwareTextOptionCharAtEnd(option, forward = true)
+            }
+            return true
+        }
+        val codePoint = event.unicodeChar
+        val typed = printableTextChar(codePoint) ?: return false
+        if (down) {
+            _state.update { it.copy(menu = it.menu.copy(editing = true)) }
+            appendHardwareTextOptionCharAtEnd(option, typed)
+        }
+        return true
+    }
+
+    private fun printableTextChar(codePoint: Int): Char? =
+        when {
+            codePoint == ' '.code -> ' '
+            codePoint <= ' '.code -> null
+            codePoint == DELETE_CHAR -> null
+            else -> codePoint.toChar()
+        }
+
+    private fun appendHardwareTextFieldChar(snap: UiState, char: Char) {
+        if (snap.games.filterEditing) {
+            val key = GamesRow.FILTER_KEY
+            val cursor = textCursor(key, snap.games.filter)
+            onFilterChange(snap.games.filter.insertAt(cursor, char))
+            textCursorByField[key] = cursor + 1
+            return
+        }
+        val option = activeTextOption(snap) ?: return
+        appendHardwareTextOptionChar(option, char)
+    }
+
+    private fun deleteHardwareTextFieldChar(snap: UiState, forward: Boolean) {
+        if (snap.games.filterEditing) {
+            val key = GamesRow.FILTER_KEY
+            val cursor = textCursor(key, snap.games.filter)
+            val (next, nextCursor) = snap.games.filter.deleteAt(cursor, forward)
+            if (next != snap.games.filter) onFilterChange(next)
+            textCursorByField[key] = nextCursor
+            return
+        }
+        val option = activeTextOption(snap) ?: return
+        deleteHardwareTextOptionChar(option, forward)
+    }
+
+    private fun appendHardwareTextOptionChar(option: MenuOption, char: Char) {
+        when (option) {
+            is MenuOption.TextInput ->
+                if (option.takesTyping) {
+                    val cursor = textCursor(option.id, option.value)
+                    option.onChange(option.value.insertAt(cursor, char))
+                    textCursorByField[option.id] = cursor + 1
+                }
+            is MenuOption.PasswordInput -> {
+                val cursor = textCursor(option.id, option.value)
+                option.onChange(option.value.insertAt(cursor, char))
+                textCursorByField[option.id] = cursor + 1
+            }
+            else -> Unit
+        }
+    }
+
+    private fun deleteHardwareTextOptionChar(option: MenuOption, forward: Boolean) {
+        when (option) {
+            is MenuOption.TextInput ->
+                if (option.takesTyping) {
+                    val cursor = textCursor(option.id, option.value)
+                    val (next, nextCursor) = option.value.deleteAt(cursor, forward)
+                    if (next != option.value) option.onChange(next)
+                    textCursorByField[option.id] = nextCursor
+                }
+            is MenuOption.PasswordInput -> {
+                val cursor = textCursor(option.id, option.value)
+                val (next, nextCursor) = option.value.deleteAt(cursor, forward)
+                if (next != option.value) option.onChange(next)
+                textCursorByField[option.id] = nextCursor
+            }
+            else -> Unit
+        }
+    }
+
+    private fun appendHardwareTextOptionCharAtEnd(option: MenuOption, char: Char) {
+        when (option) {
+            is MenuOption.TextInput ->
+                if (option.takesTyping) option.onChange(option.value + char)
+            is MenuOption.PasswordInput ->
+                option.onChange(option.value + char)
+            else -> Unit
+        }
+    }
+
+    private fun deleteHardwareTextOptionCharAtEnd(option: MenuOption, forward: Boolean) {
+        if (forward) return
+        when (option) {
+            is MenuOption.TextInput ->
+                if (option.takesTyping && option.value.isNotEmpty()) {
+                    option.onChange(option.value.dropLast(1))
+                }
+            is MenuOption.PasswordInput ->
+                if (option.value.isNotEmpty()) option.onChange(option.value.dropLast(1))
+            else -> Unit
+        }
+    }
+
+    private fun moveTextCursor(snap: UiState, delta: Int) {
+        val key = activeTextFieldKey(snap) ?: return
+        val value = activeTextFieldValue(snap) ?: return
+        textCursorByField[key] = (textCursor(key, value) + delta).coerceIn(0, value.length)
+    }
+
+    private fun textCursor(key: String, value: String): Int =
+        textCursorByField[key]?.coerceIn(0, value.length) ?: value.length
+
+    private fun String.insertAt(index: Int, char: Char): String {
+        val cursor = index.coerceIn(0, length)
+        return substring(0, cursor) + char + substring(cursor)
+    }
+
+    private fun String.deleteAt(index: Int, forward: Boolean): Pair<String, Int> {
+        val cursor = index.coerceIn(0, length)
+        return if (forward) {
+            if (cursor >= length) this to cursor else removeRange(cursor, cursor + 1) to cursor
+        } else {
+            if (cursor <= 0) this to cursor else removeRange(cursor - 1, cursor) to (cursor - 1)
+        }
+    }
+
+    private fun activeTextFieldKey(snap: UiState): String? =
+        if (snap.games.filterEditing) {
+            GamesRow.FILTER_KEY
+        } else {
+            activeTextOption(snap)?.id
+        }
+
+    private fun activeTextFieldValue(snap: UiState): String? =
+        if (snap.games.filterEditing) {
+            snap.games.filter
+        } else {
+            when (val option = activeTextOption(snap)) {
+                is MenuOption.TextInput -> option.value
+                is MenuOption.PasswordInput -> option.value
+                else -> null
+            }
+        }
+
+    private fun focusedTextOption(snap: UiState): MenuOption? {
+        val menu = snap.menu
+        if (!menu.inOptions) return null
+        return menuSections(snap)
+            .firstOrNull { it.id == menu.section }
+            ?.option(menu.optionId)
+            ?.takeIf { it.takesTyping }
+    }
+
+    private fun activeTextOption(snap: UiState): MenuOption? =
+        if (snap.menu.editing) focusedTextOption(snap) else null
 
     /** Give up whichever field is holding the IME. */
     private fun leaveTextField() {
@@ -1516,6 +1861,7 @@ fun clearBackMenuChromeFocus() {
         }
         val edge = event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0
         if (handleMenuKey(event, edge)) return true
+        if (_state.value.menu.editing || _state.value.games.filterEditing) return false
         // An open drawer owns the whole pad; a pane may still want the leftovers.
         return menuDrawerOpen
     }
@@ -1693,6 +2039,12 @@ fun clearBackMenuChromeFocus() {
     /** Dismiss overlay/stream settings and return to the live play surface. */
     fun returnToPlay() {
         if (!_state.value.playing) return
+        val wasMenuOpen = menuDrawerOpen
+        menuDrawerOpen = false
+        backMenuChromeFocused = false
+        resetMenuHats()
+        clearRemotedKeys()
+        clearKeyboardDpad()
         _state.update {
             it.copy(
                 section = NavSection.Games,
@@ -1700,6 +2052,7 @@ fun clearBackMenuChromeFocus() {
                 menu = it.menu.copy(inOptions = false, editing = false),
             )
         }
+        if (wasMenuOpen) syncMenuPause()
     }
 
     fun onHostChange(value: String) {
@@ -2391,11 +2744,13 @@ fun clearBackMenuChromeFocus() {
                 withControlsSyncConnection { send, receive ->
                     // Reached only on an authenticated connection, so the name is a profile.
                     confirmProfileUsername(username)
-                    persistOverlayProfiles()
-                    persistButtonMapDocument()
+                    ClientFileLog.conn("controls pull request user=$username")
                     send(PacketCodec.controlsDbPull(username))
                     when (val packet = receive()) {
                         is IncomingPacket.ControlsDb -> {
+                            ClientFileLog.conn(
+                                "controls pull response user=$username found=${packet.found} bytes=${packet.dbBytes.size}",
+                            )
                             if (!packet.found || packet.dbBytes.isEmpty()) {
                                 error("No controls stored on host for $username")
                             }
@@ -2403,6 +2758,7 @@ fun clearBackMenuChromeFocus() {
                                 error("Failed to import controls database")
                             }
                             reloadControlsFromLocalStore()
+                            ClientFileLog.conn("controls pull imported user=$username")
                             "Pulled controls for $username"
                         }
                         is IncomingPacket.Error -> error(packet.value.message)
@@ -2432,9 +2788,13 @@ fun clearBackMenuChromeFocus() {
                     persistOverlayProfiles()
                     persistButtonMapDocument()
                     val bytes = cadenceControls.exportPackBytes(username)
+                    ClientFileLog.conn("controls push request user=$username bytes=${bytes.size}")
                     send(PacketCodec.controlsDbPush(username, bytes))
                     when (val packet = receive()) {
                         is IncomingPacket.ControlsDbAck -> {
+                            ClientFileLog.conn(
+                                "controls push ack user=$username ok=${packet.ok} message=${packet.message}",
+                            )
                             if (!packet.ok) error(packet.message.ifBlank { "push rejected" })
                             "Pushed controls for $username"
                         }
@@ -2777,6 +3137,208 @@ fun clearBackMenuChromeFocus() {
         applyStreamPrefsToSession()
     }
 
+    fun showPairReceiveQr() {
+        pairListenSession?.close()
+        pairListenSession = null
+        _state.update {
+            it.copy(pairing = it.pairing.copy(receiveQr = null, status = "Preparing QR receiver..."))
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                PairServer.start(
+                    onProfile = { profile ->
+                        viewModelScope.launch {
+                            applyPairProfile(profile)
+                            closePairReceiveQr("Forms imported from paired device.")
+                        }
+                    },
+                    onError = { message ->
+                        viewModelScope.launch {
+                            _state.update {
+                                it.copy(pairing = it.pairing.copy(status = "Pair receive failed: $message"))
+                            }
+                        }
+                    },
+                )
+            }.onSuccess { listen ->
+                val qr = PairQr.encode(listen.uri)
+                pairListenSession = listen
+                _state.update {
+                    it.copy(
+                        pairing = it.pairing.copy(
+                            receiveQr = qr,
+                            status = "Scan this QR from the device that has the forms.",
+                        ),
+                    )
+                }
+            }.onFailure { error ->
+                _state.update {
+                    it.copy(
+                        pairing = it.pairing.copy(
+                            receiveQr = null,
+                            status = "Pair receive unavailable: ${error.message ?: error}",
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    fun closePairReceiveQr(status: String = "") {
+        pairListenSession?.close()
+        pairListenSession = null
+        _state.update {
+            it.copy(pairing = it.pairing.copy(receiveQr = null, status = status))
+        }
+    }
+
+    fun requestPairQrScan() {
+        _activityEffects.tryEmit(ClientActivityEffect.LaunchPairQrScanner)
+    }
+
+    fun onPairScanResult(raw: String?) {
+        if (raw.isNullOrBlank()) {
+            _state.update { it.copy(pairing = it.pairing.copy(status = "QR scan cancelled.")) }
+            return
+        }
+        val profile = currentPairProfile()
+        _state.update { it.copy(pairing = it.pairing.copy(status = "Sending forms...")) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                PairClient.push(PairTarget.parseUri(raw), profile)
+            }.onSuccess {
+                _state.update {
+                    it.copy(pairing = it.pairing.copy(status = "Forms sent to paired device."))
+                }
+            }.onFailure { error ->
+                _state.update {
+                    it.copy(
+                        pairing = it.pairing.copy(
+                            status = "Pair send failed: ${error.message ?: error}",
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun currentPairProfile(): PairProfile {
+        val snap = _state.value
+        return PairProfile(
+            host = snap.client.host,
+            altHost = snap.client.altHost,
+            controlPort = snap.settings.controlPort,
+            inputPort = snap.settings.inputPort,
+            username = snap.profile.username,
+            password = snap.client.password,
+            streamQuality = snap.stream.quality.id,
+            streamBitrate = snap.stream.bitrate.id,
+            streamSize = snap.stream.size.id,
+            streamFeel = snap.stream.feel.id,
+            remoteSshHost = snap.remote.sshHost,
+            remoteSshUser = snap.remote.sshUser,
+            remoteSshPassword = snap.remote.sshPassword,
+            remoteSshPort = snap.remote.sshPort,
+            remoteDirectory = snap.remote.directory,
+            remoteRomRoot = snap.remote.romRoot,
+            remoteBinary = snap.remote.binary,
+            remoteStartScript = snap.remote.startScript,
+            remoteGpu = snap.remote.gpu,
+            remoteBaseControlPort = snap.remote.baseControlPort,
+            remoteBaseInputPort = snap.remote.baseInputPort,
+        )
+    }
+
+    private fun applyPairProfile(profile: PairProfile) {
+        val host = profile.host.trim()
+        val altHost = profile.altHost.trim()
+        val controlPort = profile.controlPort.trim()
+            .ifBlank { Protocol.DEFAULT_CONTROL_PORT.toString() }
+        val inputPort = profile.inputPort.trim()
+            .ifBlank { Protocol.DEFAULT_INPUT_PORT.toString() }
+        val username = profile.username.trim()
+        val remoteSshPort = profile.remoteSshPort.trim().ifBlank { "22" }
+        val remoteBinary = profile.remoteBinary.trim().ifBlank { "./host_runner" }
+        val remoteBaseControl = profile.remoteBaseControlPort.trim()
+            .ifBlank { Protocol.DEFAULT_CONTROL_PORT.toString() }
+        val remoteBaseInput = profile.remoteBaseInputPort.trim()
+            .ifBlank { Protocol.DEFAULT_INPUT_PORT.toString() }
+        val quality = MediaQualityTier.entries.firstOrNull { it.id == profile.streamQuality }
+            ?: MediaQualityTier.Medium
+        val bitrate = MediaStreamBitrate.entries.firstOrNull { it.id == profile.streamBitrate }
+            ?: MediaStreamBitrate.Kbps3500
+        val size = MediaStreamSize.entries.firstOrNull { it.id == profile.streamSize }
+            ?: MediaStreamSize.P540
+        val feel = MediaStreamFeel.entries.firstOrNull { it.id == profile.streamFeel }
+            ?: MediaStreamFeel.LowLatency
+
+        prefs.edit()
+            .putString(KEY_HOST, host)
+            .putString(KEY_ALT_HOST, altHost)
+            .putString(KEY_CONTROL_PORT, controlPort)
+            .putString(KEY_INPUT_PORT, inputPort)
+            .putString(KEY_USERNAME, username)
+            .putInt(KEY_STREAM_QUALITY, quality.id)
+            .putInt(KEY_STREAM_BITRATE, bitrate.id)
+            .putInt(KEY_STREAM_SIZE, size.id)
+            .putInt(KEY_STREAM_FEEL, feel.id)
+            .putString(KEY_REMOTE_SSH_HOST, profile.remoteSshHost.trim())
+            .putString(KEY_REMOTE_SSH_USER, profile.remoteSshUser.trim())
+            .putString(KEY_REMOTE_SSH_PORT, remoteSshPort)
+            .putString(KEY_REMOTE_DIRECTORY, profile.remoteDirectory.trim())
+            .putString(KEY_REMOTE_ROM_ROOT, profile.remoteRomRoot.trim())
+            .putString(KEY_REMOTE_BINARY, remoteBinary)
+            .putString(KEY_REMOTE_START_SCRIPT, profile.remoteStartScript.trim())
+            .putString(KEY_REMOTE_GPU, profile.remoteGpu.trim())
+            .putString(KEY_REMOTE_BASE_CONTROL, remoteBaseControl)
+            .putString(KEY_REMOTE_BASE_INPUT, remoteBaseInput)
+            .apply()
+
+        _state.update {
+            it.copy(
+                status = "Imported paired forms.",
+                client = it.client.copy(
+                    host = host,
+                    altHost = altHost,
+                    password = profile.password,
+                    discoveryStatus = "",
+                ),
+                remote = it.remote.copy(
+                    sshHost = profile.remoteSshHost.trim(),
+                    sshUser = profile.remoteSshUser.trim(),
+                    sshPassword = profile.remoteSshPassword,
+                    sshPort = remoteSshPort,
+                    directory = profile.remoteDirectory.trim(),
+                    romRoot = profile.remoteRomRoot.trim(),
+                    binary = remoteBinary,
+                    startScript = profile.remoteStartScript.trim(),
+                    gpu = profile.remoteGpu.trim(),
+                    baseControlPort = remoteBaseControl,
+                    baseInputPort = remoteBaseInput,
+                    status = "Imported paired Remote form.",
+                ),
+                games = it.games.copy(recentGameIds = loadRecentGameIds(host, controlPort)),
+                stream = it.stream.copy(
+                    quality = quality,
+                    bitrate = bitrate,
+                    size = size,
+                    feel = feel,
+                ),
+                profile = it.profile.copy(
+                    username = username,
+                    hasProfileUsername = isProfileUsername(username),
+                ),
+                settings = it.settings.copy(
+                    controlPort = controlPort,
+                    inputPort = inputPort,
+                ),
+                pairing = it.pairing.copy(status = "Imported paired forms."),
+            )
+        }
+        reloadControlsFromLocalStore()
+        refreshControlsSyncReady()
+    }
+
     /**
      * Drawer open: park the cursor on the section whose pane is showing, and during play
      * pause (unless control editing relaxed it).
@@ -2892,7 +3454,7 @@ fun clearBackMenuChromeFocus() {
     }
 
     /**
-     * Hold-to-FF from overlay pad, remapped L2/R2, or keyboard F.
+     * Hold-to-FF from overlay pad, remapped L2/R2, or keyboard Space.
      * Ignored until [ffInputArmed] so stream startup cannot poke the host.
      */
     fun setFastForwardHold(held: Boolean) {
@@ -3233,6 +3795,7 @@ fun clearBackMenuChromeFocus() {
                     reloadControlsFromLocalStore()
                 }
                 ClientFileLog.append("Catalog loaded: ${catalog.games.size} games from $host:$port")
+                if (isTvDevice()) menuDrawerOpen = false
                 val recentIds = loadRecentGameIds(host, snap.settings.controlPort)
                 val expanded = if (recentIds.any { id -> catalog.games.any { it.id == id } }) {
                     setOf(RECENT_GROUP)
@@ -3329,8 +3892,21 @@ fun clearBackMenuChromeFocus() {
         }
     }
 
+    private fun prepareTvControllerForPlay(): Boolean {
+        if (!isTvDevice()) return true
+        refreshPhysicalPads(preferPhysical = true)
+        if (_state.value.controls.physicalPadConnected) return true
+        _state.update {
+            it.copy(
+                status = "Connect a controller before starting a game on TV.",
+                section = NavSection.Games,
+            )
+        }
+        return false
+    }
+
     fun startGame(game: GameInfo) {
-        val snap = _state.value
+        var snap = _state.value
         val primary = snap.client.host.trim()
         val altDraft = snap.client.altHost.trim()
         if (primary.isBlank()) {
@@ -3362,6 +3938,8 @@ fun clearBackMenuChromeFocus() {
             }
             return
         }
+        if (!prepareTvControllerForPlay()) return
+        snap = _state.value
 
         viewModelScope.launch {
             _state.update {
@@ -3434,6 +4012,11 @@ fun clearBackMenuChromeFocus() {
                 }
             }.onSuccess { (host, joined) ->
                 session = joined
+                menuDrawerOpen = false
+                backMenuChromeFocused = false
+                resetMenuHats()
+                clearRemotedKeys()
+                clearKeyboardDpad()
                 // The host let this name into a session with its password, so it is a
                 // profile even if Connect was made without one.
                 confirmProfileUsername(username)
@@ -3472,6 +4055,7 @@ fun clearBackMenuChromeFocus() {
                     it.copy(
                         busy = false,
                         playing = true,
+                        section = NavSection.Games,
                         status = "Playing ${game.title()}",
                         client = it.client.copy(host = host),
                         games = it.games.copy(
@@ -3479,6 +4063,7 @@ fun clearBackMenuChromeFocus() {
                             reconnectHintGameId = null,
                         ),
                         stream = it.stream.copy(mediaHint = mediaHint),
+                        menu = it.menu.copy(inOptions = false, editing = false),
                         controls = it.controls.copy(
                             padLayout = profile.resolveLayout(game.systemKey),
                             overlayOpacity = profile.clampedOpacity(),
@@ -3507,7 +4092,6 @@ fun clearBackMenuChromeFocus() {
                 }
                 // Grace reconnect / fresh join: pause Off only. FF stays default Off on
                 // both sides — do not poke F1 during stream init (hold arms after first frame).
-                menuDrawerOpen = false
                 lastSentMenuPause = false
                 resetFastForwardSendState()
                 viewModelScope.launch(Dispatchers.IO) {
@@ -4106,6 +4690,8 @@ fun clearBackMenuChromeFocus() {
         discoveryJob = null
         artJob?.cancel()
         artJob = null
+        pairListenSession?.close()
+        pairListenSession = null
         endSession(sendLeave = true)
         SessionKeepAliveService.stop(getApplication())
         super.onCleared()

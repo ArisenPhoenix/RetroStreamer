@@ -43,6 +43,7 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -97,6 +98,10 @@ import android.graphics.Bitmap as AndroidBitmap
 @Composable
 fun ArchStreamerApp(viewModel: ClientViewModel) {
     val state by viewModel.state.collectAsState()
+    val configuration = LocalConfiguration.current
+    val isTv =
+        configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
+            Configuration.UI_MODE_TYPE_TELEVISION
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     var hamburgerFocused by remember { mutableStateOf(false) }
@@ -132,7 +137,8 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
 
     // Close any nav drawer left open from Client/Games before play so we do not
     // treat a leftover Open as "pause the emulator".
-    LaunchedEffect(state.playing) {
+    LaunchedEffect(state.playing, isTv) {
+        if (isTv) return@LaunchedEffect
         if (state.playing && drawerState.isOpen) {
             drawerState.close()
         }
@@ -142,7 +148,8 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
     // targetValue — so a flash Open→Closed (cutover / press-through) never pauses.
     // Absolute rule: drawer open → pause On (only after decoded frames); closed → Off.
     // Control editing relaxes pause (see ClientViewModel.syncMenuPause).
-    LaunchedEffect(drawerState) {
+    LaunchedEffect(drawerState, isTv) {
+        if (isTv) return@LaunchedEffect
         snapshotFlow { drawerState.currentValue }
             .distinctUntilChanged()
             .collect { value ->
@@ -154,12 +161,13 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
             }
     }
 
-    LaunchedEffect(viewModel) {
+    LaunchedEffect(viewModel, isTv) {
         viewModel.menuEffects.collect { effect ->
             when (effect) {
-                MenuEffect.OpenDrawer -> openDrawer()
-                MenuEffect.CloseDrawer -> closeDrawer()
+                MenuEffect.OpenDrawer -> if (!isTv) openDrawer()
+                MenuEffect.CloseDrawer -> if (!isTv) closeDrawer()
                 MenuEffect.FocusHamburger -> {
+                    if (isTv) return@collect
                     hamburgerFocused = true
                     runCatching { hamburgerFocusRequester.requestFocus() }
                 }
@@ -178,6 +186,7 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
     LaunchedEffect(editingText) {
         if (editingText) {
             hadEditingText = true
+            if (state.controls.hasKeyboardActive) keyboardController?.hide()
         } else if (hadEditingText) {
             hadEditingText = false
             focusManager.clearFocus()
@@ -185,12 +194,22 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
         }
     }
 
-    // Text fields cannot raise the IME while a keyboard is attached — see
-    // [WithoutSoftKeyboard] — but the system can still restore it across a rotation or a
-    // process restore, so put it away if it turns up anyway.
+    // With a hardware keyboard attached, text fields still need a platform input session for
+    // typed characters, but the software IME should stay down.
     val imeVisible = WindowInsets.isImeVisible
     LaunchedEffect(imeVisible, state.controls.hasKeyboardActive) {
         if (imeVisible && state.controls.hasKeyboardActive) keyboardController?.hide()
+    }
+
+    if (isTv && !state.playing && !state.controls.overlayEditing) {
+        TvOfflineShell(
+            state = state,
+            viewModel = viewModel,
+            sections = sections,
+            fieldFocus = fieldFocus,
+        )
+        TvOfflineDialogs(state = state, viewModel = viewModel)
+        return
     }
 
     ModalNavigationDrawer(
@@ -209,7 +228,36 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
             )
         },
     ) {
-        if (state.playPaneVisible()) {
+        if (isTv && state.playing) {
+            Box(Modifier.fillMaxSize()) {
+                PlayScreen(
+                    state = state,
+                    viewModel = viewModel,
+                    onOpenMenu = { viewModel.requestPlayMenu() },
+                    showChrome = !state.playPaneVisible(),
+                )
+                if (state.playPaneVisible()) {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(0.72f)
+                            .align(Alignment.CenterStart)
+                            .padding(16.dp),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                        shape = RoundedCornerShape(8.dp),
+                        tonalElevation = 6.dp,
+                        shadowElevation = 8.dp,
+                    ) {
+                        TvMenuContent(
+                            state = state,
+                            viewModel = viewModel,
+                            sections = sections,
+                            fieldFocus = fieldFocus,
+                        )
+                    }
+                }
+            }
+        } else if (state.playPaneVisible()) {
             Scaffold(
                 // The IME belongs in the same union as the system bars: edge-to-edge
                 // ignores adjustResize, and padding for both separately stacks the
@@ -295,6 +343,8 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
             }
         }
         }
+
+        PairingDialogs(state = state, viewModel = viewModel)
 
         // Offline layout editor (Controls → Customize). While playing, PlayScreen hosts it.
         if (state.controls.overlayEditing && !state.playing) {
@@ -401,7 +451,198 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
                 },
             )
         }
+}
+
+@Composable
+private fun TvMenuContent(
+    state: UiState,
+    viewModel: ClientViewModel,
+    sections: List<MenuSection>,
+    fieldFocus: MenuFieldFocus,
+    modifier: Modifier = Modifier,
+) {
+    Row(modifier = modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .width(300.dp)
+                .fillMaxHeight()
+                .background(MaterialTheme.colorScheme.surface)
+                .padding(vertical = 12.dp),
+        ) {
+            Text(
+                "ArchStreamer",
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                style = MaterialTheme.typography.titleLarge,
+            )
+            Text(
+                if (state.connected || state.playing) {
+                    "Connected · ${state.client.host}"
+                } else {
+                    "Not connected"
+                },
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            MenuDrawerSections(
+                sections = sections,
+                focus = state.menu,
+                currentSection = state.section,
+                onSelect = viewModel::selectTvOfflineSection,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Column(modifier = Modifier.fillMaxSize()) {
+            Text(
+                state.section.title,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 18.dp),
+                style = MaterialTheme.typography.headlineSmall,
+            )
+            HorizontalDivider()
+            SectionPane(
+                state = state,
+                viewModel = viewModel,
+                sections = sections,
+                fieldFocus = fieldFocus,
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
+}
+
+@Composable
+private fun TvOfflineShell(
+    state: UiState,
+    viewModel: ClientViewModel,
+    sections: List<MenuSection>,
+    fieldFocus: MenuFieldFocus,
+) {
+    LaunchedEffect(Unit) {
+        viewModel.onTvOfflineMenuShown()
+    }
+    TvMenuContent(
+        state = state,
+        viewModel = viewModel,
+        sections = sections,
+        fieldFocus = fieldFocus,
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+    )
+}
+
+@Composable
+private fun TvOfflineDialogs(
+    state: UiState,
+    viewModel: ClientViewModel,
+) {
+    PairingDialogs(state = state, viewModel = viewModel)
+
+    if (state.controls.overlayEditNaming) {
+        AlertDialog(
+            onDismissRequest = viewModel::cancelOverlayEditNaming,
+            title = { Text("Name custom layout") },
+            text = {
+                OutlinedTextField(
+                    value = state.controls.overlayEditNameDraft,
+                    onValueChange = viewModel::setOverlayEditNameDraft,
+                    label = { Text("Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = viewModel::confirmOverlayEditName) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::cancelOverlayEditNaming) {
+                    Text("Back")
+                }
+            },
+        )
+    }
+
+    if (state.profile.forcePasswordChange) {
+        AlertDialog(
+            onDismissRequest = viewModel::cancelForcePasswordChange,
+            title = { Text("Choose a new password") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("The host requires you to change the default password before joining.")
+                    OutlinedTextField(
+                        value = state.profile.forcePasswordDraft,
+                        onValueChange = viewModel::onForcePasswordDraftChange,
+                        label = { Text("New password") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = state.profile.forcePasswordConfirm,
+                        onValueChange = viewModel::onForcePasswordConfirmChange,
+                        label = { Text("Confirm new password") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (state.profile.passwordStatus.isNotBlank()) {
+                        Text(state.profile.passwordStatus, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = viewModel::submitForcePasswordChange) {
+                    Text("Set password")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::cancelForcePasswordChange) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun PairingDialogs(
+    state: UiState,
+    viewModel: ClientViewModel,
+) {
+    val qr = state.pairing.receiveQr ?: return
+    AlertDialog(
+        onDismissRequest = { viewModel.closePairReceiveQr() },
+        title = { Text("Receive forms") },
+        text = {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Image(
+                    bitmap = qr.asImageBitmap(),
+                    contentDescription = "Pairing QR code",
+                    modifier = Modifier.size(280.dp),
+                )
+                Text(state.pairing.status)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { viewModel.closePairReceiveQr() }) {
+                Text("Close")
+            }
+        },
+    )
+}
 
 /**
  * What a settings pane must stay clear of. A union takes the largest value per side, so
@@ -566,9 +807,19 @@ private fun GamesSection(
     val cursor = gamesCursor(rows, state.games.cursorKey)
     val listRows = rows.filterNot { it is GamesRow.Filter }
     val listState = rememberLazyListState()
+    val configuration = LocalConfiguration.current
+    val isTv =
+        configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
+            Configuration.UI_MODE_TYPE_TELEVISION
     val cursorIndex = listRows.indexOfFirst { it.key == cursor?.key }
     LaunchedEffect(cursorIndex) {
-        if (cursorIndex >= 0) runCatching { listState.animateScrollToItem(cursorIndex) }
+        if (cursorIndex >= 0) {
+            if (isTv) {
+                runCatching { listState.scrollToItem(cursorIndex) }
+            } else {
+                runCatching { listState.animateScrollToItem(cursorIndex) }
+            }
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -737,6 +988,7 @@ private fun PlayScreen(
     hamburgerFocusRequester: FocusRequester = FocusRequester.Default,
     hamburgerFocused: Boolean = false,
     onHamburgerFocused: (Boolean) -> Unit = {},
+    showChrome: Boolean = true,
 ) {
     val dualScreen = state.controls.padLayout == PadLayout.DualScreen
     val configuration = LocalConfiguration.current
@@ -771,7 +1023,7 @@ private fun PlayScreen(
                 onTouch = viewModel::onDsTouch,
             )
         }
-        if (!state.controls.physicalInputActive || state.controls.overlayEditing) {
+        if (showChrome && (!state.controls.physicalInputActive || state.controls.overlayEditing)) {
             GamepadOverlay(
                 modifier = Modifier.fillMaxSize(),
                 items = state.controls.overlayItems,
@@ -788,7 +1040,7 @@ private fun PlayScreen(
         }
         // Hamburger: always available for Back exit-arm focus (and as a touch fallback
         // when a physical pad hides the overlay menu control).
-        if (!state.controls.overlayEditing) {
+        if (showChrome && !state.controls.overlayEditing) {
             val interaction = remember { MutableInteractionSource() }
             IconButton(
                 onClick = onOpenMenu,

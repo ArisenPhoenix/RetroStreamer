@@ -1,6 +1,7 @@
 package com.archstreamer.client.media
 
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -16,11 +17,12 @@ class RtpH264Depayloader {
     private var fuActive = false
     private val auBuffer = ByteArrayOutputStream(256 * 1024)
     private var lastSeq: Int? = null
-    private var dropUntilIdr = false
+    private var dropUntilIdr = true
     private val packetsReceived = AtomicLong(0)
     private val packetsLost = AtomicLong(0)
     /** Times an RTP sequence gap forced drop-until-IDR (green/tile risk until next keyframe). */
     private val sequenceGaps = AtomicLong(0)
+    private val resyncRequested = AtomicBoolean(false)
 
     /** Packets accepted since the last [takePacketStats] call. */
     fun takePacketStats(): PacketStats {
@@ -30,6 +32,7 @@ class RtpH264Depayloader {
         return PacketStats(received = received, lost = lost, sequenceGaps = gaps)
     }
 
+    @Synchronized
     fun push(packet: ByteArray, length: Int): ByteArray? {
         if (length < 12) return null
         val rtp = packet
@@ -114,12 +117,25 @@ class RtpH264Depayloader {
             packetsLost.addAndGet(gap.toLong())
         }
         sequenceGaps.incrementAndGet()
+        resyncRequested.set(true)
         if (fuActive) {
             fuActive = false
             fuBuffer.reset()
         }
         auBuffer.reset()
         dropUntilIdr = true
+    }
+
+    fun consumeResyncRequested(): Boolean = resyncRequested.getAndSet(false)
+
+    @Synchronized
+    fun resetUntilIdr(clearSequence: Boolean = false) {
+        fuActive = false
+        fuBuffer.reset()
+        auBuffer.reset()
+        dropUntilIdr = true
+        if (clearSequence) lastSeq = null
+        resyncRequested.set(true)
     }
 
     private fun appendNal(src: ByteArray, offset: Int, size: Int) {

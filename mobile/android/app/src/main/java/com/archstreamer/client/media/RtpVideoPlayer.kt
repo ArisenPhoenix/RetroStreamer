@@ -31,13 +31,15 @@ class RtpVideoPlayer(
     private val pipelineDead = AtomicBoolean(false)
     private val lastErrorMs = AtomicLong(0)
 
-    private val nalQueue = ArrayBlockingQueue<ByteArray>(90)
+    private val nalQueue = ArrayBlockingQueue<ByteArray>(12)
     private val depay = RtpH264Depayloader()
+    private val reorderBuffer = RtpReorderBuffer(REORDER_BUFFER_PACKETS)
     private val accessUnitsReceived = AtomicInteger(0)
 
     @Volatile private var surface: Surface? = null
     @Volatile private var codec: MediaCodec? = null
     @Volatile private var codecConfigured = false
+    private val codecConfiguring = AtomicBoolean(false)
     @Volatile private var sps: ByteArray? = null
     @Volatile private var pps: ByteArray? = null
     /** Surface identity currently configured into MediaCodec (avoid tear-down churn). */
@@ -115,10 +117,17 @@ class RtpVideoPlayer(
             while (running.get()) {
                 try {
                     socket?.receive(packet) ?: break
-                    val au = depay.push(packet.data, packet.length) ?: continue
-                    offerNal(au)
-                    maybeConfigureFromSpsPps(au)
-                    scheduleDecode()
+                    reorderBuffer.push(packet.data, packet.length) { data, length ->
+                        val au = depay.push(data, length)
+                        if (depay.consumeResyncRequested()) {
+                            nalQueue.clear()
+                        }
+                        if (au != null) {
+                            offerNal(au)
+                            maybeConfigureFromSpsPps(au)
+                            scheduleDecode()
+                        }
+                    }
                 } catch (_: java.net.SocketTimeoutException) {
                     // keep waiting
                 } catch (t: Throwable) {
@@ -224,6 +233,10 @@ class RtpVideoPlayer(
         val s = sps
         val p = pps
         if (s != null && p != null && surface != null && !codecConfigured) {
+            val lastError = lastErrorMs.get()
+            if (lastError != 0L && System.currentTimeMillis() - lastError < CODEC_RETRY_DELAY_MS) {
+                return
+            }
             configureCodec(s, p)
         }
     }
@@ -246,26 +259,36 @@ class RtpVideoPlayer(
 
     private fun configureCodec(spsNal: ByteArray, ppsNal: ByteArray) {
         val surf = surface ?: return
+        if (!codecConfiguring.compareAndSet(false, true)) return
+        var candidate: MediaCodec? = null
         try {
             runCatching { codec?.stop() }
             runCatching { codec?.release() }
+            codec = null
             val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, 1920, 1080)
             format.setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(startCodePrefixed(spsNal)))
             format.setByteBuffer("csd-1", java.nio.ByteBuffer.wrap(startCodePrefixed(ppsNal)))
             format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             val c = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            candidate = c
             c.configure(format, surf, null, 0)
             c.start()
             codec = c
+            candidate = null
             codecConfigured = true
             pipelineDead.set(false)
+            lastErrorMs.set(0)
             Log.i(TAG, "MediaCodec configured for port $listenPort")
         } catch (t: Throwable) {
             Log.e(TAG, "MediaCodec configure failed", t)
             codecConfigured = false
+            runCatching { candidate?.stop() }
+            runCatching { candidate?.release() }
             codec = null
             pipelineDead.set(true)
             lastErrorMs.set(System.currentTimeMillis())
+        } finally {
+            codecConfiguring.set(false)
         }
     }
 
@@ -329,6 +352,8 @@ class RtpVideoPlayer(
                 codecConfigured = false
                 pipelineDead.set(true)
                 lastErrorMs.set(System.currentTimeMillis())
+                nalQueue.clear()
+                depay.resetUntilIdr()
                 runCatching { c.stop() }
                 runCatching { c.release() }
                 codec = null
@@ -402,7 +427,81 @@ class RtpVideoPlayer(
         }
     }
 
+    /**
+     * Tiny RTP reorder buffer. In-order packets pass through immediately; small forward
+     * jumps wait briefly for the missing packet before a real loss is declared downstream.
+     */
+    private class RtpReorderBuffer(
+        private val maxPending: Int,
+    ) {
+        private val pending = HashMap<Int, PendingPacket>()
+        private var expectedSeq: Int? = null
+
+        fun push(src: ByteArray, length: Int, emit: (ByteArray, Int) -> Unit) {
+            if (length < RTP_HEADER_MIN_BYTES) return
+            val seq = sequence(src)
+            val expected = expectedSeq
+            if (expected == null) {
+                expectedSeq = next(seq)
+                emit(src, length)
+                drain(emit)
+                return
+            }
+
+            val ahead = sequenceDistance(seq, expected)
+            when {
+                ahead == 0 -> {
+                    expectedSeq = next(seq)
+                    emit(src, length)
+                    drain(emit)
+                }
+                ahead > 0 -> {
+                    pending[seq] = PendingPacket(src.copyOf(length), length)
+                    if (pending.size >= maxPending) {
+                        skipMissingUntilReady(emit)
+                    }
+                }
+                else -> Unit // late duplicate; the decoder has already moved past it.
+            }
+        }
+
+        private fun drain(emit: (ByteArray, Int) -> Unit) {
+            while (true) {
+                val expected = expectedSeq ?: return
+                val packet = pending.remove(expected) ?: return
+                expectedSeq = next(expected)
+                emit(packet.data, packet.length)
+            }
+        }
+
+        private fun skipMissingUntilReady(emit: (ByteArray, Int) -> Unit) {
+            while (pending.size >= maxPending) {
+                val expected = expectedSeq ?: return
+                expectedSeq = next(expected)
+                if (pending.containsKey(expectedSeq)) {
+                    drain(emit)
+                    return
+                }
+            }
+        }
+
+        private fun sequence(data: ByteArray): Int =
+            ((data[2].toInt() and 0xff) shl 8) or (data[3].toInt() and 0xff)
+
+        private fun next(seq: Int): Int = (seq + 1) and 0xffff
+
+        private fun sequenceDistance(seq: Int, expected: Int): Int {
+            val diff = (seq - expected) and 0xffff
+            return if (diff < 32768) diff else diff - 65536
+        }
+
+        private data class PendingPacket(val data: ByteArray, val length: Int)
+    }
+
     companion object {
         private const val TAG = "RtpVideoPlayer"
+        private const val CODEC_RETRY_DELAY_MS = 500L
+        private const val REORDER_BUFFER_PACKETS = 16
+        private const val RTP_HEADER_MIN_BYTES = 12
     }
 }

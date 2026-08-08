@@ -39,9 +39,9 @@ class CadenceControlsStore(context: Context) :
         kind: String = KIND_BUTTON_MAP,
         documentJson: String,
         version: Int = 1,
+        updatedAt: Long = System.currentTimeMillis() / 1000L,
     ): Boolean {
         if (username.isBlank() || documentJson.isBlank()) return false
-        val now = System.currentTimeMillis() / 1000L
         writableDatabase.execSQL(
             """
             INSERT INTO user_controls(username, kind, document_json, version, updated_at)
@@ -51,7 +51,7 @@ class CadenceControlsStore(context: Context) :
               version=excluded.version,
               updated_at=excluded.updated_at
             """.trimIndent(),
-            arrayOf(username, kind, documentJson, version, now),
+            arrayOf<Any>(username, kind, documentJson, version, updatedAt),
         )
         return true
     }
@@ -203,6 +203,7 @@ class CadenceControlsStore(context: Context) :
                             kind = cursor.getString(1) ?: continue,
                             documentJson = cursor.getString(2) ?: continue,
                             version = cursor.getInt(3),
+                            updatedAt = cursor.getLong(4),
                         )
                     }
                 }

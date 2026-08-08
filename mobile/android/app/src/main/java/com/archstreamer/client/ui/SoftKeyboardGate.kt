@@ -6,15 +6,11 @@ import androidx.compose.ui.platform.InterceptPlatformTextInput
 import kotlinx.coroutines.awaitCancellation
 
 /**
- * Keeps the on-screen keyboard out of the way of a real one.
+ * Text input wrapper kept at the activity boundary so all fields share one policy.
  *
- * `KeyboardOptions.showKeyboardOnFocus` cannot do this: the value / onValueChange text
- * fields this app uses document that they ignore it, so the IME rises whenever a field
- * takes focus and hiding it afterwards is what you see as a flash. Refusing to start the
- * input method means it never appears in the first place.
- *
- * Hardware keys reach the focused field through key input rather than through the input
- * method, so typing on the attached keyboard is unaffected.
+ * When a hardware keyboard is active, do not let focused Compose text fields ask Android for
+ * an input method. Android TV visibly flashes the OSK before a later hide request can run.
+ * Hardware-keyboard edits are handled from key events while this gate is closed.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable

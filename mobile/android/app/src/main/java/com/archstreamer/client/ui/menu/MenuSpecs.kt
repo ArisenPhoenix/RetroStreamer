@@ -58,7 +58,7 @@ object ClientSpec : SectionSpec {
                 value = state.client.altHost,
                 onChange = vm::onAltHostChange,
                 placeholder = "optional — e.g. WireGuard 10.6.0.x",
-                supporting = "Tried when Host IP is unreachable. Must look like an IP address.",
+                supporting = "Tried when Host IP is unreachable.",
                 isError = state.client.altHost.isNotBlank() &&
                     !HostAddresses.looksLikeIp(state.client.altHost),
             ),
@@ -71,6 +71,26 @@ object ClientSpec : SectionSpec {
                 onChange = vm::onPasswordChange,
             ),
         )
+        add(subHeader("client-pair-title", "Form sync"))
+        add(
+            MenuOption.Action(
+                id = "client-pair-receive",
+                title = "Show receive QR",
+                onRun = vm::showPairReceiveQr,
+                style = MenuOption.Action.Style.Tonal,
+            ),
+        )
+        add(
+            MenuOption.Action(
+                id = "client-pair-send",
+                title = "Scan QR and send forms",
+                onRun = vm::requestPairQrScan,
+                style = MenuOption.Action.Style.Outlined,
+            ),
+        )
+        if (state.pairing.status.isNotBlank()) {
+            add(small("client-pair-status", state.pairing.status))
+        }
         if (state.client.discoveryStatus.isNotBlank()) {
             add(small("client-discovery", state.client.discoveryStatus))
         }
@@ -491,7 +511,7 @@ object ControlsSpec : SectionSpec {
                 onChange = vm::setUseKeyboard,
                 subtitle = if (state.controls.useKeyboard) {
                     if (state.controls.hasKeyboardActive) {
-                        "Active: arrows are the D-pad, F fast-forwards, P pauses. " +
+                        "Active: arrows are the D-pad, Space holds fast-forward, F toggles it, P pauses. " +
                             "Backspace opens this menu."
                     } else {
                         "On for when a keyboard appears — none is attached yet."
@@ -631,6 +651,9 @@ object ControlsSpec : SectionSpec {
                 enabled = !state.busy && state.controls.syncReady,
             ),
         )
+        if (state.busy || state.status.contains("controls", ignoreCase = true)) {
+            add(small("controls-sync-status", state.status, MenuOption.Note.Emphasis.Muted))
+        }
     }
 }
 
@@ -683,7 +706,7 @@ object GameOptionsSpec : SectionSpec {
             add(
                 body(
                     "options-disc-empty",
-                    "Join a multi-disc session (.m3u) to swap discs here.",
+                    "Join a multi-disc game to swap discs here.",
                 ),
             )
         }

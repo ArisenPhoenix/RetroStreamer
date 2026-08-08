@@ -163,6 +163,7 @@ private:
     void apply_log_level_from_settings();
     GuiLogLevel current_log_level() const;
     int session_timeout_seconds() const;
+    int player_reconnect_timeout_seconds() const;
 
     // Paths tab (main_window_paths.cpp). Every one of these tolerates a build
     // whose host-only rows were never created.
@@ -358,6 +359,7 @@ private:
     QSpinBox* host_video_port_ = nullptr;
     QSpinBox* host_audio_port_ = nullptr;
     QSpinBox* host_clients_ = nullptr;
+    QSpinBox* host_player_reconnect_timeout_ = nullptr;
     QComboBox* host_role_ = nullptr;
     QComboBox* host_mode_ = nullptr;
     QComboBox* host_bridge_controller_ = nullptr;

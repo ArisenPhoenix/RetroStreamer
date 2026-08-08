@@ -231,6 +231,8 @@ void MainWindow::ensure_remote_host() {
         static_cast<std::uint16_t>(remote_base_control_port_->value());
     const auto base_input =
         static_cast<std::uint16_t>(remote_base_input_port_->value());
+    const auto player_reconnect_timeout =
+        static_cast<std::uint16_t>(player_reconnect_timeout_seconds());
 
     if (ssh_host.isEmpty() || ssh_user.isEmpty() || directory.isEmpty()) {
         QMessageBox::warning(
@@ -279,7 +281,8 @@ void MainWindow::ensure_remote_host() {
                  want_gpu,
                  ssh_port,
                  base_control,
-                 base_input] {
+                 base_input,
+                 player_reconnect_timeout] {
         auto finish = [this](const QString& status, bool apply, const QString& host,
                              int control, int input, int tracked_control) {
             QMetaObject::invokeMethod(
@@ -393,7 +396,8 @@ void MainWindow::ensure_remote_host() {
                 rom_root.toStdString(),
                 ports,
                 resolved_gpu_id,
-                start_script.toStdString()));
+                start_script.toStdString(),
+                player_reconnect_timeout));
             QMetaObject::invokeMethod(
                 this,
                 [this, instance_index, ports, resolved_gpu_label, start_script, cmd] {

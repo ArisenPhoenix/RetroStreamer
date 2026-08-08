@@ -236,6 +236,8 @@ void MainWindow::load_persisted_settings() {
     load_path_settings(settings);
     const auto account = settings.value("steam/accountId").toString().trimmed();
     const auto session_timeout = settings.value("host/sessionTimeoutSeconds", 30).toInt();
+    const auto player_reconnect_timeout =
+        settings.value("host/playerReconnectTimeoutSeconds", 60).toInt();
     const auto log_level = settings.value("ui/logLevel", static_cast<int>(GuiLogLevel::Normal)).toInt();
     auto username = settings.value("profile/username").toString().trimmed();
     if (username.isEmpty()) {
@@ -541,6 +543,9 @@ void MainWindow::load_persisted_settings() {
     if (host_clients_ != nullptr) {
         host_clients_->setValue(qBound(settings.value("host/maxClients", 2).toInt(), 2, 4));
     }
+    if (host_player_reconnect_timeout_ != nullptr) {
+        host_player_reconnect_timeout_->setValue(qBound(player_reconnect_timeout, 1, 3600));
+    }
     if (host_role_ != nullptr) {
         const auto role = settings.value("host/role", "viewer").toString().toLower();
         const auto index = host_role_->findData(role);
@@ -756,6 +761,11 @@ void MainWindow::save_persisted_settings() {
     if (host_clients_ != nullptr) {
         settings.setValue("host/maxClients", host_clients_->value());
     }
+    if (host_player_reconnect_timeout_ != nullptr) {
+        settings.setValue(
+            "host/playerReconnectTimeoutSeconds",
+            host_player_reconnect_timeout_->value());
+    }
     if (host_role_ != nullptr) {
         settings.setValue("host/role", host_role_->currentData().toString());
     }
@@ -878,6 +888,13 @@ int MainWindow::session_timeout_seconds() const {
         return 30;
     }
     return settings_session_timeout_->value();
+}
+
+int MainWindow::player_reconnect_timeout_seconds() const {
+    if (host_player_reconnect_timeout_ == nullptr) {
+        return 60;
+    }
+    return host_player_reconnect_timeout_->value();
 }
 
 std::string MainWindow::steam_account_id_text() const {

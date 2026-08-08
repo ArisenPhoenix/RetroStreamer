@@ -193,7 +193,8 @@ inline std::string remote_host_start_shell(
     const std::string& rom_root,
     const RemoteHostPortBlock& ports,
     const std::string& encode_gpu = {},
-    const std::string& start_script = {}) {
+    const std::string& start_script = {},
+    std::uint16_t player_reconnect_timeout_seconds = 60) {
     const auto qdir = remote_shell_single_quote([&] {
         auto d = directory;
         while (!d.empty() && (d.back() == '/' || d.back() == '\\')) {
@@ -233,6 +234,8 @@ inline std::string remote_host_start_shell(
             + remote_shell_single_quote(rom_root)
             + port_args
             + " --clients 2 --allow-new-users"
+            + " --player-reconnect-timeout "
+            + std::to_string(player_reconnect_timeout_seconds)
             + gpu_args;
     }
 

@@ -120,6 +120,12 @@ QWidget* MainWindow::build_host_tab() {
     host_clients_->setToolTip(
         "Max concurrent singleplayer sessions (each client gets its own emulator/stream). "
         "Also the Multiplayer lobby size when using Multiplayer mode.");
+    host_player_reconnect_timeout_ = new QSpinBox(form_box);
+    host_player_reconnect_timeout_->setRange(1, 3600);
+    host_player_reconnect_timeout_->setValue(60);
+    host_player_reconnect_timeout_->setSuffix(" s");
+    host_player_reconnect_timeout_->setToolTip(
+        "How long a disconnected player can rejoin before their active session is ended.");
     host_role_ = new QComboBox(form_box);
     // Viewer first: LAN remote play is the default host path (not seated).
     host_role_->addItem("Viewer", QStringLiteral("viewer"));
@@ -150,6 +156,7 @@ QWidget* MainWindow::build_host_tab() {
     form->addRow("Video port", host_video_port_);
     form->addRow("Audio port", host_audio_port_);
     form->addRow("Max clients", host_clients_);
+    form->addRow("Player rejoin wait", host_player_reconnect_timeout_);
     form->addRow("Host role", host_role_);
     form->addRow("Mode", host_mode_);
     form->addRow("Bridge controller", host_bridge_controller_);
@@ -203,6 +210,11 @@ QWidget* MainWindow::build_host_tab() {
     connect(host_clients_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
         persist_settings_if_idle();
     });
+    connect(
+        host_player_reconnect_timeout_,
+        qOverload<int>(&QSpinBox::valueChanged),
+        this,
+        [this](int) { persist_settings_if_idle(); });
     connect(host_role_, &QComboBox::currentIndexChanged, this, [this] {
         sync_host_role_and_bridge();
         persist_settings_if_idle();
@@ -703,6 +715,8 @@ void MainWindow::start_host() {
         host_cfg.input_port = static_cast<std::uint16_t>(host_input_port_->value());
         host_cfg.clients = static_cast<std::uint8_t>(host_clients_->value());
         host_cfg.session_timeout_seconds = static_cast<std::uint16_t>(session_timeout_seconds());
+        host_cfg.player_reconnect_timeout_seconds =
+            static_cast<std::uint16_t>(player_reconnect_timeout_seconds());
         host_cfg.allow_new_users =
             settings_allow_new_users_ != nullptr && settings_allow_new_users_->isChecked();
         host_cfg.host_role = host_role_is_viewer(host_role_)
@@ -796,6 +810,10 @@ void MainWindow::start_host() {
                 .arg(session_timeout_seconds())
                 .arg(mode_name(selected_mode(host_mode_)))
                 .arg(host_clients_->value()));
+        append_log(
+            host_log_,
+            QString("Disconnected players may rejoin for up to %1s.")
+                .arg(player_reconnect_timeout_seconds()));
     }
     host_process_->start(program, launch_args);
     if (!host_process_->waitForStarted(3000)) {

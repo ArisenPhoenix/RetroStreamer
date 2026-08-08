@@ -28,9 +28,32 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            val storePath = providers.gradleProperty("archstreamer.android.keystore")
+                .orElse(providers.environmentVariable("ARCHSTREAMER_ANDROID_KEYSTORE"))
+                .orNull
+                ?: "${System.getProperty("user.home")}/.android/debug.keystore"
+            storeFile = file(storePath)
+            storePassword = providers.gradleProperty("archstreamer.android.storePassword")
+                .orElse(providers.environmentVariable("ARCHSTREAMER_ANDROID_STORE_PASSWORD"))
+                .orNull
+                ?: "android"
+            keyAlias = providers.gradleProperty("archstreamer.android.keyAlias")
+                .orElse(providers.environmentVariable("ARCHSTREAMER_ANDROID_KEY_ALIAS"))
+                .orNull
+                ?: "androiddebugkey"
+            keyPassword = providers.gradleProperty("archstreamer.android.keyPassword")
+                .orElse(providers.environmentVariable("ARCHSTREAMER_ANDROID_KEY_PASSWORD"))
+                .orNull
+                ?: storePassword
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

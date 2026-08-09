@@ -946,6 +946,17 @@ int HostApp::run(const std::function<bool()>& should_stop) {
                 const auto save_root = config_.save_root.empty()
                     ? default_save_profile_root()
                     : config_.save_root;
+                const auto host_name = !config_.host_name.empty()
+                    ? config_.host_name
+                    : (config_.username.empty() ? default_cli_username() : config_.username);
+                if (!archstreamer::cadence::canonical_identity_name(host_name).empty()) {
+                    archstreamer::cadence::HostRecord host;
+                    host.identity_id = archstreamer::cadence::identity_id_from_name(host_name);
+                    host.host_name = host_name;
+                    host.display_name = host_name;
+                    host.save_root = save_root.lexically_normal().string();
+                    (void)cadence->upsert_host(host);
+                }
                 const auto imported =
                     archstreamer::cadence::import_users_from_save_root(*cadence, save_root);
                 if (imported > 0) {

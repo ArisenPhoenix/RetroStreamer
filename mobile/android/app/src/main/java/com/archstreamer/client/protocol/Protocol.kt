@@ -1,12 +1,12 @@
 package com.archstreamer.client.protocol
 
 /**
- * Wire types matching include/common/protocol.hpp (ProtocolVersion 27).
+ * Wire types matching include/common/protocol.hpp (ProtocolVersion 28).
  * Keep field order identical to the C++ serializers.
  */
 object Protocol {
     const val MAGIC: Int = 0x41525354 // "ARST"
-    const val VERSION: Int = 27
+    const val VERSION: Int = 28
     const val HEADER_SIZE: Int = 11 // u32 + u16 + u8 + u32, little-endian, no padding
 
     const val DEFAULT_CONTROL_PORT: Int = 45555
@@ -58,7 +58,11 @@ enum class PacketType(val id: Int) {
     ControlsDbPush(38),
     ControlsDbAck(39),
     /** Per-user blocked game ids after auth (shared catalog stays unfiltered). */
-    CatalogUserBlocks(40);
+    CatalogUserBlocks(40),
+    PairFormRelayPush(41),
+    PairFormRelayPull(42),
+    PairFormRelayResponse(43),
+    PairFormRelayAck(44);
 
     companion object {
         fun fromId(id: Int): PacketType =
@@ -460,5 +464,22 @@ sealed class IncomingPacket {
             31 * (31 * username.hashCode() + found.hashCode()) + dbBytes.contentHashCode()
     }
     data class ControlsDbAck(val username: String, val ok: Boolean, val message: String) : IncomingPacket()
+    data class PairFormRelayResponse(
+        val found: Boolean,
+        val profileJson: ByteArray,
+        val message: String,
+    ) : IncomingPacket() {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is PairFormRelayResponse) return false
+            return found == other.found &&
+                profileJson.contentEquals(other.profileJson) &&
+                message == other.message
+        }
+
+        override fun hashCode(): Int =
+            31 * (31 * found.hashCode() + profileJson.contentHashCode()) + message.hashCode()
+    }
+    data class PairFormRelayAck(val ok: Boolean, val message: String) : IncomingPacket()
     data class Unknown(val type: PacketType) : IncomingPacket()
 }

@@ -43,6 +43,7 @@ class QSpinBox;
 class QTabWidget;
 class QTableWidget;
 class QTabWidget;
+class QTcpServer;
 class QTimer;
 class QTreeWidget;
 class QWidget;
@@ -215,8 +216,17 @@ private:
     void start_client();
     void stop_client();
     void stop_client_connect();
+    void show_pair_receive_qr();
+    void close_pair_receive_qr(const QString& status = {});
+    void send_pair_forms_from_qr();
+    void handle_pair_receive_socket();
+    void poll_pair_relay();
+    QString current_pair_profile_json() const;
+    void apply_pair_profile_json(const QString& json);
     void send_client_logs_to_host();
     void change_profile_password_on_host();
+    /** Prompt current/session password; returns empty if cancelled. */
+    QString prompt_session_password(const QString& title);
     /** Prompt new+confirm; returns empty if cancelled/mismatch. */
     QString prompt_new_password(const QString& title);
 
@@ -308,6 +318,12 @@ private:
     GamePickerWidget* client_game_picker_ = nullptr;
     QListWidget* client_controllers_ = nullptr;
     QPlainTextEdit* client_log_ = nullptr;
+    QLabel* client_pair_status_ = nullptr;
+    QTcpServer* pair_server_ = nullptr;
+    QTimer* pair_relay_poll_timer_ = nullptr;
+    QString pair_token_;
+    QString pair_relay_host_;
+    int pair_relay_port_ = 0;
     std::shared_ptr<DiscControlBridge> disc_control_;
     std::shared_ptr<LinkControlBridge> link_control_;
     std::shared_ptr<SoftKeyboardBridge> soft_keyboard_;

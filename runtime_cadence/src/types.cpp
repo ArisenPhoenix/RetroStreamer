@@ -1,5 +1,9 @@
 #include "archstreamer/runtime_cadence/types.hpp"
 
+#include "common/sha256.hpp"
+
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <ctime>
 #include <iomanip>
@@ -27,6 +31,34 @@ std::string day_string_from_epoch(std::int64_t epoch_seconds) {
     std::ostringstream out;
     out << std::put_time(&local, "%Y-%m-%d");
     return out.str();
+}
+
+std::string canonical_identity_name(std::string_view name) {
+    std::string out(name);
+    const auto first = std::find_if_not(out.begin(), out.end(), [](unsigned char c) {
+        return std::isspace(c) != 0;
+    });
+    const auto last = std::find_if_not(out.rbegin(), out.rend(), [](unsigned char c) {
+        return std::isspace(c) != 0;
+    }).base();
+    if (first >= last) {
+        return {};
+    }
+    out = std::string(first, last);
+    return out;
+}
+
+std::string identity_id_from_name(std::string_view name) {
+    const auto canonical = canonical_identity_name(name);
+    if (canonical.empty()) {
+        return {};
+    }
+    auto digest = sha256_hex("archstreamer-identity-v1:" + canonical);
+    constexpr std::string_view prefix = "sha256:";
+    if (digest.rfind(prefix, 0) == 0) {
+        digest.erase(0, prefix.size());
+    }
+    return "identity-v1-" + digest.substr(0, 32);
 }
 
 } // namespace archstreamer::cadence

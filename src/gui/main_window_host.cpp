@@ -711,6 +711,7 @@ void MainWindow::start_host() {
         host_cfg.meta_root = meta_root_path();
         host_cfg.art_root = art_root_path();
         host_cfg.save_root = save_root;
+        host_cfg.host_name = profile_host_name();
         host_cfg.control_port = static_cast<std::uint16_t>(host_control_port_->value());
         host_cfg.input_port = static_cast<std::uint16_t>(host_input_port_->value());
         host_cfg.clients = static_cast<std::uint8_t>(host_clients_->value());

@@ -61,6 +61,7 @@ struct HostAppConfig {
     std::filesystem::path save_root;
     std::filesystem::path art_root;
     std::string username;
+    std::string host_name;
     /** When false, ClientHello for unknown usernames is rejected (no new save profiles). */
     bool allow_new_users = false;
     // Primary GPU: H.264 nvenc encode, and game render unless separate_render_gpu.

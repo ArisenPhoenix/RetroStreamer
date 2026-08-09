@@ -121,6 +121,10 @@ std::vector<std::string> host_app_config_to_argv(const HostAppConfig& config) {
         args.push_back("--username");
         args.push_back(config.username);
     }
+    if (!config.host_name.empty()) {
+        args.push_back("--host-name");
+        args.push_back(config.host_name);
+    }
 
     if (config.video) {
         args.push_back("--video");

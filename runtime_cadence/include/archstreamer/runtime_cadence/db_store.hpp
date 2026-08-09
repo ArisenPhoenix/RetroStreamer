@@ -25,6 +25,11 @@ public:
     bool delete_user(const std::string& username) override;
     std::vector<UserRecord> list_users() override;
 
+    bool upsert_host(const HostRecord& host) override;
+    std::optional<HostRecord> find_host(const std::string& identity_id) override;
+    bool delete_host(const std::string& identity_id) override;
+    std::vector<HostRecord> list_hosts() override;
+
     bool upsert_controls(const ControlsRecord& controls) override;
     std::optional<ControlsRecord> find_controls(
         const std::string& username,

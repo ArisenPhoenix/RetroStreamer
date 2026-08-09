@@ -12,8 +12,10 @@
 #include "common/client_debug_log.hpp"
 #include "common/client_logs.hpp"
 #include "common/discovery.hpp"
+#include "common/discovery_net.hpp"
 #include "common/game_assets.hpp"
 #include "common/platform/default_platform.hpp"
+#include "common/pairing.hpp"
 #include "common/platform/paths.hpp"
 #include "common/serialization.hpp"
 #include "common/steam_art_import.hpp"
@@ -24,10 +26,15 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QHostAddress>
 #include <QInputDialog>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <exception>
 #include <QLabel>
 #include <QLineEdit>
@@ -35,14 +42,19 @@
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QPixmapCache>
 #include <QProcess>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QTabWidget>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <QTimer>
+#include <QUuid>
 #include <QVBoxLayout>
 #include <QWidget>
 #include <QFileInfo>
@@ -55,11 +67,169 @@
 #include <algorithm>
 #include <exception>
 #include <iostream>
+#include <memory>
 #include <optional>
+#include <random>
 #include <thread>
 
 
 namespace archstreamer::gui {
+namespace {
+
+QString json_string(const QJsonObject& object, const char* key, const QString& fallback = {}) {
+    const auto value = object.value(QString::fromLatin1(key));
+    return value.isString() ? value.toString() : fallback;
+}
+
+int json_int(const QJsonObject& object, const char* key, int fallback) {
+    const auto value = object.value(QString::fromLatin1(key));
+    return value.isDouble() ? value.toInt(fallback) : fallback;
+}
+
+void set_combo_data(QComboBox* combo, int value) {
+    if (combo == nullptr) {
+        return;
+    }
+    const QSignalBlocker blocker(combo);
+    const auto index = combo->findData(value);
+    combo->setCurrentIndex(index >= 0 ? index : 0);
+}
+
+QString preferred_pair_lan_ip() {
+    const auto addresses = archstreamer::local_ipv4_addresses();
+    auto prefer = [&addresses](const char* prefix) -> QString {
+        const auto found = std::find_if(addresses.begin(), addresses.end(), [prefix](const std::string& address) {
+            return address.rfind(prefix, 0) == 0;
+        });
+        return found == addresses.end() ? QString() : QString::fromStdString(*found);
+    };
+    if (auto ip = prefer("192.168."); !ip.isEmpty()) return ip;
+    if (auto ip = prefer("10."); !ip.isEmpty()) return ip;
+    if (auto ip = prefer("172."); !ip.isEmpty()) return ip;
+    return addresses.empty() ? QString() : QString::fromStdString(addresses.front());
+}
+
+QPixmap render_pair_qr(const QString& uri) {
+    QProcess qr;
+    qr.start(
+        QStringLiteral("qrencode"),
+        {QStringLiteral("-o"), QStringLiteral("-"), QStringLiteral("-t"), QStringLiteral("PNG"), uri});
+    if (!qr.waitForFinished(3000) || qr.exitStatus() != QProcess::NormalExit || qr.exitCode() != 0) {
+        return {};
+    }
+    QPixmap pixmap;
+    pixmap.loadFromData(qr.readAllStandardOutput(), "PNG");
+    return pixmap;
+}
+
+void write_http_response(QTcpSocket* socket, int code, const QByteArray& body) {
+    const QByteArray status = code == 200 ? "200 OK" :
+        code == 401 ? "401 Unauthorized" :
+        code == 405 ? "405 Method Not Allowed" :
+        code == 400 ? "400 Bad Request" :
+        QByteArray::number(code) + " Error";
+    socket->write("HTTP/1.1 " + status + "\r\n");
+    socket->write("Content-Type: application/json\r\n");
+    socket->write("Content-Length: " + QByteArray::number(body.size()) + "\r\n");
+    socket->write("Connection: close\r\n\r\n");
+    socket->write(body);
+    socket->flush();
+}
+
+QString post_pair_profile_direct(const archstreamer::PairTarget& target, const QString& profile_json) {
+    QTcpSocket socket;
+    socket.connectToHost(QString::fromStdString(target.ip), target.port);
+    if (!socket.waitForConnected(4000)) {
+        return socket.errorString();
+    }
+    const auto body = profile_json.toUtf8();
+    QByteArray request;
+    request += "POST /pair HTTP/1.1\r\n";
+    request += "Host: " + QByteArray::fromStdString(target.ip) + ":" + QByteArray::number(target.port) + "\r\n";
+    request += "Authorization: Bearer " + QByteArray::fromStdString(target.token) + "\r\n";
+    request += "Content-Type: application/json\r\n";
+    request += "Content-Length: " + QByteArray::number(body.size()) + "\r\n";
+    request += "Connection: close\r\n\r\n";
+    request += body;
+    socket.write(request);
+    if (!socket.waitForBytesWritten(4000) || !socket.waitForReadyRead(6000)) {
+        return socket.errorString().isEmpty() ? QStringLiteral("timed out waiting for response") : socket.errorString();
+    }
+    const auto response = socket.readAll();
+    if (!response.startsWith("HTTP/1.1 200") && !response.startsWith("HTTP/1.0 200")) {
+        return QString::fromUtf8(response.left(160)).trimmed();
+    }
+    return {};
+}
+
+QString push_pair_profile_relay(
+    const archstreamer::PairTarget& target,
+    const QString& fallback_host,
+    int fallback_port,
+    const QString& profile_json) {
+    const auto relay_host = !target.relay_host.empty()
+        ? target.relay_host
+        : fallback_host.trimmed().toStdString();
+    const auto relay_port = target.relay_port != 0
+        ? target.relay_port
+        : static_cast<std::uint16_t>(fallback_port);
+    if (relay_host.empty() || relay_port == 0) {
+        return QStringLiteral("direct send failed and QR has no relay host");
+    }
+    try {
+        auto stream = archstreamer::TcpStream::connect_to(relay_host, relay_port);
+        archstreamer::PairFormRelayPush push;
+        push.token = target.token;
+        const auto bytes = profile_json.toUtf8();
+        push.profile_json.assign(bytes.begin(), bytes.end());
+        stream.send_packet(archstreamer::serialize_packet(push));
+        const auto packet = stream.receive_packet();
+        if (!packet.has_value()) {
+            return QStringLiteral("host relay closed without an ack");
+        }
+        const auto payload = archstreamer::deserialize_packet(*packet);
+        if (const auto* ack = std::get_if<archstreamer::PairFormRelayAck>(&payload); ack != nullptr) {
+            return ack->ok ? QString() : QString::fromStdString(ack->message);
+        }
+        if (const auto* error = std::get_if<archstreamer::ErrorPacket>(&payload); error != nullptr) {
+            return QString::fromStdString(error->message);
+        }
+        return QStringLiteral("unexpected relay response");
+    } catch (const std::exception& error) {
+        return QString::fromUtf8(error.what());
+    }
+}
+
+std::optional<QString> pull_pair_profile_relay(const QString& host, int port, const QString& token, QString* error) {
+    try {
+        auto stream = archstreamer::TcpStream::connect_to(host.toStdString(), static_cast<std::uint16_t>(port));
+        archstreamer::PairFormRelayPull pull;
+        pull.token = token.toStdString();
+        stream.send_packet(archstreamer::serialize_packet(pull));
+        const auto packet = stream.receive_packet();
+        if (!packet.has_value()) {
+            if (error != nullptr) *error = QStringLiteral("host relay closed");
+            return std::nullopt;
+        }
+        const auto payload = archstreamer::deserialize_packet(*packet);
+        if (const auto* response = std::get_if<archstreamer::PairFormRelayResponse>(&payload); response != nullptr) {
+            if (!response->found || response->profile_json.empty()) {
+                return std::nullopt;
+            }
+            return QString::fromUtf8(
+                reinterpret_cast<const char*>(response->profile_json.data()),
+                static_cast<qsizetype>(response->profile_json.size()));
+        }
+        if (const auto* err = std::get_if<archstreamer::ErrorPacket>(&payload); err != nullptr) {
+            if (error != nullptr) *error = QString::fromStdString(err->message);
+        }
+    } catch (const std::exception& ex) {
+        if (error != nullptr) *error = QString::fromUtf8(ex.what());
+    }
+    return std::nullopt;
+}
+
+} // namespace
 
 void MainWindow::refresh_client_controllers() {
     client_controllers_->clear();
@@ -354,6 +524,270 @@ void MainWindow::stop_client_host_auto_pick() {
     client_auto_browser_.reset();
 }
 
+QString MainWindow::current_pair_profile_json() const {
+    QJsonObject root;
+    root["v"] = 1;
+    root["host"] = client_host_ != nullptr ? client_host_->text().trimmed() : QString();
+    root["altHost"] = client_alt_host_ != nullptr ? client_alt_host_->text().trimmed() : QString();
+    root["controlPort"] = client_port_ != nullptr ? QString::number(client_port_->value()) : QStringLiteral("45555");
+    root["inputPort"] = client_input_port_ != nullptr ? QString::number(client_input_port_->value()) : QString::number(DefaultInputPort);
+    root["username"] = QString::fromStdString(profile_client_username());
+    root["password"] = client_password_ != nullptr ? client_password_->text() : QString();
+    root["streamQuality"] = client_stream_quality_ != nullptr ? client_stream_quality_->currentData().toInt() : static_cast<int>(MediaQualityTier::Auto);
+    root["streamBitrate"] = client_stream_bitrate_ != nullptr ? client_stream_bitrate_->currentData().toInt() : static_cast<int>(MediaStreamBitrate::Auto);
+    root["streamSize"] = client_stream_size_ != nullptr ? client_stream_size_->currentData().toInt() : static_cast<int>(MediaStreamSize::Auto);
+    root["streamFeel"] = static_cast<int>(MediaStreamFeel::LowLatency);
+    root["remoteSshHost"] = remote_ssh_host_ != nullptr ? remote_ssh_host_->text().trimmed() : QString();
+    root["remoteSshUser"] = remote_ssh_user_ != nullptr ? remote_ssh_user_->text().trimmed() : QString();
+    root["remoteSshPassword"] = remote_ssh_password_ != nullptr ? remote_ssh_password_->text() : QString();
+    root["remoteSshPort"] = remote_ssh_port_ != nullptr ? QString::number(remote_ssh_port_->value()) : QStringLiteral("22");
+    root["remoteDirectory"] = remote_directory_ != nullptr ? remote_directory_->text().trimmed() : QString();
+    root["remoteRomRoot"] = remote_rom_root_ != nullptr ? remote_rom_root_->text().trimmed() : QString();
+    root["remoteBinary"] = remote_binary_ != nullptr ? remote_binary_->text().trimmed() : QStringLiteral("./host_runner");
+    root["remoteStartScript"] = remote_start_script_ != nullptr ? remote_start_script_->text().trimmed() : QString();
+    root["remoteGpu"] = remote_gpu_ != nullptr ? remote_gpu_->text().trimmed() : QString();
+    root["remoteBaseControlPort"] = remote_base_control_port_ != nullptr ? QString::number(remote_base_control_port_->value()) : QString();
+    root["remoteBaseInputPort"] = remote_base_input_port_ != nullptr ? QString::number(remote_base_input_port_->value()) : QString();
+    return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+}
+
+void MainWindow::apply_pair_profile_json(const QString& json) {
+    const auto document = QJsonDocument::fromJson(json.toUtf8());
+    if (!document.isObject()) {
+        throw std::runtime_error("pair profile is not a JSON object");
+    }
+    const auto root = document.object();
+    if (client_host_ != nullptr) client_host_->setText(json_string(root, "host"));
+    if (client_alt_host_ != nullptr) client_alt_host_->setText(json_string(root, "altHost"));
+    if (client_port_ != nullptr) client_port_->setValue(qBound(json_string(root, "controlPort", "45555").toInt(), 1, 65535));
+    if (client_input_port_ != nullptr) client_input_port_->setValue(qBound(json_string(root, "inputPort", QString::number(DefaultInputPort)).toInt(), 1, 65535));
+    if (profile_username_ != nullptr) profile_username_->setText(json_string(root, "username"));
+    if (client_password_ != nullptr) client_password_->setText(json_string(root, "password"));
+    set_combo_data(client_stream_quality_, json_int(root, "streamQuality", static_cast<int>(MediaQualityTier::Auto)));
+    set_combo_data(client_stream_bitrate_, json_int(root, "streamBitrate", static_cast<int>(MediaStreamBitrate::Auto)));
+    set_combo_data(client_stream_size_, json_int(root, "streamSize", static_cast<int>(MediaStreamSize::Auto)));
+    if (remote_ssh_host_ != nullptr) remote_ssh_host_->setText(json_string(root, "remoteSshHost"));
+    if (remote_ssh_user_ != nullptr) remote_ssh_user_->setText(json_string(root, "remoteSshUser"));
+    if (remote_ssh_password_ != nullptr) remote_ssh_password_->setText(json_string(root, "remoteSshPassword"));
+    if (remote_ssh_port_ != nullptr) remote_ssh_port_->setValue(qBound(json_string(root, "remoteSshPort", "22").toInt(), 1, 65535));
+    if (remote_directory_ != nullptr) remote_directory_->setText(json_string(root, "remoteDirectory"));
+    if (remote_rom_root_ != nullptr) remote_rom_root_->setText(json_string(root, "remoteRomRoot"));
+    if (remote_binary_ != nullptr) remote_binary_->setText(json_string(root, "remoteBinary", "./host_runner"));
+    if (remote_start_script_ != nullptr) remote_start_script_->setText(json_string(root, "remoteStartScript"));
+    if (remote_gpu_ != nullptr) remote_gpu_->setText(json_string(root, "remoteGpu"));
+    if (remote_base_control_port_ != nullptr) remote_base_control_port_->setValue(qBound(json_string(root, "remoteBaseControlPort", "45555").toInt(), 1, 65535));
+    if (remote_base_input_port_ != nullptr) remote_base_input_port_->setValue(qBound(json_string(root, "remoteBaseInputPort", QString::number(DefaultInputPort)).toInt(), 1, 65535));
+    client_session_host_.clear();
+    update_client_host_summary({});
+    refresh_recent_settings_keys();
+    save_persisted_settings();
+}
+
+void MainWindow::show_pair_receive_qr() {
+    close_pair_receive_qr();
+    const auto ip = preferred_pair_lan_ip();
+    if (ip.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Form sync"), QStringLiteral("No LAN IPv4 address found."));
+        return;
+    }
+    pair_server_ = new QTcpServer(this);
+    connect(pair_server_, &QTcpServer::newConnection, this, &MainWindow::handle_pair_receive_socket);
+    if (!pair_server_->listen(QHostAddress::AnyIPv4, 0)) {
+        const auto error = pair_server_->errorString();
+        close_pair_receive_qr(QStringLiteral("Pair receive unavailable: %1").arg(error));
+        QMessageBox::warning(this, QStringLiteral("Form sync"), error);
+        return;
+    }
+    pair_token_ = QUuid::createUuid().toString(QUuid::Id128).left(16);
+    pair_relay_host_ = client_host_ != nullptr ? client_host_->text().trimmed() : QString();
+    pair_relay_port_ = client_port_ != nullptr ? client_port_->value() : 45555;
+    const auto uri = QString::fromStdString(archstreamer::build_pair_uri(
+        ip.toStdString(),
+        static_cast<std::uint16_t>(pair_server_->serverPort()),
+        pair_token_.toStdString(),
+        pair_relay_host_.toStdString(),
+        static_cast<std::uint16_t>(pair_relay_port_)));
+    if (client_pair_status_ != nullptr) {
+        client_pair_status_->setText(QStringLiteral("Pair receiver listening on %1:%2").arg(ip).arg(pair_server_->serverPort()));
+    }
+
+    pair_relay_poll_timer_ = new QTimer(this);
+    pair_relay_poll_timer_->setInterval(2000);
+    connect(pair_relay_poll_timer_, &QTimer::timeout, this, &MainWindow::poll_pair_relay);
+    if (!pair_relay_host_.isEmpty()) {
+        pair_relay_poll_timer_->start();
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Receive forms"));
+    auto* layout = new QVBoxLayout(&dialog);
+    const auto pixmap = render_pair_qr(uri);
+    if (!pixmap.isNull()) {
+        auto* image = new QLabel(&dialog);
+        image->setAlignment(Qt::AlignCenter);
+        image->setPixmap(pixmap.scaled(320, 320, Qt::KeepAspectRatio, Qt::FastTransformation));
+        layout->addWidget(image);
+    } else {
+        layout->addWidget(new QLabel(QStringLiteral("qrencode was not found; use the QR text below."), &dialog));
+    }
+    auto* text = new QPlainTextEdit(uri, &dialog);
+    text->setReadOnly(true);
+    text->setMaximumHeight(90);
+    layout->addWidget(text);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    dialog.exec();
+    if (pair_server_ != nullptr || pair_relay_poll_timer_ != nullptr) {
+        close_pair_receive_qr();
+    }
+}
+
+void MainWindow::close_pair_receive_qr(const QString& status) {
+    if (pair_relay_poll_timer_ != nullptr) {
+        pair_relay_poll_timer_->stop();
+        pair_relay_poll_timer_->deleteLater();
+        pair_relay_poll_timer_ = nullptr;
+    }
+    if (pair_server_ != nullptr) {
+        pair_server_->close();
+        pair_server_->deleteLater();
+        pair_server_ = nullptr;
+    }
+    pair_token_.clear();
+    pair_relay_host_.clear();
+    pair_relay_port_ = 0;
+    if (client_pair_status_ != nullptr) {
+        client_pair_status_->setText(status);
+    }
+}
+
+void MainWindow::handle_pair_receive_socket() {
+    if (pair_server_ == nullptr) {
+        return;
+    }
+    while (auto* socket = pair_server_->nextPendingConnection()) {
+        socket->setParent(this);
+        auto buffer = std::make_shared<QByteArray>();
+        connect(socket, &QTcpSocket::readyRead, this, [this, socket, buffer] {
+            buffer->append(socket->readAll());
+            const auto header_end = buffer->indexOf("\r\n\r\n");
+            if (header_end < 0) {
+                return;
+            }
+            const auto headers = buffer->left(header_end);
+            const auto match = QRegularExpression(QStringLiteral("(?i)Content-Length:\\s*(\\d+)")).match(QString::fromLatin1(headers));
+            const int content_length = match.hasMatch() ? match.captured(1).toInt() : 0;
+            if (buffer->size() < header_end + 4 + content_length) {
+                return;
+            }
+            const auto auth = QRegularExpression(QStringLiteral("(?i)Authorization:\\s*Bearer\\s+(\\S+)")).match(QString::fromLatin1(headers));
+            if (!auth.hasMatch() || auth.captured(1) != pair_token_) {
+                write_http_response(socket, 401, R"({"ok":false,"error":"bad token"})");
+            } else if (!headers.startsWith("POST ")) {
+                write_http_response(socket, 405, R"({"ok":false,"error":"POST required"})");
+            } else {
+                const auto body = QString::fromUtf8(buffer->mid(header_end + 4, content_length));
+                try {
+                    apply_pair_profile_json(body);
+                    write_http_response(socket, 200, R"({"ok":true})");
+                    close_pair_receive_qr(QStringLiteral("Forms imported from paired device."));
+                } catch (const std::exception& error) {
+                    write_http_response(socket, 400, R"({"ok":false,"error":"bad profile json"})");
+                    if (client_pair_status_ != nullptr) {
+                        client_pair_status_->setText(QStringLiteral("Pair receive failed: %1").arg(error.what()));
+                    }
+                }
+            }
+            socket->disconnectFromHost();
+        });
+        connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+    }
+}
+
+void MainWindow::poll_pair_relay() {
+    if (pair_token_.isEmpty() || pair_relay_host_.isEmpty() || pair_relay_port_ <= 0) {
+        return;
+    }
+    if (pair_relay_poll_timer_ != nullptr) {
+        pair_relay_poll_timer_->stop();
+    }
+    const auto token = pair_token_;
+    const auto host = pair_relay_host_;
+    const int port = pair_relay_port_;
+    const QPointer<MainWindow> self(this);
+    std::thread([self, token, host, port] {
+        QString error;
+        const auto profile = pull_pair_profile_relay(host, port, token, &error);
+        if (self == nullptr) {
+            return;
+        }
+        QMetaObject::invokeMethod(self.data(), [self, token, profile, error] {
+            if (self == nullptr || self->pair_token_ != token) {
+                return;
+            }
+            if (profile.has_value()) {
+                try {
+                    self->apply_pair_profile_json(*profile);
+                    self->close_pair_receive_qr(QStringLiteral("Forms imported through host relay."));
+                } catch (const std::exception& ex) {
+                    if (self->client_pair_status_ != nullptr) {
+                        self->client_pair_status_->setText(QStringLiteral("Pair relay failed: %1").arg(ex.what()));
+                    }
+                }
+                return;
+            }
+            if (!error.isEmpty() && self->client_pair_status_ != nullptr) {
+                self->client_pair_status_->setText(QStringLiteral("Pair relay waiting: %1").arg(error));
+            }
+            if (self->pair_relay_poll_timer_ != nullptr) {
+                self->pair_relay_poll_timer_->start();
+            }
+        }, Qt::QueuedConnection);
+    }).detach();
+}
+
+void MainWindow::send_pair_forms_from_qr() {
+    bool ok = false;
+    const auto raw = QInputDialog::getMultiLineText(
+        this,
+        QStringLiteral("Send forms from QR"),
+        QStringLiteral("Paste the decoded ArchStreamer QR text:"),
+        {},
+        &ok).trimmed();
+    if (!ok || raw.isEmpty()) {
+        return;
+    }
+    std::string error;
+    const auto target = archstreamer::parse_pair_uri(raw.toStdString(), &error);
+    if (!target.has_value()) {
+        QMessageBox::warning(this, QStringLiteral("Form sync"), QString::fromStdString(error));
+        return;
+    }
+    const auto profile = current_pair_profile_json();
+    if (client_pair_status_ != nullptr) {
+        client_pair_status_->setText(QStringLiteral("Sending forms..."));
+    }
+    const auto direct_error = post_pair_profile_direct(*target, profile);
+    if (direct_error.isEmpty()) {
+        if (client_pair_status_ != nullptr) {
+            client_pair_status_->setText(QStringLiteral("Forms sent directly to paired device."));
+        }
+        return;
+    }
+    append_log(client_log_, QStringLiteral("Pair direct send failed: %1; trying host relay").arg(direct_error));
+    const auto relay_error = push_pair_profile_relay(
+        *target,
+        client_host_ != nullptr ? client_host_->text().trimmed() : QString(),
+        client_port_ != nullptr ? client_port_->value() : 45555,
+        profile);
+    if (client_pair_status_ != nullptr) {
+        client_pair_status_->setText(relay_error.isEmpty()
+            ? QStringLiteral("Direct send failed; forms handed to host relay.")
+            : QStringLiteral("Pair send failed: %1").arg(relay_error));
+    }
+}
+
 void MainWindow::connect_client() {
     if (client_host_ == nullptr || client_host_->text().trimmed().isEmpty()) {
         append_log(client_log_, "Select a host (Select Host… or This PC) before Connect.");
@@ -524,15 +958,15 @@ void MainWindow::start_client() {
         return;
     }
     if (config.password.empty()) {
-        const auto created = prompt_new_password("Create password");
-        if (created.isEmpty()) {
+        const auto password = prompt_session_password("Enter password");
+        if (password.isEmpty()) {
             append_log(client_log_, "Password required before joining.");
             return;
         }
         if (client_password_ != nullptr) {
-            client_password_->setText(created);
+            client_password_->setText(password);
         }
-        config.password = created.toStdString();
+        config.password = password.toStdString();
     }
     if (config.role == archstreamer::ClientParticipantRole::Player) {
         refresh_client_controllers();
@@ -921,6 +1355,21 @@ void MainWindow::send_client_logs_to_host() {
                 GuiLogLevel::Quiet);
         }
     }
+}
+
+QString MainWindow::prompt_session_password(const QString& title) {
+    bool ok = false;
+    const auto password = QInputDialog::getText(
+        this,
+        title,
+        "Password:",
+        QLineEdit::Password,
+        {},
+        &ok);
+    if (!ok || password.isEmpty()) {
+        return {};
+    }
+    return password;
 }
 
 QString MainWindow::prompt_new_password(const QString& title) {

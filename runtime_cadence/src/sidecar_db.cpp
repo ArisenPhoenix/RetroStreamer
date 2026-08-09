@@ -59,6 +59,7 @@ bool SidecarDb::open() {
 bool SidecarDb::ensure_schema() {
     if (!exec(
             "CREATE TABLE IF NOT EXISTS users ("
+            "  identity_id TEXT NOT NULL DEFAULT '',"
             "  username TEXT PRIMARY KEY NOT NULL,"
             "  display_name TEXT NOT NULL DEFAULT '',"
             "  password_hash TEXT NOT NULL DEFAULT '',"
@@ -75,6 +76,27 @@ bool SidecarDb::ensure_schema() {
     (void)exec_quiet("ALTER TABLE users ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;");
     (void)exec_quiet("ALTER TABLE users ADD COLUMN profile_path TEXT NOT NULL DEFAULT '';");
     (void)exec_quiet("ALTER TABLE users ADD COLUMN save_root TEXT NOT NULL DEFAULT '';");
+    (void)exec_quiet("ALTER TABLE users ADD COLUMN identity_id TEXT NOT NULL DEFAULT '';");
+    (void)exec_quiet(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_identity_id "
+        "ON users(identity_id) WHERE identity_id != '';");
+    backfill_user_identity_ids();
+
+    if (!exec(
+            "CREATE TABLE IF NOT EXISTS hosts ("
+            "  identity_id TEXT PRIMARY KEY NOT NULL,"
+            "  host_name TEXT NOT NULL DEFAULT '',"
+            "  display_name TEXT NOT NULL DEFAULT '',"
+            "  save_root TEXT NOT NULL DEFAULT '',"
+            "  created_at INTEGER NOT NULL DEFAULT 0,"
+            "  updated_at INTEGER NOT NULL DEFAULT 0"
+            ");")) {
+        return false;
+    }
+    (void)exec_quiet("ALTER TABLE hosts ADD COLUMN display_name TEXT NOT NULL DEFAULT '';");
+    (void)exec_quiet("ALTER TABLE hosts ADD COLUMN save_root TEXT NOT NULL DEFAULT '';");
+    (void)exec_quiet("ALTER TABLE hosts ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;");
+    (void)exec_quiet("ALTER TABLE hosts ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;");
 
     if (!exec(
             "CREATE TABLE IF NOT EXISTS user_controls ("
@@ -138,6 +160,44 @@ bool SidecarDb::ensure_schema() {
     return true;
 }
 
+void SidecarDb::backfill_user_identity_ids() {
+    if (db_ == nullptr) {
+        return;
+    }
+    sqlite3_stmt* select = nullptr;
+    const char* select_sql =
+        "SELECT username FROM users WHERE identity_id='' OR identity_id IS NULL;";
+    if (sqlite3_prepare_v2(db_, select_sql, -1, &select, nullptr) != SQLITE_OK) {
+        return;
+    }
+    std::vector<std::string> usernames;
+    while (sqlite3_step(select) == SQLITE_ROW) {
+        if (const auto* username = reinterpret_cast<const char*>(sqlite3_column_text(select, 0));
+            username != nullptr) {
+            usernames.emplace_back(username);
+        }
+    }
+    sqlite3_finalize(select);
+
+    sqlite3_stmt* update = nullptr;
+    const char* update_sql = "UPDATE users SET identity_id=? WHERE username=? AND identity_id='';";
+    if (sqlite3_prepare_v2(db_, update_sql, -1, &update, nullptr) != SQLITE_OK) {
+        return;
+    }
+    for (const auto& username : usernames) {
+        const auto identity_id = identity_id_from_name(username);
+        if (identity_id.empty()) {
+            continue;
+        }
+        sqlite3_reset(update);
+        sqlite3_clear_bindings(update);
+        sqlite3_bind_text(update, 1, identity_id.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(update, 2, username.c_str(), -1, SQLITE_TRANSIENT);
+        (void)sqlite3_step(update);
+    }
+    sqlite3_finalize(update);
+}
+
 std::string SidecarDb::events_table_name(const std::string& day) {
     // day is YYYY-MM-DD → events_YYYY_MM_DD
     std::string name = "events_";
@@ -181,6 +241,9 @@ bool SidecarDb::upsert_user(const UserRecord& user) {
     }
     std::lock_guard lock(mutex_);
     UserRecord stored = user;
+    if (stored.identity_id.empty()) {
+        stored.identity_id = identity_id_from_name(stored.username);
+    }
     if (stored.updated_at <= 0) {
         stored.updated_at = now_epoch_seconds();
     }
@@ -189,9 +252,10 @@ bool SidecarDb::upsert_user(const UserRecord& user) {
     }
     sqlite3_stmt* stmt = nullptr;
     const char* sql =
-        "INSERT INTO users(username, display_name, password_hash, must_change, profile_path, save_root, "
-        "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?) "
+        "INSERT INTO users(identity_id, username, display_name, password_hash, must_change, profile_path, save_root, "
+        "created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(username) DO UPDATE SET "
+        "identity_id=CASE WHEN excluded.identity_id='' THEN users.identity_id ELSE excluded.identity_id END, "
         "display_name=excluded.display_name, "
         "password_hash=CASE WHEN excluded.password_hash='' THEN users.password_hash ELSE excluded.password_hash END, "
         "must_change=CASE WHEN excluded.password_hash='' THEN users.must_change ELSE excluded.must_change END, "
@@ -202,14 +266,15 @@ bool SidecarDb::upsert_user(const UserRecord& user) {
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
         return false;
     }
-    sqlite3_bind_text(stmt, 1, stored.username.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 2, stored.display_name.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 3, stored.password_hash.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(stmt, 4, stored.must_change ? 1 : 0);
-    sqlite3_bind_text(stmt, 5, stored.profile_path.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 6, stored.save_root.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int64(stmt, 7, stored.created_at);
-    sqlite3_bind_int64(stmt, 8, stored.updated_at);
+    sqlite3_bind_text(stmt, 1, stored.identity_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, stored.username.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, stored.display_name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, stored.password_hash.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 5, stored.must_change ? 1 : 0);
+    sqlite3_bind_text(stmt, 6, stored.profile_path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 7, stored.save_root.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 8, stored.created_at);
+    sqlite3_bind_int64(stmt, 9, stored.updated_at);
     const int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
     return rc == SQLITE_DONE;
@@ -222,7 +287,7 @@ std::optional<UserRecord> SidecarDb::find_user(const std::string& username) {
     std::lock_guard lock(mutex_);
     sqlite3_stmt* stmt = nullptr;
     const char* sql =
-        "SELECT username, display_name, password_hash, must_change, profile_path, save_root, "
+        "SELECT identity_id, username, display_name, password_hash, must_change, profile_path, save_root, "
         "created_at, updated_at FROM users WHERE username=? LIMIT 1;";
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
         return std::nullopt;
@@ -231,23 +296,30 @@ std::optional<UserRecord> SidecarDb::find_user(const std::string& username) {
     std::optional<UserRecord> out;
     if (sqlite3_step(stmt) == SQLITE_ROW) {
         UserRecord user;
-        user.username = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-        user.display_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-        if (const auto* hash = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        if (const auto* identity = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            identity != nullptr) {
+            user.identity_id = identity;
+        }
+        user.username = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        user.display_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        if (const auto* hash = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
             hash != nullptr) {
             user.password_hash = hash;
         }
-        user.must_change = sqlite3_column_int(stmt, 3) != 0;
-        if (const auto* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+        user.must_change = sqlite3_column_int(stmt, 4) != 0;
+        if (const auto* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
             path != nullptr) {
             user.profile_path = path;
         }
-        if (const auto* root = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
+        if (const auto* root = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
             root != nullptr) {
             user.save_root = root;
         }
-        user.created_at = sqlite3_column_int64(stmt, 6);
-        user.updated_at = sqlite3_column_int64(stmt, 7);
+        user.created_at = sqlite3_column_int64(stmt, 7);
+        user.updated_at = sqlite3_column_int64(stmt, 8);
+        if (user.identity_id.empty()) {
+            user.identity_id = identity_id_from_name(user.username);
+        }
         out = std::move(user);
     }
     sqlite3_finalize(stmt);
@@ -277,7 +349,7 @@ std::vector<UserRecord> SidecarDb::list_users() {
     std::lock_guard lock(mutex_);
     sqlite3_stmt* stmt = nullptr;
     const char* sql =
-        "SELECT username, display_name, password_hash, must_change, profile_path, save_root, "
+        "SELECT identity_id, username, display_name, password_hash, must_change, profile_path, save_root, "
         "created_at, updated_at FROM users ORDER BY username COLLATE NOCASE;";
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
         return {};
@@ -285,24 +357,156 @@ std::vector<UserRecord> SidecarDb::list_users() {
     std::vector<UserRecord> out;
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         UserRecord user;
-        user.username = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-        user.display_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-        if (const auto* hash = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        if (const auto* identity = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            identity != nullptr) {
+            user.identity_id = identity;
+        }
+        user.username = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        user.display_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        if (const auto* hash = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
             hash != nullptr) {
             user.password_hash = hash;
         }
-        user.must_change = sqlite3_column_int(stmt, 3) != 0;
-        if (const auto* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+        user.must_change = sqlite3_column_int(stmt, 4) != 0;
+        if (const auto* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
             path != nullptr) {
             user.profile_path = path;
         }
-        if (const auto* root = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
+        if (const auto* root = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
             root != nullptr) {
             user.save_root = root;
         }
-        user.created_at = sqlite3_column_int64(stmt, 6);
-        user.updated_at = sqlite3_column_int64(stmt, 7);
+        user.created_at = sqlite3_column_int64(stmt, 7);
+        user.updated_at = sqlite3_column_int64(stmt, 8);
+        if (user.identity_id.empty()) {
+            user.identity_id = identity_id_from_name(user.username);
+        }
         out.push_back(std::move(user));
+    }
+    sqlite3_finalize(stmt);
+    return out;
+}
+
+bool SidecarDb::upsert_host(const HostRecord& host) {
+    HostRecord stored = host;
+    if (stored.identity_id.empty()) {
+        stored.identity_id = identity_id_from_name(stored.host_name);
+    }
+    if (stored.identity_id.empty() || stored.host_name.empty() || db_ == nullptr) {
+        return false;
+    }
+    std::lock_guard lock(mutex_);
+    if (stored.display_name.empty()) {
+        stored.display_name = stored.host_name;
+    }
+    if (stored.updated_at <= 0) {
+        stored.updated_at = now_epoch_seconds();
+    }
+    if (stored.created_at <= 0) {
+        stored.created_at = stored.updated_at;
+    }
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql =
+        "INSERT INTO hosts(identity_id, host_name, display_name, save_root, created_at, updated_at) "
+        "VALUES(?,?,?,?,?,?) "
+        "ON CONFLICT(identity_id) DO UPDATE SET "
+        "host_name=excluded.host_name, "
+        "display_name=excluded.display_name, "
+        "save_root=CASE WHEN excluded.save_root='' THEN hosts.save_root ELSE excluded.save_root END, "
+        "created_at=CASE WHEN hosts.created_at=0 THEN excluded.created_at ELSE hosts.created_at END, "
+        "updated_at=excluded.updated_at;";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    sqlite3_bind_text(stmt, 1, stored.identity_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, stored.host_name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, stored.display_name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, stored.save_root.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 5, stored.created_at);
+    sqlite3_bind_int64(stmt, 6, stored.updated_at);
+    const int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return rc == SQLITE_DONE;
+}
+
+std::optional<HostRecord> SidecarDb::find_host(const std::string& identity_id) {
+    if (identity_id.empty() || db_ == nullptr) {
+        return std::nullopt;
+    }
+    std::lock_guard lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql =
+        "SELECT identity_id, host_name, display_name, save_root, created_at, updated_at "
+        "FROM hosts WHERE identity_id=? LIMIT 1;";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return std::nullopt;
+    }
+    sqlite3_bind_text(stmt, 1, identity_id.c_str(), -1, SQLITE_TRANSIENT);
+    std::optional<HostRecord> out;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        HostRecord host;
+        host.identity_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        host.host_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        if (const auto* display = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+            display != nullptr) {
+            host.display_name = display;
+        }
+        if (const auto* root = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+            root != nullptr) {
+            host.save_root = root;
+        }
+        host.created_at = sqlite3_column_int64(stmt, 4);
+        host.updated_at = sqlite3_column_int64(stmt, 5);
+        out = std::move(host);
+    }
+    sqlite3_finalize(stmt);
+    return out;
+}
+
+bool SidecarDb::delete_host(const std::string& identity_id) {
+    if (identity_id.empty() || db_ == nullptr) {
+        return false;
+    }
+    std::lock_guard lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "DELETE FROM hosts WHERE identity_id=?;";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return false;
+    }
+    sqlite3_bind_text(stmt, 1, identity_id.c_str(), -1, SQLITE_TRANSIENT);
+    const int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return rc == SQLITE_DONE;
+}
+
+std::vector<HostRecord> SidecarDb::list_hosts() {
+    if (db_ == nullptr) {
+        return {};
+    }
+    std::lock_guard lock(mutex_);
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql =
+        "SELECT identity_id, host_name, display_name, save_root, created_at, updated_at "
+        "FROM hosts ORDER BY host_name COLLATE NOCASE;";
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return {};
+    }
+    std::vector<HostRecord> out;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        HostRecord host;
+        host.identity_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        host.host_name = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        if (const auto* display = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+            display != nullptr) {
+            host.display_name = display;
+        }
+        if (const auto* root = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+            root != nullptr) {
+            host.save_root = root;
+        }
+        host.created_at = sqlite3_column_int64(stmt, 4);
+        host.updated_at = sqlite3_column_int64(stmt, 5);
+        out.push_back(std::move(host));
     }
     sqlite3_finalize(stmt);
     return out;
@@ -888,6 +1092,34 @@ std::string SidecarDb::handle_request_json(const std::string& request_json) {
             }
             resp["ok"] = true;
             resp["users"] = std::move(arr);
+            return resp.dump();
+        }
+        if (op == "upsert_host") {
+            resp["ok"] = upsert_host(host_from_json(req));
+            return resp.dump();
+        }
+        if (op == "find_host") {
+            if (const auto host = find_host(req.value("identity_id", "")); host.has_value()) {
+                resp["ok"] = true;
+                resp["host"] = host_to_json(*host);
+            } else {
+                resp["ok"] = true;
+                resp["host"] = nullptr;
+            }
+            return resp.dump();
+        }
+        if (op == "delete_host") {
+            resp["ok"] = delete_host(req.value("identity_id", ""));
+            return resp.dump();
+        }
+        if (op == "list_hosts") {
+            auto hosts = list_hosts();
+            nlohmann::json arr = nlohmann::json::array();
+            for (const auto& h : hosts) {
+                arr.push_back(host_to_json(h));
+            }
+            resp["ok"] = true;
+            resp["hosts"] = std::move(arr);
             return resp.dump();
         }
         if (op == "upsert_controls") {

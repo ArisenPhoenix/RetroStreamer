@@ -586,6 +586,34 @@ ByteBuffer serialize_payload(const CatalogUserBlocks& payload) {
     return writer.take();
 }
 
+ByteBuffer serialize_payload(const PairFormRelayPush& payload) {
+    Writer writer;
+    writer.write_string(payload.token);
+    writer.write_bytes(payload.profile_json);
+    return writer.take();
+}
+
+ByteBuffer serialize_payload(const PairFormRelayPull& payload) {
+    Writer writer;
+    writer.write_string(payload.token);
+    return writer.take();
+}
+
+ByteBuffer serialize_payload(const PairFormRelayResponse& payload) {
+    Writer writer;
+    writer.write_bool(payload.found);
+    writer.write_bytes(payload.profile_json);
+    writer.write_string(payload.message);
+    return writer.take();
+}
+
+ByteBuffer serialize_payload(const PairFormRelayAck& payload) {
+    Writer writer;
+    writer.write_bool(payload.ok);
+    writer.write_string(payload.message);
+    return writer.take();
+}
+
 PacketType packet_type_for(const ClientHello&) { return PacketType::ClientHello; }
 PacketType packet_type_for(const HostWelcome&) { return PacketType::HostWelcome; }
 PacketType packet_type_for(const ClientConfig&) { return PacketType::ClientConfig; }
@@ -626,6 +654,10 @@ PacketType packet_type_for(const ControlsDbResponse&) { return PacketType::Contr
 PacketType packet_type_for(const ControlsDbPush&) { return PacketType::ControlsDbPush; }
 PacketType packet_type_for(const ControlsDbAck&) { return PacketType::ControlsDbAck; }
 PacketType packet_type_for(const CatalogUserBlocks&) { return PacketType::CatalogUserBlocks; }
+PacketType packet_type_for(const PairFormRelayPush&) { return PacketType::PairFormRelayPush; }
+PacketType packet_type_for(const PairFormRelayPull&) { return PacketType::PairFormRelayPull; }
+PacketType packet_type_for(const PairFormRelayResponse&) { return PacketType::PairFormRelayResponse; }
+PacketType packet_type_for(const PairFormRelayAck&) { return PacketType::PairFormRelayAck; }
 
 template <typename Payload>
 ByteBuffer serialize_packet_impl(const Payload& payload) {
@@ -799,6 +831,22 @@ ByteBuffer serialize_packet(const ControlsDbAck& payload) {
 }
 
 ByteBuffer serialize_packet(const CatalogUserBlocks& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const PairFormRelayPush& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const PairFormRelayPull& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const PairFormRelayResponse& payload) {
+    return serialize_packet_impl(payload);
+}
+
+ByteBuffer serialize_packet(const PairFormRelayAck& payload) {
     return serialize_packet_impl(payload);
 }
 
@@ -1207,6 +1255,34 @@ CatalogUserBlocks read_catalog_user_blocks(Reader& reader) {
     return payload;
 }
 
+PairFormRelayPush read_pair_form_relay_push(Reader& reader) {
+    PairFormRelayPush payload;
+    payload.token = reader.read_string();
+    payload.profile_json = reader.read_bytes();
+    return payload;
+}
+
+PairFormRelayPull read_pair_form_relay_pull(Reader& reader) {
+    PairFormRelayPull payload;
+    payload.token = reader.read_string();
+    return payload;
+}
+
+PairFormRelayResponse read_pair_form_relay_response(Reader& reader) {
+    PairFormRelayResponse payload;
+    payload.found = reader.read_bool();
+    payload.profile_json = reader.read_bytes();
+    payload.message = reader.read_string();
+    return payload;
+}
+
+PairFormRelayAck read_pair_form_relay_ack(Reader& reader) {
+    PairFormRelayAck payload;
+    payload.ok = reader.read_bool();
+    payload.message = reader.read_string();
+    return payload;
+}
+
 PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
     Reader header_reader(packet);
     const auto magic = header_reader.read_pod<std::uint32_t>();
@@ -1308,6 +1384,14 @@ PacketPayload deserialize_packet(std::span<const std::uint8_t> packet) {
             return read_controls_db_ack(payload_reader);
         case PacketType::CatalogUserBlocks:
             return read_catalog_user_blocks(payload_reader);
+        case PacketType::PairFormRelayPush:
+            return read_pair_form_relay_push(payload_reader);
+        case PacketType::PairFormRelayPull:
+            return read_pair_form_relay_pull(payload_reader);
+        case PacketType::PairFormRelayResponse:
+            return read_pair_form_relay_response(payload_reader);
+        case PacketType::PairFormRelayAck:
+            return read_pair_form_relay_ack(payload_reader);
     }
 
     throw std::runtime_error("unknown packet type");

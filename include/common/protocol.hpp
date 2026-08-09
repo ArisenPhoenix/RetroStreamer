@@ -15,7 +15,7 @@
 namespace archstreamer {
 
 constexpr std::uint32_t ProtocolMagic = 0x41525354; // "ARST"
-constexpr std::uint16_t ProtocolVersion = 27;
+constexpr std::uint16_t ProtocolVersion = 28;
 constexpr std::uint8_t MaxRemoteClients = 2;
 constexpr std::uint8_t MaxPlayersPerClient = 2;
 constexpr std::uint8_t MaxRetroArchPorts = 5; // Ports 0-3 plus a host player if desired.
@@ -85,6 +85,14 @@ enum class PacketType : std::uint8_t {
     ControlsDbAck = 39,
     /** Per-user blocked game ids after auth (shared catalog stays unfiltered). */
     CatalogUserBlocks = 40,
+    // Client → host: fallback relay for QR form sync when devices cannot reach each other.
+    PairFormRelayPush = 41,
+    // Client → host: claim fallback relay bundle by QR token.
+    PairFormRelayPull = 42,
+    // Host → client: relay bundle response.
+    PairFormRelayResponse = 43,
+    // Host → client: relay push result.
+    PairFormRelayAck = 44,
 };
 
 enum class ClientRole : std::uint8_t {
@@ -1035,6 +1043,26 @@ struct CatalogUserBlocks {
     std::vector<GameId> blocked_game_ids;
 };
 
+struct PairFormRelayPush {
+    std::string token;
+    std::vector<std::uint8_t> profile_json;
+};
+
+struct PairFormRelayPull {
+    std::string token;
+};
+
+struct PairFormRelayResponse {
+    bool found = false;
+    std::vector<std::uint8_t> profile_json;
+    std::string message;
+};
+
+struct PairFormRelayAck {
+    bool ok = false;
+    std::string message;
+};
+
 using PacketPayload = std::variant<
     ClientHello,
     HostWelcome,
@@ -1075,7 +1103,11 @@ using PacketPayload = std::variant<
     ControlsDbResponse,
     ControlsDbPush,
     ControlsDbAck,
-    CatalogUserBlocks>;
+    CatalogUserBlocks,
+    PairFormRelayPush,
+    PairFormRelayPull,
+    PairFormRelayResponse,
+    PairFormRelayAck>;
 
 ClientRole role_for_player_count(std::uint8_t requested_players);
 bool valid_player_count(std::uint8_t requested_players);

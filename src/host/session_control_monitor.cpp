@@ -6,6 +6,7 @@
 #include "host/cadence_session_events.hpp"
 #include "host/controls_db_sync.hpp"
 #include "host/host_session_hub.hpp"
+#include "host/pair_form_relay.hpp"
 #include "host/retroarch_config_writer.hpp"
 #include "host/retroarch_netcmd.hpp"
 #include "host/save_active_sessions.hpp"
@@ -473,6 +474,14 @@ std::optional<std::string> SessionControlMonitor::poll() {
                         ? client.hello.username
                         : plan_.save_username;
                     auto reply = handle_controls_db_packet(save_root_, claimed, payload);
+                    if (!reply.empty()) {
+                        client.stream.send_packet(reply);
+                    }
+                } catch (const std::exception&) {
+                }
+            } else if (is_pair_form_relay_packet(payload)) {
+                try {
+                    auto reply = handle_pair_form_relay_packet(payload);
                     if (!reply.empty()) {
                         client.stream.send_packet(reply);
                     }

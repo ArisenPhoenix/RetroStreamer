@@ -26,6 +26,11 @@ public:
     bool delete_user(const std::string& username);
     std::vector<UserRecord> list_users();
 
+    bool upsert_host(const HostRecord& host);
+    std::optional<HostRecord> find_host(const std::string& identity_id);
+    bool delete_host(const std::string& identity_id);
+    std::vector<HostRecord> list_hosts();
+
     bool upsert_controls(const ControlsRecord& controls);
     std::optional<ControlsRecord> find_controls(
         const std::string& username,
@@ -63,6 +68,7 @@ private:
     bool exec(const char* sql);
     bool exec_quiet(const char* sql);
     bool ensure_schema();
+    void backfill_user_identity_ids();
     bool ensure_events_table(const std::string& day);
     static std::string events_table_name(const std::string& day);
 

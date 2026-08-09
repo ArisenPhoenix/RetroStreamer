@@ -107,6 +107,7 @@ MainWindow::MainWindow() {
 MainWindow::~MainWindow() {
     save_persisted_settings();
     stop_client_host_auto_pick();
+    close_pair_receive_qr();
     // Request stop first so workers unwind before we tear down host media.
     client_stop_requested_ = true;
     stop_client();
@@ -284,6 +285,8 @@ QWidget* MainWindow::build_client_tab() {
     auto* connect_host = new QPushButton("Connect", page);
     auto* join = new QPushButton("Join Session", page);
     auto* stop = new QPushButton("Stop Client", page);
+    auto* pair_receive = new QPushButton("Show receive QR", page);
+    auto* pair_send = new QPushButton("Send forms from QR…", page);
     connect(client_role_, &QComboBox::currentIndexChanged, this, [this] {
         if (selected_client_role(client_role_) == archstreamer::ClientParticipantRole::Viewer) {
             client_players_->setValue(0);
@@ -313,6 +316,12 @@ QWidget* MainWindow::build_client_tab() {
     connect(stop, &QPushButton::clicked, this, [this] {
         stop_client();
     });
+    connect(pair_receive, &QPushButton::clicked, this, [this] {
+        show_pair_receive_qr();
+    });
+    connect(pair_send, &QPushButton::clicked, this, [this] {
+        send_pair_forms_from_qr();
+    });
 
     auto* left = new QVBoxLayout();
     left->addWidget(form_box);
@@ -327,6 +336,13 @@ QWidget* MainWindow::build_client_tab() {
     actions->addWidget(join);
     actions->addWidget(stop);
     left->addLayout(actions);
+    auto* pair_actions = new QHBoxLayout();
+    pair_actions->addWidget(pair_receive);
+    pair_actions->addWidget(pair_send);
+    left->addLayout(pair_actions);
+    client_pair_status_ = new QLabel(page);
+    client_pair_status_->setWordWrap(true);
+    left->addWidget(client_pair_status_);
     left->addStretch();
 
     client_log_ = new QPlainTextEdit(page);

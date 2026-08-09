@@ -1,7 +1,9 @@
 cmake_minimum_required(VERSION 3.22.1)
 project(archstreamer_ds_touch LANGUAGES CXX)
 
-add_library(archstreamer_ds_touch SHARED ds_touch_jni.cpp)
+add_library(archstreamer_ds_touch SHARED
+    ds_touch_jni.cpp
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../../src/common/pairing.cpp")
 
 # ArchStreamer/include (six levels up from app/src/main/cpp).
 target_include_directories(archstreamer_ds_touch PRIVATE

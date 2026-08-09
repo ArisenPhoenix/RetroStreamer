@@ -349,6 +349,21 @@ object PacketCodec {
         return wrap(PacketType.ControlsDbPush, payload)
     }
 
+    fun pairFormRelayPush(token: String, profileJson: ByteArray): ByteArray {
+        val payload = WireWriter().apply {
+            writeString(token)
+            writeBytes(profileJson)
+        }.toByteArray()
+        return wrap(PacketType.PairFormRelayPush, payload)
+    }
+
+    fun pairFormRelayPull(token: String): ByteArray {
+        val payload = WireWriter().apply {
+            writeString(token)
+        }.toByteArray()
+        return wrap(PacketType.PairFormRelayPull, payload)
+    }
+
     fun artAssetRequest(assetKey: String, role: String, cachedSha256: String = ""): ByteArray {
         val payload = WireWriter().apply {
             writeString(assetKey)
@@ -577,6 +592,15 @@ object PacketCodec {
                 blocksRevision = reader.readU64(),
                 full = reader.readBool(),
                 blockedGameIds = List(reader.readU16()) { reader.readString() },
+            )
+            PacketType.PairFormRelayResponse -> IncomingPacket.PairFormRelayResponse(
+                found = reader.readBool(),
+                profileJson = reader.readBytes(),
+                message = reader.readString(),
+            )
+            PacketType.PairFormRelayAck -> IncomingPacket.PairFormRelayAck(
+                ok = reader.readBool(),
+                message = reader.readString(),
             )
             else -> IncomingPacket.Unknown(type)
         }

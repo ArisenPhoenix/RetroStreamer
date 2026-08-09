@@ -62,7 +62,8 @@ bool ensure_default_user(
     const std::filesystem::path& save_root = {});
 
 /**
- * Import plaintext credentials.json under each `<save_root>/<user>/`.
+ * Import credentials.json under each `<save_root>/<user>/`.
+ * Prefers password_hash; accepts legacy plaintext password for migration.
  * Skips usernames already present in the store (but backfills empty paths).
  * Returns count imported or path-backfilled.
  */
@@ -83,7 +84,10 @@ void apply_user_save_paths(
     UserRecord& user,
     const std::filesystem::path& save_root);
 
-/** Dual-write mirror so older hosts can still read credentials.json. */
+/**
+ * Write a credentials.json mirror without plaintext by default.
+ * Set ARCHSTREAMER_WRITE_LEGACY_CREDENTIALS=1 to include legacy plaintext.
+ */
 bool write_credentials_mirror(
     const std::filesystem::path& user_directory,
     std::string_view plaintext_password,

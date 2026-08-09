@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <random>
 #include <sstream>
+#include <cstdlib>
 #include <system_error>
 
 namespace archstreamer::cadence {
@@ -39,6 +40,7 @@ UserRecord make_new_user(
     std::string_view password,
     bool must_change) {
     UserRecord user;
+    user.identity_id = identity_id_from_name(username);
     user.username = username;
     user.display_name = display_name.empty() ? username : display_name;
     user.password_hash = make_password_hash(password);
@@ -263,11 +265,27 @@ std::size_t import_users_from_save_root(
             nlohmann::json json;
             in >> json;
             const auto password = json.value("password", std::string(kDefaultPassword));
+            const auto password_hash = json.value("password_hash", std::string{});
             const bool must_change = json.value("must_change", true);
-            if (password.empty()) {
+            if (password.empty() && password_hash.empty()) {
                 continue;
             }
-            UserRecord user = make_new_user(username, username, password, must_change);
+            UserRecord user;
+            if (password_hash.empty()) {
+                user = make_new_user(username, username, password, must_change);
+            } else {
+                user.identity_id = identity_id_from_name(username);
+                user.username = username;
+                user.display_name = username;
+                user.password_hash = password_hash;
+                user.must_change = must_change;
+            }
+            if (user.created_at <= 0) {
+                user.created_at = now_epoch_seconds();
+            }
+            if (user.updated_at <= 0) {
+                user.updated_at = user.created_at;
+            }
             apply_user_save_paths(user, save_root);
             if (store.upsert_user(user)) {
                 ++imported;
@@ -287,9 +305,13 @@ bool write_credentials_mirror(
         return false;
     }
     nlohmann::json json{
-        {"password", std::string(plaintext_password)},
+        {"password_hash", make_password_hash(plaintext_password)},
         {"must_change", must_change},
     };
+    if (const char* legacy = std::getenv("ARCHSTREAMER_WRITE_LEGACY_CREDENTIALS");
+        legacy != nullptr && legacy[0] != '\0' && std::string_view(legacy) != "0") {
+        json["password"] = std::string(plaintext_password);
+    }
     std::error_code ec;
     std::filesystem::create_directories(user_directory, ec);
     std::ofstream out(user_directory / "credentials.json", std::ios::trunc);

@@ -94,6 +94,10 @@ ByteBuffer serialize_payload(const ControlsDbResponse& payload);
 ByteBuffer serialize_payload(const ControlsDbPush& payload);
 ByteBuffer serialize_payload(const ControlsDbAck& payload);
 ByteBuffer serialize_payload(const CatalogUserBlocks& payload);
+ByteBuffer serialize_payload(const PairFormRelayPush& payload);
+ByteBuffer serialize_payload(const PairFormRelayPull& payload);
+ByteBuffer serialize_payload(const PairFormRelayResponse& payload);
+ByteBuffer serialize_payload(const PairFormRelayAck& payload);
 
 PacketType packet_type_for(const ClientHello& payload);
 PacketType packet_type_for(const HostWelcome& payload);
@@ -135,6 +139,10 @@ PacketType packet_type_for(const ControlsDbResponse& payload);
 PacketType packet_type_for(const ControlsDbPush& payload);
 PacketType packet_type_for(const ControlsDbAck& payload);
 PacketType packet_type_for(const CatalogUserBlocks& payload);
+PacketType packet_type_for(const PairFormRelayPush& payload);
+PacketType packet_type_for(const PairFormRelayPull& payload);
+PacketType packet_type_for(const PairFormRelayResponse& payload);
+PacketType packet_type_for(const PairFormRelayAck& payload);
 
 ByteBuffer serialize_packet(const ClientHello& payload);
 ByteBuffer serialize_packet(const HostWelcome& payload);
@@ -176,6 +184,10 @@ ByteBuffer serialize_packet(const ControlsDbResponse& payload);
 ByteBuffer serialize_packet(const ControlsDbPush& payload);
 ByteBuffer serialize_packet(const ControlsDbAck& payload);
 ByteBuffer serialize_packet(const CatalogUserBlocks& payload);
+ByteBuffer serialize_packet(const PairFormRelayPush& payload);
+ByteBuffer serialize_packet(const PairFormRelayPull& payload);
+ByteBuffer serialize_packet(const PairFormRelayResponse& payload);
+ByteBuffer serialize_packet(const PairFormRelayAck& payload);
 
 PacketPayload deserialize_packet(std::span<const std::uint8_t> packet);
 

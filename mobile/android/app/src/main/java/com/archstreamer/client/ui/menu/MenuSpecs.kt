@@ -71,26 +71,6 @@ object ClientSpec : SectionSpec {
                 onChange = vm::onPasswordChange,
             ),
         )
-        add(subHeader("client-pair-title", "Form sync"))
-        add(
-            MenuOption.Action(
-                id = "client-pair-receive",
-                title = "Show receive QR",
-                onRun = vm::showPairReceiveQr,
-                style = MenuOption.Action.Style.Tonal,
-            ),
-        )
-        add(
-            MenuOption.Action(
-                id = "client-pair-send",
-                title = "Scan QR and send forms",
-                onRun = vm::requestPairQrScan,
-                style = MenuOption.Action.Style.Outlined,
-            ),
-        )
-        if (state.pairing.status.isNotBlank()) {
-            add(small("client-pair-status", state.pairing.status))
-        }
         if (state.client.discoveryStatus.isNotBlank()) {
             add(small("client-discovery", state.client.discoveryStatus))
         }
@@ -131,6 +111,26 @@ object ClientSpec : SectionSpec {
                     style = MenuOption.Action.Style.Text,
                 ),
             )
+        }
+        add(subHeader("client-pair-title", "Form sync"))
+        add(
+            MenuOption.Action(
+                id = "client-pair-receive",
+                title = "Show receive QR",
+                onRun = vm::showPairReceiveQr,
+                style = MenuOption.Action.Style.Tonal,
+            ),
+        )
+        add(
+            MenuOption.Action(
+                id = "client-pair-send",
+                title = "Scan QR and send forms",
+                onRun = vm::requestPairQrScan,
+                style = MenuOption.Action.Style.Outlined,
+            ),
+        )
+        if (state.pairing.status.isNotBlank()) {
+            add(small("client-pair-status", state.pairing.status))
         }
         if (state.busy) {
             add(MenuOption.Custom("client-busy") { MenuBusyIndicator() })

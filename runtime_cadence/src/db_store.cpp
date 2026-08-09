@@ -253,6 +253,72 @@ std::vector<UserRecord> DbRuntimeStore::list_users() {
     }
 }
 
+bool DbRuntimeStore::upsert_host(const HostRecord& host) {
+    std::lock_guard lock(mutex_);
+    std::string resp;
+    if (!request("upsert_host", host_to_json(host).dump(), resp)) {
+        return false;
+    }
+    try {
+        return nlohmann::json::parse(resp).value("ok", false);
+    } catch (const nlohmann::json::exception&) {
+        return false;
+    }
+}
+
+std::optional<HostRecord> DbRuntimeStore::find_host(const std::string& identity_id) {
+    std::lock_guard lock(mutex_);
+    nlohmann::json body{{"identity_id", identity_id}};
+    std::string resp;
+    if (!request("find_host", body.dump(), resp)) {
+        return std::nullopt;
+    }
+    try {
+        const auto j = nlohmann::json::parse(resp);
+        if (!j.value("ok", false) || !j.contains("host") || j["host"].is_null()) {
+            return std::nullopt;
+        }
+        return host_from_json(j["host"]);
+    } catch (const nlohmann::json::exception&) {
+        return std::nullopt;
+    }
+}
+
+bool DbRuntimeStore::delete_host(const std::string& identity_id) {
+    std::lock_guard lock(mutex_);
+    nlohmann::json body{{"identity_id", identity_id}};
+    std::string resp;
+    if (!request("delete_host", body.dump(), resp)) {
+        return false;
+    }
+    try {
+        return nlohmann::json::parse(resp).value("ok", false);
+    } catch (const nlohmann::json::exception&) {
+        return false;
+    }
+}
+
+std::vector<HostRecord> DbRuntimeStore::list_hosts() {
+    std::lock_guard lock(mutex_);
+    std::string resp;
+    if (!request("list_hosts", "{}", resp)) {
+        return {};
+    }
+    try {
+        const auto j = nlohmann::json::parse(resp);
+        if (!j.value("ok", false) || !j.contains("hosts")) {
+            return {};
+        }
+        std::vector<HostRecord> out;
+        for (const auto& item : j["hosts"]) {
+            out.push_back(host_from_json(item));
+        }
+        return out;
+    } catch (const nlohmann::json::exception&) {
+        return {};
+    }
+}
+
 bool DbRuntimeStore::upsert_controls(const ControlsRecord& controls) {
     std::lock_guard lock(mutex_);
     std::string resp;

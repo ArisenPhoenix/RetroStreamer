@@ -26,7 +26,8 @@ that builds against `RuntimeStore` (file or db).
 
 | Field | Meaning |
 |-------|---------|
-| `username` | Primary key (`[A-Za-z0-9_-]`, 1–64) |
+| `identity_id` | Stable deterministic ID derived from trimmed, case-sensitive username |
+| `username` | Case-sensitive primary key (`[A-Za-z0-9_-]`, 1–64) |
 | `display_name` | Optional label |
 | `password_hash` | `v1:<salt>:<sha256(salt:password)>` (legacy plaintext accepted once, then upgraded) |
 | `must_change` | Forced password change on next join |
@@ -39,11 +40,21 @@ Portable helpers live in `archstreamer/runtime_cadence/user_auth.hpp`
 `backfill_user_profile_paths`, …).
 
 Host join still creates **save profile directories** under the save root for game blobs.
-`credentials.json` is dual-written as a legacy mirror only.
+`credentials.json` is a legacy mirror only. New mirrors store `password_hash`;
+set `ARCHSTREAMER_WRITE_LEGACY_CREDENTIALS=1` only when an old binary still needs
+the plaintext `password` key.
 
 On host start (db/file), existing `<save-root>/<user>/credentials.json` rows are
 imported into cadence when missing, and empty `profile_path` values are backfilled
 when `<save_root>/<username>` exists.
+
+## Hosts
+
+Stable host identities live in `hosts`, keyed by `identity_id`. The ID is derived
+from the trimmed, case-sensitive host name using the same function as users, so a
+host name and username with exactly matching case resolve to the same identity key.
+Runtime session tables still use `host_id` for the live host process id;
+stale-session cleanup depends on that remaining separate.
 
 ## User controls (button map)
 

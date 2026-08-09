@@ -1,8 +1,11 @@
 #include <jni.h>
 
 #include "common/ds_touch_mapping.hpp"
+#include "common/pairing.hpp"
 
+#include <array>
 #include <cstdint>
+#include <string>
 
 namespace {
 
@@ -57,7 +60,59 @@ archstreamer::DsScreenRects make_top_layout(
     return layout;
 }
 
+std::string jstring_to_string(JNIEnv* env, jstring value) {
+    if (value == nullptr) {
+        return {};
+    }
+    const char* chars = env->GetStringUTFChars(value, nullptr);
+    if (chars == nullptr) {
+        return {};
+    }
+    std::string out(chars);
+    env->ReleaseStringUTFChars(value, chars);
+    return out;
+}
+
+jobjectArray make_string_array(JNIEnv* env, const std::array<std::string, 5>& values) {
+    jclass string_class = env->FindClass("java/lang/String");
+    if (string_class == nullptr) {
+        return nullptr;
+    }
+    jobjectArray out = env->NewObjectArray(static_cast<jsize>(values.size()), string_class, nullptr);
+    if (out == nullptr) {
+        return nullptr;
+    }
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        jstring item = env->NewStringUTF(values[i].c_str());
+        if (item == nullptr) {
+            return nullptr;
+        }
+        env->SetObjectArrayElement(out, static_cast<jsize>(i), item);
+        env->DeleteLocalRef(item);
+    }
+    return out;
+}
+
 } // namespace
+
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_archstreamer_client_pair_PairNative_nativeParseTarget(
+    JNIEnv* env,
+    jclass,
+    jstring raw) {
+    std::string error;
+    const auto target = archstreamer::parse_pair_uri(jstring_to_string(env, raw), &error);
+    if (!target.has_value()) {
+        return nullptr;
+    }
+    return make_string_array(env, {
+        target->ip,
+        std::to_string(target->port),
+        target->token,
+        target->relay_host,
+        target->relay_port == 0 ? std::string{} : std::to_string(target->relay_port),
+    });
+}
 
 extern "C" JNIEXPORT jfloatArray JNICALL
 Java_com_archstreamer_client_ui_DsTouchMapping_nativeClientBottomScreenHitRect(

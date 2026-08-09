@@ -267,6 +267,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     private var session: JoinedPlaySession? = null
     private var pairListenSession: PairListenSession? = null
+    private var pairRelayJob: Job? = null
     /** Open control TCP after Connect (Users-tab Connected) until play/disconnect. */
     private var lobbyPresence: ControlConnection? = null
     /** In-flight ControlsDb reply while playing (session control loop delivers it). */
@@ -3143,9 +3144,15 @@ fun clearBackMenuChromeFocus() {
         _state.update {
             it.copy(pairing = it.pairing.copy(receiveQr = null, status = "Preparing QR receiver..."))
         }
+        pairRelayJob?.cancel()
+        pairRelayJob = null
+        val relayHost = _state.value.client.host.trim()
+        val relayPort = _state.value.settings.controlPort.toIntOrNull() ?: Protocol.DEFAULT_CONTROL_PORT
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 PairServer.start(
+                    relayHost = relayHost,
+                    relayPort = relayPort,
                     onProfile = { profile ->
                         viewModelScope.launch {
                             applyPairProfile(profile)
@@ -3163,6 +3170,7 @@ fun clearBackMenuChromeFocus() {
             }.onSuccess { listen ->
                 val qr = PairQr.encode(listen.uri)
                 pairListenSession = listen
+                startPairRelayPoll(listen.token, relayHost, relayPort)
                 _state.update {
                     it.copy(
                         pairing = it.pairing.copy(
@@ -3187,6 +3195,8 @@ fun clearBackMenuChromeFocus() {
     fun closePairReceiveQr(status: String = "") {
         pairListenSession?.close()
         pairListenSession = null
+        pairRelayJob?.cancel()
+        pairRelayJob = null
         _state.update {
             it.copy(pairing = it.pairing.copy(receiveQr = null, status = status))
         }
@@ -3201,14 +3211,27 @@ fun clearBackMenuChromeFocus() {
             _state.update { it.copy(pairing = it.pairing.copy(status = "QR scan cancelled.")) }
             return
         }
+        val target = runCatching { PairTarget.parseUri(raw) }
+            .getOrElse { error ->
+                _state.update {
+                    it.copy(pairing = it.pairing.copy(status = "Pair send failed: ${error.message ?: error}"))
+                }
+                return
+            }
         val profile = currentPairProfile()
         _state.update { it.copy(pairing = it.pairing.copy(status = "Sending forms...")) }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                PairClient.push(PairTarget.parseUri(raw), profile)
-            }.onSuccess {
-                _state.update {
-                    it.copy(pairing = it.pairing.copy(status = "Forms sent to paired device."))
+                try {
+                    PairClient.push(target, profile)
+                    "Forms sent directly to paired device."
+                } catch (direct: Throwable) {
+                    ClientFileLog.conn("pair direct send failed: ${direct.message ?: direct}; trying host relay")
+                    pushPairFormsViaRelay(target, profile)
+                }
+            }.onSuccess { message ->
+                _state.update { state ->
+                    state.copy(pairing = state.pairing.copy(status = message))
                 }
             }.onFailure { error ->
                 _state.update {
@@ -3218,6 +3241,93 @@ fun clearBackMenuChromeFocus() {
                         ),
                     )
                 }
+            }
+        }
+    }
+
+    private fun startPairRelayPoll(token: String, relayHost: String, relayPort: Int) {
+        if (relayHost.isBlank() || relayPort !in 1..65535) return
+        pairRelayJob?.cancel()
+        pairRelayJob = viewModelScope.launch(Dispatchers.IO) {
+            while (isActive && pairListenSession != null) {
+                delay(2_000)
+                val response = runCatching {
+                    pullPairFormsViaRelay(relayHost, relayPort, token)
+                }.getOrNull()
+                if (response == null || !response.found || response.profileJson.isEmpty()) {
+                    continue
+                }
+                val profileResult = runCatching {
+                    PairProfile.fromJson(response.profileJson.decodeToString())
+                }
+                if (profileResult.isFailure) {
+                    val error = profileResult.exceptionOrNull()
+                    _state.update { state ->
+                        state.copy(pairing = state.pairing.copy(status = "Pair relay failed: ${error?.message ?: error}"))
+                    }
+                    continue
+                }
+                val profile = profileResult.getOrThrow()
+                withContext(Dispatchers.Main) {
+                    applyPairProfile(profile)
+                    pairListenSession?.close()
+                    pairListenSession = null
+                    _state.update {
+                        it.copy(
+                            pairing = it.pairing.copy(
+                                receiveQr = null,
+                                status = "Forms imported through host relay.",
+                            ),
+                        )
+                    }
+                }
+                break
+            }
+        }
+    }
+
+    private fun pushPairFormsViaRelay(target: PairTarget, profile: PairProfile): String {
+        val relayHost = target.relayHost.ifBlank { _state.value.client.host.trim() }
+        val relayPort = if (target.relayPort in 1..65535) {
+            target.relayPort
+        } else {
+            _state.value.settings.controlPort.toIntOrNull() ?: Protocol.DEFAULT_CONTROL_PORT
+        }
+        require(relayHost.isNotBlank()) { "direct send failed and QR has no relay host" }
+        ControlConnection(relayHost, relayPort).use { conn ->
+            conn.connect()
+            conn.send(PacketCodec.pairFormRelayPush(target.token, profile.toJson().encodeToByteArray()))
+            return when (val packet = conn.receive()) {
+                is IncomingPacket.PairFormRelayAck -> {
+                    if (!packet.ok) error(packet.message.ifBlank { "host relay rejected forms" })
+                    "Direct send failed; forms handed to host relay."
+                }
+                is IncomingPacket.Error -> error(packet.value.message)
+                else -> error("unexpected relay response: $packet")
+            }
+        }
+    }
+
+    private fun pullPairFormsViaRelay(
+        relayHost: String,
+        relayPort: Int,
+        token: String,
+    ): IncomingPacket.PairFormRelayResponse {
+        ControlConnection(relayHost, relayPort).use { conn ->
+            conn.connect(timeoutMs = 3_000)
+            conn.send(PacketCodec.pairFormRelayPull(token))
+            return when (val packet = conn.receive()) {
+                is IncomingPacket.PairFormRelayResponse -> packet
+                is IncomingPacket.Error -> IncomingPacket.PairFormRelayResponse(
+                    found = false,
+                    profileJson = ByteArray(0),
+                    message = packet.value.message,
+                )
+                else -> IncomingPacket.PairFormRelayResponse(
+                    found = false,
+                    profileJson = ByteArray(0),
+                    message = "unexpected relay response: $packet",
+                )
             }
         }
     }

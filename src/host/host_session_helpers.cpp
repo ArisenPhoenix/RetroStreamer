@@ -8,6 +8,7 @@
 #include "host/game_meta_store.hpp"
 #include "host/host_app_config.hpp"
 #include "host/host_launch_planner.hpp"
+#include "host/pair_form_relay.hpp"
 #include "host/session_lobby.hpp"
 #include "host/user_credentials.hpp"
 
@@ -171,6 +172,13 @@ void poll_active_session_joins(
                 ack.ok = false;
                 ack.message = "connect with LobbyPresence or join a session first";
                 stream->send_packet(serialize_packet(ack));
+            }
+            return;
+        }
+        if (is_pair_form_relay_packet(first_payload)) {
+            auto reply = handle_pair_form_relay_packet(first_payload);
+            if (!reply.empty()) {
+                stream->send_packet(reply);
             }
             return;
         }

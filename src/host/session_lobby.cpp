@@ -6,6 +6,7 @@
 #include "common/game_identity.hpp"
 #include "host/controls_db_sync.hpp"
 #include "host/game_meta_store.hpp"
+#include "host/pair_form_relay.hpp"
 #include "host/save_active_sessions.hpp"
 #include "host/save_manager.hpp"
 #include "host/user_credentials.hpp"
@@ -665,6 +666,13 @@ SessionPlan gather_session_clients(
                     ack.ok = false;
                     ack.message = "connect with LobbyPresence or join a session first";
                     stream->send_packet(serialize_packet(ack));
+                }
+                continue;
+            }
+            if (is_pair_form_relay_packet(first_payload)) {
+                auto reply = handle_pair_form_relay_packet(first_payload);
+                if (!reply.empty()) {
+                    stream->send_packet(reply);
                 }
                 continue;
             }

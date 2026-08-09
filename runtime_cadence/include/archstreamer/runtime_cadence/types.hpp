@@ -13,6 +13,8 @@ namespace archstreamer::cadence {
  * Save-game blobs stay under the save root; this is auth + lookup only.
  */
 struct UserRecord {
+    /** Stable deterministic ID derived from username. */
+    std::string identity_id;
     std::string username;
     std::string display_name;
     /**
@@ -28,6 +30,21 @@ struct UserRecord {
     /** Unix epoch seconds when the row was first created; 0 = unknown. */
     std::int64_t created_at = 0;
     /** Unix epoch seconds when last upserted. */
+    std::int64_t updated_at = 0;
+};
+
+/**
+ * Stable host identity. This is intentionally separate from SessionRecord::host_id,
+ * which is a live process id used for stale-process cleanup.
+ */
+struct HostRecord {
+    /** Stable deterministic ID derived from host_name. */
+    std::string identity_id;
+    std::string host_name;
+    std::string display_name;
+    /** Host save-root used when the row was written. */
+    std::string save_root;
+    std::int64_t created_at = 0;
     std::int64_t updated_at = 0;
 };
 
@@ -155,5 +172,11 @@ struct RuntimeEvent {
 std::string day_string_from_epoch(std::int64_t epoch_seconds);
 
 std::int64_t now_epoch_seconds();
+
+/** Trimmed, case-sensitive name used as the input to identity_id_from_name. */
+std::string canonical_identity_name(std::string_view name);
+
+/** Deterministic ID: matching canonical user/host names get the same value. */
+std::string identity_id_from_name(std::string_view name);
 
 } // namespace archstreamer::cadence

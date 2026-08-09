@@ -70,7 +70,7 @@ else()
     FetchContent_MakeAvailable(nlohmann_json)
 endif()
 
-find_package(Qt6 COMPONENTS Widgets QUIET)
+find_package(Qt6 COMPONENTS Widgets Network QUIET)
 if(Qt6Widgets_FOUND)
     message(STATUS "Found Qt6 Widgets: ${Qt6Widgets_VERSION}")
 else()
@@ -118,6 +118,7 @@ set(ARCHSTREAMER_CORE_SOURCES
     src/common/game_assets.cpp
     src/common/game_identity.cpp
     src/common/m3m_playlist.cpp
+    src/common/pairing.cpp
     src/common/steam_art_import.cpp
     src/common/participant_role.cpp
     src/common/protocol.cpp
@@ -306,6 +307,7 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/user_credentials.cpp
         src/host/user_controls_db.cpp
         src/host/controls_db_sync.cpp
+        src/host/pair_form_relay.cpp
         src/host/standalone_emulator.cpp
         src/host/switch/switch_fs.cpp
         src/host/switch/switch_system_defaults.cpp
@@ -567,6 +569,7 @@ if(Qt6Widgets_FOUND)
             archstreamer_client
             ${ARCHSTREAMER_CADENCE_LINK_TARGET}
             Qt6::Widgets
+            Qt6::Network
     )
     if(ARCHSTREAMER_BUILD_HOST)
         target_link_libraries(archstreamer_gui PRIVATE archstreamer_host)

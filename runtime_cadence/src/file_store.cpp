@@ -34,6 +34,10 @@ std::filesystem::path FileRuntimeStore::users_path() const {
     return root_ / "users.json";
 }
 
+std::filesystem::path FileRuntimeStore::hosts_path() const {
+    return root_ / "hosts.json";
+}
+
 std::filesystem::path FileRuntimeStore::controls_path() const {
     return root_ / "controls.json";
 }
@@ -124,6 +128,9 @@ bool FileRuntimeStore::upsert_user(const UserRecord& user) {
         }
     }
     UserRecord stored = user;
+    if (stored.identity_id.empty()) {
+        stored.identity_id = identity_id_from_name(stored.username);
+    }
     if (stored.updated_at <= 0) {
         stored.updated_at = now_epoch_seconds();
     }
@@ -219,6 +226,81 @@ std::vector<UserRecord> FileRuntimeStore::list_users() {
     } catch (const nlohmann::json::exception&) {
         return {};
     }
+}
+
+bool FileRuntimeStore::upsert_host(const HostRecord& host) {
+    HostRecord stored = host;
+    if (stored.identity_id.empty()) {
+        stored.identity_id = identity_id_from_name(stored.host_name);
+    }
+    if (stored.identity_id.empty() || stored.host_name.empty()) {
+        return false;
+    }
+    std::lock_guard lock(mutex_);
+    if (!ensure_ready_unlocked()) {
+        return false;
+    }
+    auto root = load_object_file(hosts_path());
+    if (stored.display_name.empty()) {
+        stored.display_name = stored.host_name;
+    }
+    if (stored.updated_at <= 0) {
+        stored.updated_at = now_epoch_seconds();
+    }
+    if (stored.created_at <= 0) {
+        stored.created_at = stored.updated_at;
+    }
+    root[stored.identity_id] = host_to_json(stored);
+    return save_object_file(hosts_path(), root);
+}
+
+std::optional<HostRecord> FileRuntimeStore::find_host(const std::string& identity_id) {
+    if (identity_id.empty()) {
+        return std::nullopt;
+    }
+    std::lock_guard lock(mutex_);
+    const auto root = load_object_file(hosts_path());
+    if (!root.contains(identity_id)) {
+        return std::nullopt;
+    }
+    return host_from_json(root.at(identity_id));
+}
+
+bool FileRuntimeStore::delete_host(const std::string& identity_id) {
+    if (identity_id.empty()) {
+        return false;
+    }
+    std::lock_guard lock(mutex_);
+    if (!ensure_ready_unlocked()) {
+        return false;
+    }
+    auto root = load_object_file(hosts_path());
+    if (!root.contains(identity_id)) {
+        return true;
+    }
+    root.erase(identity_id);
+    return save_object_file(hosts_path(), root);
+}
+
+std::vector<HostRecord> FileRuntimeStore::list_hosts() {
+    std::lock_guard lock(mutex_);
+    const auto root = load_object_file(hosts_path());
+    if (!root.is_object()) {
+        return {};
+    }
+    std::vector<HostRecord> out;
+    out.reserve(root.size());
+    for (auto it = root.begin(); it != root.end(); ++it) {
+        auto host = host_from_json(it.value());
+        if (host.identity_id.empty()) {
+            host.identity_id = it.key();
+        }
+        out.push_back(std::move(host));
+    }
+    std::sort(out.begin(), out.end(), [](const HostRecord& a, const HostRecord& b) {
+        return a.host_name < b.host_name;
+    });
+    return out;
 }
 
 bool FileRuntimeStore::upsert_controls(const ControlsRecord& controls) {

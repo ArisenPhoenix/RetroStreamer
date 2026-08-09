@@ -4,6 +4,7 @@ import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Collections
 import java.util.UUID
@@ -37,6 +38,8 @@ object PairServer {
 
     fun start(
         ttlMs: Long = 120_000L,
+        relayHost: String = "",
+        relayPort: Int = 0,
         onProfile: (PairProfile) -> Unit,
         onError: (String) -> Unit = {},
     ): PairListenSession {
@@ -46,7 +49,12 @@ object PairServer {
         val server = ServerSocket(0)
         server.soTimeout = ttlMs.toInt().coerceIn(5_000, 300_000)
         val port = server.localPort
-        val uri = "archstreamer://pair?v=1&ip=$lanIp&port=$port&token=$token"
+        val relay = if (relayHost.isNotBlank() && relayPort in 1..65535) {
+            "&rh=${url(relayHost)}&rp=$relayPort"
+        } else {
+            ""
+        }
+        val uri = "archstreamer://pair?v=1&ip=$lanIp&port=$port&token=$token$relay"
         val future = executor.submit {
             try {
                 val socket = server.accept()
@@ -164,6 +172,9 @@ object PairServer {
     private fun jsonString(value: String): String =
         "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
+    private fun url(value: String): String =
+        URLEncoder.encode(value, StandardCharsets.UTF_8.name())
+
     fun primaryLanIpv4(): String? {
         val ifaces = Collections.list(NetworkInterface.getNetworkInterfaces())
         val candidates = mutableListOf<String>()
@@ -195,25 +206,13 @@ data class PairTarget(
     val ip: String,
     val port: Int,
     val token: String,
+    val relayHost: String = "",
+    val relayPort: Int = 0,
 ) {
     companion object {
         fun parseUri(uri: String): PairTarget {
-            val trimmed = uri.trim()
-            require(trimmed.startsWith("archstreamer://pair")) {
-                "Not an ArchStreamer pair QR"
-            }
-            val query = trimmed.substringAfter('?', missingDelimiterValue = "")
-            val params = query.split('&').mapNotNull { part ->
-                val i = part.indexOf('=')
-                if (i <= 0) null else part.substring(0, i) to part.substring(i + 1)
-            }.toMap()
-            val ip = params["ip"].orEmpty()
-            val port = params["port"]?.toIntOrNull() ?: 0
-            val token = params["token"].orEmpty()
-            require(ip.isNotBlank() && port in 1..65535 && token.isNotBlank()) {
-                "Pair QR missing ip/port/token"
-            }
-            return PairTarget(ip, port, token)
+            return PairNative.parseTarget(uri.trim())
+                ?: throw IllegalArgumentException("Invalid ArchStreamer pair QR")
         }
     }
 }

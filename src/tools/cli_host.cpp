@@ -129,6 +129,7 @@ void HostRunnerCli::print_usage() const {
         << "  --save-root <path>  Base save profile directory. Default: ~/.local/share/archstreamer/saves\n"
         << "  --allow-new-users   Allow ClientHello to create new save profiles (off by default).\n"
         << "  --username <name>   Save profile username. Default: $USER or local.\n"
+        << "  --host-name <name>  Stable host identity name. Default: --username.\n"
         << "  --virtual-joypad-index <index>\n"
         << "                      RetroArch joypad index for the virtual pad. Default: 1 with bridge.\n"
         << "  --gpu <auto|id|name>\n"
@@ -284,6 +285,9 @@ HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
         } else if (arg == "--username") {
             if_throw(i, "--username requires a name");
             args.username = argv[i];
+        } else if (arg == "--host-name") {
+            if_throw(i, "--host-name requires a name");
+            args.host_name = argv[i];
         } else if (arg == "--virtual-joypad-index") {
             if_throw(i, "--virtual-joypad-index requires an index");
             args.virtual_joypad_index = static_cast<std::size_t>(std::stoul(argv[i]));

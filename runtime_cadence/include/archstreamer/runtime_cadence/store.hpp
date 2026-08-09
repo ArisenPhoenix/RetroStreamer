@@ -25,6 +25,11 @@ public:
     virtual bool delete_user(const std::string& username) = 0;
     virtual std::vector<UserRecord> list_users() = 0;
 
+    virtual bool upsert_host(const HostRecord& host) = 0;
+    virtual std::optional<HostRecord> find_host(const std::string& identity_id) = 0;
+    virtual bool delete_host(const std::string& identity_id) = 0;
+    virtual std::vector<HostRecord> list_hosts() = 0;
+
     virtual bool upsert_controls(const ControlsRecord& controls) = 0;
     virtual std::optional<ControlsRecord> find_controls(
         const std::string& username,

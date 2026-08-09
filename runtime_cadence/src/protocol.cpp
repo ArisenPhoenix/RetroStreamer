@@ -65,6 +65,7 @@ void write_be32(unsigned char* p, std::uint32_t v) {
 
 nlohmann::json user_to_json(const UserRecord& user) {
     return {
+        {"identity_id", user.identity_id.empty() ? identity_id_from_name(user.username) : user.identity_id},
         {"username", user.username},
         {"display_name", user.display_name},
         {"password_hash", user.password_hash},
@@ -78,6 +79,7 @@ nlohmann::json user_to_json(const UserRecord& user) {
 
 UserRecord user_from_json(const nlohmann::json& j) {
     UserRecord user;
+    user.identity_id = j.value("identity_id", "");
     user.username = j.value("username", "");
     user.display_name = j.value("display_name", "");
     user.password_hash = j.value("password_hash", "");
@@ -90,7 +92,35 @@ UserRecord user_from_json(const nlohmann::json& j) {
     user.save_root = j.value("save_root", "");
     user.created_at = j.value("created_at", std::int64_t{0});
     user.updated_at = j.value("updated_at", std::int64_t{0});
+    if (user.identity_id.empty()) {
+        user.identity_id = identity_id_from_name(user.username);
+    }
     return user;
+}
+
+nlohmann::json host_to_json(const HostRecord& host) {
+    return {
+        {"identity_id", host.identity_id.empty() ? identity_id_from_name(host.host_name) : host.identity_id},
+        {"host_name", host.host_name},
+        {"display_name", host.display_name},
+        {"save_root", host.save_root},
+        {"created_at", host.created_at},
+        {"updated_at", host.updated_at},
+    };
+}
+
+HostRecord host_from_json(const nlohmann::json& j) {
+    HostRecord host;
+    host.identity_id = j.value("identity_id", "");
+    host.host_name = j.value("host_name", "");
+    host.display_name = j.value("display_name", "");
+    host.save_root = j.value("save_root", "");
+    host.created_at = j.value("created_at", std::int64_t{0});
+    host.updated_at = j.value("updated_at", std::int64_t{0});
+    if (host.identity_id.empty()) {
+        host.identity_id = identity_id_from_name(host.host_name);
+    }
+    return host;
 }
 
 nlohmann::json controls_to_json(const ControlsRecord& controls) {

@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -23,6 +24,9 @@ from scriptutil import (  # noqa: E402
     require_cmd,
     run,
 )
+
+APP_ID = "io.github.ArisenPhoenix.ArchStreamer"
+ICON_NAME = APP_ID
 
 
 def parse_args() -> argparse.Namespace:
@@ -425,6 +429,7 @@ def _install_linux(root: Path, args: argparse.Namespace, prefix: Path) -> None:
         )
 
     gui = prefix / "bin" / "archstreamer_gui"
+    _install_linux_desktop_entry(root, prefix, gui)
     print("")
     print("Done. Installed ArchStreamer for Linux.")
     print("Run:")
@@ -432,6 +437,91 @@ def _install_linux(root: Path, args: argparse.Namespace, prefix: Path) -> None:
     if args.launch:
         print("Launching installed GUI...")
         subprocess.Popen([str(gui)], cwd=str(root), start_new_session=True)
+
+
+def _install_system_file(src: Path, dest: Path, mode: str = "0644") -> None:
+    if dest.parent.exists() and os.access(dest.parent, os.W_OK):
+        shutil.copy2(src, dest)
+        dest.chmod(int(mode, 8))
+        return
+
+    require_cmd("sudo")
+    run(["sudo", "install", "-D", "-m", mode, src, dest])
+
+
+def _run_system_update(argv: list[str | Path]) -> None:
+    if not argv:
+        return
+    if os.geteuid() == 0:
+        subprocess.run([str(a) for a in argv], check=False)
+        return
+    require_cmd("sudo")
+    subprocess.run(["sudo", *[str(a) for a in argv]], check=False)
+
+
+def _install_linux_desktop_entry(root: Path, prefix: Path, gui: Path) -> None:
+    if not gui.is_file():
+        eprint(f"Warning: GUI binary missing; skipping desktop entry: {gui}")
+        return
+
+    system_app_dir = Path("/usr/local/share/applications")
+    system_icon_root = Path("/usr/local/share/icons/hicolor")
+    installed_icon_root = prefix / "share" / "icons" / "hicolor"
+    branding = root / "branding"
+
+    desktop_body = (
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=ArchStreamer\n"
+        "Comment=Local/LAN RetroArch streaming host and client\n"
+        f"Exec={gui}\n"
+        f"TryExec={gui}\n"
+        f"Icon={ICON_NAME}\n"
+        "Terminal=false\n"
+        "Categories=Game;Emulator;\n"
+        "StartupWMClass=ArchStreamer\n"
+    )
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        prefix="archstreamer-",
+        suffix=".desktop",
+        delete=False,
+    ) as tmp:
+        tmp.write(desktop_body)
+        desktop_tmp = Path(tmp.name)
+    try:
+        desktop_dest = system_app_dir / f"{APP_ID}.desktop"
+        _install_system_file(desktop_tmp, desktop_dest)
+    finally:
+        desktop_tmp.unlink(missing_ok=True)
+
+    for size in (128, 256, 512):
+        rel = Path(f"{size}x{size}") / "apps" / f"{ICON_NAME}.png"
+        src = installed_icon_root / rel
+        if not src.is_file():
+            src = branding / f"archstreamer-icon-{size}.png"
+        if src.is_file():
+            _install_system_file(src, system_icon_root / rel)
+        else:
+            eprint(f"Warning: missing icon asset for {size}x{size}")
+
+    svg_rel = Path("scalable") / "apps" / f"{ICON_NAME}.svg"
+    svg_src = installed_icon_root / svg_rel
+    if not svg_src.is_file():
+        svg_src = branding / "archstreamer-icon.svg"
+    if svg_src.is_file():
+        _install_system_file(svg_src, system_icon_root / svg_rel)
+    else:
+        eprint("Warning: missing SVG icon asset")
+
+    if shutil.which("update-desktop-database"):
+        _run_system_update(["update-desktop-database", system_app_dir])
+    if shutil.which("gtk-update-icon-cache"):
+        _run_system_update(["gtk-update-icon-cache", "-f", "-t", system_icon_root])
+
+    print(f"Installed desktop entry: {desktop_dest}")
+    print(f"Installed icons under: {system_icon_root}")
 
 
 def main() -> int:

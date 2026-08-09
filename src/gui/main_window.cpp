@@ -78,21 +78,22 @@ MainWindow::MainWindow() {
     resize(1100, 720);
 
     tabs_ = new QTabWidget(this);
+    // Build before Settings: Settings load reads the root-path fields this tab owns.
+    auto* paths_tab = build_paths_tab();
     tabs_->addTab(build_client_tab(), "Client");
+    tabs_->addTab(build_controls_tab(), "Controls");
+    tabs_->addTab(build_game_options_tab(), "Game Options");
+    tabs_->addTab(build_stream_tab(), "Stream");
+    tabs_->addTab(build_profile_tab(), "Profile");
+    tabs_->addTab(build_settings_tab(), "Settings");
     tabs_->addTab(build_remote_tab(), "Remote");
 #ifdef ARCHSTREAMER_HAS_HOST
     tabs_->addTab(build_host_tab(), "Host");
     tabs_->addTab(build_saves_tab(), "Users");
     tabs_->addTab(build_catalog_tab(), "Catalog");
 #endif
-    tabs_->addTab(build_stream_tab(), "Stream");
-    tabs_->addTab(build_controls_tab(), "Controls");
-    tabs_->addTab(build_game_options_tab(), "Game Options");
-    tabs_->addTab(build_profile_tab(), "Profile");
     tabs_->addTab(build_logs_tab(), "Logs");
-    // Paths before Settings: Settings load reads the roots this tab owns.
-    tabs_->addTab(build_paths_tab(), "Paths");
-    tabs_->addTab(build_settings_tab(), "Settings");
+    tabs_->addTab(paths_tab, "Paths");
     setCentralWidget(tabs_);
     load_persisted_settings();
 #ifdef ARCHSTREAMER_HAS_HOST

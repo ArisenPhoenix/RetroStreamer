@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -79,6 +80,15 @@ def parse_args() -> argparse.Namespace:
         "--branch",
         default=None,
         help="Git branch to pull (default: current branch, or master if detached)",
+    )
+    p.add_argument(
+        "--desktop-scope",
+        choices=("user", "system", "none"),
+        default="user",
+        help=(
+            "Linux launcher install scope: user requires no sudo, system is "
+            "visible to all users, none skips launcher registration (default: user)"
+        ),
     )
     return p.parse_args()
 
@@ -429,7 +439,7 @@ def _install_linux(root: Path, args: argparse.Namespace, prefix: Path) -> None:
         )
 
     gui = prefix / "bin" / "archstreamer_gui"
-    _install_linux_desktop_entry(root, prefix, gui)
+    _install_linux_desktop_entry(root, prefix, gui, args.desktop_scope)
     print("")
     print("Done. Installed ArchStreamer for Linux.")
     print("Run:")
@@ -439,13 +449,49 @@ def _install_linux(root: Path, args: argparse.Namespace, prefix: Path) -> None:
         subprocess.Popen([str(gui)], cwd=str(root), start_new_session=True)
 
 
-def _install_system_file(src: Path, dest: Path, mode: str = "0644") -> None:
-    if dest.parent.exists() and os.access(dest.parent, os.W_OK):
-        shutil.copy2(src, dest)
-        dest.chmod(int(mode, 8))
+def _install_file(src: Path, dest: Path, mode: str = "0644") -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dest)
+    dest.chmod(int(mode, 8))
+
+
+def _install_files_privileged(
+    files: list[tuple[Path, Path, str]],
+    update_cmds: list[list[str | Path]],
+) -> None:
+    if not files and not update_cmds:
+        return
+    if os.geteuid() == 0:
+        for src, dest, mode in files:
+            run(["install", "-D", "-m", mode, src, dest])
+        for cmd in update_cmds:
+            subprocess.run([str(a) for a in cmd], check=False)
         return
 
-    run(_privileged_command(["install", "-D", "-m", mode, src, dest]))
+    lines = ["set -eu"]
+    for src, dest, mode in files:
+        lines.append(
+            "install -D -m "
+            f"{shlex.quote(mode)} {shlex.quote(str(src))} {shlex.quote(str(dest))}"
+        )
+    for cmd in update_cmds:
+        lines.append(" ".join(shlex.quote(str(a)) for a in cmd) + " || true")
+
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        prefix="archstreamer-install-",
+        suffix=".sh",
+        delete=False,
+    ) as tmp:
+        tmp.write("\n".join(lines))
+        tmp.write("\n")
+        script = Path(tmp.name)
+    try:
+        script.chmod(0o700)
+        run(_privileged_command(["sh", script]))
+    finally:
+        script.unlink(missing_ok=True)
 
 
 def _privileged_command(argv: list[str | Path]) -> list[str | Path]:
@@ -459,22 +505,33 @@ def _privileged_command(argv: list[str | Path]) -> list[str | Path]:
     return ["sudo", *argv]
 
 
-def _run_system_update(argv: list[str | Path]) -> None:
+def _run_update(argv: list[str | Path]) -> None:
     if not argv:
         return
-    subprocess.run(
-        [str(a) for a in _privileged_command(argv)],
-        check=False,
-    )
+    subprocess.run([str(a) for a in argv], check=False)
 
 
-def _install_linux_desktop_entry(root: Path, prefix: Path, gui: Path) -> None:
+def _install_linux_desktop_entry(
+    root: Path,
+    prefix: Path,
+    gui: Path,
+    desktop_scope: str,
+) -> None:
+    if desktop_scope == "none":
+        print("Skipping Linux desktop entry registration.")
+        return
     if not gui.is_file():
         eprint(f"Warning: GUI binary missing; skipping desktop entry: {gui}")
         return
 
-    system_app_dir = Path("/usr/local/share/applications")
-    system_icon_root = Path("/usr/local/share/icons/hicolor")
+    if desktop_scope == "system":
+        app_dir = Path("/usr/local/share/applications")
+        icon_root = Path("/usr/local/share/icons/hicolor")
+    else:
+        user_data = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+        app_dir = user_data / "applications"
+        icon_root = user_data / "icons" / "hicolor"
+
     installed_icon_root = prefix / "share" / "icons" / "hicolor"
     branding = root / "branding"
 
@@ -499,38 +556,48 @@ def _install_linux_desktop_entry(root: Path, prefix: Path, gui: Path) -> None:
     ) as tmp:
         tmp.write(desktop_body)
         desktop_tmp = Path(tmp.name)
+    install_files = []
     try:
-        desktop_dest = system_app_dir / f"{APP_ID}.desktop"
-        _install_system_file(desktop_tmp, desktop_dest)
+        desktop_dest = app_dir / f"{APP_ID}.desktop"
+        install_files.append((desktop_tmp, desktop_dest, "0644"))
+
+        for size in (128, 256, 512):
+            rel = Path(f"{size}x{size}") / "apps" / f"{ICON_NAME}.png"
+            src = installed_icon_root / rel
+            if not src.is_file():
+                src = branding / f"archstreamer-icon-{size}.png"
+            if src.is_file():
+                install_files.append((src, icon_root / rel, "0644"))
+            else:
+                eprint(f"Warning: missing icon asset for {size}x{size}")
+
+        svg_rel = Path("scalable") / "apps" / f"{ICON_NAME}.svg"
+        svg_src = installed_icon_root / svg_rel
+        if not svg_src.is_file():
+            svg_src = branding / "archstreamer-icon.svg"
+        if svg_src.is_file():
+            install_files.append((svg_src, icon_root / svg_rel, "0644"))
+        else:
+            eprint("Warning: missing SVG icon asset")
+
+        update_cmds = []
+        if shutil.which("update-desktop-database"):
+            update_cmds.append(["update-desktop-database", app_dir])
+        if shutil.which("gtk-update-icon-cache"):
+            update_cmds.append(["gtk-update-icon-cache", "-f", "-t", icon_root])
+
+        if desktop_scope == "system":
+            _install_files_privileged(install_files, update_cmds)
+        else:
+            for src, dest, mode in install_files:
+                _install_file(src, dest, mode)
+            for cmd in update_cmds:
+                _run_update(cmd)
     finally:
         desktop_tmp.unlink(missing_ok=True)
 
-    for size in (128, 256, 512):
-        rel = Path(f"{size}x{size}") / "apps" / f"{ICON_NAME}.png"
-        src = installed_icon_root / rel
-        if not src.is_file():
-            src = branding / f"archstreamer-icon-{size}.png"
-        if src.is_file():
-            _install_system_file(src, system_icon_root / rel)
-        else:
-            eprint(f"Warning: missing icon asset for {size}x{size}")
-
-    svg_rel = Path("scalable") / "apps" / f"{ICON_NAME}.svg"
-    svg_src = installed_icon_root / svg_rel
-    if not svg_src.is_file():
-        svg_src = branding / "archstreamer-icon.svg"
-    if svg_src.is_file():
-        _install_system_file(svg_src, system_icon_root / svg_rel)
-    else:
-        eprint("Warning: missing SVG icon asset")
-
-    if shutil.which("update-desktop-database"):
-        _run_system_update(["update-desktop-database", system_app_dir])
-    if shutil.which("gtk-update-icon-cache"):
-        _run_system_update(["gtk-update-icon-cache", "-f", "-t", system_icon_root])
-
     print(f"Installed desktop entry: {desktop_dest}")
-    print(f"Installed icons under: {system_icon_root}")
+    print(f"Installed icons under: {icon_root}")
 
 
 def main() -> int:

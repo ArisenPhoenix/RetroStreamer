@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pull latest from GitHub, build the Windows client, and install to Program Files.
+"""Pull latest from GitHub, build ArchStreamer, and install it.
 
 Reference implementation: deploy/windows/update-and-install.ps1
 """
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -20,7 +21,6 @@ from scriptutil import (  # noqa: E402
     eprint,
     repo_root,
     require_cmd,
-    require_windows,
     run,
 )
 
@@ -28,9 +28,13 @@ from scriptutil import (  # noqa: E402
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=(
-            "Pull latest from GitHub, build the Windows client, and install to Program Files."
+            "Pull latest from GitHub, build ArchStreamer, and install it."
         ),
-        epilog="Reference implementation: deploy/windows/update-and-install.ps1",
+        epilog=(
+            "Windows default prefix: C:\\Program Files\\ArchStreamer\n"
+            "Linux default prefix:   /srv/Gaming/ArchStreamer when /srv/Gaming exists, "
+            "otherwise ~/.local"
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument(
@@ -43,7 +47,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--build-host",
         action="store_true",
-        help="Host-capable GUI (needs ViGEm etc.)",
+        help="Host-capable GUI (Windows: ViGEm; Linux: native host runtime)",
     )
     p.add_argument("--reconfigure", action="store_true", help="Force cmake reconfigure")
     p.add_argument("--clean", action="store_true", help="Wipe build/ first")
@@ -51,8 +55,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--prefix",
         type=Path,
-        default=Path(r"C:\Program Files\ArchStreamer"),
-        help="Install root (default: C:\\Program Files\\ArchStreamer)",
+        default=None,
+        help="Install root (default depends on platform)",
     )
     p.add_argument(
         "--vcpkg-root",
@@ -75,7 +79,18 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _stop_archstreamer_procs() -> None:
+def _default_prefix() -> Path:
+    if sys.platform == "win32":
+        return Path(r"C:\Program Files\ArchStreamer")
+    if sys.platform.startswith("linux"):
+        gaming = Path("/srv/Gaming")
+        if gaming.is_dir():
+            return gaming / "ArchStreamer"
+        return Path.home() / ".local"
+    raise SystemExit(f"Unsupported platform: {sys.platform}")
+
+
+def _stop_archstreamer_procs_windows() -> None:
     names = [
         "archstreamer_gui",
         "session_client",
@@ -109,10 +124,110 @@ def _stop_archstreamer_procs() -> None:
         )
 
 
-def main() -> int:
-    args = parse_args()
-    require_windows()
-    root = repo_root(Path(__file__))
+def _stop_archstreamer_procs_linux() -> None:
+    names = [
+        "archstreamer_gui",
+        "session_client",
+        "host_runner",
+        "client_catalog_probe",
+        "game_catalog_probe",
+        "asset_probe",
+        "steam_art_import",
+        "uinput_probe",
+        "controller_probe",
+        "archstreamer_ssh_askpass",
+    ]
+    for name in names:
+        subprocess.run(
+            ["pkill", "-x", name],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+
+def _stop_archstreamer_procs() -> None:
+    if sys.platform == "win32":
+        _stop_archstreamer_procs_windows()
+    else:
+        _stop_archstreamer_procs_linux()
+
+
+def _pull_latest(root: Path, branch: str, *, reset_hard: bool) -> None:
+    require_cmd("git")
+    print("Fetching origin...")
+    run(["git", "fetch", "origin"], cwd=root)
+
+    remote_ref = f"origin/{branch}"
+    verify = subprocess.run(
+        ["git", "rev-parse", "--verify", remote_ref],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if verify.returncode != 0:
+        raise SystemExit(
+            f"Remote branch not found: {remote_ref} "
+            "(push it first, or check --branch spelling)"
+        )
+
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    dirty = bool(status.stdout.strip())
+
+    if reset_hard:
+        print(f"Resetting to {remote_ref} (discarding local changes)...")
+        checkout = subprocess.run(
+            ["git", "checkout", branch],
+            cwd=str(root),
+            check=False,
+        )
+        if checkout.returncode != 0:
+            run(["git", "checkout", "-B", branch, remote_ref], cwd=root)
+        run(["git", "reset", "--hard", remote_ref], cwd=root)
+        run(["git", "clean", "-fd"], cwd=root)
+    elif dirty:
+        print("Working tree has local changes:")
+        run(["git", "status", "-sb"], cwd=root, check=False)
+        raise SystemExit(
+            "Refusing to pull over dirty tree. Re-run with --reset-hard, "
+            "or commit/stash locally, or pass --skip-pull."
+        )
+    else:
+        print(f"Pulling {remote_ref}...")
+        checkout = subprocess.run(
+            ["git", "checkout", branch],
+            cwd=str(root),
+            check=False,
+        )
+        if checkout.returncode != 0:
+            run(["git", "checkout", "-B", branch, remote_ref], cwd=root)
+        run(["git", "pull", "--ff-only", "origin", branch], cwd=root)
+
+    head = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    subject = subprocess.run(
+        ["git", "log", "-1", "--pretty=%s"],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    print(f"Git: {head.stdout.strip()} {subject.stdout.strip()} [{branch}]")
+
+
+def _build_windows(root: Path, args: argparse.Namespace, jobs: int) -> None:
     # Prefer deploy/ (current layout); fall back to repo-root copies from older trees.
     build_py = root / "deploy" / "build_windows.py"
     if not build_py.is_file():
@@ -123,95 +238,6 @@ def main() -> int:
         )
 
     vcpkg_root = Path(args.vcpkg_root) if args.vcpkg_root else default_vcpkg_root()
-    prefix = Path(args.prefix)
-    branch = (args.branch or "").strip()
-    if not branch:
-        raise SystemExit("--branch must not be empty (default is master)")
-
-    os.chdir(root)
-    print("=== ArchStreamer Windows update ===")
-    print(f"Repo: {root}")
-    print(f"Branch: {branch}")
-
-    if not args.skip_pull:
-        require_cmd("git")
-        print("Fetching origin...")
-        run(["git", "fetch", "origin"], cwd=root)
-
-        remote_ref = f"origin/{branch}"
-        verify = subprocess.run(
-            ["git", "rev-parse", "--verify", remote_ref],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if verify.returncode != 0:
-            raise SystemExit(
-                f"Remote branch not found: {remote_ref} "
-                "(push it first, or check --branch spelling)"
-            )
-
-        status = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        dirty = bool(status.stdout.strip())
-
-        if args.reset_hard:
-            print(f"Resetting to {remote_ref} (discarding local changes)...")
-            checkout = subprocess.run(
-                ["git", "checkout", branch],
-                cwd=str(root),
-                check=False,
-            )
-            if checkout.returncode != 0:
-                run(["git", "checkout", "-B", branch, remote_ref], cwd=root)
-            run(["git", "reset", "--hard", remote_ref], cwd=root)
-            run(["git", "clean", "-fd"], cwd=root)
-        elif dirty:
-            print("Working tree has local changes:")
-            run(["git", "status", "-sb"], cwd=root, check=False)
-            raise SystemExit(
-                "Refusing to pull over dirty tree. Re-run with --reset-hard, "
-                "or commit/stash locally, or pass --skip-pull."
-            )
-        else:
-            print(f"Pulling {remote_ref}...")
-            checkout = subprocess.run(
-                ["git", "checkout", branch],
-                cwd=str(root),
-                check=False,
-            )
-            if checkout.returncode != 0:
-                run(["git", "checkout", "-B", branch, remote_ref], cwd=root)
-            run(["git", "pull", "--ff-only", "origin", branch], cwd=root)
-
-        head = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        subject = subprocess.run(
-            ["git", "log", "-1", "--pretty=%s"],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        print(
-            f"Git: {head.stdout.strip()} {subject.stdout.strip()} [{branch}]"
-        )
-    else:
-        print("Skipping git pull.")
-
-    jobs = args.jobs if args.jobs > 0 else 2
-    print(f"Building (-j{jobs})...")
     build_cmd: list[str | Path] = [
         sys.executable,
         build_py,
@@ -230,12 +256,51 @@ def main() -> int:
         build_cmd.append("--clean")
     run(build_cmd, cwd=root)
 
-    if args.skip_install:
-        print("Skipping install. Binary under build\\ or build\\Release\\")
-        return 0
 
-    print(f"Installing to {prefix} ...")
+def _configure_and_build_linux(root: Path, args: argparse.Namespace, jobs: int) -> None:
+    require_cmd("cmake")
+    build_dir = root / "build"
+    if args.clean and build_dir.exists():
+        print(f"Removing {build_dir} ...")
+        shutil.rmtree(build_dir)
+
+    cache = build_dir / "CMakeCache.txt"
+    need_configure = args.clean or args.reconfigure or not cache.is_file()
+    build_dir.mkdir(parents=True, exist_ok=True)
+
+    if need_configure:
+        cmake_cmd: list[str | Path] = [
+            "cmake",
+            "-S",
+            root,
+            "-B",
+            build_dir,
+            f"-DCMAKE_BUILD_TYPE={args.config}",
+        ]
+        if args.build_host:
+            cmake_cmd.append("-DARCHSTREAMER_BUILD_HOST=ON")
+        run(cmake_cmd, cwd=root)
+    else:
+        print("Reusing existing CMake configuration.")
+
+    run(
+        [
+            "cmake",
+            "--build",
+            build_dir,
+            "--config",
+            args.config,
+            "-j",
+            str(jobs),
+        ],
+        cwd=root,
+    )
+
+
+def _install_windows(root: Path, args: argparse.Namespace, prefix: Path) -> None:
+    print(f"Installing to {prefix} ...", flush=True)
     install_bin = prefix / "bin"
+    vcpkg_root = Path(args.vcpkg_root) if args.vcpkg_root else default_vcpkg_root()
     _stop_archstreamer_procs()
     time.sleep(0.5)
 
@@ -297,6 +362,103 @@ def main() -> int:
     print("  (Programs → ArchStreamer) or Public Desktop.")
     print("Or run:")
     print(f'  & "{prefix}\\bin\\archstreamer_gui.exe"')
+
+
+def _install_linux(root: Path, args: argparse.Namespace, prefix: Path) -> None:
+    print(f"Installing to {prefix} ...", flush=True)
+    _stop_archstreamer_procs()
+    time.sleep(0.5)
+
+    require_cmd("cmake")
+    install_ok = False
+    for attempt in range(1, 4):
+        result = subprocess.run(
+            [
+                "cmake",
+                "--install",
+                "build",
+                "--config",
+                args.config,
+                "--prefix",
+                str(prefix),
+            ],
+            cwd=str(root),
+            check=False,
+        )
+        if result.returncode == 0:
+            install_ok = True
+            break
+        eprint(
+            f"cmake --install failed (attempt {attempt}/3). "
+            "Retrying after stopping processes again..."
+        )
+        _stop_archstreamer_procs()
+        time.sleep(1)
+
+    if not install_ok:
+        raise SystemExit(
+            f"cmake --install failed for {prefix}.\n"
+            "\n"
+            "Common causes:\n"
+            "  1. ArchStreamer / session_client / host_runner still running.\n"
+            "  2. Prefix is not writable. Use --prefix under a writable directory "
+            "or run with sudo.\n"
+            "  3. Missing Linux build dependencies; rerun with --reconfigure after "
+            "installing the package named by CMake.\n"
+            "\n"
+            "Then re-run:\n"
+            "  python3 deploy/update_and_install.py --skip-pull"
+        )
+
+    gui = prefix / "bin" / "archstreamer_gui"
+    print("")
+    print("Done. Installed ArchStreamer for Linux.")
+    print("Run:")
+    print(f'  "{gui}"')
+    if args.launch:
+        print("Launching installed GUI...")
+        subprocess.Popen([str(gui)], cwd=str(root), start_new_session=True)
+
+
+def main() -> int:
+    args = parse_args()
+    if sys.platform != "win32" and not sys.platform.startswith("linux"):
+        raise SystemExit(f"Unsupported platform: {sys.platform}")
+
+    root = repo_root(Path(__file__))
+    prefix = Path(args.prefix) if args.prefix is not None else _default_prefix()
+    prefix = prefix.expanduser()
+    branch = (args.branch or "").strip()
+    if not branch:
+        raise SystemExit("--branch must not be empty (default is master)")
+
+    os.chdir(root)
+    platform_label = "Windows" if sys.platform == "win32" else "Linux"
+    print(f"=== ArchStreamer {platform_label} update ===")
+    print(f"Repo: {root}")
+    print(f"Branch: {branch}")
+    print(f"Install prefix: {prefix}")
+
+    if not args.skip_pull:
+        _pull_latest(root, branch, reset_hard=args.reset_hard)
+    else:
+        print("Skipping git pull.")
+
+    jobs = args.jobs if args.jobs > 0 else (os.cpu_count() or 2)
+    print(f"Building (-j{jobs})...")
+    if sys.platform == "win32":
+        _build_windows(root, args, jobs)
+        if args.skip_install:
+            print("Skipping install. Binary under build\\ or build\\Release\\")
+            return 0
+        _install_windows(root, args, prefix)
+    else:
+        _configure_and_build_linux(root, args, jobs)
+        if args.skip_install:
+            print("Skipping install. Binaries are under build/")
+            return 0
+        _install_linux(root, args, prefix)
+
     return 0
 
 

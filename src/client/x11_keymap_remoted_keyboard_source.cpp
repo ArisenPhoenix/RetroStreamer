@@ -99,6 +99,12 @@ public:
         if (down(XK_p) || down(XK_P)) {
             keys |= KeyP;
         }
+        if (down(XK_f) || down(XK_F)) {
+            keys |= KeyF;
+        }
+        if (down(XK_Shift_L) || down(XK_Shift_R)) {
+            keys |= KeyShift;
+        }
         return keys;
     }
 

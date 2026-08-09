@@ -176,6 +176,7 @@ object PacketCodec {
         displayLayout: Int = DisplayLayoutPreference.Auto.id,
         password: String = "",
         clientBlocksRevision: Long = 0L,
+        device: ClientDeviceCapabilities = ClientDeviceCapabilities(),
     ): ByteArray {
         val payload = WireWriter().apply {
             writeString(username)
@@ -196,6 +197,12 @@ object PacketCodec {
             writeU8(displayLayout)
             writeString(password)
             writeU64(clientBlocksRevision)
+            writeU8(device.deviceClass.id)
+            writeU8(device.performanceClass.id)
+            writeU8(device.hardwareThreads.coerceIn(0, 255))
+            writeU16(device.screenWidth.coerceIn(0, 65535))
+            writeU16(device.screenHeight.coerceIn(0, 65535))
+            writeU16(device.platformVersion.coerceIn(0, 65535))
         }.toByteArray()
         return wrap(PacketType.ClientHello, payload)
     }

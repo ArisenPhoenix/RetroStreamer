@@ -762,7 +762,15 @@ SessionPlan gather_session_clients(
                 << " display=\"" << authenticated_hello.display_name << "\""
                 << " mode=" << session_mode_name(authenticated_hello.session_mode)
                 << " players=" << static_cast<int>(authenticated_hello.requested_players)
-                << " game=\"" << *authenticated_hello.selected_game_id << "\"\n";
+                << " game=\"" << *authenticated_hello.selected_game_id << "\""
+                << " device=" << client_device_class_name(authenticated_hello.device.device_class)
+                << " perf=" << client_performance_class_name(
+                       authenticated_hello.device.performance_class)
+                << " threads=" << static_cast<int>(authenticated_hello.device.hardware_threads)
+                << " screen=" << authenticated_hello.device.screen_width
+                << "x" << authenticated_hello.device.screen_height
+                << " platform=" << authenticated_hello.device.platform_version
+                << '\n';
 
             plan.clients.push_back(SessionClientConnection{
                 client_id,

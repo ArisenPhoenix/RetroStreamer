@@ -39,6 +39,11 @@ ClientHello SessionClient::make_hello(
         wants_audio,
         DisplayLayoutPreference::Auto,
         std::move(password),
+        0,
+        ClientDeviceCapabilities{
+            ClientDeviceClass::Desktop,
+            ClientPerformanceClass::Unknown,
+        },
     };
 }
 

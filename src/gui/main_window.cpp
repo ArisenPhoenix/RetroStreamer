@@ -207,12 +207,12 @@ QWidget* MainWindow::build_client_tab() {
     client_players_ = new QSpinBox(form_box);
     client_players_->setRange(0, 2);
     client_players_->setValue(1);
-    client_send_keyboard_ = new QCheckBox("Send keyboard (Space=FF; P=pause via EmulatorControl)", form_box);
+    client_send_keyboard_ = new QCheckBox("Send keyboard gameplay controls", form_box);
     client_send_keyboard_->setChecked(true);
     client_send_keyboard_->setToolTip(
-        "Forwards Space, P, arrows, Enter, Esc, Tab, Backspace, and F1 to the host.\n"
-        "Space = fast-forward (hold), F8 = Yuzu continuous FF, P = pause (EmulatorControl), "
-        "F1 = RetroArch menu.\n"
+        "Gameplay: Enter=South, Shift=East, arrows=D-pad, Space=hold FF, "
+        "F=toggle FF, P=pause.\n"
+        "Esc, Tab, Backspace, F1, and F8 remain remoted keyboard keys.\n"
         "Works even when the video window has focus (not only this GUI).");
     connect(client_port_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
         update_client_host_summary(client_host_label_);

@@ -85,7 +85,7 @@ object PhysicalGamepad {
 
 /**
  * Accumulates KeyEvent / MotionEvent from a physical pad into [ControllerState].
- * Home / Mode turns the menu on and off. [actionFor] supplies remapped Actions from the
+ * Menu turns the menu on and off. [actionFor] supplies remapped Actions from the
  * shared [ControllerMapProfile] pipeline (same remaps as the overlay).
  */
 class PhysicalGamepadTracker(
@@ -374,7 +374,7 @@ class PhysicalGamepadTracker(
     companion object {
         private const val DEADZONE = 0.18f
 
-        /** Guide / Home / PS — the menu's on/off. Back stays with the remote's step-out. */
+        /** Menu / PS center — the menu's on/off. Back stays with the remote's step-out. */
         private fun isMenuKey(keyCode: Int): Boolean =
             keyCode == KeyEvent.KEYCODE_BUTTON_MODE ||
                 keyCode == KeyEvent.KEYCODE_HOME ||

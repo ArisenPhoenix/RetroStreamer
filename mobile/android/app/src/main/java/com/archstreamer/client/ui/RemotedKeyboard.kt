@@ -22,17 +22,19 @@ fun remotedKeyBitFromAndroidKeyCode(keyCode: Int): Int? = when (keyCode) {
     else -> null
 }
 
-/** Keyboard arrows → ControllerState D-pad bits while playing. */
-fun keyboardDpadMask(keyCode: Int): Int? = when (keyCode) {
+/** Keyboard gameplay keys → ControllerState button bits while playing. */
+fun keyboardGameplayButtonMask(keyCode: Int): Int? = when (keyCode) {
     KeyEvent.KEYCODE_DPAD_UP -> ControllerState.BUTTON_DPAD_UP
     KeyEvent.KEYCODE_DPAD_DOWN -> ControllerState.BUTTON_DPAD_DOWN
     KeyEvent.KEYCODE_DPAD_LEFT -> ControllerState.BUTTON_DPAD_LEFT
     KeyEvent.KEYCODE_DPAD_RIGHT -> ControllerState.BUTTON_DPAD_RIGHT
+    KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> ControllerState.BUTTON_A
+    KeyEvent.KEYCODE_SHIFT_LEFT, KeyEvent.KEYCODE_SHIFT_RIGHT -> ControllerState.BUTTON_B
     else -> null
 }
 
 /**
- * Controller Home / Guide — the PS or Xbox button — which turns the whole menu on and off.
+ * Controller Menu — the PS / Xbox center button — which turns the whole menu on and off.
  * Pads report it as Mode or Home; a remote's or keyboard's Menu key means the same thing.
  */
 fun isMenuHomeKey(keyCode: Int): Boolean =

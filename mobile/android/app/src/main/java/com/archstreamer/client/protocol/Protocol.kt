@@ -1,12 +1,12 @@
 package com.archstreamer.client.protocol
 
 /**
- * Wire types matching include/common/protocol.hpp (ProtocolVersion 28).
+ * Wire types matching include/common/protocol.hpp (ProtocolVersion 29).
  * Keep field order identical to the C++ serializers.
  */
 object Protocol {
     const val MAGIC: Int = 0x41525354 // "ARST"
-    const val VERSION: Int = 28
+    const val VERSION: Int = 29
     const val HEADER_SIZE: Int = 11 // u32 + u16 + u8 + u32, little-endian, no padding
 
     const val DEFAULT_CONTROL_PORT: Int = 45555
@@ -70,6 +70,33 @@ enum class PacketType(val id: Int) {
                 ?: error("unknown packet type $id")
     }
 }
+
+/** Matches ClientDeviceClass in protocol.hpp. */
+enum class ClientDeviceClass(val id: Int) {
+    Unknown(0),
+    Desktop(1),
+    Phone(2),
+    Tablet(3),
+    Tv(4),
+    Handheld(5),
+}
+
+/** Matches ClientPerformanceClass in protocol.hpp. */
+enum class ClientPerformanceClass(val id: Int) {
+    Unknown(0),
+    Low(1),
+    Medium(2),
+    High(3),
+}
+
+data class ClientDeviceCapabilities(
+    val deviceClass: ClientDeviceClass = ClientDeviceClass.Unknown,
+    val performanceClass: ClientPerformanceClass = ClientPerformanceClass.Unknown,
+    val hardwareThreads: Int = 0,
+    val screenWidth: Int = 0,
+    val screenHeight: Int = 0,
+    val platformVersion: Int = 0,
+)
 
 enum class GameSessionMode(val id: Int) {
     SinglePlayer(0),

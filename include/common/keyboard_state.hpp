@@ -18,6 +18,8 @@ enum RemotedKey : std::uint32_t {
     KeyF1 = 1u << 9,
     KeyP = 1u << 10,
     KeyF8 = 1u << 11,
+    KeyF = 1u << 12,
+    KeyShift = 1u << 13,
 };
 
 struct KeyboardState {

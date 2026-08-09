@@ -195,6 +195,12 @@ ByteBuffer serialize_payload(const ClientHello& payload) {
     writer.write_pod<std::uint8_t>(static_cast<std::uint8_t>(payload.display_layout));
     writer.write_string(payload.password);
     writer.write_pod<std::uint64_t>(payload.client_blocks_revision);
+    writer.write_pod<std::uint8_t>(static_cast<std::uint8_t>(payload.device.device_class));
+    writer.write_pod<std::uint8_t>(static_cast<std::uint8_t>(payload.device.performance_class));
+    writer.write_pod<std::uint8_t>(payload.device.hardware_threads);
+    writer.write_pod<std::uint16_t>(payload.device.screen_width);
+    writer.write_pod<std::uint16_t>(payload.device.screen_height);
+    writer.write_pod<std::uint16_t>(payload.device.platform_version);
     return writer.take();
 }
 
@@ -869,6 +875,26 @@ ClientHello read_client_hello(Reader& reader) {
     }
     if (reader.remaining() >= sizeof(std::uint64_t)) {
         payload.client_blocks_revision = reader.read_pod<std::uint64_t>();
+    }
+    if (reader.remaining() >= 1) {
+        payload.device.device_class =
+            static_cast<ClientDeviceClass>(reader.read_pod<std::uint8_t>());
+    }
+    if (reader.remaining() >= 1) {
+        payload.device.performance_class =
+            static_cast<ClientPerformanceClass>(reader.read_pod<std::uint8_t>());
+    }
+    if (reader.remaining() >= 1) {
+        payload.device.hardware_threads = reader.read_pod<std::uint8_t>();
+    }
+    if (reader.remaining() >= sizeof(std::uint16_t)) {
+        payload.device.screen_width = reader.read_pod<std::uint16_t>();
+    }
+    if (reader.remaining() >= sizeof(std::uint16_t)) {
+        payload.device.screen_height = reader.read_pod<std::uint16_t>();
+    }
+    if (reader.remaining() >= sizeof(std::uint16_t)) {
+        payload.device.platform_version = reader.read_pod<std::uint16_t>();
     }
     return payload;
 }

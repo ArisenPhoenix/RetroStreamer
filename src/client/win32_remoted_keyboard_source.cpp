@@ -62,6 +62,12 @@ public:
         if (win_down('P')) {
             keys |= KeyP;
         }
+        if (win_down('F')) {
+            keys |= KeyF;
+        }
+        if (win_down(VK_SHIFT)) {
+            keys |= KeyShift;
+        }
         return keys;
     }
 

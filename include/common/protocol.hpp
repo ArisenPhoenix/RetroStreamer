@@ -15,7 +15,7 @@
 namespace archstreamer {
 
 constexpr std::uint32_t ProtocolMagic = 0x41525354; // "ARST"
-constexpr std::uint16_t ProtocolVersion = 28;
+constexpr std::uint16_t ProtocolVersion = 29;
 constexpr std::uint8_t MaxRemoteClients = 2;
 constexpr std::uint8_t MaxPlayersPerClient = 2;
 constexpr std::uint8_t MaxRetroArchPorts = 5; // Ports 0-3 plus a host player if desired.
@@ -195,6 +195,63 @@ inline const char* display_layout_preference_name(DisplayLayoutPreference value)
     }
 }
 
+enum class ClientDeviceClass : std::uint8_t {
+    Unknown = 0,
+    Desktop = 1,
+    Phone = 2,
+    Tablet = 3,
+    Tv = 4,
+    Handheld = 5,
+};
+
+inline const char* client_device_class_name(ClientDeviceClass value) {
+    switch (value) {
+    case ClientDeviceClass::Desktop:
+        return "desktop";
+    case ClientDeviceClass::Phone:
+        return "phone";
+    case ClientDeviceClass::Tablet:
+        return "tablet";
+    case ClientDeviceClass::Tv:
+        return "tv";
+    case ClientDeviceClass::Handheld:
+        return "handheld";
+    case ClientDeviceClass::Unknown:
+    default:
+        return "unknown";
+    }
+}
+
+enum class ClientPerformanceClass : std::uint8_t {
+    Unknown = 0,
+    Low = 1,
+    Medium = 2,
+    High = 3,
+};
+
+inline const char* client_performance_class_name(ClientPerformanceClass value) {
+    switch (value) {
+    case ClientPerformanceClass::Low:
+        return "low";
+    case ClientPerformanceClass::Medium:
+        return "medium";
+    case ClientPerformanceClass::High:
+        return "high";
+    case ClientPerformanceClass::Unknown:
+    default:
+        return "unknown";
+    }
+}
+
+struct ClientDeviceCapabilities {
+    ClientDeviceClass device_class = ClientDeviceClass::Unknown;
+    ClientPerformanceClass performance_class = ClientPerformanceClass::Unknown;
+    std::uint8_t hardware_threads = 0;
+    std::uint16_t screen_width = 0;
+    std::uint16_t screen_height = 0;
+    std::uint16_t platform_version = 0;
+};
+
 struct ClientHello {
     std::string username;
     std::string display_name;
@@ -210,6 +267,8 @@ struct ClientHello {
     std::string password;
     // Trailing v27 — cached CatalogUserBlocks revision (0 = unknown / full send).
     std::uint64_t client_blocks_revision = 0;
+    // Trailing v29 — client-reported device class / coarse capability hints.
+    ClientDeviceCapabilities device;
 };
 
 struct HostWelcome {

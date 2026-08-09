@@ -40,6 +40,7 @@ class RtpVideoPlayer(
     @Volatile private var codec: MediaCodec? = null
     @Volatile private var codecConfigured = false
     private val codecConfiguring = AtomicBoolean(false)
+    private val codecResetRequested = AtomicBoolean(false)
     @Volatile private var sps: ByteArray? = null
     @Volatile private var pps: ByteArray? = null
     /** Surface identity currently configured into MediaCodec (avoid tear-down churn). */
@@ -121,10 +122,13 @@ class RtpVideoPlayer(
                         val au = depay.push(data, length)
                         if (depay.consumeResyncRequested()) {
                             nalQueue.clear()
+                            requestCodecReset(clearParameterSets = true)
                         }
                         if (au != null) {
+                            if (maybeConfigureFromSpsPps(au)) {
+                                nalQueue.clear()
+                            }
                             offerNal(au)
-                            maybeConfigureFromSpsPps(au)
                             scheduleDecode()
                         }
                     }
@@ -209,8 +213,12 @@ class RtpVideoPlayer(
         }
     }
 
-    private fun maybeConfigureFromSpsPps(au: ByteArray) {
-        if (codecConfigured) return
+    /**
+     * Returns true when the caller should discard queued AUs that belonged to the
+     * previous coded stream before enqueueing [au].
+     */
+    private fun maybeConfigureFromSpsPps(au: ByteArray): Boolean {
+        var parameterSetsChanged = false
         var i = 0
         while (i + 4 < au.size) {
             if (au[i] == 0.toByte() && au[i + 1] == 0.toByte() &&
@@ -222,23 +230,43 @@ class RtpVideoPlayer(
                 val next = nextStartCode(au, nalStart) ?: au.size
                 val nal = au.copyOfRange(nalStart, next)
                 when (type) {
-                    7 -> sps = nal
-                    8 -> pps = nal
+                    7 -> {
+                        val previous = sps
+                        if (previous != null && !previous.contentEquals(nal)) {
+                            parameterSetsChanged = true
+                        }
+                        sps = nal
+                    }
+                    8 -> {
+                        val previous = pps
+                        if (previous != null && !previous.contentEquals(nal)) {
+                            parameterSetsChanged = true
+                        }
+                        pps = nal
+                    }
                 }
                 i = next
             } else {
                 i++
             }
         }
+        if (parameterSetsChanged && codecConfigured) {
+            requestCodecReset(clearParameterSets = false)
+            return true
+        }
+        if (codecResetRequested.get()) {
+            return false
+        }
         val s = sps
         val p = pps
         if (s != null && p != null && surface != null && !codecConfigured) {
             val lastError = lastErrorMs.get()
             if (lastError != 0L && System.currentTimeMillis() - lastError < CODEC_RETRY_DELAY_MS) {
-                return
+                return false
             }
             configureCodec(s, p)
         }
+        return false
     }
 
     private fun nextStartCode(data: ByteArray, from: Int): Int? {
@@ -306,6 +334,14 @@ class RtpVideoPlayer(
     }
 
     private fun drainDecode() {
+        handlePendingCodecReset()
+        if (!codecConfigured) {
+            val s = sps
+            val p = pps
+            if (s != null && p != null && surface != null) {
+                configureCodec(s, p)
+            }
+        }
         val c = codec
         if (c == null || !codecConfigured) return
         while (true) {
@@ -360,6 +396,24 @@ class RtpVideoPlayer(
                 return
             }
         }
+    }
+
+    private fun requestCodecReset(clearParameterSets: Boolean) {
+        if (clearParameterSets) {
+            sps = null
+            pps = null
+        }
+        codecResetRequested.set(true)
+        scheduleDecode()
+    }
+
+    private fun handlePendingCodecReset() {
+        if (!codecResetRequested.getAndSet(false)) return
+        codecConfigured = false
+        val old = codec
+        codec = null
+        runCatching { old?.stop() }
+        runCatching { old?.release() }
     }
 
     data class HeartbeatStats(

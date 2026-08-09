@@ -4,6 +4,7 @@ import com.archstreamer.client.media.MediaUris
 import com.archstreamer.client.media.RtpOpusPlayer
 import com.archstreamer.client.media.RtpVideoPlayer
 import com.archstreamer.client.protocol.ControllerInfo
+import com.archstreamer.client.protocol.ClientDeviceCapabilities
 import com.archstreamer.client.protocol.ControllerState
 import com.archstreamer.client.protocol.DiscControlAction
 import com.archstreamer.client.protocol.DisplayLayoutPreference
@@ -633,6 +634,7 @@ object SessionJoiner {
         controllerGuid: String = "android-touch-0",
         knownCatalogRevision: Long = 0L,
         knownBlocksRevision: Long = 0L,
+        device: ClientDeviceCapabilities = ClientDeviceCapabilities(),
         onPasswordChangeRequired: (() -> String)? = null,
     ): JoinedPlaySession {
         ClientFileLog.conn(
@@ -673,6 +675,7 @@ object SessionJoiner {
                     displayLayout = displayLayout,
                     password = sessionPassword,
                     clientBlocksRevision = knownBlocksRevision,
+                    device = device,
                 ),
             )
 

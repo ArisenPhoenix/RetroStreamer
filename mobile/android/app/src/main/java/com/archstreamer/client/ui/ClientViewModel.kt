@@ -1,8 +1,11 @@
 package com.archstreamer.client.ui
 
 import android.app.Application
+import android.app.ActivityManager
+import android.content.Context
 import android.content.res.Configuration
 import android.hardware.input.InputManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.KeyEvent
@@ -31,6 +34,9 @@ import com.archstreamer.client.pair.PairServer
 import com.archstreamer.client.pair.PairTarget
 import com.archstreamer.client.protocol.IncomingPacket
 import com.archstreamer.client.protocol.PacketCodec
+import com.archstreamer.client.protocol.ClientDeviceCapabilities
+import com.archstreamer.client.protocol.ClientDeviceClass
+import com.archstreamer.client.protocol.ClientPerformanceClass
 import com.archstreamer.client.protocol.ControllerState
 import com.archstreamer.client.protocol.DisplayLayoutPreference
 import com.archstreamer.client.protocol.DiscControlAction
@@ -303,8 +309,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private var lastLoggedSourcePad: ControllerState? = null
     /** Held RemotedKey bits (desktop remoted keyboard subset). */
     private val remotedKeysHeld = AtomicInteger(0)
-    /** Keyboard arrow keys merged into the pad as D-pad while playing. */
-    private val keyboardDpadBits = AtomicInteger(0)
+    /** Keyboard gameplay keys merged into the pad while playing. */
+    private val keyboardButtonBits = AtomicInteger(0)
     private var menuHatUp = false
     private var menuHatDown = false
     private var menuHatLeft = false
@@ -912,7 +918,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     fun setUseKeyboard(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_USE_KEYBOARD, enabled).apply()
         if (!enabled) {
-            clearKeyboardDpad()
+            clearKeyboardButtons()
             clearRemotedKeys()
         }
         refreshPhysicalPads()
@@ -1014,7 +1020,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         menuDrawerOpen = true
         backMenuChromeFocused = false
         clearRemotedKeys()
-        clearKeyboardDpad()
+        clearKeyboardButtons()
         resetMenuHats()
         gamepadTracker.reset()
         latestPad = ControllerState()
@@ -1028,8 +1034,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * Home / Guide — the PS button, the Xbox button, whatever the pad calls it — is the
-     * whole menu's on / off switch.
+     * Menu — the PS button, the Xbox button, whatever the pad calls it — is the whole
+     * menu's on / off switch.
      *
      * Off means every part of it: while playing that is the settings pane as well as the
      * drawer, so one press puts the game back however deep in the menu the cursor was.
@@ -1054,7 +1060,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
  * 5) if menu open but hamburger not focused → focus hamburger
  * 6) if hamburger already focused → return false (Activity finishes)
  *
- * Home / Guide is the whole menu's on / off instead (see [toggleMenuDrawer]).
+ * Menu is the whole menu's on / off instead (see [toggleMenuDrawer]).
  */
 fun handleSystemBack(): Boolean {
     val snap = _state.value
@@ -1141,7 +1147,7 @@ fun clearBackMenuChromeFocus() {
     }
 
     /**
-     * Name every pad key press when Log controls is on. A Guide button that reports an
+     * Name every pad key press when Log controls is on. A Menu button that reports an
      * unexpected code — or one the system swallows before we see it — is otherwise
      * invisible.
      */
@@ -1220,9 +1226,9 @@ fun clearBackMenuChromeFocus() {
             return false
         }
 
-        // Arrows → joypad D-pad for the game.
-        keyboardDpadMask(keyCode)?.let { mask ->
-            setKeyboardDpad(mask, down)
+        // Gameplay keyboard keys → joypad buttons for the game.
+        keyboardGameplayButtonMask(keyCode)?.let { mask ->
+            setKeyboardButton(mask, down)
             return true
         }
 
@@ -1281,6 +1287,41 @@ fun clearBackMenuChromeFocus() {
     private fun isTvDevice(): Boolean =
         getApplication<Application>().resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
             Configuration.UI_MODE_TYPE_TELEVISION
+
+    private fun clientDeviceCapabilities(): ClientDeviceCapabilities {
+        val app = getApplication<Application>()
+        val config = app.resources.configuration
+        val metrics = app.resources.displayMetrics
+        val uiMode = config.uiMode and Configuration.UI_MODE_TYPE_MASK
+        val deviceClass = when (uiMode) {
+            Configuration.UI_MODE_TYPE_TELEVISION -> ClientDeviceClass.Tv
+            Configuration.UI_MODE_TYPE_WATCH -> ClientDeviceClass.Handheld
+            else -> if (config.smallestScreenWidthDp >= 600) {
+                ClientDeviceClass.Tablet
+            } else {
+                ClientDeviceClass.Phone
+            }
+        }
+        val threads = Runtime.getRuntime().availableProcessors().coerceIn(0, 255)
+        val memoryClass = (app.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)
+            ?.memoryClass
+            ?: 0
+        val performanceClass = when {
+            threads >= 8 && memoryClass >= 384 -> ClientPerformanceClass.High
+            threads >= 6 && memoryClass >= 192 -> ClientPerformanceClass.Medium
+            threads >= 4 && memoryClass >= 128 && deviceClass != ClientDeviceClass.Tv ->
+                ClientPerformanceClass.Medium
+            else -> ClientPerformanceClass.Low
+        }
+        return ClientDeviceCapabilities(
+            deviceClass = deviceClass,
+            performanceClass = performanceClass,
+            hardwareThreads = threads,
+            screenWidth = metrics.widthPixels,
+            screenHeight = metrics.heightPixels,
+            platformVersion = Build.VERSION.SDK_INT,
+        )
+    }
 
     /** True when there is a cursor to move: the drawer is up, or we are inside options. */
     private fun menuCursorActive(snap: UiState = _state.value): Boolean =
@@ -1519,7 +1560,7 @@ fun clearBackMenuChromeFocus() {
         menuDrawerOpen = true
         backMenuChromeFocused = false
         clearRemotedKeys()
-        clearKeyboardDpad()
+        clearKeyboardButtons()
         resetMenuHats()
         _state.update { snap ->
             if (snap.menu.inOptions || snap.menu.section == snap.section) {
@@ -1910,12 +1951,12 @@ fun clearBackMenuChromeFocus() {
         )
     }
 
-    private fun setKeyboardDpad(mask: Int, down: Boolean) {
-        val next = keyboardDpadBits.updateAndGet { cur ->
+    private fun setKeyboardButton(mask: Int, down: Boolean) {
+        val next = keyboardButtonBits.updateAndGet { cur ->
             if (down) cur or mask else cur and mask.inv()
         }
         logControl(
-            "keyboard dpad mask=0x${mask.toString(16)} down=$down held=0x${next.toString(16)}",
+            "keyboard button mask=0x${mask.toString(16)} down=$down held=0x${next.toString(16)}",
         )
     }
 
@@ -1923,13 +1964,13 @@ fun clearBackMenuChromeFocus() {
         remotedKeysHeld.set(0)
     }
 
-    private fun clearKeyboardDpad() {
-        keyboardDpadBits.set(0)
+    private fun clearKeyboardButtons() {
+        keyboardButtonBits.set(0)
     }
 
     private fun padForSend(): ControllerState {
         if (menuDrawerOpen) return ControllerState()
-        val kb = keyboardDpadBits.get()
+        val kb = keyboardButtonBits.get()
         if (kb == 0) return latestPad
         return latestPad.copy(buttons = latestPad.buttons or kb)
     }
@@ -2045,7 +2086,7 @@ fun clearBackMenuChromeFocus() {
         backMenuChromeFocused = false
         resetMenuHats()
         clearRemotedKeys()
-        clearKeyboardDpad()
+        clearKeyboardButtons()
         _state.update {
             it.copy(
                 section = NavSection.Games,
@@ -3457,7 +3498,7 @@ fun clearBackMenuChromeFocus() {
         menuDrawerOpen = true
         logControl("menuDrawerOpen=true (pads muted for UDP)")
         clearRemotedKeys()
-        clearKeyboardDpad()
+        clearKeyboardButtons()
         resetMenuHats()
         gamepadTracker.reset()
         latestPad = ControllerState()
@@ -3481,7 +3522,7 @@ fun clearBackMenuChromeFocus() {
         logControl("menuDrawerOpen=false (pads unmuted)")
         resetMenuHats()
         clearRemotedKeys()
-        clearKeyboardDpad()
+        clearKeyboardButtons()
         syncMenuPause()
     }
 
@@ -4095,6 +4136,7 @@ fun clearBackMenuChromeFocus() {
                                 },
                                 knownCatalogRevision = snap.games.catalogRevision,
                                 knownBlocksRevision = snap.games.blocksRevision,
+                                device = clientDeviceCapabilities(),
                                 onPasswordChangeRequired = {
                                     val latch = java.util.concurrent.CountDownLatch(1)
                                     passwordChangeLatch = latch
@@ -4126,7 +4168,7 @@ fun clearBackMenuChromeFocus() {
                 backMenuChromeFocused = false
                 resetMenuHats()
                 clearRemotedKeys()
-                clearKeyboardDpad()
+                clearKeyboardButtons()
                 // The host let this name into a session with its password, so it is a
                 // profile even if Connect was made without one.
                 confirmProfileUsername(username)
@@ -4274,7 +4316,7 @@ fun clearBackMenuChromeFocus() {
         resetAvStallState()
         pendingDsTouches.clear()
         clearRemotedKeys()
-        clearKeyboardDpad()
+        clearKeyboardButtons()
         latestPad = ControllerState()
         endSession()
         _state.update {
@@ -4456,7 +4498,7 @@ fun clearBackMenuChromeFocus() {
         }
         ensureUnpausedForKeyboard()
         clearRemotedKeys()
-        clearKeyboardDpad()
+        clearKeyboardButtons()
         _state.update {
             it.copy(status = if (request.prompt.isBlank()) {
                     "Host requested software keyboard."
@@ -4502,7 +4544,7 @@ fun clearBackMenuChromeFocus() {
                         logControl(
                             "udp pad ${formatPad(pad)} copies=$copies " +
                                 "menuOpen=$menuDrawerOpen " +
-                                "kbDpad=0x${keyboardDpadBits.get().toString(16)} " +
+                                "kbButtons=0x${keyboardButtonBits.get().toString(16)} " +
                                 "physicalActive=${_state.value.controls.physicalInputActive}",
                         )
                     }

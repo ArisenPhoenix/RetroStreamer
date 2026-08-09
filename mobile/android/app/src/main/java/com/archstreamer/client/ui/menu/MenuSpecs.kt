@@ -494,7 +494,7 @@ object ControlsSpec : SectionSpec {
                 subtitle = if (state.controls.usePhysicalController) {
                     if (state.controls.physicalPadConnected) {
                         "Active: ${state.controls.physicalPadLabel.ifBlank { "gamepad" }}. " +
-                            "Home / Guide turns this menu on and off. Face swaps still apply."
+                            "Menu turns this menu on and off. Face swaps still apply."
                     } else {
                         "No pad connected — using touch overlay until one appears."
                     }

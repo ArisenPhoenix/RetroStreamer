@@ -535,6 +535,9 @@ ClientRunResult ClientApp::join_session(
             KeyboardState last_keys{};
             bool have_last_keys = false;
             bool prev_p_down = false;
+            bool prev_f_down = false;
+            bool ff_latched = false;
+            bool keyboard_pad_active_sent = false;
             std::array<ControllerMapApplyState, MaxPlayersPerClient> map_apply_states{};
             constexpr auto kInputTick = std::chrono::milliseconds(4);
             constexpr int kChangeCopies = 3;
@@ -546,19 +549,89 @@ ClientRunResult ClientApp::join_session(
                 }
                 bool any_ff_held = false;
                 bool any_screen_swap = false;
-                if (want_pads && controller_backend.has_value()) {
+                KeyboardState keyboard_wire{};
+                bool have_keyboard_sample = false;
+                std::uint32_t keyboard_pad_buttons = 0;
+                if (config.send_keyboard && keyboard_poller) {
+                    if (const auto keys = keyboard_poller->poll(); keys.has_value()) {
+                        keyboard_wire = *keys;
+                        have_keyboard_sample = true;
+                        const bool osk_open =
+                            soft_keyboard != nullptr && soft_keyboard->is_dialog_open();
+                        if (osk_open) {
+                            keyboard_wire.keys = 0;
+                            prev_p_down = false;
+                            prev_f_down = false;
+                        } else {
+                            const bool p_down = key_down(keyboard_wire, KeyP);
+                            if (p_down && !prev_p_down && emulator_control) {
+                                emulator_control->toggle_pause();
+                            }
+                            prev_p_down = p_down;
+
+                            const bool f_down = key_down(keyboard_wire, KeyF);
+                            if (f_down && !prev_f_down) {
+                                ff_latched = !ff_latched;
+                            }
+                            prev_f_down = f_down;
+
+                            if (key_down(keyboard_wire, KeySpace)) {
+                                any_ff_held = true;
+                            }
+                            if (key_down(keyboard_wire, KeyEnter)) {
+                                keyboard_pad_buttons |= ButtonA;
+                            }
+                            if (key_down(keyboard_wire, KeyShift)) {
+                                keyboard_pad_buttons |= ButtonB;
+                            }
+                            if (key_down(keyboard_wire, KeyUp)) {
+                                keyboard_pad_buttons |= ButtonDpadUp;
+                            }
+                            if (key_down(keyboard_wire, KeyDown)) {
+                                keyboard_pad_buttons |= ButtonDpadDown;
+                            }
+                            if (key_down(keyboard_wire, KeyLeft)) {
+                                keyboard_pad_buttons |= ButtonDpadLeft;
+                            }
+                            if (key_down(keyboard_wire, KeyRight)) {
+                                keyboard_pad_buttons |= ButtonDpadRight;
+                            }
+                            keyboard_wire.keys &= ~(
+                                static_cast<std::uint32_t>(KeySpace) |
+                                static_cast<std::uint32_t>(KeyUp) |
+                                static_cast<std::uint32_t>(KeyDown) |
+                                static_cast<std::uint32_t>(KeyLeft) |
+                                static_cast<std::uint32_t>(KeyRight) |
+                                static_cast<std::uint32_t>(KeyEnter) |
+                                static_cast<std::uint32_t>(KeyP) |
+                                static_cast<std::uint32_t>(KeyF) |
+                                static_cast<std::uint32_t>(KeyShift));
+                        }
+                    }
+                }
+                any_ff_held = any_ff_held || ff_latched;
+                if (want_pads) {
                     for (LocalPlayerIndex player = 0; player < config.filter.requested_players; ++player) {
-                        const auto state = controller_backend->poll(player);
-                        if (!state.has_value()) {
+                        auto state = std::optional<ControllerState>{};
+                        if (controller_backend.has_value()) {
+                            state = controller_backend->poll(player);
+                        }
+                        const bool use_keyboard_pad =
+                            player == 0 && (keyboard_pad_buttons != 0 || keyboard_pad_active_sent);
+                        if (!state.has_value() && !use_keyboard_pad) {
                             continue;
                         }
+                        auto combined = state.value_or(ControllerState{});
+                        if (player == 0) {
+                            combined.buttons |= keyboard_pad_buttons;
+                        }
                         const bool changed =
-                            !have_last_sent[player] || !same_controls(last_sent[player], *state);
+                            !have_last_sent[player] || !same_controls(last_sent[player], combined);
                         // Always send each tick so lost button-down edges recover quickly.
                         const int copies = changed ? kChangeCopies : 1;
                         ControllerMapApplyExtras map_extras{};
                         auto mapped = apply_controller_button_map(
-                            *state,
+                            combined,
                             map_profile,
                             map_apply_states[player],
                             map_extras);
@@ -587,9 +660,10 @@ ClientRunResult ClientApp::join_session(
                                 // Transient send failures should not kill the session loop.
                             }
                         }
-                        last_sent[player] = *state;
+                        last_sent[player] = combined;
                         have_last_sent[player] = true;
                     }
+                    keyboard_pad_active_sent = keyboard_pad_buttons != 0;
                 }
                 if (emulator_control) {
                     emulator_control->set_fast_forward_held(any_ff_held);
@@ -598,46 +672,32 @@ ClientRunResult ClientApp::join_session(
                     }
                 }
 
-                if (config.send_keyboard && keyboard_poller) {
-                    if (const auto keys = keyboard_poller->poll(); keys.has_value()) {
-                        auto wire = *keys;
-                        // P is never remoted — pause is EmulatorControl only (host picks
-                        // RA netcmd vs F5). Skip while pad OSK is typing a name.
-                        const bool p_down = key_down(wire, KeyP);
-                        wire.keys &= ~static_cast<std::uint32_t>(KeyP);
-                        const bool osk_open =
-                            soft_keyboard != nullptr && soft_keyboard->is_dialog_open();
-                        if (p_down && !prev_p_down && !osk_open && emulator_control) {
-                            emulator_control->toggle_pause();
-                        }
-                        prev_p_down = p_down;
-
-                        const bool changed = !have_last_keys || !same_keys(last_keys, wire);
-                        const int copies = changed ? kChangeCopies : 1;
-                        if (changed) {
-                            std::ostringstream hex;
-                            hex << std::hex << wire.keys;
-                            client_debug_log_ctrl("keyboard keys=0x" + hex.str());
-                        }
-                        for (int copy = 0; copy < copies; ++copy) {
-                            auto sample = wire;
-                            sample.timestamp_us =
-                                archstreamer::steady_timestamp_us() + static_cast<std::uint64_t>(copy);
-                            if (copy > 0) {
-                                sample.sequence = wire.sequence + static_cast<std::uint32_t>(copy);
-                            }
-                            const auto packet = input_sender->make_keyboard(0, sample);
-                            try {
-                                input_socket->send_to(
-                                    serialize_packet(packet),
-                                    config.host,
-                                    *config.input_port);
-                            } catch (...) {
-                            }
-                        }
-                        last_keys = wire;
-                        have_last_keys = true;
+                if (have_keyboard_sample) {
+                    const bool changed = !have_last_keys || !same_keys(last_keys, keyboard_wire);
+                    const int copies = changed ? kChangeCopies : 1;
+                    if (changed) {
+                        std::ostringstream hex;
+                        hex << std::hex << keyboard_wire.keys;
+                        client_debug_log_ctrl("keyboard keys=0x" + hex.str());
                     }
+                    for (int copy = 0; copy < copies; ++copy) {
+                        auto sample = keyboard_wire;
+                        sample.timestamp_us =
+                            archstreamer::steady_timestamp_us() + static_cast<std::uint64_t>(copy);
+                        if (copy > 0) {
+                            sample.sequence = keyboard_wire.sequence + static_cast<std::uint32_t>(copy);
+                        }
+                        const auto packet = input_sender->make_keyboard(0, sample);
+                        try {
+                            input_socket->send_to(
+                                serialize_packet(packet),
+                                config.host,
+                                *config.input_port);
+                        } catch (...) {
+                        }
+                    }
+                    last_keys = keyboard_wire;
+                    have_last_keys = true;
                 }
 
                 if (ds_touch) {

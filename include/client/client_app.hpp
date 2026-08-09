@@ -420,7 +420,7 @@ struct ClientAppConfig {
     std::vector<std::size_t> controller_indexes;
     bool wants_video = true;
     bool wants_audio = true;
-    // Remotes Space/arrows/Enter/Esc/Tab/Backspace/F1 to a host virtual keyboard.
+    // Gameplay reserves Space/F/P/arrows/Enter/Shift. Remaining keys are remoted.
     // Default on so kids get hold-to-fast-forward (Space) without extra setup.
     bool send_keyboard = true;
     // Low-latency dual gst-launch receivers by default (better pad feel).

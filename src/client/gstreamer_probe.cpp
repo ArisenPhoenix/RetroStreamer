@@ -51,6 +51,16 @@ bool gst_element_available(const char* element) {
                std::string("gst-inspect-1.0 ") + element + " >" + kDevNull + " 2>&1") == 0;
 }
 
+bool gst_element_property_available(const char* element, const char* property) {
+    if (element == nullptr || element[0] == '\0' ||
+        property == nullptr || property[0] == '\0') {
+        return false;
+    }
+    const auto output = read_command_output(
+        (std::string("gst-inspect-1.0 ") + element + " 2>" + kDevNull).c_str());
+    return output.find(property) != std::string::npos;
+}
+
 bool gst_video_sink_usable(const char* element) {
     if (!gst_element_available(element)) {
         return false;

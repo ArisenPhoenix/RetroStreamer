@@ -4,6 +4,7 @@ namespace archstreamer {
 
 bool gst_inspect_available();
 bool gst_element_available(const char* element);
+bool gst_element_property_available(const char* element, const char* property);
 
 /** True when a short videotestsrc pipeline can open this sink (plugin present is not enough). */
 bool gst_video_sink_usable(const char* element);

@@ -130,7 +130,7 @@ std::vector<std::string> gst_h264_rtp_source_args(std::uint16_t port) {
     // Default buffer-size=0 (kernel default) is safe in Flatpak. After
     // scripts/grant-flatpak-udp-buffers.sh raises rmem_max and sets
     // ARCHSTREAMER_UDP_RCVBUF, use that larger SO_RCVBUF for Wi‑Fi IDR bursts.
-    return {
+    auto args = std::vector<std::string>{
         "udpsrc",
         "port=" + std::to_string(port),
         "buffer-size=" + std::to_string(udp_receive_buffer_bytes()),
@@ -145,8 +145,17 @@ std::vector<std::string> gst_h264_rtp_source_args(std::uint16_t port) {
         "do-lost=true",
         "!",
         "rtph264depay",
-        "!",
     };
+    // GStreamer's counterpart to the Android receiver's drop-until-IDR recovery:
+    // after RTP loss, do not output damaged access units until a keyframe arrives.
+    if (gst_element_property_available("rtph264depay", "request-keyframe")) {
+        args.push_back("request-keyframe=true");
+    }
+    if (gst_element_property_available("rtph264depay", "wait-for-keyframe")) {
+        args.push_back("wait-for-keyframe=true");
+    }
+    args.push_back("!");
+    return args;
 }
 
 std::vector<std::string> gst_opus_rtp_decode_args(std::uint16_t port, int jitter_latency_ms) {

@@ -145,7 +145,9 @@ void HostRunnerCli::print_usage() const {
         << "                      Applied to Ryujinx/Yuzu. Default: 1. Ignored for RetroArch.\n"
         << "  --retroarch-resolution <1-6>\n"
         << "                      RetroArch internal resolution multiplier (1x…6x).\n"
-        << "                      Applied to known cores' .opt on launch. Default: 1.\n";
+        << "                      Applied to known cores' .opt on launch. Default: 1.\n"
+        << "  --owner-gui-pid <pid>\n"
+        << "                      Internal: stop when this supervising GUI process exits.\n";
 }
 
 HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
@@ -300,6 +302,9 @@ HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
             if_throw(i, "--render-gpu requires auto, a device id (nvidia:0), or a name substring");
             args.render_gpu = argv[i];
             args.separate_render_gpu = true;
+        } else if (arg == "--owner-gui-pid") {
+            if_throw(i, "--owner-gui-pid requires a pid");
+            args.owner_gui_pid = std::stoi(argv[i]);
         } else if (arg == "--help" || arg == "-h") {
             print_usage();
             std::exit(0);

@@ -104,6 +104,38 @@ std::string cmdline_value(const std::string& cmdline, std::string_view flag) {
     return {};
 }
 
+int live_gui_owner_from_cmdline(
+    const std::string& cmdline,
+    const std::map<pid_t, const ProcEntry*>& by_pid) {
+    const auto owner = cmdline_value(cmdline, "--owner-gui-pid");
+    if (owner.empty()) {
+        return 0;
+    }
+    char* end = nullptr;
+    const auto parsed = std::strtol(owner.c_str(), &end, 10);
+    if (end == owner.c_str() || parsed <= 1) {
+        return 0;
+    }
+    const auto it = by_pid.find(static_cast<pid_t>(parsed));
+    if (it == by_pid.end() || !is_gui_process(*it->second)) {
+        return 0;
+    }
+    return static_cast<int>(it->second->pid);
+}
+
+int cmdline_port_value(const std::string& cmdline, std::string_view flag) {
+    const auto value = cmdline_value(cmdline, flag);
+    if (value.empty()) {
+        return 0;
+    }
+    char* end = nullptr;
+    const auto parsed = std::strtol(value.c_str(), &end, 10);
+    if (end != value.c_str() && parsed > 0 && parsed <= 65535) {
+        return static_cast<int>(parsed);
+    }
+    return 0;
+}
+
 bool any_other_live_host(const std::vector<ProcEntry>& entries, pid_t self) {
     return std::any_of(entries.begin(), entries.end(), [self](const ProcEntry& entry) {
         return entry.pid != self && is_host_runner(entry);
@@ -291,15 +323,12 @@ std::vector<HostRunnerProcess> list_host_runner_processes(int ignore_pid) {
         }
         HostRunnerProcess proc;
         proc.pid = static_cast<int>(entry.pid);
-        proc.owner_gui_pid = gui_ancestor_of(entry.ppid);
-        const auto port = cmdline_value(entry.cmdline, "--control-port");
-        if (!port.empty()) {
-            char* end = nullptr;
-            const auto parsed = std::strtol(port.c_str(), &end, 10);
-            if (end != port.c_str() && parsed > 0 && parsed <= 65535) {
-                proc.control_port = static_cast<int>(parsed);
-            }
+        proc.owner_gui_pid = live_gui_owner_from_cmdline(entry.cmdline, by_pid);
+        if (proc.owner_gui_pid == 0) {
+            proc.owner_gui_pid = gui_ancestor_of(entry.ppid);
         }
+        proc.control_port = cmdline_port_value(entry.cmdline, "--control-port");
+        proc.input_port = cmdline_port_value(entry.cmdline, "--input-port");
         proc.gpu = cmdline_value(entry.cmdline, "--gpu");
         found.push_back(std::move(proc));
     }

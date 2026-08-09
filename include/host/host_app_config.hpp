@@ -75,6 +75,9 @@ struct HostAppConfig {
     // OpenGL on VirtualGL). Ignored for RetroArch.
     GraphicsApiPreference graphics_api = GraphicsApiPreference::Auto;
     ResolutionSettings resolution;
+    // Set only by the local GUI. Remote-spawned host_runners intentionally have
+    // no owner so the Remote tab can manage them as parentless processes.
+    int owner_gui_pid = 0;
 };
 
 // GPU id used for RetroArch/Switch PRIME / Vulkan device selection.

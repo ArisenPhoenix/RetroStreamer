@@ -185,14 +185,13 @@ QWidget* MainWindow::build_host_tab() {
         start_host();
     });
     connect(stop, &QPushButton::clicked, this, [this] {
-        const bool owned =
-            host_process_ != nullptr && host_process_->state() != QProcess::NotRunning;
+        const bool owned = host_running();
         stop_host();
         // This lives here, not in stop_host(), because the destructor calls that
         // too. Without it the click is a silent no-op against a host_runner an
         // earlier GUI left behind on this window's control port.
         if (!owned) {
-            reclaim_matching_host_runners();
+            reclaim_matching_host_runners(/*adopt_matching=*/false);
         }
     });
     connect(load_games, &QPushButton::clicked, this, [this] {
@@ -268,7 +267,7 @@ QWidget* MainWindow::build_host_tab() {
     connect(host_advertise_, &QCheckBox::toggled, this, [this](bool checked) {
         // Only broadcast while a host session is actually running; otherwise this
         // machine shows up in other clients' host lists as a fake peer.
-        if (checked && host_process_ != nullptr && host_process_->state() != QProcess::NotRunning) {
+        if (checked && host_running()) {
             sync_host_advertise(true);
         } else {
             sync_host_advertise(false);
@@ -532,7 +531,7 @@ void MainWindow::load_host_games() {
  * Returns false when our control port is taken by something we may not stop, so
  * Start Host can refuse instead of launching a process that cannot bind.
  */
-bool MainWindow::reclaim_matching_host_runners() {
+bool MainWindow::reclaim_matching_host_runners(bool adopt_matching) {
     const int owned =
         host_process_ != nullptr ? static_cast<int>(host_process_->processId()) : 0;
     const auto running = list_host_runner_processes(owned);
@@ -541,6 +540,7 @@ bool MainWindow::reclaim_matching_host_runners() {
     }
 
     const int our_port = host_control_port_->value();
+    const int our_input_port = host_input_port_->value();
     const auto our_gpu = selected_encode_gpu_id();
 
     // Blocking, but only for as long as a reclaimed host takes to unwind.
@@ -548,6 +548,7 @@ bool MainWindow::reclaim_matching_host_runners() {
     bool port_is_free = true;
     for (const auto& proc : running) {
         const bool same_port = proc.control_port == our_port;
+        const bool same_input_port = proc.input_port == 0 || proc.input_port == our_input_port;
         // An unnamed GPU on either side proves nothing; only a stated
         // difference marks the process as somebody else's host.
         const bool other_gpu =
@@ -557,14 +558,25 @@ bool MainWindow::reclaim_matching_host_runners() {
         // owned and streaming. Only an unsupervised one is a leftover.
         const bool supervised = proc.owner_gui_pid != 0;
 
-        if (same_port && !other_gpu && !supervised) {
-            // This window's own host, left behind by a GUI that exited without
-            // running stop_host(). Reclaiming it is what Stop Host would have done.
-            if (terminate_host_runner(proc.pid)) {
+        if (same_port && same_input_port && !other_gpu && !supervised) {
+            if (adopt_matching) {
+                adopted_host_runner_pid_ = proc.pid;
+                client_port_->setValue(host_control_port_->value());
+                client_input_port_->setValue(host_input_port_->value());
+                host_status_->setText(QString("Host running on port %1").arg(host_control_port_->value()));
+                if (host_advertise_ != nullptr && host_advertise_->isChecked()) {
+                    sync_host_advertise(true);
+                }
                 append_log(
                     host_log_,
-                    QString("Reclaimed host_runner (PID %1) on control port %2 — left over "
-                            "from a session that exited without stopping it.")
+                    QString("Adopted existing host_runner (PID %1) on control port %2. "
+                            "Stop Host or closing this GUI will stop it.")
+                        .arg(proc.pid)
+                        .arg(proc.control_port));
+            } else if (terminate_host_runner(proc.pid)) {
+                append_log(
+                    host_log_,
+                    QString("Stopped matching unowned host_runner (PID %1) on control port %2.")
                         .arg(proc.pid)
                         .arg(proc.control_port));
             } else {
@@ -585,6 +597,9 @@ bool MainWindow::reclaim_matching_host_runners() {
         if (proc.control_port > 0) {
             note += QString(", control port %1").arg(proc.control_port);
         }
+        if (proc.input_port > 0) {
+            note += QString(", input port %1").arg(proc.input_port);
+        }
         if (!proc.gpu.empty()) {
             note += QString(", gpu %1").arg(QString::fromStdString(proc.gpu));
         }
@@ -592,7 +607,7 @@ bool MainWindow::reclaim_matching_host_runners() {
             note += QString(", owned by ArchStreamer GUI %1").arg(proc.owner_gui_pid);
         }
         note += QStringLiteral(")");
-        if (same_port) {
+        if (same_port && same_input_port) {
             port_is_free = false;
             note += supervised
                 ? QString(" and that window is using control port %1. Left alone — stop the "
@@ -610,15 +625,23 @@ bool MainWindow::reclaim_matching_host_runners() {
     return port_is_free;
 }
 
+bool MainWindow::host_running() const {
+    return adopted_host_runner_pid_ > 0 ||
+        (host_process_ != nullptr && host_process_->state() != QProcess::NotRunning);
+}
+
 void MainWindow::start_host() {
-    if (host_process_ != nullptr && host_process_->state() != QProcess::NotRunning) {
+    if (host_running()) {
         append_log(host_log_, "Host is already running.");
         return;
     }
     // A leftover on our control port would make the new process fail to bind and
     // exit at once, so clear ours first and refuse when the port is someone else's.
-    if (!reclaim_matching_host_runners()) {
+    if (!reclaim_matching_host_runners(/*adopt_matching=*/true)) {
         host_status_->setText("Host not started");
+        return;
+    }
+    if (adopted_host_runner_pid_ > 0) {
         return;
     }
 
@@ -739,6 +762,7 @@ void MainWindow::start_host() {
         }
         host_cfg.resolution.switch_scale = selected_switch_resolution_scale();
         host_cfg.resolution.retroarch_scale = selected_retroarch_resolution_scale();
+        host_cfg.owner_gui_pid = static_cast<int>(QCoreApplication::applicationPid());
         host_cfg.verbose = current_log_level() == GuiLogLevel::Verbose;
         host_cfg.video = host_video_->isChecked();
         host_cfg.video_port = static_cast<std::uint16_t>(host_video_port_->value());
@@ -837,6 +861,19 @@ void MainWindow::start_host() {
 void MainWindow::stop_host() {
     stop_host_local_media();
     sync_host_advertise(false);
+    if (adopted_host_runner_pid_ > 0) {
+        const int pid = adopted_host_runner_pid_;
+        adopted_host_runner_pid_ = 0;
+        if (terminate_host_runner(pid)) {
+            append_log(host_log_, QString("Stopped adopted host_runner (PID %1).").arg(pid));
+        } else {
+            append_log(
+                host_log_,
+                QString("Could not stop adopted host_runner (PID %1).").arg(pid),
+                GuiLogLevel::Quiet);
+        }
+        host_status_->setText("Host stopped");
+    }
     if (host_process_ == nullptr || host_process_->state() == QProcess::NotRunning) {
         return;
     }
@@ -881,7 +918,7 @@ void MainWindow::sync_host_local_media() {
     }
     const bool want = host_local_media_->isChecked();
     const bool host_up =
-        host_process_ != nullptr && host_process_->state() != QProcess::NotRunning;
+        host_running();
     const bool streaming = host_video_->isChecked() || host_audio_->isChecked();
 
     if (!want || !host_up || !streaming) {

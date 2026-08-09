@@ -19,6 +19,8 @@ struct HostRunnerProcess {
     int pid = 0;
     /** --control-port value; 0 when the process did not name one. */
     int control_port = 0;
+    /** --input-port value; 0 when the process did not name one. */
+    int input_port = 0;
     /** --gpu value; empty when the process did not name one. */
     std::string gpu;
     /**

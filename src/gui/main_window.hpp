@@ -233,7 +233,8 @@ private:
 #ifdef ARCHSTREAMER_HAS_HOST
     void start_host();
     void stop_host();
-    bool reclaim_matching_host_runners();
+    bool host_running() const;
+    bool reclaim_matching_host_runners(bool adopt_matching);
     void stop_host_local_media();
     void sync_host_local_media();
 #endif
@@ -262,6 +263,7 @@ private:
     std::thread ps2_prewarm_thread_;
 #ifdef ARCHSTREAMER_HAS_HOST
     QProcess* host_process_ = nullptr;
+    int adopted_host_runner_pid_ = 0;
     QStringList host_debug_args_;
     std::unique_ptr<HostDiscoveryAnnouncer> host_announcer_;
     std::unique_ptr<ClientMediaPlayback> host_local_receiver_;

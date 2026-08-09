@@ -543,7 +543,7 @@ void MainWindow::start_ps2_memcard_prewarm() {
 }
 
 bool MainWindow::saves_host_busy() const {
-    return host_process_ != nullptr && host_process_->state() != QProcess::NotRunning;
+    return host_running();
 }
 
 SaveNameHints MainWindow::saves_name_hints() const {

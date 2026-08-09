@@ -1390,8 +1390,7 @@ QWidget* MainWindow::build_profile_tab() {
     connect(profile_host_name_, &QLineEdit::editingFinished, this, [this] {
         persist_settings_if_idle();
 #ifdef ARCHSTREAMER_HAS_HOST
-        if (host_advertise_ != nullptr && host_advertise_->isChecked() &&
-            host_process_ != nullptr && host_process_->state() != QProcess::NotRunning) {
+        if (host_advertise_ != nullptr && host_advertise_->isChecked() && host_running()) {
             sync_host_advertise(true);
         }
 #endif

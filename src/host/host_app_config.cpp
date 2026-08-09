@@ -80,6 +80,10 @@ std::vector<std::string> host_app_config_to_argv(const HostAppConfig& config) {
     args.push_back(std::to_string(config.resolution.switch_scale));
     args.push_back("--retroarch-resolution");
     args.push_back(std::to_string(config.resolution.retroarch_scale));
+    if (config.owner_gui_pid > 0) {
+        args.push_back("--owner-gui-pid");
+        args.push_back(std::to_string(config.owner_gui_pid));
+    }
 
     if (config.verbose) {
         args.push_back("--verbose");

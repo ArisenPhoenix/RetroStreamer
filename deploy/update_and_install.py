@@ -47,7 +47,6 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Discard local edits and match origin/<branch>",
     )
-    
     p.add_argument("--skip-pull", action="store_true", help="Build/install only (no git)")
     p.add_argument("--skip-install", action="store_true", help="Build only")
     p.add_argument(
@@ -58,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--no-host",
         action="store_true",
-        help="Refrain from building the host"
+        help="Build/install client-only GUI and remove installed local host runner",
     )
     p.add_argument("--reconfigure", action="store_true", help="Force cmake reconfigure")
     p.add_argument("--clean", action="store_true", help="Wipe build/ first")
@@ -285,11 +284,9 @@ def _build_windows(root: Path, args: argparse.Namespace, jobs: int) -> None:
         "--jobs",
         str(jobs),
     ]
-    if args.no_host:
-        build_cmd.append("--no-host")
-    elif args.build_host:
+    if args.build_host and not args.no_host:
         build_cmd.append("--build-host")
-        
+
     if args.reconfigure:
         build_cmd.append("--reconfigure")
     if args.clean:
@@ -305,7 +302,13 @@ def _configure_and_build_linux(root: Path, args: argparse.Namespace, jobs: int) 
         shutil.rmtree(build_dir)
 
     cache = build_dir / "CMakeCache.txt"
-    need_configure = args.clean or args.reconfigure or not cache.is_file()
+    need_configure = (
+        args.clean
+        or args.reconfigure
+        or args.no_host
+        or args.build_host
+        or not cache.is_file()
+    )
     build_dir.mkdir(parents=True, exist_ok=True)
 
     if need_configure:
@@ -453,6 +456,8 @@ def _install_linux(root: Path, args: argparse.Namespace, prefix: Path) -> None:
         )
 
     gui = prefix / "bin" / "archstreamer_gui"
+    if args.no_host:
+        _remove_linux_host_install(prefix)
     _install_linux_desktop_entry(root, prefix, gui, args.desktop_scope)
     print("")
     print("Done. Installed ArchStreamer for Linux.")
@@ -461,6 +466,23 @@ def _install_linux(root: Path, args: argparse.Namespace, prefix: Path) -> None:
     if args.launch:
         print("Launching installed GUI...")
         subprocess.Popen([str(gui)], cwd=str(root), start_new_session=True)
+
+
+def _remove_linux_host_install(prefix: Path) -> None:
+    removed = False
+    for rel in (
+        Path("bin") / "host_runner",
+        Path("bin") / "uinput_probe",
+        Path("bin") / "controller_probe",
+    ):
+        path = prefix / rel
+        if not path.exists():
+            continue
+        path.unlink()
+        removed = True
+        print(f"Removed host install artifact: {path}")
+    if removed:
+        print("Installed prefix is client-only for local host controls.")
 
 
 def _install_file(src: Path, dest: Path, mode: str = "0644") -> None:

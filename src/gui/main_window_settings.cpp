@@ -891,10 +891,14 @@ int MainWindow::session_timeout_seconds() const {
 }
 
 int MainWindow::player_reconnect_timeout_seconds() const {
+#ifdef ARCHSTREAMER_HAS_HOST
     if (host_player_reconnect_timeout_ == nullptr) {
         return 60;
     }
     return host_player_reconnect_timeout_->value();
+#else
+    return 60;
+#endif
 }
 
 std::string MainWindow::steam_account_id_text() const {

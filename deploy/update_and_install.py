@@ -445,18 +445,27 @@ def _install_system_file(src: Path, dest: Path, mode: str = "0644") -> None:
         dest.chmod(int(mode, 8))
         return
 
+    run(_privileged_command(["install", "-D", "-m", mode, src, dest]))
+
+
+def _privileged_command(argv: list[str | Path]) -> list[str | Path]:
+    if os.geteuid() == 0:
+        return argv
+    if sys.platform.startswith("linux") and shutil.which("pkexec") and (
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    ):
+        return ["pkexec", *argv]
     require_cmd("sudo")
-    run(["sudo", "install", "-D", "-m", mode, src, dest])
+    return ["sudo", *argv]
 
 
 def _run_system_update(argv: list[str | Path]) -> None:
     if not argv:
         return
-    if os.geteuid() == 0:
-        subprocess.run([str(a) for a in argv], check=False)
-        return
-    require_cmd("sudo")
-    subprocess.run(["sudo", *[str(a) for a in argv]], check=False)
+    subprocess.run(
+        [str(a) for a in _privileged_command(argv)],
+        check=False,
+    )
 
 
 def _install_linux_desktop_entry(root: Path, prefix: Path, gui: Path) -> None:

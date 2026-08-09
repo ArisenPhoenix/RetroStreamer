@@ -47,12 +47,18 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Discard local edits and match origin/<branch>",
     )
+    
     p.add_argument("--skip-pull", action="store_true", help="Build/install only (no git)")
     p.add_argument("--skip-install", action="store_true", help="Build only")
     p.add_argument(
         "--build-host",
         action="store_true",
         help="Host-capable GUI (Windows: ViGEm; Linux: native host runtime)",
+    )
+    p.add_argument(
+        "--no-host",
+        action="store_true",
+        help="Refrain from building the host"
     )
     p.add_argument("--reconfigure", action="store_true", help="Force cmake reconfigure")
     p.add_argument("--clean", action="store_true", help="Wipe build/ first")
@@ -279,8 +285,11 @@ def _build_windows(root: Path, args: argparse.Namespace, jobs: int) -> None:
         "--jobs",
         str(jobs),
     ]
-    if args.build_host:
+    if args.no_host:
+        build_cmd.append("--no-host")
+    elif args.build_host:
         build_cmd.append("--build-host")
+        
     if args.reconfigure:
         build_cmd.append("--reconfigure")
     if args.clean:
@@ -308,7 +317,9 @@ def _configure_and_build_linux(root: Path, args: argparse.Namespace, jobs: int) 
             build_dir,
             f"-DCMAKE_BUILD_TYPE={args.config}",
         ]
-        if args.build_host:
+        if args.no_host:
+            cmake_cmd.append("-DARCHSTREAMER_BUILD_HOST=OFF")
+        elif args.build_host:
             cmake_cmd.append("-DARCHSTREAMER_BUILD_HOST=ON")
         run(cmake_cmd, cwd=root)
     else:

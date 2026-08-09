@@ -166,8 +166,11 @@ def _stop_archstreamer_procs_linux() -> None:
         "archstreamer_ssh_askpass",
     ]
     for name in names:
+        # Linux comm names are capped at 15 bytes, so pkill -x misses
+        # archstreamer_gui. Match argv instead and require a path/basename edge.
+        pattern = rf"(^|/){name}([[:space:]]|$)"
         subprocess.run(
-            ["pkill", "-x", name],
+            ["pkill", "-f", pattern],
             capture_output=True,
             text=True,
             check=False,

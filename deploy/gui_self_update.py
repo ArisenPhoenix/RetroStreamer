@@ -260,7 +260,10 @@ def _stop_procs_linux() -> None:
         "session_client",
     ]
     for name in names:
-        subprocess.run(["pkill", "-x", name], capture_output=True, text=True, check=False)
+        # Linux comm names are capped at 15 bytes, so pkill -x misses
+        # archstreamer_gui. Match argv instead and require a path/basename edge.
+        pattern = rf"(^|/){name}([[:space:]]|$)"
+        subprocess.run(["pkill", "-f", pattern], capture_output=True, text=True, check=False)
 
 
 def _pull(root: Path, branch: str, reset_hard: bool) -> None:

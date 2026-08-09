@@ -73,10 +73,24 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--branch",
-        default="master",
-        help="Git branch to pull (default: master)",
+        default=None,
+        help="Git branch to pull (default: current branch, or master if detached)",
     )
     return p.parse_args()
+
+
+def _current_git_branch(root: Path) -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    branch = (result.stdout or "").strip()
+    if result.returncode == 0 and branch and branch != "HEAD":
+        return branch
+    return "master"
 
 
 def _default_prefix() -> Path:
@@ -428,7 +442,7 @@ def main() -> int:
     root = repo_root(Path(__file__))
     prefix = Path(args.prefix) if args.prefix is not None else _default_prefix()
     prefix = prefix.expanduser()
-    branch = (args.branch or "").strip()
+    branch = (args.branch or _current_git_branch(root)).strip()
     if not branch:
         raise SystemExit("--branch must not be empty (default is master)")
 

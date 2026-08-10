@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -64,6 +65,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="With --shortcuts, install per-user shortcuts only (not All Users)",
     )
+    p.add_argument(
+        "--keep-running",
+        action="store_true",
+        help=(
+            "Do not stop ArchStreamer processes. On Windows this skips runtime DLL "
+            "deployment because loaded DLLs cannot be overwritten."
+        ),
+    )
     return p.parse_args()
 
 
@@ -96,6 +105,55 @@ def _special_folder(name: str) -> Path | None:
     except OSError:
         pass
     return None
+
+
+def _windows_install_binaries() -> list[str]:
+    return [
+        "archstreamer_gui.exe",
+        "session_client.exe",
+        "host_runner.exe",
+        "client_catalog_probe.exe",
+        "game_catalog_probe.exe",
+        "asset_probe.exe",
+        "steam_art_import.exe",
+        "uinput_probe.exe",
+        "controller_probe.exe",
+        "archstreamer_ssh_askpass.exe",
+        "archstreamer_cadence.exe",
+    ]
+
+
+def _stop_procs_windows() -> None:
+    for name in _windows_install_binaries():
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/IM", name],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+
+def _copy_runtime_file(src: Path, dest: Path, label: str) -> None:
+    for attempt in range(1, 7):
+        try:
+            shutil.copy2(src, dest)
+            return
+        except PermissionError as exc:
+            if sys.platform == "win32":
+                _stop_procs_windows()
+            if attempt == 6:
+                raise SystemExit(
+                    f"Could not update {label}: {dest}\n"
+                    "\n"
+                    "Windows says the file is in use. Close ArchStreamer, "
+                    "session_client, host_runner, and any Explorer windows opened "
+                    "inside the install folder, then rerun the installer."
+                ) from exc
+            eprint(
+                f"{label} is locked ({dest}); retrying after stopping "
+                f"ArchStreamer processes ({attempt}/6)..."
+            )
+            time.sleep(1)
 
 
 def _create_shortcut(
@@ -165,68 +223,91 @@ def main() -> int:
             f'Missing {exe} — run: cmake --install build --prefix "{prefix}"'
         )
 
+    if sys.platform == "win32" and not args.keep_running:
+        _stop_procs_windows()
+        time.sleep(0.5)
+
     vcpkg_bin = vcpkg_root / "installed" / "x64-windows" / "bin"
     if not vcpkg_bin.is_dir():
         raise SystemExit(f"vcpkg bin not found: {vcpkg_bin} (pass --vcpkg-root)")
 
-    # --- SDL2.dll (build tree first, then vcpkg) ---
-    sdl_candidates = [
-        cwd / "build" / "SDL2.dll",
-        cwd / "build" / "Release" / "SDL2.dll",
-        vcpkg_bin / "SDL2.dll",
-    ]
-    sdl_copied = False
-    for src in sdl_candidates:
-        if src.is_file():
-            shutil.copy2(src, bin_dir / "SDL2.dll")
-            print(f"Copied SDL2.dll from {src}")
-            sdl_copied = True
-            break
-    if not sdl_copied:
-        eprint(f"SDL2.dll not found. Controllers may fail until you copy it into {bin_dir}")
+    if args.keep_running and sys.platform == "win32":
+        print(
+            "Keeping ArchStreamer running — skipping runtime DLL deployment. "
+            "Close ArchStreamer and rerun without --keep-running if Qt/SDL DLLs changed."
+        )
+    else:
+        # --- SDL2.dll (build tree first, then vcpkg) ---
+        sdl_candidates = [
+            cwd / "build" / "SDL2.dll",
+            cwd / "build" / "Release" / "SDL2.dll",
+            vcpkg_bin / "SDL2.dll",
+        ]
+        sdl_copied = False
+        for src in sdl_candidates:
+            if src.is_file():
+                _copy_runtime_file(src, bin_dir / "SDL2.dll", "SDL2.dll")
+                print(f"Copied SDL2.dll from {src}")
+                sdl_copied = True
+                break
+        if not sdl_copied:
+            eprint(f"SDL2.dll not found. Controllers may fail until you copy it into {bin_dir}")
 
-    # --- windeployqt ---
-    deploy_candidates = [
-        vcpkg_root / "installed" / "x64-windows" / "tools" / "Qt6" / "bin" / "windeployqt.exe",
-        vcpkg_root / "installed" / "x64-windows" / "tools" / "Qt6" / "bin" / "windeployqt6.exe",
-    ]
-    found_deploy: Path | None = None
-    for c in deploy_candidates:
-        if c.is_file():
-            found_deploy = c
-            break
-    if found_deploy is None and vcpkg_root.is_dir():
-        for hit in vcpkg_root.rglob("windeployqt*.exe"):
-            found_deploy = hit
-            break
-    if found_deploy is None:
-        raise SystemExit(f"windeployqt.exe not found under {vcpkg_root}")
+        # --- windeployqt ---
+        deploy_candidates = [
+            vcpkg_root / "installed" / "x64-windows" / "tools" / "Qt6" / "bin" / "windeployqt.exe",
+            vcpkg_root / "installed" / "x64-windows" / "tools" / "Qt6" / "bin" / "windeployqt6.exe",
+        ]
+        found_deploy: Path | None = None
+        for c in deploy_candidates:
+            if c.is_file():
+                found_deploy = c
+                break
+        if found_deploy is None and vcpkg_root.is_dir():
+            for hit in vcpkg_root.rglob("windeployqt*.exe"):
+                found_deploy = hit
+                break
+        if found_deploy is None:
+            raise SystemExit(f"windeployqt.exe not found under {vcpkg_root}")
 
-    print(f"Using windeployqt: {found_deploy}")
-    run([found_deploy, "--release", exe])
+        print(f"Using windeployqt: {found_deploy}")
+        for attempt in range(1, 7):
+            result = subprocess.run(
+                [str(found_deploy), "--release", str(exe)],
+                cwd=str(cwd),
+                check=False,
+            )
+            if result.returncode == 0:
+                break
+            if sys.platform == "win32":
+                _stop_procs_windows()
+            if attempt == 6:
+                raise SystemExit(result.returncode)
+            eprint(f"windeployqt failed (attempt {attempt}/6); retrying...")
+            time.sleep(1)
 
-    # windeployqt often skips Qt's vcpkg transitive deps; copy them explicitly.
-    qt_deps = [
-        "libpng16.dll",
-        "harfbuzz.dll",
-        "md4c.dll",
-        "freetype.dll",
-        "zlib1.dll",
-        "double-conversion.dll",
-        "pcre2-16.dll",
-        "zstd.dll",
-        "bz2.dll",
-        "brotlidec.dll",
-        "brotlicommon.dll",
-        "brotlienc.dll",
-    ]
-    for name in qt_deps:
-        src = vcpkg_bin / name
-        if src.is_file():
-            shutil.copy2(src, bin_dir / name)
-            print(f"Copied Qt dep {name}")
-        else:
-            eprint(f"Optional Qt dep missing in vcpkg: {name}")
+        # windeployqt often skips Qt's vcpkg transitive deps; copy them explicitly.
+        qt_deps = [
+            "libpng16.dll",
+            "harfbuzz.dll",
+            "md4c.dll",
+            "freetype.dll",
+            "zlib1.dll",
+            "double-conversion.dll",
+            "pcre2-16.dll",
+            "zstd.dll",
+            "bz2.dll",
+            "brotlidec.dll",
+            "brotlicommon.dll",
+            "brotlienc.dll",
+        ]
+        for name in qt_deps:
+            src = vcpkg_bin / name
+            if src.is_file():
+                _copy_runtime_file(src, bin_dir / name, name)
+                print(f"Copied Qt dep {name}")
+            else:
+                eprint(f"Optional Qt dep missing in vcpkg: {name}")
 
     if not (bin_dir / "platforms" / "qwindows.dll").is_file():
         raise SystemExit("platforms\\qwindows.dll missing after windeployqt")

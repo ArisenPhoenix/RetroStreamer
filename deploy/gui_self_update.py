@@ -375,6 +375,8 @@ def _install_windows(root: Path, args: argparse.Namespace) -> None:
     # Never relaunch over a live GUI session — caller asks the user to restart.
     if args.launch and not keep_running:
         finish_cmd.append("--launch")
+    if keep_running:
+        finish_cmd.append("--keep-running")
     if args.branch:
         finish_cmd.extend(["--gui-branch", args.branch])
     run(finish_cmd, cwd=root)

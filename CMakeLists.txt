@@ -284,6 +284,8 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/host_app.cpp
         src/host/host_app_config.cpp
         src/host/host_concurrent_lobby.cpp
+        src/host/direct_session_launch.cpp
+        src/host/session_launch_types.cpp
         src/host/lobby.cpp
         src/host/session_manager.cpp
         src/host/host_launch_planner.cpp

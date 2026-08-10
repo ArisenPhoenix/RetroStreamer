@@ -42,6 +42,7 @@ class GameCatalog;
 struct LocalControllerBridge;
 class ControllerDevice;
 struct GpuDevice;
+struct SessionBackendState;
 
 struct ActiveSessionSlotConfig {
     int slot_index = 0;
@@ -114,6 +115,15 @@ private:
 
     void thread_main();
     void run_session();
+    void print_session_data(int slot, const SessionPlan& plan);
+
+    void cleanup(
+        int slot,
+        SessionBackendState& backends,
+        const std::string& admin_stop_reason,
+        std::optional<std::string> session_end_reason,
+        const std::function<bool()>& should_stop);
+
     void drain_pending_joins();
     void register_input_clients();
     void unregister_input_clients();
@@ -126,6 +136,10 @@ private:
         const std::optional<GpuDevice>* resolved_gpu = nullptr;
         EmulatorLaunchEnvRequest* launch_env_request = nullptr;
     };
+    void poll_while(
+        const std::function<bool()>& should_stop,
+        std::optional<std::string>& session_end_reason,
+        const RelaunchContext& relaunch_ctx);
 
     RetroArchOverrideParams make_relaunch_override_params(
         RetroArchPort players,
@@ -164,6 +178,17 @@ private:
     std::unique_ptr<MediaServer> media_server_;
     std::unique_ptr<SessionRuntime> session_runtime_;
     std::optional<SessionControlMonitor> session_monitor_;
+
+    struct RyujinxData {
+        std::optional<std::filesystem::path> ryujinx_control_root;
+        std::vector<ArchStreamerSdlPad> ryujinx_control_pads;
+        std::string ryujinx_control_filter;
+        int ryujinx_reassert_remaining = 0;
+        std::chrono::steady_clock::time_point ryujinx_next_reassert;
+    };
+
+    RyujinxData ryujinx;
+
     SaveProfile save_profile_;
     std::string system_key_;
     std::size_t media_index_ = 0;

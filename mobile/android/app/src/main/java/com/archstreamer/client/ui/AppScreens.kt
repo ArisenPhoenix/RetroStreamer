@@ -146,8 +146,8 @@ fun ArchStreamerApp(viewModel: ClientViewModel) {
 
     // Scrim tap / swipe close bypasses closeDrawer(). Use settled currentValue — not
     // targetValue — so a flash Open→Closed (cutover / press-through) never pauses.
-    // Absolute rule: drawer open → pause On (only after decoded frames); closed → Off.
-    // Control editing relaxes pause (see ClientViewModel.syncMenuPause).
+    // Absolute rule while playing: any menu pane open → pause On (only after decoded frames);
+    // returning to the play surface → Off.
     LaunchedEffect(drawerState, isTv) {
         if (isTv) return@LaunchedEffect
         snapshotFlow { drawerState.currentValue }

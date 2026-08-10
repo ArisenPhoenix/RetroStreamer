@@ -370,14 +370,101 @@ bool GStreamerVideoFanout::reconfigure_shared(const VideoEncodeSettings& setting
 }
 
 std::optional<std::string> GStreamerVideoFanout::begin_tier_cutover(
-    ClientId,
-    const VideoEncodeSettings&) {
-    // Quality changes use reconfigure_shared (single encode). Legacy no-op.
-    return std::nullopt;
+    ClientId client_id,
+    const VideoEncodeSettings& settings) {
+    Destination* slot = find_destination(client_id);
+    if (slot == nullptr) {
+        return std::nullopt;
+    }
+    if (source_kind_ == SourceKind::X11 && display_.empty()) {
+        return std::nullopt;
+    }
+    if (source_kind_ == SourceKind::PipeWire && pipewire_node_.empty()) {
+        return std::nullopt;
+    }
+
+    if (slot->staging_active) {
+        slot->staging.stop();
+        if (slot->staging_port != 0) {
+            terminate_gst_multiudpsink_on_port(slot->staging_port);
+            rtp_frame_pace_debug::stop_tee(slot->staging_port);
+        }
+        slot->staging_active = false;
+        slot->staging_port = 0;
+    }
+
+    auto staging_port = static_cast<std::uint16_t>(slot->base_port + StagingPortOffset);
+    if (staging_port == slot->port) {
+        staging_port = static_cast<std::uint16_t>(slot->base_port + AlternateStagingPortOffset);
+    }
+    if (staging_port == slot->port || staging_port == slot->base_port) {
+        std::cerr
+            << "Video staging could not find a free alternate port for client "
+            << static_cast<int>(client_id) << '\n';
+        return std::nullopt;
+    }
+    terminate_gst_multiudpsink_on_port(staging_port);
+    rtp_frame_pace_debug::stop_tee(staging_port);
+    const auto args = build_single_encode_args(settings, slot->host, staging_port);
+    apply_nvenc_environment(slot->staging, args, staging_encode_log_path());
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    if (!slot->staging.running()) {
+        slot->staging_port = 0;
+        return std::nullopt;
+    }
+
+    slot->staging_active = true;
+    slot->staging_port = staging_port;
+    slot->staging_settings = settings;
+    slot->staging_started = std::chrono::steady_clock::now();
+    std::cerr
+        << "Video staging started for client " << static_cast<int>(client_id)
+        << " -> " << slot->host << ":" << staging_port << '\n';
+    return rtp_h264_uri(slot->host, staging_port);
 }
 
-bool GStreamerVideoFanout::complete_tier_cutover(ClientId, std::string_view) {
-    return false;
+bool GStreamerVideoFanout::complete_tier_cutover(ClientId client_id, std::string_view video_uri) {
+    Destination* slot = find_destination(client_id);
+    if (slot == nullptr || !slot->staging_active || slot->staging_port == 0) {
+        return false;
+    }
+    const auto expected = rtp_h264_uri(slot->host, slot->staging_port);
+    if (video_uri != expected) {
+        std::cerr
+            << "Video staging URI mismatch for client " << static_cast<int>(client_id)
+            << ": got \"" << video_uri << "\", expected \"" << expected << "\"\n";
+        return false;
+    }
+
+    if (slot->dedicated.running()) {
+        slot->dedicated.stop();
+    }
+    if (slot->port != slot->base_port) {
+        rtp_frame_pace_debug::stop_tee(slot->port);
+    }
+    slot->dedicated = std::move(slot->staging);
+    slot->port = slot->staging_port;
+    slot->settings = slot->staging_settings;
+    slot->staging_active = false;
+    slot->staging_port = 0;
+    slot->staging_started = {};
+    std::cerr
+        << "Video staging promoted for client " << static_cast<int>(client_id)
+        << " on port " << slot->port << '\n';
+
+    bool any_shared = false;
+    for (const auto& destination : destinations_) {
+        if (!destination.dedicated.running()) {
+            any_shared = true;
+            break;
+        }
+    }
+    if (!any_shared) {
+        process_.stop();
+    } else {
+        restart_pipeline();
+    }
+    return true;
 }
 
 void GStreamerVideoFanout::abort_tier_cutover(ClientId client_id) {
@@ -996,6 +1083,19 @@ bool GStreamerMediaServer::reconfigure_shared_video(const VideoEncodeSettings& s
         return false;
     }
     return video_fanout_->reconfigure_shared(settings);
+}
+
+bool GStreamerMediaServer::restart_shared_audio() {
+    if (!audio_fanout_.has_value()) {
+        return false;
+    }
+    try {
+        audio_fanout_->restart();
+        return true;
+    } catch (const std::exception& error) {
+        std::cerr << "Shared audio restart failed: " << error.what() << '\n';
+        return false;
+    }
 }
 
 bool GStreamerMediaServer::complete_video_tier_cutover(

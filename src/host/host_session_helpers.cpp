@@ -309,14 +309,20 @@ void poll_active_session_joins(
             reconnected_player->applied_size = MediaStreamSize::P720;
             reconnected_player->applied_feel = MediaStreamFeel::LowLatency;
             reconnected_player->applied_bitrate = MediaStreamBitrate::Auto;
+            reconnected_player->adaptive_fps_cap = MediaStreamFps::Auto;
+            reconnected_player->applied_fps = MediaStreamFps::Fps30;
             reconnected_player->pending_tier.reset();
             reconnected_player->pending_size.reset();
             reconnected_player->pending_feel.reset();
             reconnected_player->pending_bitrate.reset();
+            reconnected_player->pending_fps.reset();
             reconnected_player->pending_video_uri.reset();
             reconnected_player->video_cutover_started = {};
             reconnected_player->video_cutover_failures = 0;
             reconnected_player->video_cutover_suppressed = false;
+            reconnected_player->positive_video_heartbeats = 0;
+            reconnected_player->initial_video_settings_ready = false;
+            reconnected_player->initial_video_settings_defer_logged = false;
             if (!endpoint.video_uri.empty() || !endpoint.audio_uri.empty()) {
                 reconnected_player->media_endpoint = endpoint;
             } else {

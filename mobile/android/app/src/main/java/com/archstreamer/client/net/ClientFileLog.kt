@@ -54,6 +54,19 @@ object ClientFileLog {
         }
     }
 
+    fun clear(): Long {
+        return lock.withLock {
+            val file = logFile ?: return 0L
+            val previousSize = if (file.exists()) file.length() else 0L
+            file.parentFile?.mkdirs()
+            file.writeText("", StandardCharsets.UTF_8)
+            appendLine(SESSION_MARKER)
+            appendLine("Log file: ${file.absolutePath}")
+            appendLine("[${timestamp()}] Logs cleared; previous size=$previousSize bytes")
+            previousSize
+        }
+    }
+
     fun extractLastSessionsText(
         logText: String,
         sessionMarker: String,

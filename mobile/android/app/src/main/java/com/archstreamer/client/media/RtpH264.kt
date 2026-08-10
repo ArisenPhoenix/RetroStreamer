@@ -15,7 +15,9 @@ import java.util.concurrent.atomic.AtomicLong
 class RtpH264Depayloader {
     private val fuBuffer = ByteArrayOutputStream(64 * 1024)
     private var fuActive = false
+    private var fuFirstPacketNs = 0L
     private val auBuffer = ByteArrayOutputStream(256 * 1024)
+    private var auFirstPacketNs = 0L
     private var lastSeq: Int? = null
     private var dropUntilIdr = true
     private val packetsReceived = AtomicLong(0)
@@ -33,8 +35,9 @@ class RtpH264Depayloader {
     }
 
     @Synchronized
-    fun push(packet: ByteArray, length: Int): ByteArray? {
+    fun push(packet: ByteArray, length: Int): AccessUnit? {
         if (length < 12) return null
+        val packetReceivedNs = System.nanoTime()
         val rtp = packet
         val version = (rtp[0].toInt() ushr 6) and 0x3
         if (version != 2) return null
@@ -62,7 +65,7 @@ class RtpH264Depayloader {
         val nalType = rtp[offset].toInt() and 0x1f
         when {
             nalType in 1..23 -> {
-                appendNal(rtp, offset, end - offset)
+                appendNal(rtp, offset, end - offset, packetReceivedNs)
                 if (marker) return flushAu()
             }
             nalType == 24 -> { // STAP-A
@@ -71,7 +74,7 @@ class RtpH264Depayloader {
                     val size = ((rtp[i].toInt() and 0xff) shl 8) or (rtp[i + 1].toInt() and 0xff)
                     i += 2
                     if (i + size > end) break
-                    appendNal(rtp, i, size)
+                    appendNal(rtp, i, size, packetReceivedNs)
                     i += size
                 }
                 if (marker) return flushAu()
@@ -85,6 +88,7 @@ class RtpH264Depayloader {
                 if (start) {
                     fuBuffer.reset()
                     fuActive = true
+                    fuFirstPacketNs = packetReceivedNs
                     val nalHeader = ((rtp[offset].toInt() and 0xe0) or type).toByte()
                     fuBuffer.write(nalHeader.toInt())
                 }
@@ -92,9 +96,11 @@ class RtpH264Depayloader {
                 fuBuffer.write(rtp, offset + 2, end - offset - 2)
                 if (endBit) {
                     val nal = fuBuffer.toByteArray()
+                    val firstPacketNs = if (fuFirstPacketNs != 0L) fuFirstPacketNs else packetReceivedNs
                     fuActive = false
+                    fuFirstPacketNs = 0L
                     fuBuffer.reset()
-                    appendNal(nal, 0, nal.size)
+                    appendNal(nal, 0, nal.size, firstPacketNs)
                     if (marker) return flushAu()
                 }
             }
@@ -120,25 +126,31 @@ class RtpH264Depayloader {
         resyncRequested.set(true)
         if (fuActive) {
             fuActive = false
+            fuFirstPacketNs = 0L
             fuBuffer.reset()
         }
         auBuffer.reset()
+        auFirstPacketNs = 0L
         dropUntilIdr = true
     }
 
     fun consumeResyncRequested(): Boolean = resyncRequested.getAndSet(false)
 
     @Synchronized
-    fun resetUntilIdr(clearSequence: Boolean = false) {
+    fun resetUntilIdr(clearSequence: Boolean = false, requestResync: Boolean = true) {
         fuActive = false
+        fuFirstPacketNs = 0L
         fuBuffer.reset()
         auBuffer.reset()
+        auFirstPacketNs = 0L
         dropUntilIdr = true
         if (clearSequence) lastSeq = null
-        resyncRequested.set(true)
+        if (requestResync) {
+            resyncRequested.set(true)
+        }
     }
 
-    private fun appendNal(src: ByteArray, offset: Int, size: Int) {
+    private fun appendNal(src: ByteArray, offset: Int, size: Int, firstPacketNs: Long) {
         if (size <= 0) return
         val type = src[offset].toInt() and 0x1f
         if (dropUntilIdr) {
@@ -148,6 +160,9 @@ class RtpH264Depayloader {
                 else -> return
             }
         }
+        if (auBuffer.size() == 0) {
+            auFirstPacketNs = firstPacketNs
+        }
         auBuffer.write(0)
         auBuffer.write(0)
         auBuffer.write(0)
@@ -155,14 +170,23 @@ class RtpH264Depayloader {
         auBuffer.write(src, offset, size)
     }
 
-    private fun flushAu(): ByteArray? {
+    private fun flushAu(): AccessUnit? {
         if (auBuffer.size() == 0) return null
+        val completedNs = System.nanoTime()
         val out = auBuffer.toByteArray()
+        val firstNs = if (auFirstPacketNs != 0L) auFirstPacketNs else completedNs
         auBuffer.reset()
-        return out
+        auFirstPacketNs = 0L
+        return AccessUnit(out, firstNs, completedNs)
     }
 
     data class PacketStats(val received: Long, val lost: Long, val sequenceGaps: Long = 0)
+    data class AccessUnit(
+        val data: ByteArray,
+        val firstPacketNs: Long,
+        val completedNs: Long,
+        val queuedNs: Long = 0L,
+    )
 }
 
 object MediaUris {

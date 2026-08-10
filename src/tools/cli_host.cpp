@@ -93,10 +93,11 @@ void HostRunnerCli::print_usage() const {
         << "  --video             Capture RetroArch from a virtual display and stream RTP/H.264 (default on).\n"
         << "  --no-video          Disable video streaming.\n"
         << "  --video-dest <ip>   Override video destination IP for all clients.\n"
-        << "  --video-port <port> Base destination UDP video port (host loopback uses this). Default: 5004\n"
+        << "  --video-port <port> Base destination UDP video port. Default: 5004\n"
         << "  --audio             Capture host audio and stream RTP/Opus (default on).\n"
         << "  --no-audio          Disable audio streaming.\n"
         << "  --audio-port <port> Base destination UDP audio port. Default: 6004\n"
+        << "  --host-local-watch  Add a 127.0.0.1 loopback stream for host-side viewing.\n"
         << "  --audio-source <source>\n"
         << "                      Pulse/PipeWire source to capture. Default: archstreamer.monitor\n"
         << "                      (dedicated null sink so host speakers stay quiet).\n"
@@ -173,6 +174,8 @@ HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
             args.pulse_input = true;
         } else if (arg == "--verbose") {
             args.verbose = true;
+        } else if (arg == "--host-local-watch") {
+            args.host_local_watch = true;
         } else if (arg == "--video") {
             args.video = true;
         } else if (arg == "--no-video") {

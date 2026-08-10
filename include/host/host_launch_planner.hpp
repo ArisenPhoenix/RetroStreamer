@@ -34,6 +34,7 @@ struct HostMediaPlanConfig {
     bool destination_host_explicit = false;
     std::uint16_t video_port = 5004;
     std::uint16_t audio_port = 6004;
+    bool include_host_loopback = false;
 };
 
 struct HostMediaDestination {

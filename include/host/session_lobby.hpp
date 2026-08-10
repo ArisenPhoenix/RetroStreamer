@@ -43,12 +43,15 @@ struct SessionClientConnection {
     MediaStreamFeel applied_feel = MediaStreamFeel::LowLatency;
     MediaStreamBitrate wanted_bitrate = MediaStreamBitrate::Auto;
     MediaStreamBitrate applied_bitrate = MediaStreamBitrate::Auto;
+    MediaStreamFps adaptive_fps_cap = MediaStreamFps::Auto;
+    MediaStreamFps applied_fps = MediaStreamFps::Fps30;
     DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto;
     /** Tier/size/feel/bitrate being warmed on a staging RTP path (cutover in flight). */
     std::optional<MediaQualityTier> pending_tier;
     std::optional<MediaStreamSize> pending_size;
     std::optional<MediaStreamFeel> pending_feel;
     std::optional<MediaStreamBitrate> pending_bitrate;
+    std::optional<MediaStreamFps> pending_fps;
     std::optional<std::string> pending_video_uri;
     std::chrono::steady_clock::time_point video_cutover_started = {};
     std::uint16_t max_bitrate_kbps = 0;
@@ -58,6 +61,15 @@ struct SessionClientConnection {
     // After Auto steps down from High due to loss/no frames, hold off retrying High.
     std::chrono::steady_clock::time_point high_tier_cooldown_until = {};
     std::chrono::steady_clock::time_point last_video_reconfigure = {};
+    std::uint8_t video_zero_frame_streak = 0;
+    std::chrono::steady_clock::time_point last_video_stall_restart = {};
+    std::chrono::steady_clock::time_point last_decode_pressure_log = {};
+    std::uint16_t decode_queue_p95_ms = ViewerHeartbeatLatencyUnknownMs;
+    std::uint16_t decode_queue_max_ms = ViewerHeartbeatLatencyUnknownMs;
+    std::uint16_t au_queue_p95_ms = ViewerHeartbeatLatencyUnknownMs;
+    std::uint8_t positive_video_heartbeats = 0;
+    bool initial_video_settings_ready = false;
+    bool initial_video_settings_defer_logged = false;
     // Consecutive MediaVideoPending timeouts without MediaVideoReady (e.g. older
     // clients). After a few, stop staging size changes until reconnect.
     std::uint8_t video_cutover_failures = 0;
@@ -108,6 +120,7 @@ struct SessionPlan {
     MediaQualityTier session_video_tier = MediaQualityTier::Medium;
     MediaStreamFeel session_video_feel = MediaStreamFeel::LowLatency;
     MediaStreamBitrate session_video_bitrate = MediaStreamBitrate::Auto;
+    MediaStreamFps session_video_fps = MediaStreamFps::Fps30;
     bool session_video_configured = false;
 };
 
@@ -134,6 +147,7 @@ std::optional<ControllerInfo> controller_for(const ClientHello& hello, LocalPlay
 std::string sanitize_virtual_device_text(std::string_view value);
 std::string controller_name_for(const ClientHello& hello, LocalPlayerIndex local_player);
 std::vector<VirtualGamepadIdentity> virtual_identities_for_session(const SessionPlan& plan);
+void log_client_hello(ClientId client_id, const ClientHello& hello);
 
 SessionPlan gather_session_clients(
     TcpListener& listener,

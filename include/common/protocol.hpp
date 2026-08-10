@@ -439,6 +439,19 @@ enum class MediaStreamBitrate : std::uint8_t {
     Kbps25000 = 5,
 };
 
+/**
+ * Explicit output FPS ladder. Auto keeps the framerate implied by MediaQualityTier;
+ * host-side adaptive caps can use this independently of bitrate/resolution.
+ */
+enum class MediaStreamFps : std::uint8_t {
+    Auto = 0,
+    Fps20 = 1,
+    Fps24 = 2,
+    Fps30 = 3,
+    Fps45 = 4,
+    Fps60 = 5,
+};
+
 struct VideoEncodeSettings {
     std::uint16_t bitrate_kbps = 1500;
     std::uint8_t framerate = 30;
@@ -626,6 +639,48 @@ inline std::uint16_t bitrate_kbps_for_stream_bitrate(MediaStreamBitrate bitrate)
     }
 }
 
+inline std::uint8_t framerate_for_stream_fps(MediaStreamFps fps) {
+    switch (fps) {
+    case MediaStreamFps::Fps20:
+        return 20;
+    case MediaStreamFps::Fps24:
+        return 24;
+    case MediaStreamFps::Fps45:
+        return 45;
+    case MediaStreamFps::Fps60:
+        return 60;
+    case MediaStreamFps::Fps30:
+    case MediaStreamFps::Auto:
+    default:
+        return 30;
+    }
+}
+
+inline MediaStreamFps media_stream_fps_for_framerate(std::uint8_t framerate) {
+    if (framerate >= 53) {
+        return MediaStreamFps::Fps60;
+    }
+    if (framerate >= 38) {
+        return MediaStreamFps::Fps45;
+    }
+    if (framerate <= 22) {
+        return MediaStreamFps::Fps20;
+    }
+    if (framerate <= 27) {
+        return MediaStreamFps::Fps24;
+    }
+    return MediaStreamFps::Fps30;
+}
+
+inline void apply_media_stream_fps(VideoEncodeSettings& settings, MediaStreamFps fps) {
+    if (fps == MediaStreamFps::Auto) {
+        return;
+    }
+    const auto framerate = framerate_for_stream_fps(fps);
+    settings.framerate = framerate;
+    settings.key_int_max = key_int_max_for_framerate(framerate);
+}
+
 /** Default bitrate when Bitrate=Auto but fps is taken from an explicit frame-rate tier. */
 inline MediaStreamBitrate default_bitrate_for_framerate_tier(MediaQualityTier quality) {
     switch (quality) {
@@ -668,7 +723,8 @@ inline VideoEncodeSettings video_encode_settings(
     std::uint16_t capture_width = 1920,
     std::uint16_t capture_height = 1080,
     MediaStreamFeel feel = MediaStreamFeel::LowLatency,
-    MediaStreamBitrate bitrate = MediaStreamBitrate::Auto) {
+    MediaStreamBitrate bitrate = MediaStreamBitrate::Auto,
+    MediaStreamFps fps = MediaStreamFps::Auto) {
     VideoEncodeSettings settings;
     if (bitrate == MediaStreamBitrate::Auto) {
         // Older clients / Auto bitrate: full legacy fps+bitrate from tier.
@@ -679,6 +735,7 @@ inline VideoEncodeSettings video_encode_settings(
         settings.key_int_max = key_int_max_for_framerate(fps);
         settings.bitrate_kbps = bitrate_kbps_for_stream_bitrate(bitrate);
     }
+    apply_media_stream_fps(settings, fps);
     if (size == MediaStreamSize::Auto) {
         size = MediaStreamSize::P720;
     }
@@ -865,6 +922,25 @@ inline const char* media_stream_bitrate_name(MediaStreamBitrate bitrate) {
     return "unknown";
 }
 
+inline const char* media_stream_fps_name(MediaStreamFps fps) {
+    switch (fps) {
+    case MediaStreamFps::Auto:
+        return "Auto";
+    case MediaStreamFps::Fps20:
+        return "20fps";
+    case MediaStreamFps::Fps24:
+        return "24fps";
+    case MediaStreamFps::Fps30:
+        return "30fps";
+    case MediaStreamFps::Fps45:
+        return "45fps";
+    case MediaStreamFps::Fps60:
+        return "60fps";
+    default:
+        return "Unknown";
+    }
+}
+
 /** Framerate-only Auto ladder when bitrate is fixed (skip Med-High/Very-High aliases). */
 inline MediaQualityTier step_framerate_tier_down(MediaQualityTier tier) {
     switch (tier) {
@@ -919,6 +995,8 @@ inline bool parse_video_resolution(
     }
 }
 
+inline constexpr std::uint16_t ViewerHeartbeatLatencyUnknownMs = 0xffff;
+
 struct ViewerHeartbeat {
     ClientId client_id = 0;
     std::uint32_t sequence = 0;
@@ -941,6 +1019,10 @@ struct ViewerHeartbeat {
     MediaStreamFeel wanted_feel = MediaStreamFeel::LowLatency;
     // Trailing — older peers omit → Auto (legacy combined fps+bitrate from wanted_tier).
     MediaStreamBitrate wanted_bitrate = MediaStreamBitrate::Auto;
+    // Trailing Android decode/render health. 0xffff = not reported / not applicable.
+    std::uint16_t decode_queue_p95_ms = ViewerHeartbeatLatencyUnknownMs;
+    std::uint16_t decode_queue_max_ms = ViewerHeartbeatLatencyUnknownMs;
+    std::uint16_t au_queue_p95_ms = ViewerHeartbeatLatencyUnknownMs;
 };
 
 struct ErrorPacket {

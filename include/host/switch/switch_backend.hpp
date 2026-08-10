@@ -28,6 +28,7 @@ struct SwitchBackendPrepContext {
     bool virtualgl_capture = false;
     bool gamescope_capture = false;
     int resolution_scale = 1;
+    bool prefer_handheld_mode = false;
     const std::optional<GpuDevice>* resolved_gpu = nullptr;
     /** Caller-resolved Ryujinx profile name (Steam persona or session hello). */
     std::string profile_display_name;
@@ -47,6 +48,7 @@ struct SwitchBackendPrepResult {
     bool force_vulkan = false;
     int yuzu_vulkan_device = -1;
     std::size_t synced_title_count = 0;
+    bool ryujinx_docked_mode = true;
     std::optional<RyujinxUserProfile> ryujinx_profile;
     std::optional<YuzuUserProfile> yuzu_profile;
     std::vector<ArchStreamerSdlPad> resolved_pads;

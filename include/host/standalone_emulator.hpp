@@ -119,6 +119,7 @@ RyujinxUserProfile prepare_ryujinx_user_profile(
     const SaveProfile& save_profile,
     bool enable_ldn_mitm = true,
     int resolution_scale = 1,
+    bool docked_mode = true,
     std::string_view profile_display_name = {},
     std::string_view lan_interface_id = {},
     std::string_view game_id = {},

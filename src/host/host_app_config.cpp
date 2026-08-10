@@ -30,6 +30,7 @@ HostMediaPlanConfig media_plan_config_for(const HostAppConfig& config) {
         config.video_destination_explicit,
         config.video_port,
         config.audio_port,
+        config.host_local_watch,
     };
 }
 
@@ -96,6 +97,9 @@ std::vector<std::string> host_app_config_to_argv(const HostAppConfig& config) {
     }
     if (config.pulse_input) {
         args.push_back("--pulse-input");
+    }
+    if (config.host_local_watch) {
+        args.push_back("--host-local-watch");
     }
 
     if (config.bridge_controller_index.has_value()) {

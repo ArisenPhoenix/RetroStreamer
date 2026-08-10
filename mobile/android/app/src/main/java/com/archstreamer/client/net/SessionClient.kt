@@ -5,6 +5,7 @@ import com.archstreamer.client.media.RtpOpusPlayer
 import com.archstreamer.client.media.RtpVideoPlayer
 import com.archstreamer.client.protocol.ControllerInfo
 import com.archstreamer.client.protocol.ClientDeviceCapabilities
+import com.archstreamer.client.protocol.ClientDeviceClass
 import com.archstreamer.client.protocol.ControllerState
 import com.archstreamer.client.protocol.DiscControlAction
 import com.archstreamer.client.protocol.DisplayLayoutPreference
@@ -206,6 +207,7 @@ data class JoinedPlaySession(
     val ready: SessionReady,
     val starting: SessionStarting?,
     val media: MediaEndpoint?,
+    val device: ClientDeviceCapabilities,
     @Volatile var videoPlayer: RtpVideoPlayer?,
     @Volatile var audioPlayer: RtpOpusPlayer?,
     private val control: ControlConnection,
@@ -323,7 +325,9 @@ data class JoinedPlaySession(
                 "net video port=${videoPlayer?.port} " +
                     "rx=${stats.packetsReceived} lost=${stats.packetsLost} " +
                     "gaps=${stats.sequenceGaps} frames=$frames " +
-                    "loss=${stats.lossPermille}‰" +
+                    "loss=${stats.lossPermille}‰ " +
+                    "decode_p95=${stats.decodeQueueP95Ms}ms decode_max=${stats.decodeQueueMaxMs}ms " +
+                    "au_p95=${stats.auQueueP95Ms}ms" +
                     if (stats.pipelineDead) " dead=true" else "",
             )
         }
@@ -338,6 +342,9 @@ data class JoinedPlaySession(
                 displayLayout = displayLayout,
                 wantedFeel = wantedFeel,
                 wantedBitrate = wantedBitrate,
+                decodeQueueP95Ms = stats?.decodeQueueP95Ms ?: 0xffff,
+                decodeQueueMaxMs = stats?.decodeQueueMaxMs ?: 0xffff,
+                auQueueP95Ms = stats?.auQueueP95Ms ?: 0xffff,
             ),
         )
         return frames
@@ -480,6 +487,12 @@ data class JoinedPlaySession(
                 control.send(PacketCodec.mediaVideoReady(videoUri))
                 stagingReadySent = true
                 true
+            } else if (device.deviceClass == ClientDeviceClass.Tv) {
+                val player = RtpVideoPlayer(port, holdAfterFirstAccessUnit = true).also { it.startReceiving() }
+                ClientFileLog.conn("video staging bind tv-light port=$port uri=$videoUri")
+                stagingPlayer = player
+                stagingUri = videoUri
+                true
             } else {
                 val player = RtpVideoPlayer(port).also { it.startReceiving() }
                 ClientFileLog.conn("video staging bind port=$port uri=$videoUri")
@@ -518,15 +531,21 @@ data class JoinedPlaySession(
         val uri = stagingUri ?: return null
         val staging = stagingPlayer ?: return null
         if (stagingReadySent) return null
+        if (device.deviceClass == ClientDeviceClass.Tv && staging.hasReceivedKeyframeAccessUnit()) {
+            return sendVideoReady(uri)
+        }
         if (!staging.hasDecodedFrames()) return null
-        return try {
+        return sendVideoReady(uri)
+    }
+
+    private fun sendVideoReady(uri: String): String? =
+        try {
             control.send(PacketCodec.mediaVideoReady(uri))
             stagingReadySent = true
             uri
         } catch (_: Throwable) {
             null
         }
-    }
 
     /**
      * After host cutover completes it resends MediaEndpoint — adopt staging as the
@@ -766,6 +785,7 @@ object SessionJoiner {
                 ready = ready,
                 starting = starting,
                 media = media,
+                device = device,
                 videoPlayer = videoPlayer,
                 audioPlayer = audioPlayer,
                 control = control,

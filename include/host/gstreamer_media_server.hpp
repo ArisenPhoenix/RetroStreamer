@@ -17,7 +17,8 @@
 namespace archstreamer {
 
 // Encode ladder: one capture → one shared H.264 encode → multiudpsink fanout.
-// Mid-session quality changes hard-restart that shared encode (no dedicated path).
+// Mid-session quality changes may stage a dedicated encode for the player before
+// promoting it, leaving the old shared encode alive for viewers during warm-up.
 class GStreamerVideoFanout {
 public:
     ~GStreamerVideoFanout();
@@ -50,6 +51,9 @@ public:
     void stop_client(ClientId client_id);
 
 private:
+    static constexpr std::uint16_t StagingPortOffset = 128;
+    static constexpr std::uint16_t AlternateStagingPortOffset = 129;
+
     struct Destination {
         ClientId client_id = 0;
         std::string host;
@@ -141,6 +145,7 @@ public:
         bool wants_audio) override;
     void remove_client(ClientId client_id) override;
     bool reconfigure_shared_video(const VideoEncodeSettings& settings) override;
+    bool restart_shared_audio() override;
     std::optional<std::string> begin_video_tier_cutover(
         ClientId client_id,
         const VideoEncodeSettings& settings) override;

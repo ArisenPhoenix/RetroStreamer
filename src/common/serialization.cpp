@@ -306,6 +306,9 @@ ByteBuffer serialize_payload(const ViewerHeartbeat& payload) {
     writer.write_pod<std::uint8_t>(static_cast<std::uint8_t>(payload.display_layout));
     writer.write_pod<std::uint8_t>(static_cast<std::uint8_t>(payload.wanted_feel));
     writer.write_pod<std::uint8_t>(static_cast<std::uint8_t>(payload.wanted_bitrate));
+    writer.write_pod<std::uint16_t>(payload.decode_queue_p95_ms);
+    writer.write_pod<std::uint16_t>(payload.decode_queue_max_ms);
+    writer.write_pod<std::uint16_t>(payload.au_queue_p95_ms);
     return writer.take();
 }
 
@@ -1007,6 +1010,15 @@ ViewerHeartbeat read_viewer_heartbeat(Reader& reader) {
     if (reader.remaining() >= 1) {
         payload.wanted_bitrate =
             static_cast<MediaStreamBitrate>(reader.read_pod<std::uint8_t>());
+    }
+    if (reader.remaining() >= 2) {
+        payload.decode_queue_p95_ms = reader.read_pod<std::uint16_t>();
+    }
+    if (reader.remaining() >= 2) {
+        payload.decode_queue_max_ms = reader.read_pod<std::uint16_t>();
+    }
+    if (reader.remaining() >= 2) {
+        payload.au_queue_p95_ms = reader.read_pod<std::uint16_t>();
     }
     return payload;
 }

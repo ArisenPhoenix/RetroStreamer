@@ -126,7 +126,9 @@ void log_switch_backend_prep(
             << "\nShared Switch saves:     " << prep.synced_title_count
             << " title(s)\n";
         const int scale = std::clamp(resolution_scale, 1, 4);
-        std::cout << "Ryujinx resolution: " << scale << "x native\n";
+        std::cout
+            << "Ryujinx mode:       " << (prep.ryujinx_docked_mode ? "docked" : "handheld")
+            << "\nRyujinx resolution: " << scale << "x native\n";
         return;
     }
 

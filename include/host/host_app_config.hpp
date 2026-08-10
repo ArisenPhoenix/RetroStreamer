@@ -51,6 +51,7 @@ struct HostAppConfig {
     std::uint16_t audio_port = 6004;
     std::string audio_source;
     AudioCaptureBackend audio_backend = AudioCaptureBackend::Pulse;
+    bool host_local_watch = false;
     std::string virtual_display = ":99";
     std::string video_resolution = "1920x1080";
     VirtualDisplayBackend display_backend = VirtualDisplayBackend::None;

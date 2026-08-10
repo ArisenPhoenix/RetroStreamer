@@ -35,12 +35,16 @@ private:
     bool remove_viewer(std::size_t index, std::string_view reason);
     void mark_player_disconnected(SessionClientConnection& client, std::string_view reason);
     void handle_heartbeat(SessionClientConnection& client, const ViewerHeartbeat& heartbeat);
+    bool recover_stalled_video_if_needed(
+        SessionClientConnection& client,
+        const ViewerHeartbeat& heartbeat);
     void apply_video_encode(
         SessionClientConnection& client,
         MediaStreamSize size,
         MediaQualityTier tier,
         MediaStreamFeel feel,
         MediaStreamBitrate bitrate,
+        MediaStreamFps fps,
         std::string_view reason);
     static std::string client_label(const SessionClientConnection& client);
 
@@ -56,6 +60,7 @@ private:
     std::filesystem::path save_root_;
     int slot_index_ = -1;
     std::string session_id_;
+    bool emulator_pause_requested_ = false;
 };
 
 } // namespace archstreamer

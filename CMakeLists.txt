@@ -19,7 +19,11 @@ set(FETCHCONTENT_BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/_dependencies")
 if(WIN32)
     option(ARCHSTREAMER_BUILD_HOST "Build host runtime (Windows: Yuzu + DXGI/WASAPI/ViGEm)" OFF)
 else()
-    option(ARCHSTREAMER_BUILD_HOST "Build host runtime (Linux)" ON)
+    if (ARCHSTREAMER_BUILD_HOST)
+        option(ARCHSTREAMER_BUILD_HOST "Build host runtime (Linux)" ON)
+    else()
+        option(ARCHSTREAMER_BUILD_HOST "Build host runtime (Linux)" OFF)
+    endif()
 endif()
 if(MSVC)
     # Source/u8 literals are UTF-8; without this MSVC uses the system code page.
@@ -332,6 +336,7 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/link_cable_backend.cpp
         src/host/seat_manager.cpp
         src/host/session_control_monitor.cpp
+        src/host/stream_adaptation.cpp
         src/host/cadence_session_events.cpp
         src/host/cadence_session_tracker.cpp
         src/host/session_launch_assemble.cpp
@@ -450,6 +455,13 @@ if(ARCHSTREAMER_BUILD_HOST)
     )
     target_link_libraries(host_runner PRIVATE archstreamer_host)
 
+    if(NOT WIN32)
+        add_executable(host_runner_logged
+            src/tools/host_runner_logged.cpp
+        )
+        target_link_libraries(host_runner_logged PRIVATE archstreamer_host)
+    endif()
+
     list(APPEND ARCHSTREAMER_INSTALL_TARGETS
         game_catalog_probe
         asset_probe
@@ -457,6 +469,9 @@ if(ARCHSTREAMER_BUILD_HOST)
         catalog_repair
         host_runner
     )
+    if(NOT WIN32)
+        list(APPEND ARCHSTREAMER_INSTALL_TARGETS host_runner_logged)
+    endif()
     if(ARCHSTREAMER_CADENCE_SIDECAR_TARGET)
         list(APPEND ARCHSTREAMER_INSTALL_TARGETS archstreamer_cadence)
     endif()

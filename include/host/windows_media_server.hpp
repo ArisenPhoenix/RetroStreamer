@@ -35,6 +35,7 @@ public:
         bool wants_audio) override;
     void remove_client(ClientId client_id) override;
     bool reconfigure_shared_video(const VideoEncodeSettings& settings) override;
+    bool restart_shared_audio() override;
     std::optional<std::string> begin_video_tier_cutover(
         ClientId client_id,
         const VideoEncodeSettings& settings) override;

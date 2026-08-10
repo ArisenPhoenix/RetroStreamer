@@ -11,6 +11,7 @@ SwitchBackendPrepResult RyujinxBackend::prepare(
     SwitchBackendPrepContext ctx) {
     SwitchBackendPrepResult result;
     apply_common_prep(launch_config, ctx, result);
+    result.ryujinx_docked_mode = !ctx.prefer_handheld_mode;
 
 #if !defined(_WIN32)
     // Dual same-host LDN: isolate each Ryujinx in a firejail netns on asldnbr0.
@@ -27,6 +28,7 @@ SwitchBackendPrepResult RyujinxBackend::prepare(
         ctx.save_profile,
         /*enable_ldn_mitm=*/true,
         ctx.resolution_scale,
+        !ctx.prefer_handheld_mode,
         ctx.profile_display_name,
         lan_iface,
         ctx.game_id,

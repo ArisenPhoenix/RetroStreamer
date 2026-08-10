@@ -890,6 +890,15 @@ object SettingsSpec : SectionSpec {
                 enabled = !state.busy,
             ),
         )
+        add(
+            MenuOption.Action(
+                id = "settings-clear-logs",
+                title = if (state.busy) "Working…" else "Clear logs",
+                onRun = vm::clearClientLogs,
+                enabled = !state.busy,
+                style = MenuOption.Action.Style.Outlined,
+            ),
+        )
         if (state.settings.logSendStatus.isNotBlank()) {
             add(small("settings-log-status", state.settings.logSendStatus))
         }

@@ -549,6 +549,7 @@ int HostApp::run_direct_session(
                 virtualgl_capture,
                 gamescope_capture,
                 config.resolution.switch_scale,
+                /*prefer_handheld_mode=*/false,
                 &resolved_gpu,
                 profile_name,
                 std::move(resolved_pads),

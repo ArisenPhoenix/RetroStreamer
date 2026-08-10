@@ -25,6 +25,7 @@ void ensure_ryujinx_config(
     const std::filesystem::path& config_path,
     bool enable_ldn_mitm,
     int resolution_scale,
+    bool docked_mode,
     const std::filesystem::path& title_updates_dir,
     const std::string& lan_interface_id) {
     std::filesystem::create_directories(config_path.parent_path());
@@ -55,6 +56,7 @@ void ensure_ryujinx_config(
     cfg["show_confirm_exit"] = false;
     cfg["skip_user_profiles"] = true;
     cfg["ignore_applet"] = true;
+    cfg["docked_mode"] = docked_mode;
     cfg["enable_discord_integration"] = false;
     cfg["disable_input_when_out_of_focus"] = false;
 
@@ -257,6 +259,7 @@ RyujinxUserProfile RyujinxUserProfileService::prepare(
     const SaveProfile& save_profile,
     bool enable_ldn_mitm,
     int resolution_scale,
+    bool docked_mode,
     std::string_view profile_display_name,
     std::string_view lan_interface_id,
     std::string_view game_id,
@@ -304,6 +307,7 @@ RyujinxUserProfile RyujinxUserProfileService::prepare(
             template_config,
             /*enable_ldn_mitm=*/true,
             /*resolution_scale=*/1,
+            /*docked_mode=*/true,
             updates_dir,
             lan_iface);
     }
@@ -322,7 +326,13 @@ RyujinxUserProfile RyujinxUserProfileService::prepare(
         }
     }
 
-    ensure_ryujinx_config(user_config, enable_ldn_mitm, resolution_scale, updates_dir, lan_iface);
+    ensure_ryujinx_config(
+        user_config,
+        enable_ldn_mitm,
+        resolution_scale,
+        docked_mode,
+        updates_dir,
+        lan_iface);
     const std::string display =
         profile_display_name.empty() ? save_profile.username : std::string(profile_display_name);
     ensure_ryujinx_profiles_json(profile.data_root, save_profile.username, display);

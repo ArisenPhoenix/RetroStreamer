@@ -34,6 +34,8 @@ public:
      * unavailable / empty.
      */
     virtual bool reconfigure_shared_video(const VideoEncodeSettings& settings) = 0;
+    /** Restart the shared audio fanout without changing client ports. */
+    virtual bool restart_shared_audio() = 0;
 
     /**
      * Legacy dual-stream cutover (unused for quality changes — session uses

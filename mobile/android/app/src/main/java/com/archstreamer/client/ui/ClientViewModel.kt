@@ -80,6 +80,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
@@ -286,6 +288,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private var discoveryJob: Job? = null
     private var menuPauseJob: Job? = null
     private var ffJob: Job? = null
+    /** Emulator control commands are order-sensitive toggle wrappers on the host. */
+    private val emulatorControlSendMutex = Mutex()
     /** Last effective FF On/Off sent to the host (latch ∨ hold). */
     private var lastSentFf: Boolean? = null
     private var lastFfSendAtMs: Long = 0L
@@ -803,7 +807,6 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 ),
             )
         }
-        // Relax pause only for control editing (live game under the editor).
         syncMenuPause()
         refreshPhysicalPads()
     }
@@ -2041,7 +2044,37 @@ fun clearBackMenuChromeFocus() {
         session?.displayLayout = DisplayLayoutPreference.Landscape.id
     }
 
+    private fun streamPrefsDifferFromSession(): Boolean {
+        val active = session ?: return false
+        val snap = _state.value
+        return active.wantedTier != snap.stream.quality.id ||
+            active.wantedSize != snap.stream.size.id ||
+            active.wantedFeel != snap.stream.feel.id ||
+            active.wantedBitrate != snap.stream.bitrate.id
+    }
+
+    private fun commitStreamPrefsToSession(reason: String) {
+        if (!streamPrefsDifferFromSession()) return
+        val snap = _state.value
+        applyStreamPrefsToSession()
+        ClientFileLog.conn(
+            "stream settings committed ($reason): " +
+                "tier=${snap.stream.quality.id} " +
+                "bitrate=${snap.stream.bitrate.id} " +
+                "size=${snap.stream.size.id} " +
+                "feel=${snap.stream.feel.id}",
+        )
+    }
+
+    private fun commitStreamPrefsIfLeaving(nextSection: NavSection?, reason: String) {
+        val snap = _state.value
+        if (!snap.playing || snap.section != NavSection.Stream) return
+        if (nextSection == NavSection.Stream) return
+        commitStreamPrefsToSession(reason)
+    }
+
     fun selectSection(section: NavSection) {
+        commitStreamPrefsIfLeaving(section, "section exit")
         if (_state.value.playing) {
             // Stay in the session — open overlay/stream/settings/remote over the play surface.
             val remoteOk =
@@ -2081,6 +2114,7 @@ fun clearBackMenuChromeFocus() {
     /** Dismiss overlay/stream settings and return to the live play surface. */
     fun returnToPlay() {
         if (!_state.value.playing) return
+        commitStreamPrefsIfLeaving(NavSection.Games, "return to play")
         val wasMenuOpen = menuDrawerOpen
         menuDrawerOpen = false
         backMenuChromeFocused = false
@@ -3101,6 +3135,49 @@ fun clearBackMenuChromeFocus() {
         }
     }
 
+    fun clearClientLogs() {
+        if (_state.value.busy) return
+        _state.update {
+            it.copy(
+                busy = true,
+                settings = it.settings.copy(logSendStatus = "Clearing logs…"),
+            )
+        }
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { ClientFileLog.clear() }
+            }
+            result.fold(
+                onSuccess = { previousSize ->
+                    val mb = previousSize.toDouble() / (1024.0 * 1024.0)
+                    val message = if (previousSize >= 1024 * 1024) {
+                        "Logs cleared (${String.format("%.1f", mb)} MB removed)."
+                    } else {
+                        "Logs cleared ($previousSize bytes removed)."
+                    }
+                    _state.update {
+                        it.copy(
+                            busy = false,
+                            status = message,
+                            settings = it.settings.copy(logSendStatus = message),
+                        )
+                    }
+                },
+                onFailure = { error ->
+                    val message = "Clear logs failed: ${error.message}"
+                    ClientFileLog.append(message)
+                    _state.update {
+                        it.copy(
+                            busy = false,
+                            status = message,
+                            settings = it.settings.copy(logSendStatus = message),
+                        )
+                    }
+                },
+            )
+        }
+    }
+
     fun onFilterChange(value: String) {
         val filter = value.trim().lowercase()
         updateGames {
@@ -3158,25 +3235,21 @@ fun clearBackMenuChromeFocus() {
     fun setStreamQuality(tier: MediaQualityTier) {
         updateStream { copy(quality = tier) }
         prefs.edit().putInt(KEY_STREAM_QUALITY, tier.id).apply()
-        applyStreamPrefsToSession()
     }
 
     fun setStreamBitrate(bitrate: MediaStreamBitrate) {
         updateStream { copy(bitrate = bitrate) }
         prefs.edit().putInt(KEY_STREAM_BITRATE, bitrate.id).apply()
-        applyStreamPrefsToSession()
     }
 
     fun setStreamSize(size: MediaStreamSize) {
         updateStream { copy(size = size) }
         prefs.edit().putInt(KEY_STREAM_SIZE, size.id).apply()
-        applyStreamPrefsToSession()
     }
 
     fun setStreamFeel(feel: MediaStreamFeel) {
         updateStream { copy(feel = feel) }
         prefs.edit().putInt(KEY_STREAM_FEEL, feel.id).apply()
-        applyStreamPrefsToSession()
     }
 
     fun showPairReceiveQr() {
@@ -3515,11 +3588,12 @@ fun clearBackMenuChromeFocus() {
         syncMenuPause()
     }
 
-    /** Drawer closed → unpause (unless drawer re-opens before this applies). */
+    /** Drawer sheet closed; stay menu-paused while a gameplay pane remains visible. */
     fun onMenuDrawerClosed() {
-        menuDrawerOpen = false
+        commitStreamPrefsIfLeaving(NavSection.Games, "menu closed")
+        menuDrawerOpen = _state.value.playing && _state.value.playPaneVisible()
         backMenuChromeFocused = false
-        logControl("menuDrawerOpen=false (pads unmuted)")
+        logControl("menuDrawerOpen=$menuDrawerOpen (drawer sheet closed)")
         resetMenuHats()
         clearRemotedKeys()
         clearKeyboardButtons()
@@ -3527,8 +3601,7 @@ fun clearBackMenuChromeFocus() {
     }
 
     /**
-     * Absolute pause from UI truth: drawer open pauses; control editing is the only
-     * exception (game stays live under the editor). Never toggles / inverts.
+     * Absolute pause from UI truth: any play-menu surface open pauses. Never toggles / inverts.
      *
      * Only pause once the client has decoded at least one video frame — early drawer
      * open during stream init must not send EmulatorControl pause (Ryujinx F5 is a
@@ -3549,8 +3622,7 @@ fun clearBackMenuChromeFocus() {
             delay(MENU_PAUSE_DEBOUNCE_MS)
             if (!_state.value.playing) return@launch
             val hasFrames = session?.videoPlayer?.hasDecodedFrames() == true
-            val wantPaused =
-                menuDrawerOpen && !_state.value.controls.overlayEditing && hasFrames
+            val wantPaused = menuDrawerOpen && hasFrames
             // Initial Closed while playing / drawer open before first frame: do not poke.
             if (lastSentMenuPause == null && !wantPaused) return@launch
             if (lastSentMenuPause == wantPaused) return@launch
@@ -3561,7 +3633,7 @@ fun clearBackMenuChromeFocus() {
         }
     }
 
-    /** OSK needs an unpaused emulator; bypass debounce so the dialog is not racing F5. */
+    /** Game text entry needs a live emulator; this is the only non-menu/P pause path. */
     private fun ensureUnpausedForKeyboard() {
         if (!menuDrawerOpen && lastSentMenuPause != true) return
         menuDrawerOpen = false
@@ -3640,7 +3712,10 @@ fun clearBackMenuChromeFocus() {
         val active = session ?: return
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                active.sendEmulatorControl(action = EmulatorControlAction.ScreenSwap)
+                emulatorControlSendMutex.withLock {
+                    if (!_state.value.playing || session !== active) return@withLock
+                    active.sendEmulatorControl(action = EmulatorControlAction.ScreenSwap)
+                }
             }.onFailure { err ->
                 ClientFileLog.append(
                     "EmulatorControl screen_swap failed: ${err.javaClass.simpleName}: ${err.message}",
@@ -3665,7 +3740,10 @@ fun clearBackMenuChromeFocus() {
         clearRemotedKeys()
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                active.sendEmulatorControl(action = EmulatorControlAction.PauseToggle)
+                emulatorControlSendMutex.withLock {
+                    if (!_state.value.playing || session !== active) return@withLock
+                    active.sendEmulatorControl(action = EmulatorControlAction.PauseToggle)
+                }
             }.onFailure { err ->
                 ClientFileLog.append(
                     "EmulatorControl pause_toggle failed: ${err.javaClass.simpleName}: ${err.message}",
@@ -3701,12 +3779,22 @@ fun clearBackMenuChromeFocus() {
         if (pauseWire == EmulatorControlState.Unchanged) {
             return
         }
+        val requestedPause = pause
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                active.sendEmulatorControl(
-                    pause = pauseWire,
-                    force = force,
-                )
+                emulatorControlSendMutex.withLock {
+                    if (!_state.value.playing || session !== active) return@withLock
+                    if (requestedPause != null && lastSentMenuPause != requestedPause) {
+                        ClientFileLog.append(
+                            "emuControl stale pause skipped pause=$requestedPause current=$lastSentMenuPause",
+                        )
+                        return@withLock
+                    }
+                    active.sendEmulatorControl(
+                        pause = pauseWire,
+                        force = force,
+                    )
+                }
             }.onFailure { err ->
                 ClientFileLog.append(
                     "EmulatorControl send failed: ${err.javaClass.simpleName}: ${err.message}",
@@ -3822,13 +3910,19 @@ fun clearBackMenuChromeFocus() {
             if (!_state.value.playing) return@launch
             val finalWant = effectiveFastForward()
             if (lastSentFf == finalWant) return@launch
+            val active = session ?: return@launch
             lastSentFf = finalWant
             lastFfSendAtMs = System.currentTimeMillis()
             runCatching {
-                session?.sendEmulatorControl(
-                    fastForward = if (finalWant) EmulatorControlState.On else EmulatorControlState.Off,
-                    force = false,
-                )
+                emulatorControlSendMutex.withLock {
+                    if (!_state.value.playing || session !== active || lastSentFf != finalWant) {
+                        return@withLock
+                    }
+                    active.sendEmulatorControl(
+                        fastForward = if (finalWant) EmulatorControlState.On else EmulatorControlState.Off,
+                        force = false,
+                    )
+                }
             }.onFailure { err ->
                 ClientFileLog.append(
                     "EmulatorControl FF send failed: ${err.javaClass.simpleName}: ${err.message}",
@@ -4614,7 +4708,6 @@ fun clearBackMenuChromeFocus() {
                 // frames exist so we still pause for a long-open menu after init.
                 if (menuDrawerOpen &&
                     lastSentMenuPause != true &&
-                    !_state.value.controls.overlayEditing &&
                     active.videoPlayer?.hasDecodedFrames() == true
                 ) {
                     syncMenuPause()

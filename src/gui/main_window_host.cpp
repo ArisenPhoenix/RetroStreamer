@@ -769,6 +769,8 @@ void MainWindow::start_host() {
         host_cfg.video_resolution = selected_host_capture_resolution().toStdString();
         host_cfg.audio = host_audio_->isChecked();
         host_cfg.audio_port = static_cast<std::uint16_t>(host_audio_port_->value());
+        host_cfg.host_local_watch =
+            host_local_media_ != nullptr && host_local_media_->isChecked();
         if (bridge_index >= 0) {
             host_cfg.bridge_controller_index = static_cast<std::size_t>(bridge_index);
         }

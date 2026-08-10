@@ -430,6 +430,9 @@ object PacketCodec {
         displayLayout: Int = DisplayLayoutPreference.Auto.id,
         wantedFeel: Int = MediaStreamFeel.LowLatency.id,
         wantedBitrate: Int = MediaStreamBitrate.Kbps3500.id,
+        decodeQueueP95Ms: Int = 0xffff,
+        decodeQueueMaxMs: Int = 0xffff,
+        auQueueP95Ms: Int = 0xffff,
     ): ByteArray {
         val payload = WireWriter().apply {
             writeU8(clientId)
@@ -443,6 +446,9 @@ object PacketCodec {
             writeU8(displayLayout)
             writeU8(wantedFeel)
             writeU8(wantedBitrate)
+            writeU16(decodeQueueP95Ms)
+            writeU16(decodeQueueMaxMs)
+            writeU16(auQueueP95Ms)
         }.toByteArray()
         return wrap(PacketType.ViewerHeartbeat, payload)
     }

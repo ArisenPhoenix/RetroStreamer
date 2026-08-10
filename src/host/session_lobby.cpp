@@ -425,6 +425,27 @@ void finalize_session_plan_ready(SessionPlan& plan) {
     assign_seats_welcome_and_save_username(plan);
 }
 
+void log_client_hello(ClientId client_id, const ClientHello& hello) {
+    std::cout
+        << "Client " << static_cast<int>(client_id)
+        << " username=" << hello.username
+        << " display=\"" << hello.display_name << "\""
+        << " mode=" << session_mode_name(hello.session_mode)
+        << " players=" << static_cast<int>(hello.requested_players);
+    if (hello.selected_game_id.has_value()) {
+        std::cout << " game=\"" << *hello.selected_game_id << "\"";
+    } else {
+        std::cout << " game=\"\"";
+    }
+    std::cout
+        << " device=" << client_device_class_name(hello.device.device_class)
+        << " perf=" << client_performance_class_name(hello.device.performance_class)
+        << " threads=" << static_cast<int>(hello.device.hardware_threads)
+        << " screen=" << hello.device.screen_width << "x" << hello.device.screen_height
+        << " platform=" << hello.device.platform_version
+        << '\n';
+}
+
 SessionPlan make_singleplayer_session_plan(
     ClientId client_id,
     ClientHello hello,
@@ -465,6 +486,7 @@ SessionPlan make_singleplayer_session_plan(
     SessionPlan plan;
     plan.selected_game_id = *hello.selected_game_id;
     plan.session_mode = GameSessionMode::SinglePlayer;
+    log_client_hello(client_id, hello);
     plan.clients.push_back(SessionClientConnection{
         client_id,
         std::move(hello),
@@ -756,21 +778,7 @@ SessionPlan gather_session_clients(
                 throw std::runtime_error("session clients selected different session modes");
             }
 
-            std::cout
-                << "Client " << static_cast<int>(client_id)
-                << " username=" << authenticated_hello.username
-                << " display=\"" << authenticated_hello.display_name << "\""
-                << " mode=" << session_mode_name(authenticated_hello.session_mode)
-                << " players=" << static_cast<int>(authenticated_hello.requested_players)
-                << " game=\"" << *authenticated_hello.selected_game_id << "\""
-                << " device=" << client_device_class_name(authenticated_hello.device.device_class)
-                << " perf=" << client_performance_class_name(
-                       authenticated_hello.device.performance_class)
-                << " threads=" << static_cast<int>(authenticated_hello.device.hardware_threads)
-                << " screen=" << authenticated_hello.device.screen_width
-                << "x" << authenticated_hello.device.screen_height
-                << " platform=" << authenticated_hello.device.platform_version
-                << '\n';
+            log_client_hello(client_id, authenticated_hello);
 
             plan.clients.push_back(SessionClientConnection{
                 client_id,

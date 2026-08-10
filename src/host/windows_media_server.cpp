@@ -296,6 +296,16 @@ bool WindowsMediaServer::reconfigure_shared_video(const VideoEncodeSettings& set
     return video_running_;
 }
 
+bool WindowsMediaServer::restart_shared_audio() {
+    try {
+        restart_audio();
+    } catch (const std::exception& error) {
+        std::cerr << "Windows shared audio restart failed: " << error.what() << '\n';
+        return false;
+    }
+    return audio_running_;
+}
+
 bool WindowsMediaServer::complete_video_tier_cutover(ClientId, std::string_view) {
     return false;
 }

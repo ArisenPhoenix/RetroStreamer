@@ -38,6 +38,52 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.util.concurrent.atomic.AtomicReference
 
+private const val DEFAULT_MIN_GAP_PACKETS_FOR_SOFT_FLUSH = 16
+// Chromecast/Amlogic keeps decoding through small RTP gaps, but MediaCodec.flush()
+// regularly paints stale rows as top-of-screen bars. For TV, prefer depayloader
+// drop-until-IDR recovery and reserve codec flush for actual decode stalls.
+private const val TV_MIN_GAP_PACKETS_FOR_SOFT_FLUSH = Int.MAX_VALUE
+private const val DEFAULT_SOFT_FLUSH_MIN_INTERVAL_NS = 5_000_000_000L
+private const val TV_SOFT_FLUSH_MIN_INTERVAL_NS = DEFAULT_SOFT_FLUSH_MIN_INTERVAL_NS
+private const val DEFAULT_REORDER_BUFFER_PACKETS = 16
+private const val TV_REORDER_BUFFER_PACKETS = 32
+
+private data class VideoRecoveryPolicy(
+    val minGapPacketsForSoftFlush: Int,
+    val softFlushMinIntervalNs: Long,
+    val reorderBufferPackets: Int,
+)
+
+private fun videoRecoveryPolicyFor(deviceClass: ClientDeviceClass): VideoRecoveryPolicy =
+    if (deviceClass == ClientDeviceClass.Tv) {
+        VideoRecoveryPolicy(
+            minGapPacketsForSoftFlush = TV_MIN_GAP_PACKETS_FOR_SOFT_FLUSH,
+            softFlushMinIntervalNs = TV_SOFT_FLUSH_MIN_INTERVAL_NS,
+            reorderBufferPackets = TV_REORDER_BUFFER_PACKETS,
+        )
+    } else {
+        VideoRecoveryPolicy(
+            minGapPacketsForSoftFlush = DEFAULT_MIN_GAP_PACKETS_FOR_SOFT_FLUSH,
+            softFlushMinIntervalNs = DEFAULT_SOFT_FLUSH_MIN_INTERVAL_NS,
+            reorderBufferPackets = DEFAULT_REORDER_BUFFER_PACKETS,
+        )
+    }
+
+private fun rtpVideoPlayerFor(
+    port: Int,
+    deviceClass: ClientDeviceClass,
+    holdAfterFirstAccessUnit: Boolean = false,
+): RtpVideoPlayer {
+    val policy = videoRecoveryPolicyFor(deviceClass)
+    return RtpVideoPlayer(
+        listenPort = port,
+        holdAfterFirstAccessUnit = holdAfterFirstAccessUnit,
+        minGapPacketsForSoftFlush = policy.minGapPacketsForSoftFlush,
+        softFlushMinIntervalNs = policy.softFlushMinIntervalNs,
+        reorderBufferPackets = policy.reorderBufferPackets,
+    )
+}
+
 data class CatalogResult(
     val host: String,
     val controlPort: Int,
@@ -231,6 +277,11 @@ data class JoinedPlaySession(
     /** Headless decode probe so cutover ACK waits for real frames, not just RTP AUs. */
     private var stagingProbeReader: ImageReader? = null
     private var stagingProbeThread: HandlerThread? = null
+    private var promotedProbeReader: ImageReader? = null
+    private var promotedProbeThread: HandlerThread? = null
+
+    private fun videoPlayerForPort(port: Int): RtpVideoPlayer =
+        rtpVideoPlayerFor(port, device.deviceClass)
 
     @Volatile
     var wantedTier: Int = MediaQualityTier.Medium.id
@@ -487,16 +538,13 @@ data class JoinedPlaySession(
                 control.send(PacketCodec.mediaVideoReady(videoUri))
                 stagingReadySent = true
                 true
-            } else if (device.deviceClass == ClientDeviceClass.Tv) {
-                val player = RtpVideoPlayer(port, holdAfterFirstAccessUnit = true).also { it.startReceiving() }
-                ClientFileLog.conn("video staging bind tv-light port=$port uri=$videoUri")
-                stagingPlayer = player
-                stagingUri = videoUri
-                true
             } else {
-                val player = RtpVideoPlayer(port).also { it.startReceiving() }
+                // Warm-decode on a headless surface so Ready means frames out, not
+                // merely "UDP heard". TV used to ACK on the first keyframe AU without
+                // decoding (holdAfterFirstAccessUnit), then promote left the player
+                // gated to a single AU — packets arrived, frames stayed at 0.
+                val player = videoPlayerForPort(port).also { it.startReceiving() }
                 ClientFileLog.conn("video staging bind port=$port uri=$videoUri")
-                // Decode without a visible view so Ready means "frames out", not "UDP heard".
                 val thread = HandlerThread("staging-probe-$port").also { it.start() }
                 val reader = ImageReader.newInstance(1920, 1080, ImageFormat.PRIVATE, 3)
                 reader.setOnImageAvailableListener(
@@ -531,9 +579,6 @@ data class JoinedPlaySession(
         val uri = stagingUri ?: return null
         val staging = stagingPlayer ?: return null
         if (stagingReadySent) return null
-        if (device.deviceClass == ClientDeviceClass.Tv && staging.hasReceivedKeyframeAccessUnit()) {
-            return sendVideoReady(uri)
-        }
         if (!staging.hasDecodedFrames()) return null
         return sendVideoReady(uri)
     }
@@ -561,9 +606,14 @@ data class JoinedPlaySession(
         val staging = stagingPlayer
         if (staging != null && staging.port == port) {
             val previous = videoPlayer
-            // Drop the headless probe surface; the UI will attach a real Surface.
-            staging.detachSurface()
-            clearStagingProbe()
+            promotedProbeReader = stagingProbeReader
+            promotedProbeThread = stagingProbeThread
+            stagingProbeReader = null
+            stagingProbeThread = null
+            staging.onOutputSurfaceAttached = {
+                clearPromotedProbe()
+                staging.onOutputSurfaceAttached = null
+            }
             videoPlayer = staging
             stagingPlayer = null
             stagingUri = null
@@ -589,7 +639,7 @@ data class JoinedPlaySession(
         stagingUri = null
         stagingReadySent = false
         runCatching { videoPlayer?.close() }
-        videoPlayer = RtpVideoPlayer(port).also { it.startReceiving() }
+        videoPlayer = videoPlayerForPort(port).also { it.startReceiving() }
         ClientFileLog.conn("video rebind live port=$port")
         return videoPlayer
     }
@@ -618,6 +668,7 @@ data class JoinedPlaySession(
                 "video=${videoPlayer != null} audio=${audioPlayer != null}",
         )
         clearStagingProbe()
+        clearPromotedProbe()
         runCatching { stagingPlayer?.close() }
         stagingPlayer = null
         stagingUri = null
@@ -633,6 +684,14 @@ data class JoinedPlaySession(
         stagingProbeThread?.quitSafely()
         stagingProbeThread = null
     }
+
+    private fun clearPromotedProbe() {
+        runCatching { promotedProbeReader?.close() }
+        promotedProbeReader = null
+        promotedProbeThread?.quitSafely()
+        promotedProbeThread = null
+    }
+
 }
 
 /**
@@ -754,13 +813,14 @@ object SessionJoiner {
                         media = p.value
                         if (videoPlayer == null && p.value.videoUri.isNotBlank()) {
                             val port = MediaUris.portFrom(p.value.videoUri, MediaUris.H264_SCHEME)
-                            videoPlayer = RtpVideoPlayer(port).also { it.startReceiving() }
-                            ClientFileLog.conn("join video bind port=$port")
+                            videoPlayer = rtpVideoPlayerFor(port, device.deviceClass)
+                                .also { it.startReceiving() }
+                            ClientFileLog.conn("join video bind port=$port uri=${p.value.videoUri}")
                         }
                         if (receiveAudio && audioPlayer == null && p.value.audioUri.isNotBlank()) {
                             val port = MediaUris.portFrom(p.value.audioUri, MediaUris.OPUS_SCHEME)
                             audioPlayer = RtpOpusPlayer(port).also { it.start() }
-                            ClientFileLog.conn("join audio bind port=$port")
+                            ClientFileLog.conn("join audio bind port=$port uri=${p.value.audioUri}")
                         }
                     }
                     is IncomingPacket.Starting -> starting = p.value

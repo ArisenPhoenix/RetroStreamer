@@ -376,6 +376,8 @@ QWidget* MainWindow::build_stream_tab() {
     client_stream_bitrate_ = new QComboBox(client_box);
     client_stream_bitrate_->addItem("Auto", static_cast<int>(archstreamer::MediaStreamBitrate::Auto));
     client_stream_bitrate_->addItem("0.8 Mbps", static_cast<int>(archstreamer::MediaStreamBitrate::Kbps800));
+    client_stream_bitrate_->addItem("1.5 Mbps", static_cast<int>(archstreamer::MediaStreamBitrate::Kbps1500));
+    client_stream_bitrate_->addItem("2.5 Mbps", static_cast<int>(archstreamer::MediaStreamBitrate::Kbps2500));
     client_stream_bitrate_->addItem("3.5 Mbps", static_cast<int>(archstreamer::MediaStreamBitrate::Kbps3500));
     client_stream_bitrate_->addItem("8 Mbps", static_cast<int>(archstreamer::MediaStreamBitrate::Kbps8000));
     client_stream_bitrate_->addItem("12 Mbps", static_cast<int>(archstreamer::MediaStreamBitrate::Kbps12000));

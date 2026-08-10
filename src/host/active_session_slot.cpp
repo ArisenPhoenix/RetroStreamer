@@ -8,6 +8,7 @@
 #include "host/cadence_session_events.hpp"
 #include "host/cadence_session_tracker.hpp"
 #include "host/capture_platform.hpp"
+#include "host/client_stream_policy.hpp"
 #include "host/game_catalog.hpp"
 #include "host/gpu_select.hpp"
 #include "host/host_launch_planner.hpp"
@@ -516,13 +517,12 @@ void ActiveSessionSlot::drain_pending_joins() {
                 reconnected_player->last_seen = std::chrono::steady_clock::now();
                 reconnected_player->disconnected_at = {};
                 reconnected_player->disconnect_reason.clear();
-                // Match what add_client just latched (720p/medium shared tee).
-                reconnected_player->applied_tier = MediaQualityTier::Medium;
-                reconnected_player->applied_size = MediaStreamSize::P720;
-                reconnected_player->applied_feel = MediaStreamFeel::LowLatency;
-                reconnected_player->applied_bitrate = MediaStreamBitrate::Auto;
+                reconnected_player->applied_tier = plan.session_video_tier;
+                reconnected_player->applied_size = plan.session_video_size;
+                reconnected_player->applied_feel = plan.session_video_feel;
+                reconnected_player->applied_bitrate = plan.session_video_bitrate;
                 reconnected_player->adaptive_fps_cap = MediaStreamFps::Auto;
-                reconnected_player->applied_fps = MediaStreamFps::Fps30;
+                reconnected_player->applied_fps = plan.session_video_fps;
                 reconnected_player->pending_tier.reset();
                 reconnected_player->pending_size.reset();
                 reconnected_player->pending_feel.reset();
@@ -535,6 +535,9 @@ void ActiveSessionSlot::drain_pending_joins() {
                 reconnected_player->positive_video_heartbeats = 0;
                 reconnected_player->initial_video_settings_ready = false;
                 reconnected_player->initial_video_settings_defer_logged = false;
+                // add_client restarts the shared encode; arm stall recovery window.
+                reconnected_player->last_video_reconfigure = std::chrono::steady_clock::now();
+                reconnected_player->video_zero_frame_streak = 0;
                 if (!endpoint.video_uri.empty() || !endpoint.audio_uri.empty()) {
                     reconnected_player->media_endpoint = endpoint;
                 } else {
@@ -925,7 +928,13 @@ void ActiveSessionSlot::run_session() {
         gamescope_vk_device = "10de:2504";
     }
 
-    const auto media_config = media_plan_config_for(config);
+    std::uint16_t capture_w = 1920;
+    std::uint16_t capture_h = 1080;
+    parse_video_resolution(config.video_resolution, capture_w, capture_h);
+    configure_initial_session_video(plan, capture_w, capture_h);
+
+    auto media_config = media_plan_config_for(config);
+    media_config.initial_video_settings = plan.session_video_settings;
     auto media_destinations = std::vector<HostMediaDestination>{};
     auto media_streams = std::vector<MediaClientStream>{};
     if (config.video || config.audio) {
@@ -1039,14 +1048,10 @@ void ActiveSessionSlot::run_session() {
     if (switch_backend) {
         std::vector<ClientHello> client_hellos;
         client_hellos.reserve(plan.clients.size());
-        auto prefer_handheld_mode = false;
         for (const auto& client : plan.clients) {
             client_hellos.push_back(client.hello);
-            if (client.hello.requested_players > 0 &&
-                client.hello.device.device_class == ClientDeviceClass::Tv) {
-                prefer_handheld_mode = true;
-            }
         }
+        const auto prefer_handheld_mode = session_prefers_switch_handheld_mode(plan);
         const auto profile_name = resolve_switch_profile_display_name(
             save_profile_.username, plan.host_hello, client_hellos);
         // Save leaf = catalog content stem (.m3m when hosted as a map; not the ROM= target).
@@ -1247,9 +1252,6 @@ void ActiveSessionSlot::run_session() {
     send_session_starting_to_clients(plan);
 
     if (media_server_ != nullptr) {
-        std::uint16_t capture_w = 1920;
-        std::uint16_t capture_h = 1080;
-        parse_video_resolution(config.video_resolution, capture_w, capture_h);
         session_monitor_.emplace(
             plan,
             *input_router_,
@@ -1285,7 +1287,6 @@ void ActiveSessionSlot::run_session() {
         /*audio_slot_index=*/std::nullopt,
         *gamepads_,
         launch_plan.players,
-        config.pulse_input,
         keyboard_.get(),
         gamescope_capture_,
         xtest_display,

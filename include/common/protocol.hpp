@@ -437,6 +437,9 @@ enum class MediaStreamBitrate : std::uint8_t {
     Kbps8000 = 3,
     Kbps12000 = 4,
     Kbps25000 = 5,
+    // Finer TV/Wi‑Fi steps between 0.8 and 3.5 (new IDs; older peers ignore).
+    Kbps1500 = 6,
+    Kbps2500 = 7,
 };
 
 /**
@@ -526,10 +529,16 @@ inline MediaStreamBitrate media_stream_bitrate_for_settings(const VideoEncodeSet
     if (settings.bitrate_kbps >= 6000) {
         return MediaStreamBitrate::Kbps8000;
     }
-    if (settings.bitrate_kbps <= 1000) {
-        return MediaStreamBitrate::Kbps800;
+    if (settings.bitrate_kbps >= 3000) {
+        return MediaStreamBitrate::Kbps3500;
     }
-    return MediaStreamBitrate::Kbps3500;
+    if (settings.bitrate_kbps >= 2000) {
+        return MediaStreamBitrate::Kbps2500;
+    }
+    if (settings.bitrate_kbps >= 1200) {
+        return MediaStreamBitrate::Kbps1500;
+    }
+    return MediaStreamBitrate::Kbps800;
 }
 
 inline std::uint16_t media_stream_size_height(MediaStreamSize size) {
@@ -626,6 +635,10 @@ inline std::uint16_t bitrate_kbps_for_stream_bitrate(MediaStreamBitrate bitrate)
     switch (bitrate) {
     case MediaStreamBitrate::Kbps800:
         return 800;
+    case MediaStreamBitrate::Kbps1500:
+        return 1500;
+    case MediaStreamBitrate::Kbps2500:
+        return 2500;
     case MediaStreamBitrate::Kbps8000:
         return 8000;
     case MediaStreamBitrate::Kbps12000:
@@ -910,6 +923,10 @@ inline const char* media_stream_bitrate_name(MediaStreamBitrate bitrate) {
         return "auto";
     case MediaStreamBitrate::Kbps800:
         return "0.8Mbps";
+    case MediaStreamBitrate::Kbps1500:
+        return "1.5Mbps";
+    case MediaStreamBitrate::Kbps2500:
+        return "2.5Mbps";
     case MediaStreamBitrate::Kbps3500:
         return "3.5Mbps";
     case MediaStreamBitrate::Kbps8000:

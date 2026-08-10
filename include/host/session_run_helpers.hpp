@@ -88,7 +88,6 @@ void post_emulator_start_warmup(
     std::optional<int> audio_slot_index,
     VirtualGamepadBus& pads,
     RetroArchPort players,
-    bool pulse_input,
     VirtualKeyboard* keyboard = nullptr,
     bool gamescope_capture = false,
     const std::string& preferred_display = {},

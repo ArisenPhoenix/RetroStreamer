@@ -1,18 +1,17 @@
 package com.archstreamer.client.ui
 
 import android.app.Application
-import android.app.ActivityManager
-import android.content.Context
 import android.content.res.Configuration
 import android.hardware.input.InputManager
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.KeyEvent
 import android.view.MotionEvent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.archstreamer.client.AndroidDeviceProfile
 import com.archstreamer.client.SessionKeepAliveService
+import com.archstreamer.client.clientInputPolicyFor
 import com.archstreamer.client.cadence.CadenceControlsStore
 import com.archstreamer.client.media.RtpVideoPlayer
 import com.archstreamer.client.net.ArtFetcher
@@ -35,8 +34,6 @@ import com.archstreamer.client.pair.PairTarget
 import com.archstreamer.client.protocol.IncomingPacket
 import com.archstreamer.client.protocol.PacketCodec
 import com.archstreamer.client.protocol.ClientDeviceCapabilities
-import com.archstreamer.client.protocol.ClientDeviceClass
-import com.archstreamer.client.protocol.ClientPerformanceClass
 import com.archstreamer.client.protocol.ControllerState
 import com.archstreamer.client.protocol.DisplayLayoutPreference
 import com.archstreamer.client.protocol.DiscControlAction
@@ -205,7 +202,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         )
         val pads = PhysicalGamepad.connectedPads()
         val padConnected = pads.isNotEmpty()
-        val preferPhysical = if (isTvDevice() && padConnected) {
+        val inputPolicy = inputPolicy()
+        val preferPhysical = if (inputPolicy.forcePhysicalControllerWhenConnected && padConnected) {
             true
         } else {
             base.controls.usePhysicalController
@@ -288,6 +286,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private var discoveryJob: Job? = null
     private var menuPauseJob: Job? = null
     private var ffJob: Job? = null
+    /** Debounce brief L2/R2/Space releases so F1 is not toggled every flicker. */
+    private var ffHoldReleaseJob: Job? = null
     /** Emulator control commands are order-sensitive toggle wrappers on the host. */
     private val emulatorControlSendMutex = Mutex()
     /** Last effective FF On/Off sent to the host (latch ∨ hold). */
@@ -297,6 +297,8 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private var ffMenuLatched = false
     /** Keyboard F / overlay / remapped pad hold. */
     private var ffHoldPressed = false
+    /** Next FF send should force host apply (stuck Custom@200% recovery). */
+    private var ffForceNextSend = false
     /**
      * False until the first decoded video frame. Ignores hold edges during stream
      * init so startup noise cannot poke Ryujinx F1 before client/host agree on Off.
@@ -932,7 +934,9 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         val connected = pads.isNotEmpty()
         val label = pads.firstOrNull()?.name.orEmpty()
         val editing = _state.value.controls.overlayEditing
-        val effectivePreferPhysical = if (isTvDevice() && connected) true else preferPhysical
+        val inputPolicy = inputPolicy()
+        val effectivePreferPhysical =
+            if (inputPolicy.forcePhysicalControllerWhenConnected && connected) true else preferPhysical
         val active = effectivePreferPhysical && connected && !editing
         val wasActive = _state.value.controls.physicalInputActive
         // Once seen, a keyboard stays seen: see [ControlsState.hasKeyboardActive].
@@ -1004,7 +1008,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun requestPlayMenu() {
-        if (isTvDevice()) {
+        if (inputPolicy().useTvPlayMenu) {
             openTvPlayMenu()
             return
         }
@@ -1287,43 +1291,14 @@ fun clearBackMenuChromeFocus() {
 
     private fun menuSections(snap: UiState = _state.value): List<MenuSection> = menuFor(snap)
 
-    private fun isTvDevice(): Boolean =
-        getApplication<Application>().resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
-            Configuration.UI_MODE_TYPE_TELEVISION
+    private fun deviceProfile(): AndroidDeviceProfile =
+        AndroidDeviceProfile.from(getApplication<Application>())
+
+    private fun inputPolicy() =
+        clientInputPolicyFor(deviceProfile().deviceClass)
 
     private fun clientDeviceCapabilities(): ClientDeviceCapabilities {
-        val app = getApplication<Application>()
-        val config = app.resources.configuration
-        val metrics = app.resources.displayMetrics
-        val uiMode = config.uiMode and Configuration.UI_MODE_TYPE_MASK
-        val deviceClass = when (uiMode) {
-            Configuration.UI_MODE_TYPE_TELEVISION -> ClientDeviceClass.Tv
-            Configuration.UI_MODE_TYPE_WATCH -> ClientDeviceClass.Handheld
-            else -> if (config.smallestScreenWidthDp >= 600) {
-                ClientDeviceClass.Tablet
-            } else {
-                ClientDeviceClass.Phone
-            }
-        }
-        val threads = Runtime.getRuntime().availableProcessors().coerceIn(0, 255)
-        val memoryClass = (app.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)
-            ?.memoryClass
-            ?: 0
-        val performanceClass = when {
-            threads >= 8 && memoryClass >= 384 -> ClientPerformanceClass.High
-            threads >= 6 && memoryClass >= 192 -> ClientPerformanceClass.Medium
-            threads >= 4 && memoryClass >= 128 && deviceClass != ClientDeviceClass.Tv ->
-                ClientPerformanceClass.Medium
-            else -> ClientPerformanceClass.Low
-        }
-        return ClientDeviceCapabilities(
-            deviceClass = deviceClass,
-            performanceClass = performanceClass,
-            hardwareThreads = threads,
-            screenWidth = metrics.widthPixels,
-            screenHeight = metrics.heightPixels,
-            platformVersion = Build.VERSION.SDK_INT,
-        )
+        return deviceProfile().toCapabilities()
     }
 
     /** True when there is a cursor to move: the drawer is up, or we are inside options. */
@@ -1447,7 +1422,7 @@ fun clearBackMenuChromeFocus() {
                 if (here !is GamesRow.Filter && snap.games.filter.isNotEmpty()) {
                     updateGames { copy(cursorKey = GamesRow.FILTER_KEY) }
                 } else {
-                    if (isTvDevice()) {
+                    if (inputPolicy().useTvPlayMenu) {
                         onTvOfflineMenuShown()
                     } else {
                         _menuEffects.tryEmit(MenuEffect.OpenDrawer)
@@ -1597,7 +1572,7 @@ fun clearBackMenuChromeFocus() {
             markPaneOpening(outcome.focus.section)
             selectSection(outcome.focus.section)
         }
-        if (isTvDevice() && entered && outcome.focus.section == NavSection.Games) {
+        if (inputPolicy().closeMenuRailWhenEnteringGames && entered && outcome.focus.section == NavSection.Games) {
             menuDrawerOpen = false
             syncMenuPause()
         }
@@ -2114,8 +2089,8 @@ fun clearBackMenuChromeFocus() {
     /** Dismiss overlay/stream settings and return to the live play surface. */
     fun returnToPlay() {
         if (!_state.value.playing) return
-        commitStreamPrefsIfLeaving(NavSection.Games, "return to play")
         val wasMenuOpen = menuDrawerOpen
+        val wasMenuPaused = lastSentMenuPause == true
         menuDrawerOpen = false
         backMenuChromeFocused = false
         resetMenuHats()
@@ -2128,7 +2103,18 @@ fun clearBackMenuChromeFocus() {
                 menu = it.menu.copy(inOptions = false, editing = false),
             )
         }
-        if (wasMenuOpen) syncMenuPause()
+        if (wasMenuPaused) {
+            menuPauseJob?.cancel()
+            menuPauseJob = null
+            pushEmulatorControls(pause = false, force = true)
+            viewModelScope.launch(Dispatchers.IO) {
+                delay(MENU_PAUSE_DEBOUNCE_MS + 150L)
+                commitStreamPrefsToSession("return to play")
+            }
+        } else {
+            commitStreamPrefsToSession("return to play")
+            if (wasMenuOpen) syncMenuPause()
+        }
     }
 
     fun onHostChange(value: String) {
@@ -3668,9 +3654,17 @@ fun clearBackMenuChromeFocus() {
     /**
      * Play-menu / switch latch. Turns FF on and leaves it alone until turned off.
      * Hold input is separate — releasing R2 must not clear this latch.
+     * Turning Off clears any sticky hold and force-applies on the host so a desynced
+     * Ryujinx Custom@200% can recover when the cache already thinks FF is off.
      */
     fun setFastForward(enabled: Boolean) {
         if (!_state.value.playing) return
+        if (!enabled) {
+            ffHoldReleaseJob?.cancel()
+            ffHoldPressed = false
+            gamepadTracker.clearFastForwardHold()
+            ffForceNextSend = true
+        }
         ffMenuLatched = enabled
         updateGameOptions { copy(fastForward = enabled) }
         publishEffectiveFastForward()
@@ -3679,6 +3673,8 @@ fun clearBackMenuChromeFocus() {
     /**
      * Hold-to-FF from overlay pad, remapped L2/R2, or keyboard Space.
      * Ignored until [ffInputArmed] so stream startup cannot poke the host.
+     * Releases are debounced — DualSense trigger noise was flickering hold and
+     * desyncing Ryujinx F1 VSync.
      */
     fun setFastForwardHold(held: Boolean) {
         if (!_state.value.playing) return
@@ -3688,21 +3684,35 @@ fun clearBackMenuChromeFocus() {
             }
             return
         }
-        if (ffHoldPressed == held) return
-        ffHoldPressed = held
-        publishEffectiveFastForward()
+        if (held) {
+            ffHoldReleaseJob?.cancel()
+            ffHoldReleaseJob = null
+            if (ffHoldPressed) return
+            ffHoldPressed = true
+            publishEffectiveFastForward()
+            return
+        }
+        if (!ffHoldPressed) return
+        ffHoldReleaseJob?.cancel()
+        ffHoldReleaseJob = viewModelScope.launch {
+            delay(FF_HOLD_RELEASE_DEBOUNCE_MS)
+            if (!_state.value.playing) return@launch
+            ffHoldPressed = false
+            publishEffectiveFastForward()
+        }
     }
 
     private fun effectiveFastForward(): Boolean = ffMenuLatched || ffHoldPressed
 
     /**
-     * Send EmulatorControl FF only when latch∨hold changes. No force, no Off retries —
+     * Send EmulatorControl FF only when latch∨hold changes. No Off retries by default —
      * those re-cycled Ryujinx F1 and left Custom@200% stuck while UI showed Off.
+     * Explicit menu Off sets [ffForceNextSend] for a one-shot recovery tap.
      */
     private fun publishEffectiveFastForward() {
         if (!_state.value.playing) return
         val want = effectiveFastForward()
-        if (lastSentFf == want) return
+        if (lastSentFf == want && !ffForceNextSend) return
         scheduleFastForwardSend()
     }
 
@@ -3902,17 +3912,20 @@ fun clearBackMenuChromeFocus() {
             delay(FF_COALESCE_MS)
             if (!_state.value.playing) return@launch
             val latest = effectiveFastForward()
-            if (lastSentFf == latest) return@launch
+            val force = ffForceNextSend && !latest
+            if (lastSentFf == latest && !force) return@launch
             val elapsed = System.currentTimeMillis() - lastFfSendAtMs
             if (lastFfSendAtMs > 0L && elapsed < FF_MIN_INTERVAL_MS) {
                 delay(FF_MIN_INTERVAL_MS - elapsed)
             }
             if (!_state.value.playing) return@launch
             val finalWant = effectiveFastForward()
-            if (lastSentFf == finalWant) return@launch
+            val finalForce = ffForceNextSend && !finalWant
+            if (lastSentFf == finalWant && !finalForce) return@launch
             val active = session ?: return@launch
             lastSentFf = finalWant
             lastFfSendAtMs = System.currentTimeMillis()
+            ffForceNextSend = false
             runCatching {
                 emulatorControlSendMutex.withLock {
                     if (!_state.value.playing || session !== active || lastSentFf != finalWant) {
@@ -3920,7 +3933,7 @@ fun clearBackMenuChromeFocus() {
                     }
                     active.sendEmulatorControl(
                         fastForward = if (finalWant) EmulatorControlState.On else EmulatorControlState.Off,
-                        force = false,
+                        force = finalForce,
                     )
                 }
             }.onFailure { err ->
@@ -3930,7 +3943,7 @@ fun clearBackMenuChromeFocus() {
                 lastSentFf = null
             }
             ClientFileLog.append(
-                "emuControl push pause=- ff=$finalWant force=false " +
+                "emuControl push pause=- ff=$finalWant force=$finalForce " +
                     "(latch=$ffMenuLatched hold=$ffHoldPressed)",
             )
         }
@@ -3939,8 +3952,11 @@ fun clearBackMenuChromeFocus() {
     private fun resetFastForwardSendState() {
         ffJob?.cancel()
         ffJob = null
+        ffHoldReleaseJob?.cancel()
+        ffHoldReleaseJob = null
         ffMenuLatched = false
         ffHoldPressed = false
+        ffForceNextSend = false
         ffInputArmed = false
         lastSentFf = null
         lastFfSendAtMs = 0L
@@ -4040,7 +4056,7 @@ fun clearBackMenuChromeFocus() {
                     reloadControlsFromLocalStore()
                 }
                 ClientFileLog.append("Catalog loaded: ${catalog.games.size} games from $host:$port")
-                if (isTvDevice()) menuDrawerOpen = false
+                if (inputPolicy().closeMenuRailWhenEnteringGames) menuDrawerOpen = false
                 val recentIds = loadRecentGameIds(host, snap.settings.controlPort)
                 val expanded = if (recentIds.any { id -> catalog.games.any { it.id == id } }) {
                     setOf(RECENT_GROUP)
@@ -4137,8 +4153,8 @@ fun clearBackMenuChromeFocus() {
         }
     }
 
-    private fun prepareTvControllerForPlay(): Boolean {
-        if (!isTvDevice()) return true
+    private fun prepareControllerForPlay(): Boolean {
+        if (!inputPolicy().requireControllerForPlay) return true
         refreshPhysicalPads(preferPhysical = true)
         if (_state.value.controls.physicalPadConnected) return true
         _state.update {
@@ -4183,7 +4199,7 @@ fun clearBackMenuChromeFocus() {
             }
             return
         }
-        if (!prepareTvControllerForPlay()) return
+        if (!prepareControllerForPlay()) return
         snap = _state.value
 
         viewModelScope.launch {
@@ -4998,7 +5014,9 @@ fun clearBackMenuChromeFocus() {
         /** Hat axis magnitude that counts as a D-pad press while navigating menus. */
         private const val HAT_EDGE = 0.5f
         /** Ignore FF button bounce before rate-limit clock. */
-        private const val FF_COALESCE_MS = 80L
+        private const val FF_COALESCE_MS = 120L
+        /** Ignore brief L2/R2/Space release blips before sending FF Off. */
+        private const val FF_HOLD_RELEASE_DEBOUNCE_MS = 200L
         /** Max one FF EmulatorControl edge per second (Ryujinx F1 cycle). */
         private const val FF_MIN_INTERVAL_MS = 1_000L
         /** Match desktop client_app A/V resync cooldown. */

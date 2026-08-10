@@ -69,7 +69,7 @@ class MainActivity : ComponentActivity() {
                 }
             },
         )
-        if (!isTvDevice()) {
+        if (!AndroidDeviceProfile.from(this).isTv) {
             showComposeApp()
             return
         }
@@ -86,10 +86,6 @@ class MainActivity : ComponentActivity() {
             showComposeApp()
         }, 1_000L)
     }
-
-    private fun isTvDevice(): Boolean =
-        resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
-            Configuration.UI_MODE_TYPE_TELEVISION
 
     private fun showComposeApp() {
         setContent {

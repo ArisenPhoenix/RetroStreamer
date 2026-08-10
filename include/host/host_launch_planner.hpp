@@ -35,6 +35,8 @@ struct HostMediaPlanConfig {
     std::uint16_t video_port = 5004;
     std::uint16_t audio_port = 6004;
     bool include_host_loopback = false;
+    VideoEncodeSettings initial_video_settings =
+        video_encode_settings(MediaStreamSize::P720, MediaQualityTier::Medium);
 };
 
 struct HostMediaDestination {

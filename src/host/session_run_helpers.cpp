@@ -371,7 +371,7 @@ void SessionLoopCadence::tick() {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     } else {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
+    } 
 }
 
 void post_emulator_start_warmup(
@@ -383,7 +383,6 @@ void post_emulator_start_warmup(
     std::optional<int> audio_slot_index,
     VirtualGamepadBus& pads,
     RetroArchPort players,
-    bool pulse_input,
     VirtualKeyboard* keyboard,
     bool gamescope_capture,
     const std::string& preferred_display,
@@ -421,7 +420,7 @@ void post_emulator_start_warmup(
         }
     }
 
-    if (pulse_input && players > 0) {
+    if (config.pulse_input && players > 0) {
         std::this_thread::sleep_for(std::chrono::seconds(2));
         pulse_virtual_pad_a(pads);
     }

@@ -31,6 +31,7 @@ HostMediaPlanConfig media_plan_config_for(const HostAppConfig& config) {
         config.video_port,
         config.audio_port,
         config.host_local_watch,
+        video_encode_settings(MediaStreamSize::P720, MediaQualityTier::Medium),
     };
 }
 

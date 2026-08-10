@@ -68,6 +68,17 @@ public:
     /** Primary (logical-host) emulator process. */
     virtual RetroArchProcess& emulator() = 0;
     virtual const RetroArchProcess& emulator() const = 0;
+
+    std::string info() {
+        std::ostringstream o;
+        o << "Session runtime: " << kind_name()
+        << " (shared_emulator=" << (uses_shared_emulator() ? "yes" : "no")
+        << ", instances=" << static_cast<int>(emulator_instance_count())
+        << ", logical_host_client=" << static_cast<int>(logical_host_client_id())
+        << ", save_user=" << save_username()
+        << ")\n";
+        return o.str();
+    }
 };
 
 /** Inputs to promote a shared Single/Multi runtime into Link. */

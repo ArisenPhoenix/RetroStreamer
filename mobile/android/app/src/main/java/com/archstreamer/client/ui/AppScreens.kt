@@ -80,6 +80,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import android.content.res.Configuration
 import androidx.compose.foundation.lazy.rememberLazyListState
+import com.archstreamer.client.AndroidDeviceProfile
 import com.archstreamer.client.protocol.GameInfo
 import com.archstreamer.client.ui.games.GamesRow
 import com.archstreamer.client.ui.games.gamesCursor
@@ -99,9 +100,7 @@ import android.graphics.Bitmap as AndroidBitmap
 fun ArchStreamerApp(viewModel: ClientViewModel) {
     val state by viewModel.state.collectAsState()
     val configuration = LocalConfiguration.current
-    val isTv =
-        configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
-            Configuration.UI_MODE_TYPE_TELEVISION
+    val isTv = AndroidDeviceProfile.isTv(configuration)
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     var hamburgerFocused by remember { mutableStateOf(false) }
@@ -808,9 +807,7 @@ private fun GamesSection(
     val listRows = rows.filterNot { it is GamesRow.Filter }
     val listState = rememberLazyListState()
     val configuration = LocalConfiguration.current
-    val isTv =
-        configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
-            Configuration.UI_MODE_TYPE_TELEVISION
+    val isTv = AndroidDeviceProfile.isTv(configuration)
     val cursorIndex = listRows.indexOfFirst { it.key == cursor?.key }
     LaunchedEffect(cursorIndex) {
         if (cursorIndex >= 0) {

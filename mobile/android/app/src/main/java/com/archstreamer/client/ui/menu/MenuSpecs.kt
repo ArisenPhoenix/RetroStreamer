@@ -359,8 +359,8 @@ object StreamSpec : SectionSpec {
         add(
             body(
                 "stream-blurb",
-                "Heartbeats tell the host which encode ladder to send. " +
-                    "Mobile defaults are 30 fps @ 3.5 Mbps, 540p, Low latency.",
+                "Defaults: 30 fps @ 3.5 Mbps, 540p, Low latency. " +
+                "Bitrate: 0.8 / 1.5 / 2.5 / 3.5 / 8 / 12 / 25 Mbps.",
             ),
         )
         val tiers = listOf(
@@ -380,6 +380,8 @@ object StreamSpec : SectionSpec {
         )
         val bitrates = listOf(
             MediaStreamBitrate.Kbps800 to "0.8",
+            MediaStreamBitrate.Kbps1500 to "1.5",
+            MediaStreamBitrate.Kbps2500 to "2.5",
             MediaStreamBitrate.Kbps3500 to "3.5",
             MediaStreamBitrate.Kbps8000 to "8",
             MediaStreamBitrate.Kbps12000 to "12",
@@ -428,7 +430,7 @@ object StreamSpec : SectionSpec {
         add(
             small(
                 "stream-feel-blurb",
-                "Low latency = snappier controls; Smooth = more buffer (closer to older feel).",
+                "Low latency = snappier controls; Smooth = more buffer",
             ),
         )
         add(

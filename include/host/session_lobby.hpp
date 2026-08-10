@@ -67,6 +67,10 @@ struct SessionClientConnection {
     std::uint16_t decode_queue_p95_ms = ViewerHeartbeatLatencyUnknownMs;
     std::uint16_t decode_queue_max_ms = ViewerHeartbeatLatencyUnknownMs;
     std::uint16_t au_queue_p95_ms = ViewerHeartbeatLatencyUnknownMs;
+    /** Last heartbeat loss / decode deltas — used when resolving stream requests. */
+    std::uint16_t last_loss_permille = 0;
+    std::uint16_t last_frames_decoded_delta = 0;
+    std::uint8_t decode_pressure_streak = 0;
     std::uint8_t positive_video_heartbeats = 0;
     bool initial_video_settings_ready = false;
     bool initial_video_settings_defer_logged = false;
@@ -140,6 +144,10 @@ void send_error_to_session_clients(SessionPlan& plan, std::string_view message);
 void send_session_ready_to_clients(SessionPlan& plan);
 void send_session_starting_to_clients(SessionPlan& plan);
 void send_media_endpoint_to_client(SessionPlan& plan, ClientId client_id, const MediaEndpoint& endpoint);
+void configure_initial_session_video(
+    SessionPlan& plan,
+    std::uint16_t capture_width,
+    std::uint16_t capture_height);
 void send_session_ended_to_clients(SessionPlan& plan, std::string_view reason);
 DiscControlResponse apply_disc_control(SessionPlan& plan, const DiscControlRequest& request);
 const SessionClientConnection* session_client_for(const SessionPlan& plan, ClientId client_id);

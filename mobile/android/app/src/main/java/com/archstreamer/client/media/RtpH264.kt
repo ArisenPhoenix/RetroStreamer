@@ -9,8 +9,9 @@ import java.util.concurrent.atomic.AtomicLong
  * Emits Annex-B access units (start-code prefixed NALs) when the RTP marker bit is set,
  * or when a fragmented FU-A completes.
  *
- * Tracks RTP sequence gaps: incomplete FU-A is discarded and output is suppressed until
- * the next IDR so MediaCodec does not ingest a torn NAL.
+ * Layer A of loss handling: tracks RTP sequence gaps, discards incomplete FU-A, and
+ * suppresses output until the next IDR so torn NALs never leave this class. Codec
+ * flush / rebuild belongs in [RtpVideoPlayer], not here.
  */
 class RtpH264Depayloader {
     private val fuBuffer = ByteArrayOutputStream(64 * 1024)
@@ -25,6 +26,8 @@ class RtpH264Depayloader {
     /** Times an RTP sequence gap forced drop-until-IDR (green/tile risk until next keyframe). */
     private val sequenceGaps = AtomicLong(0)
     private val resyncRequested = AtomicBoolean(false)
+    /** Missing RTP packets for the pending [resyncRequested] event (0 if none). */
+    @Volatile private var pendingResyncGapPackets = 0
 
     /** Packets accepted since the last [takePacketStats] call. */
     fun takePacketStats(): PacketStats {
@@ -121,6 +124,9 @@ class RtpH264Depayloader {
         // Ignore huge jumps (reset / reorder storm); still resync to IDR.
         if (gap in 1..4095) {
             packetsLost.addAndGet(gap.toLong())
+            pendingResyncGapPackets = gap
+        } else {
+            pendingResyncGapPackets = 1
         }
         sequenceGaps.incrementAndGet()
         resyncRequested.set(true)
@@ -134,7 +140,15 @@ class RtpH264Depayloader {
         dropUntilIdr = true
     }
 
-    fun consumeResyncRequested(): Boolean = resyncRequested.getAndSet(false)
+    /**
+     * @return missing packet count for this resync (at least 1), or `null` if none pending.
+     */
+    fun consumeResyncGap(): Int? {
+        if (!resyncRequested.getAndSet(false)) return null
+        val gap = pendingResyncGapPackets
+        pendingResyncGapPackets = 0
+        return gap.coerceAtLeast(1)
+    }
 
     @Synchronized
     fun resetUntilIdr(clearSequence: Boolean = false, requestResync: Boolean = true) {
@@ -146,8 +160,14 @@ class RtpH264Depayloader {
         dropUntilIdr = true
         if (clearSequence) lastSeq = null
         if (requestResync) {
+            pendingResyncGapPackets = 1
             resyncRequested.set(true)
         }
+    }
+
+    @Synchronized
+    fun clearSequenceBaseline() {
+        lastSeq = null
     }
 
     private fun appendNal(src: ByteArray, offset: Int, size: Int, firstPacketNs: Long) {

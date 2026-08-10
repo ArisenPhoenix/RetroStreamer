@@ -265,8 +265,9 @@ class PhysicalGamepadTracker(
         when (l2) {
             OverlayAction.FastForward -> {
                 leftTrigger = 0
-                if (ffFromL2 != l2Down) {
-                    ffFromL2 = l2Down
+                val l2FfDown = leftTriggerButton || leftTriggerAxis > FF_TRIGGER_THRESHOLD
+                if (ffFromL2 != l2FfDown) {
+                    ffFromL2 = l2FfDown
                     publishFastForward()
                 }
                 if (swapFromL2) {
@@ -303,8 +304,9 @@ class PhysicalGamepadTracker(
         when (r2) {
             OverlayAction.FastForward -> {
                 rightTrigger = 0
-                if (ffFromR2 != r2Down) {
-                    ffFromR2 = r2Down
+                val r2FfDown = rightTriggerButton || rightTriggerAxis > FF_TRIGGER_THRESHOLD
+                if (ffFromR2 != r2FfDown) {
+                    ffFromR2 = r2FfDown
                     publishFastForward()
                 }
                 if (swapFromR2) {
@@ -348,6 +350,11 @@ class PhysicalGamepadTracker(
         }
     }
 
+    /** Drop sticky L2/R2/digital FF so a menu Off is not overridden by hold. */
+    fun clearFastForwardHold() {
+        clearFastForward()
+    }
+
     private fun publishFastForward() {
         onFastForward(ffFromL2 || ffFromR2 || ffFromDigital)
     }
@@ -373,6 +380,11 @@ class PhysicalGamepadTracker(
 
     companion object {
         private const val DEADZONE = 0.18f
+        /**
+         * L2/R2 remapped to FF: DualSense analog rest noise sits above 0.1 and was
+         * flickering hold-FF (F1 VSync desync → stuck Custom@200%).
+         */
+        private const val FF_TRIGGER_THRESHOLD = 0.45f
 
         /** Menu / PS center — the menu's on/off. Back stays with the remote's step-out. */
         private fun isMenuKey(keyCode: Int): Boolean =

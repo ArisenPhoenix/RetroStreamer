@@ -1223,51 +1223,71 @@ void VirtualKeyboard::set_fast_forward(bool want_on, bool force) {
     if (!plugged_) {
         return;
     }
-    if (switch_style_hotkeys_) {
-        // Ryujinx: F1 cycles Switch(0) → Unbounded(1) → Custom@200%(2) → Switch.
-        // On = land on Custom (2 taps from Switch). Off = return to Switch
-        // (1 tap from Custom, or 2 from Unbounded if an On tap was missed).
-        // Never re-cycle when the cache already matches — force retries desync F1
-        // and leave the game in Custom@200% while the client thinks FF is off.
-        if (want_on == fast_forward_) {
-            return;
-        }
-        if (!focus_emulator_window(/*settle=*/true)) {
-            std::cerr
+        if (switch_style_hotkeys_) {
+            // Ryujinx: F1 cycles Switch(0) → Unbounded(1) → Custom@200%(2) → Switch.
+            // On = land on Custom (2 taps from Switch). Off = return to Switch
+            // (1 tap from Custom, or 2 from Unbounded if an On tap was missed).
+            // F6 turbo is configured but not reliable under gamescope — keep VSync.
+            constexpr auto kF1Settle = std::chrono::milliseconds(120);
+            if (want_on == fast_forward_) {
+                // Cache already matches. force+Off: one speculative tap assumes the
+                // common desync (game still on Custom while we think Switch/off).
+                if (!(force && !want_on)) {
+                    return;
+                }
+                if (!focus_emulator_window(/*settle=*/true)) {
+                    std::cerr
+                        << "EmulatorControl: fast_forward=off recovery skipped — no focus on "
+                        << capture_display_ << '\n';
+                    return;
+                }
+                xtest_tap_keysym(XK_F1);
+                std::this_thread::sleep_for(kF1Settle);
+                ryujinx_vsync_mode_ = 0;
+                ryujinx_switch_vsync_ = true;
+                fast_forward_ = false;
+                std::cout
+                    << "EmulatorControl: fast_forward=off "
+                    << "(Ryujinx VSync recovery tap → Switch, force) on "
+                    << capture_display_ << '\n';
+                return;
+            }
+            if (!focus_emulator_window(/*settle=*/true)) {
+                std::cerr
+                    << "EmulatorControl: fast_forward=" << (want_on ? "on" : "off")
+                    << " skipped — no emulator focus on " << capture_display_ << '\n';
+                // Do not update caches — a later real edge can still apply.
+                return;
+            }
+            if (want_on) {
+                if (ryujinx_vsync_mode_ == 0) {
+                    xtest_tap_keysym(XK_F1);
+                    std::this_thread::sleep_for(kF1Settle);
+                    xtest_tap_keysym(XK_F1);
+                    ryujinx_vsync_mode_ = 2; // Custom
+                }
+                ryujinx_switch_vsync_ = false;
+                fast_forward_ = true;
+            } else {
+                // Return to Switch. From Custom need 1 tap; from Unbounded need 2
+                // (On tap missed → landed Unbounded while we thought Custom).
+                int guard = 0;
+                while (ryujinx_vsync_mode_ != 0 && guard < 2) {
+                    xtest_tap_keysym(XK_F1);
+                    std::this_thread::sleep_for(kF1Settle);
+                    ryujinx_vsync_mode_ = static_cast<std::uint8_t>((ryujinx_vsync_mode_ + 1) % 3);
+                    ++guard;
+                }
+                ryujinx_switch_vsync_ = (ryujinx_vsync_mode_ == 0);
+                fast_forward_ = false;
+            }
+            std::cout
                 << "EmulatorControl: fast_forward=" << (want_on ? "on" : "off")
-                << " skipped — no emulator focus on " << capture_display_ << '\n';
-            // Do not update caches — a later real edge can still apply.
+                << " (Ryujinx VSync mode=" << static_cast<int>(ryujinx_vsync_mode_)
+                << (want_on ? " Custom@200%" : " Switch")
+                << (force ? ", force" : "") << ") on " << capture_display_ << '\n';
             return;
         }
-        if (want_on) {
-            if (ryujinx_vsync_mode_ == 0) {
-                xtest_tap_keysym(XK_F1);
-                std::this_thread::sleep_for(std::chrono::milliseconds(40));
-                xtest_tap_keysym(XK_F1);
-                ryujinx_vsync_mode_ = 2; // Custom
-            }
-            ryujinx_switch_vsync_ = false;
-            fast_forward_ = true;
-        } else {
-            // Return to Switch. From Custom need 1 tap; from Unbounded need 2
-            // (On tap missed → landed Unbounded while we thought Custom).
-            int guard = 0;
-            while (ryujinx_vsync_mode_ != 0 && guard < 2) {
-                xtest_tap_keysym(XK_F1);
-                std::this_thread::sleep_for(std::chrono::milliseconds(40));
-                ryujinx_vsync_mode_ = static_cast<std::uint8_t>((ryujinx_vsync_mode_ + 1) % 3);
-                ++guard;
-            }
-            ryujinx_switch_vsync_ = (ryujinx_vsync_mode_ == 0);
-            fast_forward_ = false;
-        }
-        std::cout
-            << "EmulatorControl: fast_forward=" << (want_on ? "on" : "off")
-            << " (Ryujinx VSync mode=" << static_cast<int>(ryujinx_vsync_mode_)
-            << (want_on ? " Custom@200%" : " Switch")
-            << (force ? ", force" : "") << ") on " << capture_display_ << '\n';
-        return;
-    }
 
     // RetroArch hold-FF and melonDS HK_FastForward — Space while held.
     const bool already = (want_on == fast_forward_ && want_on == ff_key_held_);

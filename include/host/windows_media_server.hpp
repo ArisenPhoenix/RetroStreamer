@@ -35,6 +35,9 @@ public:
         bool wants_audio) override;
     void remove_client(ClientId client_id) override;
     bool reconfigure_shared_video(const VideoEncodeSettings& settings) override;
+    bool apply_video_branch_layout(
+        const VideoEncodeSettings& trunk,
+        const std::vector<std::pair<ClientId, VideoEncodeSettings>>& per_client) override;
     bool restart_shared_audio() override;
     std::optional<std::string> begin_video_tier_cutover(
         ClientId client_id,
@@ -44,6 +47,7 @@ public:
         std::string_view staging_video_uri) override;
     void abort_video_tier_cutover(ClientId client_id) override;
     bool video_cutover_in_flight(ClientId client_id) const override;
+    std::optional<std::string> current_video_uri(ClientId client_id) const override;
     void stop() override;
 
 private:

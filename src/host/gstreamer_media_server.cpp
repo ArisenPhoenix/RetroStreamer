@@ -229,7 +229,8 @@ std::vector<std::string> GStreamerVideoFanout::build_single_encode_args(
 
 std::vector<MediaClientStream> GStreamerVideoFanout::start(
     const std::string& display,
-    const std::vector<MediaStreamRequest>& destinations) {
+    const std::vector<MediaStreamRequest>& destinations,
+    const VideoEncodeSettings& initial_settings) {
     if (!destinations_.empty() || process_.running()) {
         throw std::runtime_error("video fanout is already running");
     }
@@ -245,7 +246,9 @@ std::vector<MediaClientStream> GStreamerVideoFanout::start(
         slot.host = destination.destination_host;
         slot.base_port = destination.port;
         slot.port = destination.port;
-        slot.settings = video_encode_settings(MediaStreamSize::P720, MediaQualityTier::Medium);
+        slot.settings = initial_settings.bitrate_kbps == 0
+            ? video_encode_settings(MediaStreamSize::P720, MediaQualityTier::Medium)
+            : initial_settings;
         destinations_.push_back(std::move(slot));
         streams.push_back(MediaClientStream{
             destination.client_id,
@@ -261,7 +264,8 @@ std::vector<MediaClientStream> GStreamerVideoFanout::start(
 
 std::vector<MediaClientStream> GStreamerVideoFanout::start_pipewire(
     const std::string& pipewire_node,
-    const std::vector<MediaStreamRequest>& destinations) {
+    const std::vector<MediaStreamRequest>& destinations,
+    const VideoEncodeSettings& initial_settings) {
     if (!destinations_.empty() || process_.running()) {
         throw std::runtime_error("video fanout is already running");
     }
@@ -277,7 +281,9 @@ std::vector<MediaClientStream> GStreamerVideoFanout::start_pipewire(
         slot.host = destination.destination_host;
         slot.base_port = destination.port;
         slot.port = destination.port;
-        slot.settings = video_encode_settings(MediaStreamSize::P720, MediaQualityTier::Medium);
+        slot.settings = initial_settings.bitrate_kbps == 0
+            ? video_encode_settings(MediaStreamSize::P720, MediaQualityTier::Medium)
+            : initial_settings;
         destinations_.push_back(std::move(slot));
         streams.push_back(MediaClientStream{
             destination.client_id,
@@ -365,6 +371,61 @@ bool GStreamerVideoFanout::reconfigure_shared(const VideoEncodeSettings& setting
             << ", clients=" << destinations_.size() << ")\n";
     } else {
         std::cerr << "Shared video reconfigure failed to start pipeline\n";
+    }
+    return ok;
+}
+
+bool GStreamerVideoFanout::apply_branch_layout(
+    const VideoEncodeSettings& trunk,
+    const std::vector<std::pair<ClientId, VideoEncodeSettings>>& per_client) {
+    if (destinations_.empty()) {
+        return false;
+    }
+    if (source_kind_ == SourceKind::X11 && display_.empty()) {
+        return false;
+    }
+    if (source_kind_ == SourceKind::PipeWire && pipewire_node_.empty()) {
+        return false;
+    }
+
+    for (auto& destination : destinations_) {
+        if (destination.staging_active) {
+            destination.staging.stop();
+            if (destination.staging_port != 0) {
+                terminate_gst_multiudpsink_on_port(destination.staging_port);
+                rtp_frame_pace_debug::stop_tee(destination.staging_port);
+            }
+            destination.staging_active = false;
+            destination.staging_port = 0;
+        }
+        if (destination.dedicated.running()) {
+            destination.dedicated.stop();
+        }
+        if (destination.port != destination.base_port) {
+            rtp_frame_pace_debug::stop_tee(destination.port);
+            destination.port = destination.base_port;
+        }
+        destination.settings = trunk;
+    }
+
+    for (const auto& [client_id, settings] : per_client) {
+        if (Destination* slot = find_destination(client_id); slot != nullptr) {
+            slot->settings = settings;
+        }
+    }
+
+    restart_pipeline();
+    const bool ok = process_.running();
+    if (ok) {
+        std::cout << "Video branch layout applied (trunk "
+                  << trunk.bitrate_kbps << "kbps/"
+                  << static_cast<int>(trunk.framerate) << "fps";
+        if (trunk.width > 0 && trunk.height > 0) {
+            std::cout << "/" << trunk.width << "x" << trunk.height;
+        }
+        std::cout << ", clients=" << destinations_.size() << ")\n";
+    } else {
+        std::cerr << "Video branch layout failed to start pipeline\n";
     }
     return ok;
 }
@@ -485,6 +546,14 @@ void GStreamerVideoFanout::abort_tier_cutover(ClientId client_id) {
 bool GStreamerVideoFanout::cutover_in_flight(ClientId client_id) const {
     const Destination* slot = find_destination(client_id);
     return slot != nullptr && slot->staging_active;
+}
+
+std::optional<std::string> GStreamerVideoFanout::current_video_uri(ClientId client_id) const {
+    const Destination* slot = find_destination(client_id);
+    if (slot == nullptr || slot->port == 0 || slot->host.empty()) {
+        return std::nullopt;
+    }
+    return rtp_h264_uri(slot->host, slot->port);
 }
 
 void GStreamerVideoFanout::stop() {
@@ -984,7 +1053,8 @@ void GStreamerMediaServer::start(
             video_fanout_->set_nvenc_cuda_device_id(capture_.nvenc_cuda_device_id);
             const auto video_streams = video_fanout_->start(
                 capture_.virtual_display,
-                video_requests_from_media_destinations(plan, destinations));
+                video_requests_from_media_destinations(plan, destinations),
+                plan_.initial_video_settings);
             for (const auto& stream : video_streams) {
                 for (auto& media_stream : streams) {
                     if (media_stream.client_id == stream.client_id) {
@@ -1034,7 +1104,8 @@ void GStreamerMediaServer::start_pipewire_video(
     video_fanout_->set_nvenc_cuda_device_id(capture_.nvenc_cuda_device_id);
     const auto video_streams = video_fanout_->start_pipewire(
         pipewire_node,
-        video_requests_from_media_destinations(plan_, destinations_));
+        video_requests_from_media_destinations(plan_, destinations_),
+        plan_.initial_video_settings);
     for (const auto& stream : video_streams) {
         for (auto& media_stream : streams) {
             if (media_stream.client_id == stream.client_id) {
@@ -1056,7 +1127,8 @@ MediaEndpoint GStreamerMediaServer::add_client(
     if (wants_video && capture_.video && video_fanout_.has_value()) {
         const auto stream = video_fanout_->add(
             capture_.virtual_display,
-            video_request_for_destination(plan_, destination, media_index));
+            video_request_for_destination(plan_, destination, media_index),
+            plan_.initial_video_settings);
         endpoint.video_uri = stream.endpoint.video_uri;
     }
     if (wants_audio && capture_.audio && audio_fanout_.has_value()) {
@@ -1082,7 +1154,18 @@ bool GStreamerMediaServer::reconfigure_shared_video(const VideoEncodeSettings& s
     if (!video_fanout_.has_value()) {
         return false;
     }
+    plan_.initial_video_settings = settings;
     return video_fanout_->reconfigure_shared(settings);
+}
+
+bool GStreamerMediaServer::apply_video_branch_layout(
+    const VideoEncodeSettings& trunk,
+    const std::vector<std::pair<ClientId, VideoEncodeSettings>>& per_client) {
+    if (!video_fanout_.has_value()) {
+        return false;
+    }
+    plan_.initial_video_settings = trunk;
+    return video_fanout_->apply_branch_layout(trunk, per_client);
 }
 
 bool GStreamerMediaServer::restart_shared_audio() {
@@ -1115,6 +1198,13 @@ void GStreamerMediaServer::abort_video_tier_cutover(ClientId client_id) {
 
 bool GStreamerMediaServer::video_cutover_in_flight(ClientId client_id) const {
     return video_fanout_.has_value() && video_fanout_->cutover_in_flight(client_id);
+}
+
+std::optional<std::string> GStreamerMediaServer::current_video_uri(ClientId client_id) const {
+    if (!video_fanout_.has_value()) {
+        return std::nullopt;
+    }
+    return video_fanout_->current_video_uri(client_id);
 }
 
 std::optional<std::string> GStreamerMediaServer::begin_video_tier_cutover(

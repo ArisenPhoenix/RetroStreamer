@@ -1,6 +1,5 @@
 package com.archstreamer.client.ui.menu
 
-import android.content.res.Configuration
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -61,6 +60,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import android.view.KeyEvent as AndroidKeyEvent
+import com.archstreamer.client.AndroidDeviceProfile
 import com.archstreamer.client.ui.ClientViewModel
 import com.archstreamer.client.ui.NavSection
 import com.archstreamer.client.ui.UiState
@@ -155,9 +155,7 @@ fun MenuOptionList(
     val options = section.options
     val listState = rememberLazyListState()
     val configuration = LocalConfiguration.current
-    val useLightweightTextRows =
-        configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
-            Configuration.UI_MODE_TYPE_TELEVISION
+    val useLightweightTextRows = AndroidDeviceProfile.isTv(configuration)
     // A row can only ask to be revealed once it exists, so wrapping to the far end of a
     // page — where the target was never composed — has to be scrolled by the list itself.
     LaunchedEffect(section.id, focusedOptionId) {
@@ -723,9 +721,7 @@ private fun NoteRow(option: MenuOption.Note) {
 @Composable
 private fun Modifier.revealWhenFocused(focused: Boolean): Modifier {
     val configuration = LocalConfiguration.current
-    val isTv =
-        configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
-            Configuration.UI_MODE_TYPE_TELEVISION
+    val isTv = AndroidDeviceProfile.isTv(configuration)
     if (isTv) return this
     val requester = remember { BringIntoViewRequester() }
     LaunchedEffect(focused) {
@@ -793,9 +789,7 @@ fun MenuDrawerSections(
 ) {
     val listState = rememberLazyListState()
     val configuration = LocalConfiguration.current
-    val isTv =
-        configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
-            Configuration.UI_MODE_TYPE_TELEVISION
+    val isTv = AndroidDeviceProfile.isTv(configuration)
     LaunchedEffect(focus.section, focus.inOptions, sections) {
         if (focus.inOptions) return@LaunchedEffect
         val target = sections.indexOfFirst { it.id == focus.section }
@@ -826,9 +820,7 @@ private fun DrawerSectionRow(
     onSelect: (NavSection) -> Unit,
 ) {
     val configuration = LocalConfiguration.current
-    val isTv =
-        configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
-            Configuration.UI_MODE_TYPE_TELEVISION
+    val isTv = AndroidDeviceProfile.isTv(configuration)
     Row(
         modifier = Modifier
             .fillMaxWidth()

@@ -277,6 +277,9 @@ enum class MediaStreamBitrate(val id: Int) {
     Kbps8000(3),
     Kbps12000(4),
     Kbps25000(5),
+    /** Finer steps between 0.8 and 3.5 (ids 6/7 match host protocol.hpp). */
+    Kbps1500(6),
+    Kbps2500(7),
 }
 
 /** Matches DisplayLayoutPreference in protocol.hpp — DS Hybrid vs Top/Bottom.

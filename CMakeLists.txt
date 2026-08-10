@@ -335,6 +335,7 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/link_coordinator.cpp
         src/host/link_cable_backend.cpp
         src/host/seat_manager.cpp
+        src/host/client_stream_policy.cpp
         src/host/session_control_monitor.cpp
         src/host/stream_adaptation.cpp
         src/host/cadence_session_events.cpp

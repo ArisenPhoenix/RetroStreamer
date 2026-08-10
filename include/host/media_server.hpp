@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace archstreamer {
@@ -34,6 +35,13 @@ public:
      * unavailable / empty.
      */
     virtual bool reconfigure_shared_video(const VideoEncodeSettings& settings) = 0;
+    /**
+     * Apply per-client encode settings and rebuild the capture ladder.
+     * Clients with matching settings share one encode branch (trunk or sample).
+     */
+    virtual bool apply_video_branch_layout(
+        const VideoEncodeSettings& trunk,
+        const std::vector<std::pair<ClientId, VideoEncodeSettings>>& per_client) = 0;
     /** Restart the shared audio fanout without changing client ports. */
     virtual bool restart_shared_audio() = 0;
 
@@ -49,6 +57,8 @@ public:
         std::string_view staging_video_uri) = 0;
     virtual void abort_video_tier_cutover(ClientId client_id) = 0;
     virtual bool video_cutover_in_flight(ClientId client_id) const = 0;
+    /** Current RTP H.264 URI the client should receive on (base or promoted port). */
+    virtual std::optional<std::string> current_video_uri(ClientId client_id) const = 0;
 
     virtual void stop() = 0;
 };

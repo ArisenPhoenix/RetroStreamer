@@ -131,47 +131,159 @@ std::optional<ControllerDevice> HostApp::resolve_bridge_device(const HostAppConf
     return std::nullopt;
 }
 
-int HostApp::run_lobby_sessions(
-    HostAppConfig config,
-    GameCatalog& catalog,
-    const GameList& list,
-    StreamingAudioSink& streaming_audio,
-    std::optional<ControllerDevice> bridge_device,
-    const std::function<bool()>& should_stop) {
-    return run_concurrent_session_host(
-        std::move(config),
-        catalog,
-        list,
-        streaming_audio,
-        bridge_device,
-        should_stop);
+namespace {
+
+void append_direct_controller_ignore_list(
+    HostAppConfig& config,
+    const std::optional<ControllerDevice>& bridge_device) {
+    if (bridge_device.has_value() && !config.ignore_controller.has_value()) {
+        if (bridge_device->vendor_id != 0 && bridge_device->product_id != 0) {
+            config.ignore_controller = hex_vid_pid(bridge_device->vendor_id, bridge_device->product_id);
+        }
+    }
+
+    // Blacklist every physical pad currently attached so RetroArch is less likely to
+    // bind P1 to a host controller. Virtual ArchStreamer pads are created after this.
+    try {
+        ControllerBackend host_pads;
+        std::string host_ignore;
+        for (const auto& device : host_pads.list_devices()) {
+            if (device.vendor_id == 0 || device.product_id == 0) {
+                continue;
+            }
+            const auto id = hex_vid_pid(device.vendor_id, device.product_id);
+            if (!host_ignore.empty()) {
+                host_ignore += ",";
+            }
+            host_ignore += id;
+        }
+        if (!host_ignore.empty()) {
+            if (config.ignore_controller.has_value() && !config.ignore_controller->empty()) {
+                config.ignore_controller = *config.ignore_controller + "," + host_ignore;
+            } else {
+                config.ignore_controller = host_ignore;
+            }
+        }
+    } catch (const std::exception& error) {
+        std::cerr << "Warning: host controller scan for ignore list failed: " << error.what() << '\n';
+    }
+
+    auto ignore_devices = config.ignore_controller.value_or("");
+    const char* steam_input = "0x28de/0x11ff,0x28de/0x1205,0x28de/0x1201";
+    if (ignore_devices.empty()) {
+        ignore_devices = steam_input;
+    } else {
+        ignore_devices = ignore_devices + "," + steam_input;
+    }
+    config.ignore_controller = ignore_devices;
+    if (config.retroarch_joypad_driver != "sdl2") {
+        std::cerr
+            << "Warning: SDL_GAMECONTROLLER_IGNORE_DEVICES only affects RetroArch when "
+            << "--retroarch-joypad-driver is sdl2.\n";
+    }
 }
 
-int HostApp::run_direct_session(
-    HostAppConfig config,
+struct DirectGpuSelection {
+    std::optional<GpuDevice> resolved_encode;
+    std::optional<GpuDevice> resolved_gpu;
+    std::string gamescope_vk_device;
+    int nvenc_cuda_device_id = -1;
+};
+
+DirectGpuSelection resolve_direct_gpu_selection(
+    const HostAppConfig& config,
+    bool use_virtual_capture,
+    bool virtualgl_capture,
+    bool gamescope_capture) {
+    DirectGpuSelection selection;
+    selection.resolved_encode = resolve_render_gpu(config.encode_gpu);
+    selection.resolved_gpu = resolve_render_gpu(effective_render_gpu_selection(config));
+    if (selection.resolved_encode.has_value() && selection.resolved_encode->nvidia_index >= 0) {
+        selection.nvenc_cuda_device_id = selection.resolved_encode->nvidia_index;
+    }
+    if (selection.resolved_gpu.has_value()) {
+        const bool same_as_encode =
+            selection.resolved_encode.has_value() &&
+            selection.resolved_encode->id == selection.resolved_gpu->id;
+        if (same_as_encode) {
+            std::cout
+                << "GPU: " << selection.resolved_gpu->name
+                << " [" << selection.resolved_gpu->id << "] (encode+render)";
+        } else {
+            if (selection.resolved_encode.has_value()) {
+                std::cout
+                    << "Encode GPU: " << selection.resolved_encode->name
+                    << " [" << selection.resolved_encode->id << "]";
+                if (selection.resolved_encode->nvidia_index >= 0) {
+                    std::cout << " nvidia_index=" << selection.resolved_encode->nvidia_index;
+                }
+                std::cout << '\n';
+            }
+            std::cout
+                << "Render GPU: " << selection.resolved_gpu->name
+                << " [" << selection.resolved_gpu->id << "]";
+            if (config.separate_render_gpu) {
+                std::cout << " (separate from encode)";
+            }
+        }
+        if (selection.resolved_gpu->vulkan_index >= 0) {
+            std::cout << " vulkan_index=" << selection.resolved_gpu->vulkan_index;
+        }
+        if (!selection.resolved_gpu->prime_provider.empty()) {
+            std::cout << " prime=" << selection.resolved_gpu->prime_provider;
+        }
+        std::cout << '\n';
+        if (const auto vd = pci_vendor_device_id(selection.resolved_gpu->pci_bus); vd.has_value()) {
+            selection.gamescope_vk_device = *vd;
+        }
+        if (selection.resolved_gpu->prime_provider.empty() &&
+            selection.resolved_gpu->nvidia_index >= 0) {
+            std::cerr
+                << "Warning: NVIDIA GPU selected but no PRIME provider was mapped "
+                << "(is DISPLAY set when scanning GPUs?). Capture GL may use llvmpipe.\n";
+        }
+        if (use_virtual_capture && !virtualgl_capture && !gamescope_capture &&
+            selection.resolved_gpu->nvidia_index > 0) {
+            std::cerr
+                << "Warning: streamed OpenGL on plain Xvfb cannot select NVIDIA GPU index "
+                << selection.resolved_gpu->nvidia_index
+                << " (always uses nvidia:0). Install VirtualGL (vglrun) so Host GPU works.\n";
+        }
+    } else if (selection.resolved_encode.has_value()) {
+        std::cout
+            << "Encode GPU: " << selection.resolved_encode->name
+            << " [" << selection.resolved_encode->id << "]";
+        if (selection.resolved_encode->nvidia_index >= 0) {
+            std::cout << " nvidia_index=" << selection.resolved_encode->nvidia_index;
+        }
+        std::cout << '\n';
+    }
+    if (selection.gamescope_vk_device.empty()) {
+        // Prefer RTX 3060 then 1660 Ti on this host when auto-detect fails.
+        selection.gamescope_vk_device = "10de:2504";
+    }
+    return selection;
+}
+
+struct DirectSessionTarget {
+    HostLaunchPlan launch_plan;
+    SaveProfile save_profile;
+    RetroArchLaunchConfig launch_config;
+    ResolvedRetroArch resolved_retroarch;
+    std::string system_key;
+    std::filesystem::path catalog_content_path;
+    std::string m3m_title_id;
+};
+
+std::optional<DirectSessionTarget> prepare_direct_session_target(
+    HostAppConfig& config,
     GameCatalog& catalog,
     const GameList& list,
-    StreamingAudioSink& streaming_audio,
-    std::optional<ControllerDevice> bridge_device,
-    std::optional<HostPlayerControllerIdentity> bridge_identity,
-    bool host_plays_locally,
-    const std::function<bool()>& should_stop) {
-    // Soft-keyboard bridge for the no-session launch path. The watcher holds a weak
-    // reference, so this has to outlive the launch block or it retires immediately.
-    std::shared_ptr<SoftKeyboardHostBridge> standalone_soft_keyboard;
-    std::string soft_keyboard_fallback;
-    bool arm_soft_keyboard = false;
-    std::unique_ptr<SwitchBackend> switch_backend;
-    std::string switch_launch_content_stem;
-    std::string switch_launch_title_id;
-    std::unique_ptr<MelonDsBackend> melonds_backend;
-    std::optional<std::string> session_end_reason;
-
-    // Direct (non-lobby) launch path — single local session, no control port.
+    const std::optional<HostPlayerControllerIdentity>& bridge_identity) {
     const auto game_id = select_game_for_launch(list, *config.selector);
     if (!game_id.has_value()) {
         std::cerr << "Game not found: " << *config.selector << '\n';
-        return 1;
+        return std::nullopt;
     }
     const auto selected_game = game_info_for(list, *game_id);
     if (!selected_game.has_value()) {
@@ -198,10 +310,10 @@ int HostApp::run_direct_session(
         launch_plan.virtual_identities.resize(launch_plan.players);
     }
 
-    const auto save_profile = prepare_save_profile(config.save_root, launch_plan.save_username);
-
+    auto save_profile = prepare_save_profile(config.save_root, launch_plan.save_username);
     auto launch_config = catalog.launch_config_for(launch_plan.game_id);
     const auto resolved_retroarch = resolve_retroarch();
+
     std::string system_key;
     std::filesystem::path catalog_content_path;
     std::string m3m_title_id;
@@ -237,165 +349,27 @@ int HostApp::run_direct_session(
     if (config.verbose && !launch_config.standalone) {
         launch_config.extra_args.insert(launch_config.extra_args.begin(), "--verbose");
     }
-    // Streaming already forced off above for Host Player.
-    // Emulator child env is assembled once later (audio/input/gpu/capture/emulator).
-    if (bridge_device.has_value() && !config.ignore_controller.has_value()) {
-        if (bridge_device->vendor_id != 0 && bridge_device->product_id != 0) {
-            config.ignore_controller = hex_vid_pid(bridge_device->vendor_id, bridge_device->product_id);
-        }
-    }
-    // Blacklist every physical pad currently attached so RetroArch is less likely to
-    // bind P1 to a host controller. Virtual ArchStreamer pads are created after this.
-    {
-        try {
-            ControllerBackend host_pads;
-            std::string host_ignore;
-            for (const auto& device : host_pads.list_devices()) {
-                if (device.vendor_id == 0 || device.product_id == 0) {
-                    continue;
-                }
-                const auto id = hex_vid_pid(device.vendor_id, device.product_id);
-                if (!host_ignore.empty()) {
-                    host_ignore += ",";
-                }
-                host_ignore += id;
-            }
-            if (!host_ignore.empty()) {
-                if (config.ignore_controller.has_value() && !config.ignore_controller->empty()) {
-                    config.ignore_controller = *config.ignore_controller + "," + host_ignore;
-                } else {
-                    config.ignore_controller = host_ignore;
-                }
-            }
-        } catch (const std::exception& error) {
-            std::cerr << "Warning: host controller scan for ignore list failed: " << error.what() << '\n';
-        }
-    }
-    auto ignore_devices = config.ignore_controller.value_or("");
-    const char* steam_input = "0x28de/0x11ff,0x28de/0x1205,0x28de/0x1201";
-    if (ignore_devices.empty()) {
-        ignore_devices = steam_input;
-    } else {
-        ignore_devices = ignore_devices + "," + steam_input;
-    }
-    config.ignore_controller = ignore_devices;
-    if (config.retroarch_joypad_driver != "sdl2") {
-        std::cerr
-            << "Warning: SDL_GAMECONTROLLER_IGNORE_DEVICES only affects RetroArch when "
-            << "--retroarch-joypad-driver is sdl2.\n";
-    }
 
-    // Host Player keeps the real DISPLAY (and speakers). Streamed RetroArch needs a
-    // virtual capture surface. Switch standalone defaults to headless gamescope on Linux;
-    // Windows captures the desktop/HWND via d3d11screencapturesrc (no gamescope).
-    const auto capture = resolve_capture_plan(config, launch_config);
-    const bool use_virtual_capture = capture.use_virtual_capture;
-    const bool capture_fullscreen = capture.capture_fullscreen;
-    const std::string capture_display = capture.capture_display;
-    const auto display_backend = capture.display_backend;
-    const bool gamescope_capture = capture.gamescope_capture;
-    const bool virtualgl_capture = capture.virtualgl_capture;
+    return DirectSessionTarget{
+        std::move(launch_plan),
+        std::move(save_profile),
+        std::move(launch_config),
+        resolved_retroarch,
+        std::move(system_key),
+        std::move(catalog_content_path),
+        std::move(m3m_title_id),
+    };
+}
 
-    EmulatorLaunchEnvRequest launch_env_request;
-    launch_env_request.stream_media = config.audio || config.video;
-    launch_env_request.stream_audio = config.audio;
-    launch_env_request.host_plays_locally = host_plays_locally;
-    launch_env_request.audio_source = config.audio_source;
-    launch_env_request.ignore_devices = *config.ignore_controller;
-    launch_env_request.use_virtual_capture = use_virtual_capture;
-    launch_env_request.gamescope_capture = gamescope_capture;
-    launch_env_request.virtualgl_capture = virtualgl_capture;
-    launch_env_request.capture_display = capture_display;
-    const std::string xtest_display = gamescope_capture
-        ? gamescope_xtest_display_for_slot(0)
-        : capture_display;
-    if (gamescope_capture) {
-        launch_env_request.xtest_display = xtest_display;
-    }
-    // Direct CLI path has no Lobby session id — mint one for the XTest lease map.
-    const std::string session_id = "direct-" + std::to_string(
-        std::chrono::steady_clock::now().time_since_epoch().count());
-    launch_env_request.session_id = session_id;
-    register_session_xtest_display(session_id, xtest_display);
 
-    auto resolved_encode = resolve_render_gpu(config.encode_gpu);
-    auto resolved_gpu = resolve_render_gpu(effective_render_gpu_selection(config));
-    std::string gamescope_vk_device;
-    int nvenc_cuda_device_id = -1;
-    if (resolved_encode.has_value() && resolved_encode->nvidia_index >= 0) {
-        nvenc_cuda_device_id = resolved_encode->nvidia_index;
-    }
-    if (resolved_gpu.has_value()) {
-        const bool same_as_encode =
-            resolved_encode.has_value() && resolved_encode->id == resolved_gpu->id;
-        if (same_as_encode) {
-            std::cout
-                << "GPU: " << resolved_gpu->name
-                << " [" << resolved_gpu->id << "] (encode+render)";
-        } else {
-            if (resolved_encode.has_value()) {
-                std::cout
-                    << "Encode GPU: " << resolved_encode->name
-                    << " [" << resolved_encode->id << "]";
-                if (resolved_encode->nvidia_index >= 0) {
-                    std::cout << " nvidia_index=" << resolved_encode->nvidia_index;
-                }
-                std::cout << '\n';
-            }
-            std::cout
-                << "Render GPU: " << resolved_gpu->name
-                << " [" << resolved_gpu->id << "]";
-            if (config.separate_render_gpu) {
-                std::cout << " (separate from encode)";
-            }
-        }
-        if (resolved_gpu->vulkan_index >= 0) {
-            std::cout << " vulkan_index=" << resolved_gpu->vulkan_index;
-        }
-        if (!resolved_gpu->prime_provider.empty()) {
-            std::cout << " prime=" << resolved_gpu->prime_provider;
-        }
-        std::cout << '\n';
-        if (const auto vd = pci_vendor_device_id(resolved_gpu->pci_bus); vd.has_value()) {
-            gamescope_vk_device = *vd;
-        }
-        // PRIME offload for NVIDIA. On plain Xvfb the provider name is ignored (no RandR
-        // providers); VirtualGL uses the real display's GLX where G0/G1 selection works.
-        launch_env_request.render_gpu = *resolved_gpu;
-        if (resolved_gpu->prime_provider.empty() && resolved_gpu->nvidia_index >= 0) {
-            std::cerr
-                << "Warning: NVIDIA GPU selected but no PRIME provider was mapped "
-                << "(is DISPLAY set when scanning GPUs?). Capture GL may use llvmpipe.\n";
-        }
-        if (use_virtual_capture && !virtualgl_capture && !gamescope_capture &&
-            resolved_gpu->nvidia_index > 0) {
-            std::cerr
-                << "Warning: streamed OpenGL on plain Xvfb cannot select NVIDIA GPU index "
-                << resolved_gpu->nvidia_index
-                << " (always uses nvidia:0). Install VirtualGL (vglrun) so Host GPU works.\n";
-        }
-    } else if (resolved_encode.has_value()) {
-        std::cout
-            << "Encode GPU: " << resolved_encode->name
-            << " [" << resolved_encode->id << "]";
-        if (resolved_encode->nvidia_index >= 0) {
-            std::cout << " nvidia_index=" << resolved_encode->nvidia_index;
-        }
-        std::cout << '\n';
-    }
-    if (gamescope_vk_device.empty()) {
-        // Prefer RTX 3060 then 1660 Ti on this host when auto-detect fails.
-        gamescope_vk_device = "10de:2504";
-    }
 
-    const auto media_config = media_plan_config_for(config);
-    auto media_destinations = std::vector<HostMediaDestination>{};
-    auto media_streams = std::vector<MediaClientStream>{};
-    if (config.video || config.audio) {
-        media_destinations = media_destinations_for_host(media_config);
-        media_streams = media_streams_for_dry_run(media_config, media_destinations);
-    }
-
+void print_direct_launch_summary(
+    const HostAppConfig& config,
+    const HostLaunchPlan& launch_plan,
+    const SaveProfile& save_profile,
+    const RetroArchLaunchConfig& launch_config,
+    const std::vector<MediaClientStream>& media_streams,
+    const std::string& capture_display) {
     std::cout
         << "Selected game: " << launch_plan.game_id
         << "\nRetroArch: " << launch_config.retroarch_path
@@ -446,210 +420,64 @@ int HostApp::run_direct_session(
     if (config.ignore_controller.has_value()) {
         std::cout << "Ignoring:  " << *config.ignore_controller << '\n';
     }
+}
 
-    if (config.dry_run) {
-        return 0;
-    }
-
-    HostVirtualGamepadBus gamepads(launch_plan.virtual_identities);
-    for (RetroArchPort port = 0; port < launch_plan.players; ++port) {
-        gamepads.plug(port);
-    }
-    // Virtual keyboard targets ARCHSTREAMER_XTEST_DISPLAY for gamescope, else Xvfb capture.
-    VirtualKeyboard keyboard(xtest_display);
-    std::this_thread::sleep_for(std::chrono::milliseconds(750));
-
-    // Resolve joypad indices after uinput pads appear. Prefer discovered index so
-    // RetroArch binds the ArchStreamer pad even when host controllers remain visible.
-    // udev and sdl2 enumerate pads differently — match the driver RetroArch will use.
-    std::vector<std::size_t> resolved_indices;
-    std::vector<ArchStreamerSdlPad> resolved_pads;
-    const bool use_udev = config.retroarch_joypad_driver == "udev";
-    if (config.verbose && use_udev) {
-        std::cout << "udev joysticks (ArchStreamer hunt):\n";
-    }
-    const auto shared_pad_plan = resolve_shared_pad_plan(
-        launch_plan.players,
-        config.ignore_controller.value_or(""),
-        config.verbose,
-        /*product_id_base=*/0,
-        use_udev);
-    if (use_udev) {
-        resolved_indices = shared_pad_plan.udev_indices;
-        resolved_pads = shared_pad_plan.pads;
-    } else {
-        resolved_pads = shared_pad_plan.pads;
-        resolved_indices.reserve(resolved_pads.size());
-        for (const auto& pad : resolved_pads) {
-            resolved_indices.push_back(pad.sdl_index);
+std::string direct_emulator_command(
+    const RetroArchLaunchConfig& launch_config,
+    const ResolvedRetroArch& resolved_retroarch) {
+    std::string command;
+    for (const auto& arg : launch_config.command_prefix) {
+        if (!command.empty()) {
+            command.push_back(' ');
         }
+        command += arg;
     }
-    std::size_t virtual_joypad_index = 0;
-    if (config.virtual_joypad_index.has_value()) {
-        virtual_joypad_index = *config.virtual_joypad_index;
-        std::cout << "Using explicit --virtual-joypad-index " << virtual_joypad_index << '\n';
-    } else if (!resolved_indices.empty()) {
-        virtual_joypad_index = resolved_indices.front();
-        if (config.verbose) {
-            std::cout
-                << "Resolved virtual joypad index " << virtual_joypad_index
-                << " (driver=" << config.retroarch_joypad_driver << ")\n";
+    if (launch_config.standalone) {
+        if (!command.empty()) {
+            command.push_back(' ');
         }
-    } else {
-        std::cerr
-            << "Warning: ArchStreamer virtual pads not visible to "
-            << config.retroarch_joypad_driver
-            << " yet; defaulting RetroArch joypad index to 0.\n";
-    }
-
-    if (system_key == "switch") {
-        const auto runtime = resolve_switch_runtime();
-        if (!runtime.has_value()) {
-            throw std::runtime_error(switch_runtime_unavailable_message());
+        command += launch_config.core_path.string();
+        for (const auto& arg : launch_config.standalone_args_before_content) {
+            command.push_back(' ');
+            command += arg;
         }
-        launch_config.standalone = true;
-        launch_config.core_path = runtime->path;
-        launch_config.standalone_args_before_content = runtime->args_before_content;
-        switch_backend = make_switch_backend(*runtime);
-    } else if (system_key == "nds" && melonds_runtime_available()) {
-        const auto runtime = resolve_melonds_runtime();
-        if (!runtime.has_value()) {
-            throw std::runtime_error(melonds_unavailable_message());
+        for (const auto& arg : launch_config.extra_args) {
+            command.push_back(' ');
+            command += arg;
         }
-        launch_config.standalone = true;
-        launch_config.core_path = runtime->path;
-        launch_config.standalone_args_before_content = runtime->args_before_content;
-        melonds_backend = make_melonds_backend();
-    } else if (launch_config.standalone) {
-        throw std::runtime_error(
-            "standalone launch requested for unsupported system_key=" + system_key);
+        command.push_back(' ');
+        command += launch_config.content_path.string();
+        return command;
     }
 
-    if (switch_backend) {
-        keyboard.set_switch_style_hotkeys(true);
-        const auto profile_name =
-            preferred_steam_or_username_display_name(save_profile.username);
-        const auto switch_content_stem = !catalog_content_path.empty()
-            ? catalog_content_path.stem().string()
-            : launch_config.content_path.stem().string();
-        auto switch_title_id = m3m_title_id;
-        if (switch_title_id.empty()) {
-            switch_title_id = resolve_switch_title_id_for_catalog(
-                save_profile, switch_content_stem, launch_config.content_path);
-        }
-        auto switch_prep = switch_backend->prepare(
-            launch_config,
-            SwitchBackendPrepContext{
-                save_profile,
-                launch_plan.players,
-                config.verbose,
-                /*product_id_base=*/0,
-                config.ignore_controller.value_or(""),
-                config.graphics_api,
-                virtualgl_capture,
-                gamescope_capture,
-                config.resolution.switch_scale,
-                /*prefer_handheld_mode=*/false,
-                &resolved_gpu,
-                profile_name,
-                std::move(resolved_pads),
-                /*slot_index=*/0,
-                launch_plan.game_id,
-                switch_content_stem,
-                switch_title_id,
-            });
-        resolved_pads = std::move(switch_prep.resolved_pads);
-        switch_backend->assign_launch_env_profile(launch_env_request, switch_prep);
-        log_switch_backend_prep(
-            *switch_backend,
-            launch_env_request,
-            switch_prep,
-            config.resolution.switch_scale,
-            resolved_gpu);
-        switch_launch_content_stem = switch_content_stem;
-        switch_launch_title_id = switch_title_id;
-        if (switch_backend->enable_soft_keyboard()) {
-            if (!standalone_soft_keyboard) {
-                standalone_soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();
-            }
-            soft_keyboard_fallback = profile_name;
-            arm_soft_keyboard = true;
-        }
-    } else if (melonds_backend) {
-        const auto profile_name =
-            preferred_steam_or_username_display_name(save_profile.username);
-        auto melonds_prep = melonds_backend->prepare(
-            launch_config,
-            MelonDsBackendPrepContext{
-                save_profile,
-                launch_plan.players,
-                config.verbose,
-                /*product_id_base=*/0,
-                config.ignore_controller.value_or(""),
-                virtualgl_capture,
-                gamescope_capture,
-                /*slot_index=*/0,
-                profile_name,
-                DisplayLayoutPreference::Auto,
-                std::move(resolved_pads),
-            });
-        resolved_pads = std::move(melonds_prep.resolved_pads);
-        melonds_backend->assign_launch_env_profile(launch_env_request, melonds_prep);
-        log_melonds_backend_prep(*melonds_backend, launch_env_request, melonds_prep);
-    } else {
-        RetroArchOverrideParams override_params;
-        override_params.first_virtual_joypad_index = virtual_joypad_index;
-        override_params.identities = &launch_plan.virtual_identities;
-        override_params.joypad_driver = config.retroarch_joypad_driver;
-        override_params.players = launch_plan.players;
-        override_params.save_profile = &save_profile;
-        override_params.realtime_pacing = config.audio || config.video;
-        override_params.capture_fullscreen = capture_fullscreen && use_virtual_capture;
-        override_params.capture_resolution = config.video_resolution;
-        override_params.vulkan_gpu_index =
-            (!use_virtual_capture && resolved_gpu.has_value()) ? resolved_gpu->vulkan_index : -1;
-        override_params.system_key = system_key;
-        override_params.core_path = launch_config.core_path;
-        override_params.resolution_scale = config.resolution.retroarch_scale;
-        const auto runtime_override = apply_retroarch_override(launch_config, override_params);
-        std::cout
-            << "RetroArch config: " << runtime_override
-            << "\nVirtual joypad index: " << virtual_joypad_index
-            << " (driver=" << config.retroarch_joypad_driver << ")\n";
-        {
-            const int scale = std::clamp(config.resolution.retroarch_scale, 1, 6);
-            std::cout << "RetroArch resolution: " << scale << "x native"
-                      << " (known cores via .opt)\n";
-        }
-        if (!system_key.empty()) {
-            std::cout << "Face buttons: system=" << system_key
-                      << " (" << face_button_map_name(system_key) << ")\n";
-        }
-        launch_env_request.pad_plan = shared_pad_plan;
-        log_pad_plan(shared_pad_plan);
+    if (command.empty()) {
+        command = resolved_retroarch.display_path;
     }
-
-    apply_capture_and_launch_environment(
-        launch_config,
-        capture,
-        config,
-        gamescope_vk_device,
-        resolved_gpu,
-        launch_env_request);
-
-    if (capture_fullscreen) {
-        std::cout
-            << "Capture fullscreen: " << config.video_resolution
-            << " on display " << capture_display
-            << (use_virtual_capture ? " (virtual)" : " (host)") << '\n';
+    for (const auto& arg : launch_config.extra_args) {
+        command.push_back(' ');
+        command += arg;
     }
+    command += " -L ";
+    command += launch_config.core_path.string();
+    command.push_back(' ');
+    command += launch_config.content_path.string();
+    return command;
+}
 
-    // Pin Viewer RetroArch to the capture null sink (speakers stay quiet unless Watch-local).
-    if (config.audio) {
-        park_session_game_audio(&streaming_audio);
-    }
+void log_direct_emulator_command(
+    const RetroArchLaunchConfig& launch_config,
+    const ResolvedRetroArch& resolved_retroarch) {
+    std::cout
+        << (launch_config.standalone ? "Launching standalone emulator..." : "Launching RetroArch...")
+        << "\nCommand: " << direct_emulator_command(launch_config, resolved_retroarch) << '\n';
+}
 
-    InputRouter input_router(gamepads, &keyboard);
+std::unique_ptr<MelonDsCtrlClient> configure_direct_input_router(
+    InputRouter& input_router,
+    VirtualKeyboard& keyboard,
+    const HostLaunchPlan& launch_plan,
+    const std::unique_ptr<SwitchBackend>& switch_backend,
+    const std::unique_ptr<MelonDsBackend>& melonds_backend) {
     input_router.set_seat_assignment(launch_plan.seats);
     if (switch_backend) {
         input_router.set_emulator_backend(EmulatorControlBackend::Ryujinx);
@@ -658,7 +486,8 @@ int HostApp::run_direct_session(
     } else {
         input_router.set_emulator_backend(EmulatorControlBackend::RetroArch);
     }
-    std::unique_ptr<MelonDsCtrlClient> melonds_touch_ctrl;
+
+    auto melonds_touch_ctrl = std::unique_ptr<MelonDsCtrlClient>{};
     if (melonds_backend != nullptr && melonds_backend->profile() != nullptr) {
         const auto& ctrl_name = melonds_backend->profile()->ctrl_server_name;
         keyboard.set_melonds_ctrl_name(ctrl_name);
@@ -677,13 +506,492 @@ int HostApp::run_direct_session(
             return touch_ctrl->touch_end();
         });
     }
-    std::cout << "Input seats: " << launch_plan.seats.seats.size() << '\n';
-    for (const auto& seat : launch_plan.seats.seats) {
+    return melonds_touch_ctrl;
+}
+
+void print_input_seats(const SeatAssignment& seats) {
+    std::cout << "Input seats: " << seats.seats.size() << '\n';
+    for (const auto& seat : seats.seats) {
         std::cout
             << "  client " << static_cast<int>(seat.client_id)
             << " local P" << static_cast<int>(seat.local_player) + 1
             << " -> RetroArch P" << static_cast<int>(seat.retroarch_port) + 1 << '\n';
     }
+}
+
+CadenceSessionTracker begin_direct_cadence_session(
+    const HostLaunchPlan& launch_plan,
+    const HostAppConfig& config,
+    const SessionRuntime& session_runtime) {
+    CadenceSessionTracker cadence_tracker;
+    std::ostringstream detail;
+    detail << session_mode_name(launch_plan.session_mode) << " direct";
+    const std::string sink = StreamingAudioSink::kName;
+    cadence_tracker.begin(
+        0,
+        launch_plan.save_username,
+        launch_plan.game_id,
+        {},
+        detail.str(),
+        config.virtual_display,
+        config.video_port,
+        config.audio_port,
+        DefaultRetroArchNetcmdPort,
+        sink,
+        sink,
+        0xa517);
+    if (const auto pid = session_runtime.emulator().process_id(); pid.has_value()) {
+        cadence_tracker.claim_emulator_pid(*pid);
+    }
+    record_session_started(
+        0,
+        launch_plan.save_username,
+        launch_plan.game_id,
+        detail.str(),
+        cadence_tracker.session_id());
+    return cadence_tracker;
+}
+
+void end_direct_cadence_session(
+    CadenceSessionTracker& cadence_tracker,
+    const HostLaunchPlan& launch_plan,
+    std::string_view end_reason) {
+    record_session_ended(
+        0,
+        launch_plan.save_username,
+        launch_plan.game_id,
+        end_reason,
+        cadence_tracker.session_id());
+    cadence_tracker.end(end_reason);
+}
+
+EmulatorLaunchEnvRequest build_launch_env_request(
+    const HostAppConfig& config,
+    const CapturePlan& capture,
+    bool host_plays_locally) {
+    EmulatorLaunchEnvRequest launch_env_request;
+    launch_env_request.host_plays_locally = host_plays_locally;
+    launch_env_request.stream_media = config.audio || config.video;
+    launch_env_request.stream_audio = config.audio;
+    launch_env_request.audio_source = config.audio_source;
+    launch_env_request.ignore_devices = *config.ignore_controller;
+    launch_env_request.use_virtual_capture = capture.use_virtual_capture;
+    launch_env_request.gamescope_capture = capture.gamescope_capture;
+    launch_env_request.virtualgl_capture = capture.virtualgl_capture;
+    launch_env_request.capture_display = capture.capture_display;
+    launch_env_request.xtest_display = launch_env_request.gamescope_capture
+        ? gamescope_xtest_display_for_slot(0)
+        : launch_env_request.capture_display;
+    // Direct CLI path has no Lobby session id — mint one for the XTest lease map.
+    const std::string session_id = "direct-" + std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    launch_env_request.session_id = session_id;
+    return launch_env_request;
+}
+
+
+struct DirectPadSelection {
+    std::vector<std::size_t> resolved_indices;
+    std::vector<ArchStreamerSdlPad> resolved_pads;
+    std::size_t virtual_joypad_index = 0;
+    PadPlan shared_pad_plan;
+};
+
+DirectPadSelection resolve_direct_pad_selection(
+    const HostAppConfig& config,
+    const HostLaunchPlan& launch_plan) {
+    // Resolve joypad indices after uinput pads appear. Prefer discovered index so
+    // RetroArch binds the ArchStreamer pad even when host controllers remain visible.
+    // udev and sdl2 enumerate pads differently — match the driver RetroArch will use.
+    DirectPadSelection selection;
+    const bool use_udev = config.retroarch_joypad_driver == "udev";
+    if (config.verbose && use_udev) {
+        std::cout << "udev joysticks (ArchStreamer hunt):\n";
+    }
+    selection.shared_pad_plan = resolve_shared_pad_plan(
+        launch_plan.players,
+        config.ignore_controller.value_or(""),
+        config.verbose,
+        /*product_id_base=*/0,
+        use_udev);
+    if (use_udev) {
+        selection.resolved_indices = selection.shared_pad_plan.udev_indices;
+        selection.resolved_pads = selection.shared_pad_plan.pads;
+    } else {
+        selection.resolved_pads = selection.shared_pad_plan.pads;
+        selection.resolved_indices.reserve(selection.resolved_pads.size());
+        for (const auto& pad : selection.resolved_pads) {
+            selection.resolved_indices.push_back(pad.sdl_index);
+        }
+    }
+    if (config.virtual_joypad_index.has_value()) {
+        selection.virtual_joypad_index = *config.virtual_joypad_index;
+        std::cout << "Using explicit --virtual-joypad-index " << selection.virtual_joypad_index << '\n';
+    } else if (!selection.resolved_indices.empty()) {
+        selection.virtual_joypad_index = selection.resolved_indices.front();
+        if (config.verbose) {
+            std::cout
+                << "Resolved virtual joypad index " << selection.virtual_joypad_index
+                << " (driver=" << config.retroarch_joypad_driver << ")\n";
+        }
+    } else {
+        std::cerr
+            << "Warning: ArchStreamer virtual pads not visible to "
+            << config.retroarch_joypad_driver
+            << " yet; defaulting RetroArch joypad index to 0.\n";
+    }
+    return selection;
+}
+
+
+DirectGpuSelection prepare_direct_gpu(
+    const HostAppConfig& config,
+    EmulatorLaunchEnvRequest& launch_env_request,
+    const CapturePlan& capture) {
+    auto gpu_selection = resolve_direct_gpu_selection(
+        config,
+        capture.use_virtual_capture,
+        capture.virtualgl_capture,
+        capture.gamescope_capture);
+    if (gpu_selection.resolved_gpu.has_value()) {
+        // PRIME offload for NVIDIA. On plain Xvfb the provider name is ignored (no RandR
+        // providers); VirtualGL uses the real display's GLX where G0/G1 selection works.
+        launch_env_request.render_gpu = *gpu_selection.resolved_gpu;
+    }
+    return gpu_selection;
+}
+
+struct DirectLaunchEnvironment {
+    CapturePlan capture;
+    EmulatorLaunchEnvRequest request;
+    DirectGpuSelection gpu;
+};
+
+DirectLaunchEnvironment prepare_direct_launch_environment(
+    HostAppConfig& config,
+    RetroArchLaunchConfig& launch_config,
+    bool host_plays_locally) {
+    auto capture = resolve_capture_plan(config, launch_config);
+    auto request = build_launch_env_request(config, capture, host_plays_locally);
+    auto gpu = prepare_direct_gpu(config, request, capture);
+    return DirectLaunchEnvironment{
+        std::move(capture),
+        std::move(request),
+        std::move(gpu),
+    };
+}
+
+struct DirectMediaPlan {
+    HostMediaPlanConfig config;
+    std::vector<HostMediaDestination> destinations;
+    std::vector<MediaClientStream> streams;
+};
+
+DirectMediaPlan build_direct_media_plan(const HostAppConfig& config) {
+    DirectMediaPlan plan;
+    plan.config = media_plan_config_for(config);
+    if (config.video || config.audio) {
+        plan.destinations = media_destinations_for_host(plan.config);
+        plan.streams = media_streams_for_dry_run(plan.config, plan.destinations);
+    }
+    return plan;
+}
+
+struct DirectBackendState {
+    std::unique_ptr<SwitchBackend> switch_backend;
+    std::unique_ptr<MelonDsBackend> melonds_backend;
+    std::string switch_launch_content_stem;
+    std::string switch_launch_title_id;
+    std::string system_key;
+};
+
+struct DirectDevicePlan {
+    PadPlan shared_pad_plan;
+    std::vector<std::size_t> resolved_indices;
+    std::vector<ArchStreamerSdlPad> resolved_pads;
+    std::size_t virtual_joypad_index = 0;
+    std::string soft_keyboard_fallback;
+    std::shared_ptr<SoftKeyboardHostBridge> standalone_soft_keyboard;
+    std::optional<GpuDevice> resolved_gpu;
+    bool arm_soft_keyboard = false;
+    bool use_virtual_capture = false;
+    bool capture_fullscreen = false;
+    std::string capture_display;
+    VirtualDisplayBackend display_backend = VirtualDisplayBackend::None;
+};
+
+DirectDevicePlan resolve_direct_device_plan(
+    const HostLaunchPlan& launch_plan,
+    const HostAppConfig& config,
+    const CapturePlan& capture) {
+    auto pads = resolve_direct_pad_selection(config, launch_plan);
+    DirectDevicePlan devices;
+    devices.shared_pad_plan = std::move(pads.shared_pad_plan);
+    devices.resolved_indices = std::move(pads.resolved_indices);
+    devices.resolved_pads = std::move(pads.resolved_pads);
+    devices.virtual_joypad_index = pads.virtual_joypad_index;
+    devices.use_virtual_capture = capture.use_virtual_capture;
+    devices.capture_fullscreen = capture.capture_fullscreen;
+    devices.capture_display = capture.capture_display;
+    devices.display_backend = capture.display_backend;
+    return devices;
+}
+
+void prepare_direct_backend(
+    const HostAppConfig& config,
+    RetroArchLaunchConfig& launch_config,
+    const CapturePlan& capture,
+    const DirectSessionTarget& target,
+    HostLaunchPlan& launch_plan,
+    DirectDevicePlan& devices,
+    VirtualKeyboard& keyboard,
+    EmulatorLaunchEnvRequest& launch_env_request,
+    DirectBackendState& backends) {
+    if (backends.system_key == "switch") {
+        const auto runtime = resolve_switch_runtime();
+        if (!runtime.has_value()) {
+            throw std::runtime_error(switch_runtime_unavailable_message());
+        }
+        launch_config.standalone = true;
+        launch_config.core_path = runtime->path;
+        launch_config.standalone_args_before_content = runtime->args_before_content;
+        backends.switch_backend = make_switch_backend(*runtime);
+    } else if (backends.system_key == "nds" && melonds_runtime_available()) {
+        const auto runtime = resolve_melonds_runtime();
+        if (!runtime.has_value()) {
+            throw std::runtime_error(melonds_unavailable_message());
+        }
+        launch_config.standalone = true;
+        launch_config.core_path = runtime->path;
+        launch_config.standalone_args_before_content = runtime->args_before_content;
+        backends.melonds_backend = make_melonds_backend();
+    } else if (launch_config.standalone) {
+        throw std::runtime_error(
+            "standalone launch requested for unsupported system_key=" + backends.system_key);
+    }
+
+    if (backends.switch_backend) {
+        keyboard.set_switch_style_hotkeys(true);
+        const auto profile_name =
+            preferred_steam_or_username_display_name(target.save_profile.username);
+        const auto switch_content_stem = !target.catalog_content_path.empty()
+            ? target.catalog_content_path.stem().string()
+            : launch_config.content_path.stem().string();
+        auto switch_title_id = target.m3m_title_id;
+        if (switch_title_id.empty()) {
+            switch_title_id = resolve_switch_title_id_for_catalog(
+                target.save_profile, switch_content_stem, launch_config.content_path);
+        }
+        auto switch_prep = backends.switch_backend->prepare(
+            launch_config,
+            SwitchBackendPrepContext{
+                target.save_profile,
+                launch_plan.players,
+                config.verbose,
+                /*product_id_base=*/0,
+                config.ignore_controller.value_or(""),
+                config.graphics_api,
+                capture.virtualgl_capture,
+                capture.gamescope_capture,
+                config.resolution.switch_scale,
+                /*prefer_handheld_mode=*/false,
+                &devices.resolved_gpu,
+                profile_name,
+                std::move(devices.resolved_pads),
+                /*slot_index=*/0,
+                launch_plan.game_id,
+                switch_content_stem,
+                switch_title_id,
+            });
+        devices.resolved_pads = std::move(switch_prep.resolved_pads);
+        backends.switch_backend->assign_launch_env_profile(launch_env_request, switch_prep);
+        log_switch_backend_prep(
+            *backends.switch_backend,
+            launch_env_request,
+            switch_prep,
+            config.resolution.switch_scale,
+            devices.resolved_gpu);
+        backends.switch_launch_content_stem = switch_content_stem;
+        backends.switch_launch_title_id = switch_title_id;
+        if (backends.switch_backend->enable_soft_keyboard()) {
+            if (!devices.standalone_soft_keyboard) {
+                devices.standalone_soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();
+            }
+            devices.soft_keyboard_fallback = profile_name;
+            devices.arm_soft_keyboard = true;
+        }
+    } else if (backends.melonds_backend) {
+        const auto profile_name =
+            preferred_steam_or_username_display_name(target.save_profile.username);
+        auto melonds_prep = backends.melonds_backend->prepare(
+            launch_config,
+            MelonDsBackendPrepContext{
+                target.save_profile,
+                launch_plan.players,
+                config.verbose,
+                /*product_id_base=*/0,
+                config.ignore_controller.value_or(""),
+                capture.virtualgl_capture,
+                capture.gamescope_capture,
+                /*slot_index=*/0,
+                profile_name,
+                DisplayLayoutPreference::Auto,
+                std::move(devices.resolved_pads),
+            });
+        devices.resolved_pads = std::move(melonds_prep.resolved_pads);
+        backends.melonds_backend->assign_launch_env_profile(launch_env_request, melonds_prep);
+        log_melonds_backend_prep(*backends.melonds_backend, launch_env_request, melonds_prep);
+    } else {
+        RetroArchOverrideParams override_params;
+        override_params.first_virtual_joypad_index = devices.virtual_joypad_index;
+        override_params.identities = &launch_plan.virtual_identities;
+        override_params.joypad_driver = config.retroarch_joypad_driver;
+        override_params.players = launch_plan.players;
+        override_params.save_profile = &target.save_profile;
+        override_params.realtime_pacing = config.audio || config.video;
+        override_params.capture_fullscreen = devices.capture_fullscreen && devices.use_virtual_capture;
+        override_params.capture_resolution = config.video_resolution;
+        override_params.vulkan_gpu_index =
+            (!devices.use_virtual_capture && devices.resolved_gpu.has_value()) ? devices.resolved_gpu->vulkan_index : -1;
+        override_params.system_key = backends.system_key;
+        override_params.core_path = launch_config.core_path;
+        override_params.resolution_scale = config.resolution.retroarch_scale;
+        const auto runtime_override = apply_retroarch_override(launch_config, override_params);
+        std::cout
+            << "RetroArch config: " << runtime_override
+            << "\nVirtual joypad index: " << devices.virtual_joypad_index
+            << " (driver=" << config.retroarch_joypad_driver << ")\n";
+        {
+            const int scale = std::clamp(config.resolution.retroarch_scale, 1, 6);
+            std::cout << "RetroArch resolution: " << scale << "x native"
+                      << " (known cores via .opt)\n";
+        }
+        if (!backends.system_key.empty()) {
+            std::cout << "Face buttons: system=" << backends.system_key
+                      << " (" << face_button_map_name(backends.system_key) << ")\n";
+        }
+        launch_env_request.pad_plan = devices.shared_pad_plan;
+        log_pad_plan(devices.shared_pad_plan);
+    }
+}
+
+
+
+} // namespace
+
+
+int HostApp::run_lobby_sessions(
+    HostAppConfig config,
+    GameCatalog& catalog,
+    const GameList& list,
+    StreamingAudioSink& streaming_audio,
+    std::optional<ControllerDevice> bridge_device,
+    const std::function<bool()>& should_stop) {
+    return run_concurrent_session_host(
+        std::move(config),
+        catalog,
+        list,
+        streaming_audio,
+        bridge_device,
+        should_stop);
+}
+
+int HostApp::run_direct_session(
+    HostAppConfig config,
+    GameCatalog& catalog,
+    const GameList& list,
+    StreamingAudioSink& streaming_audio,
+    std::optional<ControllerDevice> bridge_device,
+    std::optional<HostPlayerControllerIdentity> bridge_identity,
+    bool host_plays_locally,
+    const std::function<bool()>& should_stop) {
+    auto backends = DirectBackendState{};
+    std::optional<std::string> session_end_reason;
+
+    auto target_result = prepare_direct_session_target(config, catalog, list, bridge_identity);
+    if (!target_result.has_value()) {
+        return 1;
+    }
+    auto target = std::move(*target_result);
+    backends.system_key = std::move(target.system_key);
+
+    // Streaming already forced off above for Host Player.
+    // Emulator child env is assembled once later (audio/input/gpu/capture/emulator).
+    append_direct_controller_ignore_list(config, bridge_device);
+
+    // Host Player keeps the real DISPLAY (and speakers). Streamed RetroArch needs a
+    // virtual capture surface. Switch standalone defaults to headless gamescope on Linux;
+    // Windows captures the desktop/HWND via d3d11screencapturesrc (no gamescope).
+    auto launch_env = prepare_direct_launch_environment(
+        config,
+        target.launch_config,
+        host_plays_locally);
+    register_session_xtest_display(launch_env.request.session_id, launch_env.request.xtest_display);
+
+    auto media = build_direct_media_plan(config);
+
+    print_direct_launch_summary(
+        config,
+        target.launch_plan,
+        target.save_profile,
+        target.launch_config,
+        media.streams,
+        launch_env.capture.capture_display);
+
+    if (config.dry_run) {
+        return 0;
+    }
+
+    HostVirtualGamepadBus gamepads(target.launch_plan.virtual_identities);
+    for (RetroArchPort port = 0; port < target.launch_plan.players; ++port) {
+        gamepads.plug(port);
+    }
+    // Virtual keyboard targets ARCHSTREAMER_XTEST_DISPLAY for gamescope, else Xvfb capture.
+    VirtualKeyboard keyboard(launch_env.request.xtest_display);
+    std::this_thread::sleep_for(std::chrono::milliseconds(750));
+
+    auto devices = resolve_direct_device_plan(target.launch_plan, config, launch_env.capture);
+    devices.resolved_gpu = launch_env.gpu.resolved_gpu;
+
+    prepare_direct_backend(
+        config,
+        target.launch_config,
+        launch_env.capture,
+        target,
+        target.launch_plan,
+        devices,
+        keyboard,
+        launch_env.request,
+        backends);
+
+    apply_capture_and_launch_environment(
+        target.launch_config,
+        launch_env.capture,
+        config,
+        launch_env.gpu.gamescope_vk_device,
+        launch_env.gpu.resolved_gpu,
+        launch_env.request);
+
+    if (devices.capture_fullscreen) {
+        std::cout
+            << "Capture fullscreen: " << config.video_resolution
+            << " on display " << devices.capture_display
+            << (devices.use_virtual_capture ? " (virtual)" : " (host)") << '\n';
+    }
+
+    // Pin Viewer RetroArch to the capture null sink (speakers stay quiet unless Watch-local).
+    if (config.audio) {
+        park_session_game_audio(&streaming_audio);
+    }
+
+    InputRouter input_router(gamepads, &keyboard);
+    auto melonds_touch_ctrl = configure_direct_input_router(
+        input_router,
+        keyboard,
+        target.launch_plan,
+        backends.switch_backend,
+        backends.melonds_backend);
+    print_input_seats(target.launch_plan.seats);
 
     auto network_receiver = std::optional<NetworkInputReceiver>{};
     if (config.input_port.has_value()) {
@@ -692,17 +1000,17 @@ int HostApp::run_direct_session(
 
     auto media_server = start_host_media_server_if_needed(HostMediaStartRequest{
         config,
-        capture_display,
-        display_backend,
-        nvenc_cuda_device_id,
-        media_config,
-        media_destinations,
-        media_streams,
+        devices.capture_display,
+        devices.display_backend,
+        launch_env.gpu.nvenc_cuda_device_id,
+        media.config,
+        media.destinations,
+        media.streams,
     });
     // Plug after Xvfb/Xephyr is up. Soft-fail so a keyboard issue never kills the session.
     if (!plug_virtual_keyboard_with_retry(
-            keyboard, use_virtual_capture, gamescope_capture)) {
-        if (use_virtual_capture && !gamescope_capture) {
+            keyboard, devices.use_virtual_capture, launch_env.capture.gamescope_capture)) {
+        if (devices.use_virtual_capture && !launch_env.capture.gamescope_capture) {
             std::cerr << "Warning: continuing without remoted keyboard (pads still work).\n";
         }
     }
@@ -712,116 +1020,38 @@ int HostApp::run_direct_session(
         local_bridge.emplace(*bridge_device);
     }
 
-    auto session_runtime = make_session_runtime(launch_plan);
-    session_runtime->bind_launch_config(std::move(launch_config));
-    std::cout
-        << "Session runtime: " << session_runtime->kind_name()
-        << " (shared_emulator=" << (session_runtime->uses_shared_emulator() ? "yes" : "no")
-        << ", instances=" << static_cast<int>(session_runtime->emulator_instance_count())
-        << ", logical_host_client=" << static_cast<int>(session_runtime->logical_host_client_id())
-        << ", save_user=" << session_runtime->save_username()
-        << ")\n";
+    auto session_runtime = make_session_runtime(target.launch_plan);
+    session_runtime->bind_launch_config(std::move(target.launch_config));
+    std::cout << session_runtime->info();
 
-    {
-        const auto& launch_config = session_runtime->launch_config();
-        std::string command;
-        if (launch_config.standalone) {
-            command.clear();
-            for (const auto& arg : launch_config.command_prefix) {
-                if (!command.empty()) {
-                    command.push_back(' ');
-                }
-                command += arg;
-            }
-            if (!command.empty()) {
-                command.push_back(' ');
-            }
-            command += launch_config.core_path.string();
-            for (const auto& arg : launch_config.standalone_args_before_content) {
-                command.push_back(' ');
-                command += arg;
-            }
-            for (const auto& arg : launch_config.extra_args) {
-                command.push_back(' ');
-                command += arg;
-            }
-            command.push_back(' ');
-            command += launch_config.content_path.string();
-            std::cout << "Launching standalone emulator...\nCommand: " << command << '\n';
-        } else {
-            command.clear();
-            for (const auto& arg : launch_config.command_prefix) {
-                if (!command.empty()) {
-                    command.push_back(' ');
-                }
-                command += arg;
-            }
-            if (command.empty()) {
-                command = resolved_retroarch.display_path;
-            }
-            for (const auto& arg : launch_config.extra_args) {
-                command.push_back(' ');
-                command += arg;
-            }
-            command += " -L ";
-            command += launch_config.core_path.string();
-            command.push_back(' ');
-            command += launch_config.content_path.string();
-            std::cout << "Launching RetroArch...\nCommand: " << command << '\n';
-        }
-    }
+    log_direct_emulator_command(session_runtime->launch_config(), target.resolved_retroarch);
     start_emulator_and_verify(*session_runtime, EmulatorStartFailDetail::DirectCli);
     post_emulator_start_warmup(
         media_server.get(),
         config,
-        media_streams,
+        media.streams,
         *session_runtime,
         &streaming_audio,
         std::nullopt,
         gamepads,
-        launch_plan.players,
-        config.pulse_input,
+        target.launch_plan.players,
         &keyboard,
-        gamescope_capture,
-        xtest_display);
+        launch_env.capture.gamescope_capture,
+        launch_env.request.xtest_display);
 
-    CadenceSessionTracker cadence_tracker;
-    {
-        std::ostringstream detail;
-        detail << session_mode_name(launch_plan.session_mode) << " direct";
-        const std::string sink = StreamingAudioSink::kName;
-        cadence_tracker.begin(
-            0,
-            launch_plan.save_username,
-            launch_plan.game_id,
-            {},
-            detail.str(),
-            config.virtual_display,
-            config.video_port,
-            config.audio_port,
-            DefaultRetroArchNetcmdPort,
-            sink,
-            sink,
-            0xa517);
-        if (const auto pid = session_runtime->emulator().process_id(); pid.has_value()) {
-            cadence_tracker.claim_emulator_pid(*pid);
-        }
-        record_session_started(
-            0,
-            launch_plan.save_username,
-            launch_plan.game_id,
-            detail.str(),
-            cadence_tracker.session_id());
-    }
+    auto cadence_tracker = begin_direct_cadence_session(
+        target.launch_plan,
+        config,
+        *session_runtime);
 
-    if (arm_soft_keyboard && standalone_soft_keyboard) {
-        std::string display = xtest_display;
+    if (devices.arm_soft_keyboard && devices.standalone_soft_keyboard) {
+        std::string display = launch_env.request.xtest_display;
         if (keyboard.plugged()) {
             display = keyboard.capture_display();
         }
         schedule_soft_keyboard(
-            standalone_soft_keyboard,
-            soft_keyboard_fallback,
+            devices.standalone_soft_keyboard,
+            devices.soft_keyboard_fallback,
             // Prefer OCR of Ryujinx HeaderText when the dialog appears.
             {},
             display,
@@ -848,7 +1078,7 @@ int HostApp::run_direct_session(
         const auto stderr_tail = session_runtime->last_stderr_tail();
         std::ostringstream reason;
         reason << format_emulator_exit_summary(code);
-        if (session_runtime->launch_config().standalone && gamescope_capture) {
+        if (session_runtime->launch_config().standalone && launch_env.capture.gamescope_capture) {
             reason << " — if Host GPU is the non-boot NVIDIA, check Gamescope WSI "
                       "(ENABLE_GAMESCOPE_WSI / VK_ADD_IMPLICIT_LAYER_PATH); "
                       "Switch emulators often log \"Device lacks a present queue\"";
@@ -868,7 +1098,7 @@ int HostApp::run_direct_session(
 
     // Close XTest before stopping gamescope/Xvfb so Xlib does not abort the process.
     unplug_session_keyboard(&keyboard);
-    unregister_session_xtest_display(session_id);
+    unregister_session_xtest_display(launch_env.request.session_id);
 
     untrack_session_audio(&streaming_audio);
     stop_session_runtime(session_runtime);
@@ -882,29 +1112,22 @@ int HostApp::run_direct_session(
             }
         }
     }
-    if (switch_backend) {
+    if (backends.switch_backend) {
         sync_and_log_post_exit_switch_saves(
-            save_profile,
+            target.save_profile,
             std::nullopt,
-            switch_backend.get(),
-            switch_launch_content_stem,
-            switch_launch_title_id);
+            backends.switch_backend.get(),
+            backends.switch_launch_content_stem,
+            backends.switch_launch_title_id);
     }
-    if (melonds_backend) {
-        (void)melonds_backend->post_exit_sync(save_profile);
+    if (backends.melonds_backend) {
+        (void)backends.melonds_backend->post_exit_sync(target.save_profile);
     }
-    {
-        const std::string end_reason = should_stop()
-            ? "host stopped"
-            : session_end_reason.value_or("session ended");
-        record_session_ended(
-            0,
-            launch_plan.save_username,
-            launch_plan.game_id,
-            end_reason,
-            cadence_tracker.session_id());
-        cadence_tracker.end(end_reason);
-    }
+    const std::string end_reason = should_stop()
+        ? "host stopped"
+        : session_end_reason.value_or("session ended");
+
+    end_direct_cadence_session(cadence_tracker, target.launch_plan, end_reason);
     stop_session_media(media_server);
     if (config.audio) {
         streaming_audio.restore_default_sink();

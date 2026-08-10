@@ -107,11 +107,30 @@ fun StreamVideoView(
     ) {
         val maxW = maxWidth
         val maxH = maxHeight
-        val boxW = if (maxW / maxH > ratio) maxH * ratio else maxW
-        val boxH = if (maxW / maxH > ratio) maxH else maxW / ratio
+        // Never size the TextureView to 0×0 — on TV that can leave MediaCodec without a
+        // Surface forever (AUs arrive, frames stay 0, black screen after reconnect).
+        val hasBounds = maxW.value > 1f && maxH.value > 1f
+        val boxW = if (!hasBounds) {
+            maxW
+        } else if (maxW / maxH > ratio) {
+            maxH * ratio
+        } else {
+            maxW
+        }
+        val boxH = if (!hasBounds) {
+            maxH
+        } else if (maxW / maxH > ratio) {
+            maxH
+        } else {
+            maxW / ratio
+        }
 
         AndroidView(
-            modifier = Modifier.size(boxW, boxH),
+            modifier = if (hasBounds) {
+                Modifier.size(boxW, boxH)
+            } else {
+                Modifier.fillMaxSize()
+            },
             factory = { context ->
                 PlayerTextureView(context)
             },
@@ -163,6 +182,18 @@ private class PlayerTextureView(context: android.content.Context) : TextureView(
         val surface = ownedSurface
         if (player != null && surface != null && isAvailable) {
             player.attachSurface(surface)
+            return
+        }
+        // SurfaceTexture can become available before the first bind, or after a
+        // zero-size layout pass. Re-check once laid out so reconnect does not sit
+        // forever with AUs and no decoder surface.
+        if (player != null) {
+            post {
+                val late = ownedSurface
+                if (boundPlayer === player && late != null && isAvailable) {
+                    player.attachSurface(late)
+                }
+            }
         }
     }
 

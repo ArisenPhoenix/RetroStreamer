@@ -219,6 +219,9 @@ void WindowsMediaServer::start(
     std::vector<MediaClientStream>& streams) {
     plan_ = plan;
     destinations_ = destinations;
+    video_settings_ = plan_.initial_video_settings.bitrate_kbps == 0
+        ? video_encode_settings(MediaStreamSize::P720, MediaQualityTier::Medium)
+        : plan_.initial_video_settings;
     streams = media_streams_for_dry_run(plan_, destinations_);
 
     if (capture_.video) {
@@ -287,6 +290,7 @@ void WindowsMediaServer::remove_client(ClientId client_id) {
 
 bool WindowsMediaServer::reconfigure_shared_video(const VideoEncodeSettings& settings) {
     video_settings_ = settings;
+    plan_.initial_video_settings = settings;
     try {
         restart_video();
     } catch (const std::exception& error) {
@@ -294,6 +298,13 @@ bool WindowsMediaServer::reconfigure_shared_video(const VideoEncodeSettings& set
         return false;
     }
     return video_running_;
+}
+
+bool WindowsMediaServer::apply_video_branch_layout(
+    const VideoEncodeSettings& trunk,
+    const std::vector<std::pair<ClientId, VideoEncodeSettings>>&) {
+    // Windows fanout is still a single shared encode; samples collapse to the trunk.
+    return reconfigure_shared_video(trunk);
 }
 
 bool WindowsMediaServer::restart_shared_audio() {
@@ -314,6 +325,18 @@ void WindowsMediaServer::abort_video_tier_cutover(ClientId) {}
 
 bool WindowsMediaServer::video_cutover_in_flight(ClientId) const {
     return false;
+}
+
+std::optional<std::string> WindowsMediaServer::current_video_uri(ClientId client_id) const {
+    for (std::size_t index = 0; index < destinations_.size(); ++index) {
+        const auto& destination = destinations_[index];
+        if (destination.client_id != client_id) {
+            continue;
+        }
+        const auto request = video_request_for_destination(plan_, destination, index);
+        return rtp_h264_uri(request.destination_host, request.port);
+    }
+    return std::nullopt;
 }
 
 std::optional<std::string> WindowsMediaServer::begin_video_tier_cutover(

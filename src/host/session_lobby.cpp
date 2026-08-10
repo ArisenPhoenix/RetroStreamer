@@ -4,6 +4,7 @@
 #include "common/catalog_paths.hpp"
 #include "common/client_logs.hpp"
 #include "common/game_identity.hpp"
+#include "host/client_stream_policy.hpp"
 #include "host/controls_db_sync.hpp"
 #include "host/game_meta_store.hpp"
 #include "host/pair_form_relay.hpp"
@@ -215,6 +216,55 @@ void send_media_endpoint_to_client(SessionPlan& plan, ClientId client_id, const 
             client.stream.send_packet(serialize_packet(endpoint));
             return;
         }
+    }
+}
+
+void configure_initial_session_video(
+    SessionPlan& plan,
+    std::uint16_t capture_width,
+    std::uint16_t capture_height) {
+    const auto policy = initial_session_video_policy_for(plan);
+
+    auto initial_settings = video_encode_settings(
+        policy.size,
+        policy.tier,
+        capture_width == 0 ? 1920 : capture_width,
+        capture_height == 0 ? 1080 : capture_height,
+        MediaStreamFeel::LowLatency,
+        policy.bitrate,
+        policy.fps);
+    if (policy.align_encode_to_macroblocks) {
+        initial_settings = align_encode_to_h264_macroblocks(initial_settings);
+    }
+    plan.session_video_settings = initial_settings;
+    plan.session_video_size = policy.size;
+    plan.session_video_tier = policy.tier;
+    plan.session_video_feel = MediaStreamFeel::LowLatency;
+    plan.session_video_bitrate = policy.bitrate;
+    plan.session_video_fps = policy.fps;
+    plan.session_video_configured = true;
+
+    std::cerr
+        << "Initial stream policy: " << policy.reason
+        << " -> " << media_stream_size_name(plan.session_video_size)
+        << "/" << media_quality_tier_name(plan.session_video_tier)
+        << "/" << media_stream_bitrate_name(plan.session_video_bitrate)
+        << "/" << media_stream_feel_name(plan.session_video_feel)
+        << "/" << media_stream_fps_name(plan.session_video_fps)
+        << " @" << plan.session_video_settings.bitrate_kbps << "kbps/"
+        << static_cast<int>(plan.session_video_settings.framerate) << "fps/"
+        << plan.session_video_settings.width << "x" << plan.session_video_settings.height
+        << '\n';
+
+    for (auto& client : plan.clients) {
+        if (client.connection_state != SessionConnectionState::Connected) {
+            continue;
+        }
+        client.applied_size = plan.session_video_size;
+        client.applied_tier = plan.session_video_tier;
+        client.applied_feel = plan.session_video_feel;
+        client.applied_bitrate = plan.session_video_bitrate;
+        client.applied_fps = plan.session_video_fps;
     }
 }
 

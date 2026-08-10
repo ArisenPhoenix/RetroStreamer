@@ -27,10 +27,12 @@ public:
 
     std::vector<MediaClientStream> start(
         const std::string& display,
-        const std::vector<MediaStreamRequest>& destinations);
+        const std::vector<MediaStreamRequest>& destinations,
+        const VideoEncodeSettings& initial_settings = {});
     std::vector<MediaClientStream> start_pipewire(
         const std::string& pipewire_node,
-        const std::vector<MediaStreamRequest>& destinations);
+        const std::vector<MediaStreamRequest>& destinations,
+        const VideoEncodeSettings& initial_settings = {});
     MediaClientStream add(
         const std::string& display,
         const MediaStreamRequest& destination,
@@ -38,14 +40,22 @@ public:
 
     /** Apply [settings] to every destination and restart the shared pipeline. */
     bool reconfigure_shared(const VideoEncodeSettings& settings);
+    /**
+     * Set each destination's encode settings and rebuild the capture → branch ladder.
+     * Matching settings merge into one multiudpsink branch (reuse).
+     */
+    bool apply_branch_layout(
+        const VideoEncodeSettings& trunk,
+        const std::vector<std::pair<ClientId, VideoEncodeSettings>>& per_client);
 
-    // Legacy dual-stream API — no longer used for quality; kept as no-ops.
+    // Legacy dual-stream API — warm probe for trunk replace; commit uses shared restart.
     std::optional<std::string> begin_tier_cutover(
         ClientId client_id,
         const VideoEncodeSettings& settings);
     bool complete_tier_cutover(ClientId client_id, std::string_view staging_video_uri);
     void abort_tier_cutover(ClientId client_id);
     bool cutover_in_flight(ClientId client_id) const;
+    std::optional<std::string> current_video_uri(ClientId client_id) const;
 
     void stop();
     void stop_client(ClientId client_id);
@@ -145,6 +155,9 @@ public:
         bool wants_audio) override;
     void remove_client(ClientId client_id) override;
     bool reconfigure_shared_video(const VideoEncodeSettings& settings) override;
+    bool apply_video_branch_layout(
+        const VideoEncodeSettings& trunk,
+        const std::vector<std::pair<ClientId, VideoEncodeSettings>>& per_client) override;
     bool restart_shared_audio() override;
     std::optional<std::string> begin_video_tier_cutover(
         ClientId client_id,
@@ -154,6 +167,7 @@ public:
         std::string_view staging_video_uri) override;
     void abort_video_tier_cutover(ClientId client_id) override;
     bool video_cutover_in_flight(ClientId client_id) const override;
+    std::optional<std::string> current_video_uri(ClientId client_id) const override;
     void stop() override;
 
     // Gamescope: video fanout is deferred until the PipeWire node appears after launch.

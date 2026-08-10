@@ -123,10 +123,10 @@ QPixmap render_pair_qr(const QString& uri) {
 }
 
 void write_http_response(QTcpSocket* socket, int code, const QByteArray& body) {
-    const QByteArray status = code == 200 ? "200 OK" :
-        code == 401 ? "401 Unauthorized" :
-        code == 405 ? "405 Method Not Allowed" :
-        code == 400 ? "400 Bad Request" :
+    const QByteArray status = code == 200 ? QByteArray("200 OK") :
+        code == 401 ? QByteArray("401 Unauthorized") :
+        code == 405 ? QByteArray("405 Method Not Allowed") :
+        code == 400 ? QByteArray("400 Bad Request") :
         QByteArray::number(code) + " Error";
     socket->write("HTTP/1.1 " + status + "\r\n");
     socket->write("Content-Type: application/json\r\n");

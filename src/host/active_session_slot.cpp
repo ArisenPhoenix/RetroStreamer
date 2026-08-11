@@ -259,25 +259,18 @@ RetroArchOverrideParams ActiveSessionSlot::make_relaunch_override_params(
     override_params.players = players;
     override_params.save_profile = &save_profile_;
     override_params.realtime_pacing = slot_config_.audio || slot_config_.video;
-    override_params.capture_fullscreen = ctx.capture_fullscreen && use_virtual_capture_;
-    override_params.capture_resolution = slot_config_.video_resolution;
-    const bool have_gpu = ctx.resolved_gpu != nullptr && ctx.resolved_gpu->has_value();
+    override_params.capture_fullscreen = ctx.capture.capture_fullscreen && use_virtual_capture_;
+    override_params.capture_resolution = ctx.capture.video_resolution;
+    const bool have_gpu = ctx.capture.resolved_gpu.has_value();
     override_params.vulkan_gpu_index =
-        (!use_virtual_capture_ && have_gpu) ? (*ctx.resolved_gpu)->vulkan_index : -1;
+        (!use_virtual_capture_ && have_gpu) ? ctx.capture.resolved_gpu->vulkan_index : -1;
     override_params.system_key = system_key_;
     override_params.core_path = core_path;
     override_params.resolution_scale = slot_config_.resolution.retroarch_scale;
     override_params.slot_index = config_.slot_index;
     override_params.network_cmd_port = config_.plan.retroarch_netcmd_port;
-    {
-        std::vector<ClientHello> hellos;
-        hellos.reserve(config_.plan.clients.size());
-        for (const auto& client : config_.plan.clients) {
-            hellos.push_back(client.hello);
-        }
-        override_params.display_layout =
-            resolve_display_layout_preference(config_.plan.host_hello, hellos);
-    }
+    override_params.display_layout =
+        resolve_session_plan_participants(save_profile_.username, config_.plan).display_layout;
     return override_params;
 }
 
@@ -1213,8 +1206,14 @@ void ActiveSessionSlot::run_session() {
 
     std::optional<std::string> session_end_reason;
     const RelaunchContext relaunch_ctx{
-        launch_env.capture.capture_fullscreen,
-        &launch_env.resolved_gpu,
+        SessionCaptureDevices{
+            launch_env.resolved_gpu,
+            launch_env.capture.use_virtual_capture,
+            launch_env.capture.capture_fullscreen,
+            launch_env.capture.capture_display,
+            launch_env.capture.display_backend,
+            config.video_resolution,
+        },
         &launch_env.request,
     };
     SessionLoopCadence loop_cadence(

@@ -11,6 +11,7 @@
 #include "host/save_profile.hpp"
 #include "host/session_control_monitor.hpp"
 #include "host/session_launch_assemble.hpp"
+#include "host/session_launch_types.hpp"
 #include "host/session_lobby.hpp"
 #include "host/session_runtime.hpp"
 #include "host/session_slot_lease.hpp"
@@ -142,8 +143,7 @@ private:
 
     /** Locals needed by mid-session RetroArch relaunches (GB link / GBA netplay). */
     struct RelaunchContext {
-        bool capture_fullscreen = false;
-        const std::optional<GpuDevice>* resolved_gpu = nullptr;
+        SessionCaptureDevices capture;
         EmulatorLaunchEnvRequest* launch_env_request = nullptr;
     };
     void poll_while(

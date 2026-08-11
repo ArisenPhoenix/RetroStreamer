@@ -189,7 +189,7 @@ int HostApp::run_direct_session(
         SessionPadPlanKind::Direct,
         /*product_id_base=*/0);
     apply_capture_to_session_device_plan(devices, config, launch_env.capture);
-    devices.resolved_gpu = launch_env.gpu.resolved_gpu;
+    devices.capture.resolved_gpu = launch_env.gpu.resolved_gpu;
 
     auto backend_context = make_session_backend_prepare_context(
         config,
@@ -210,7 +210,7 @@ int HostApp::run_direct_session(
         launch_env.gpu.resolved_gpu,
         launch_env.request);
 
-    if (devices.capture_fullscreen) {
+    if (devices.capture.capture_fullscreen) {
         std::cout << devices.capture_info();
     }
 
@@ -234,8 +234,8 @@ int HostApp::run_direct_session(
 
     auto media_server = start_host_media_server_if_needed(HostMediaStartRequest{
         config,
-        devices.capture_display,
-        devices.display_backend,
+        devices.capture.capture_display,
+        devices.capture.display_backend,
         launch_env.gpu.nvenc_cuda_device_id,
         media.config,
         media.destinations,
@@ -243,8 +243,10 @@ int HostApp::run_direct_session(
     });
     // Plug after Xvfb/Xephyr is up. Soft-fail so a keyboard issue never kills the session.
     if (!plug_virtual_keyboard_with_retry(
-            keyboard, devices.use_virtual_capture, launch_env.capture.gamescope_capture)) {
-        if (devices.use_virtual_capture && !launch_env.capture.gamescope_capture) {
+            keyboard,
+            devices.capture.use_virtual_capture,
+            launch_env.capture.gamescope_capture)) {
+        if (devices.capture.use_virtual_capture && !launch_env.capture.gamescope_capture) {
             std::cerr << "Warning: continuing without remoted keyboard (pads still work).\n";
         }
     }
@@ -278,14 +280,14 @@ int HostApp::run_direct_session(
         config,
         *session_runtime);
 
-    if (devices.arm_soft_keyboard && devices.standalone_soft_keyboard) {
+    if (devices.keyboard.arm_soft_keyboard && devices.keyboard.standalone_soft_keyboard) {
         std::string display = launch_env.request.xtest_display;
         if (keyboard.plugged()) {
             display = keyboard.capture_display();
         }
         schedule_soft_keyboard(
-            devices.standalone_soft_keyboard,
-            devices.soft_keyboard_fallback,
+            devices.keyboard.standalone_soft_keyboard,
+            devices.keyboard.soft_keyboard_fallback,
             // Prefer OCR of Ryujinx HeaderText when the dialog appears.
             {},
             display,

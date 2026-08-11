@@ -13,6 +13,7 @@
 #include "host/pad_plan.hpp"
 #include "host/retroarch_resolve.hpp"
 #include "host/save_profile.hpp"
+#include "host/session_launch_assemble.hpp"
 #include "host/soft_keyboard_host.hpp"
 #include "host/switch/switch_backend.hpp"
 #include "host/virtual_gamepad.hpp"
@@ -94,21 +95,37 @@ struct SessionBackendState {
     std::string system_key;
 };
 
-struct SessionDevicePlan {
+struct SessionInputDevices {
     PadPlan shared_pad_plan;
     std::vector<std::size_t> resolved_indices;
     std::vector<ArchStreamerSdlPad> resolved_pads;
     std::size_t virtual_joypad_index = 0;
     std::uint16_t product_id_base = 0;
+};
+
+struct SessionKeyboardDevices {
     std::string soft_keyboard_fallback;
     std::shared_ptr<SoftKeyboardHostBridge> standalone_soft_keyboard;
-    std::optional<GpuDevice> resolved_gpu;
     bool arm_soft_keyboard = false;
+};
+
+struct SessionTouchDevices {
+};
+
+struct SessionCaptureDevices {
+    std::optional<GpuDevice> resolved_gpu;
     bool use_virtual_capture = false;
     bool capture_fullscreen = false;
     std::string capture_display;
     VirtualDisplayBackend display_backend = VirtualDisplayBackend::None;
     std::string video_resolution;
+};
+
+struct SessionDevicePlan {
+    SessionInputDevices input;
+    SessionKeyboardDevices keyboard;
+    SessionTouchDevices touch;
+    SessionCaptureDevices capture;
 
     std::string capture_info() const;
 };
@@ -126,7 +143,7 @@ struct SessionGameContext {
 
 struct SessionVideoContext {
     const CapturePlan& capture;
-    std::optional<GpuDevice>& resolved_gpu;
+    SessionCaptureDevices& devices;
     std::string_view video_resolution;
     int retroarch_scale = 1;
     int switch_scale = 1;
@@ -144,6 +161,13 @@ struct SessionBackendPrepareContext {
     SessionInputContext input;
     SessionBackendState& backends;
     EmulatorLaunchEnvRequest& launch_env_request;
+};
+
+struct SessionRetroArchOverrideOptions {
+    bool use_virtual_capture = false;
+    int slot_index = 0;
+    std::uint16_t network_cmd_port = 55355;
+    DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto;
 };
 
 enum class SessionPadPlanKind {
@@ -218,6 +242,10 @@ SessionBackendPrepareContext make_session_backend_prepare_context(
     const CapturePlan& capture,
     EmulatorLaunchEnvRequest& launch_env_request,
     SessionParticipantContext participants);
+
+RetroArchOverrideParams build_session_retroarch_override(
+    const SessionBackendPrepareContext& backend,
+    const SessionRetroArchOverrideOptions& options);
 
 void plug_session_gamepads(VirtualGamepadBus& gamepads, RetroArchPort players);
 

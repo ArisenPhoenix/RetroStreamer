@@ -38,9 +38,10 @@ void append_ignore_devices(HostAppConfig& config, const std::string& devices) {
 
 std::string SessionDevicePlan::capture_info() const {
     std::ostringstream o;
-    o << "Capture: " << (capture_fullscreen ? "fullscreen" : "windowed") << video_resolution
-      << " on display " << capture_display
-      << (use_virtual_capture ? " (virtual)" : " (host)") << '\n';
+    o << "Capture: " << (capture.capture_fullscreen ? "fullscreen" : "windowed")
+      << capture.video_resolution
+      << " on display " << capture.capture_display
+      << (capture.use_virtual_capture ? " (virtual)" : " (host)") << '\n';
     return o.str();
 }
 
@@ -49,12 +50,12 @@ void apply_capture_to_session_device_plan(
     const HostAppConfig& config,
     const CapturePlan& capture,
     std::optional<GpuDevice> resolved_gpu) {
-    devices.resolved_gpu = std::move(resolved_gpu);
-    devices.use_virtual_capture = capture.use_virtual_capture;
-    devices.capture_fullscreen = capture.capture_fullscreen;
-    devices.capture_display = capture.capture_display;
-    devices.display_backend = capture.display_backend;
-    devices.video_resolution = config.video_resolution;
+    devices.capture.resolved_gpu = std::move(resolved_gpu);
+    devices.capture.use_virtual_capture = capture.use_virtual_capture;
+    devices.capture.capture_fullscreen = capture.capture_fullscreen;
+    devices.capture.capture_display = capture.capture_display;
+    devices.capture.display_backend = capture.display_backend;
+    devices.capture.video_resolution = config.video_resolution;
 }
 
 SessionDevicePlan resolve_session_device_plan(
@@ -63,20 +64,20 @@ SessionDevicePlan resolve_session_device_plan(
     SessionPadPlanKind kind,
     std::uint16_t product_id_base) {
     SessionDevicePlan devices;
-    devices.product_id_base = product_id_base;
+    devices.input.product_id_base = product_id_base;
     const bool use_udev = config.retroarch_joypad_driver == "udev";
     if (config.verbose && use_udev && kind == SessionPadPlanKind::Direct) {
         std::cout << "udev joysticks (ArchStreamer hunt):\n";
     }
     if (kind == SessionPadPlanKind::RetroArchSlot) {
-        devices.shared_pad_plan = resolve_retroarch_slot_pad_plan(
+        devices.input.shared_pad_plan = resolve_retroarch_slot_pad_plan(
             launch_plan.players,
             config.ignore_controller.value_or(""),
             config.verbose,
             product_id_base,
             use_udev);
     } else {
-        devices.shared_pad_plan = resolve_shared_pad_plan(
+        devices.input.shared_pad_plan = resolve_shared_pad_plan(
             launch_plan.players,
             config.ignore_controller.value_or(""),
             config.verbose,
@@ -85,27 +86,27 @@ SessionDevicePlan resolve_session_device_plan(
     }
 
     if (use_udev) {
-        devices.resolved_indices = devices.shared_pad_plan.udev_indices;
-        devices.resolved_pads = devices.shared_pad_plan.pads;
+        devices.input.resolved_indices = devices.input.shared_pad_plan.udev_indices;
+        devices.input.resolved_pads = devices.input.shared_pad_plan.pads;
     } else {
-        devices.resolved_pads = devices.shared_pad_plan.pads;
-        devices.resolved_indices.reserve(devices.resolved_pads.size());
-        for (const auto& pad : devices.resolved_pads) {
-            devices.resolved_indices.push_back(pad.sdl_index);
+        devices.input.resolved_pads = devices.input.shared_pad_plan.pads;
+        devices.input.resolved_indices.reserve(devices.input.resolved_pads.size());
+        for (const auto& pad : devices.input.resolved_pads) {
+            devices.input.resolved_indices.push_back(pad.sdl_index);
         }
     }
     if (config.virtual_joypad_index.has_value()) {
-        devices.virtual_joypad_index = *config.virtual_joypad_index;
+        devices.input.virtual_joypad_index = *config.virtual_joypad_index;
         if (kind == SessionPadPlanKind::Direct) {
             std::cout
                 << "Using explicit --virtual-joypad-index "
-                << devices.virtual_joypad_index << '\n';
+                << devices.input.virtual_joypad_index << '\n';
         }
-    } else if (!devices.resolved_indices.empty()) {
-        devices.virtual_joypad_index = devices.resolved_indices.front();
+    } else if (!devices.input.resolved_indices.empty()) {
+        devices.input.virtual_joypad_index = devices.input.resolved_indices.front();
         if (kind == SessionPadPlanKind::Direct && config.verbose) {
             std::cout
-                << "Resolved virtual joypad index " << devices.virtual_joypad_index
+                << "Resolved virtual joypad index " << devices.input.virtual_joypad_index
                 << " (driver=" << config.retroarch_joypad_driver << ")\n";
         }
     } else if (kind == SessionPadPlanKind::Direct) {
@@ -332,7 +333,7 @@ SessionBackendPrepareContext make_session_backend_prepare_context(
         },
         SessionVideoContext{
             capture,
-            devices.resolved_gpu,
+            devices.capture,
             config.video_resolution,
             config.resolution.retroarch_scale,
             config.resolution.switch_scale,
@@ -343,6 +344,39 @@ SessionBackendPrepareContext make_session_backend_prepare_context(
         backends,
         launch_env_request,
     };
+}
+
+RetroArchOverrideParams build_session_retroarch_override(
+    const SessionBackendPrepareContext& backend,
+    const SessionRetroArchOverrideOptions& options) {
+    const auto& config = backend.config;
+    const auto& user = backend.user;
+    const auto& game = backend.game;
+    const auto& video = backend.video;
+    const auto& input = backend.input;
+    const auto& backends = backend.backends;
+
+    RetroArchOverrideParams override_params;
+    override_params.first_virtual_joypad_index = input.devices.input.virtual_joypad_index;
+    override_params.identities = &game.launch_plan.virtual_identities;
+    override_params.joypad_driver = config.retroarch_joypad_driver;
+    override_params.players = game.launch_plan.players;
+    override_params.save_profile = &user.save_profile;
+    override_params.realtime_pacing = config.audio || config.video;
+    override_params.capture_fullscreen =
+        video.capture.capture_fullscreen && options.use_virtual_capture;
+    override_params.capture_resolution = std::string(video.video_resolution);
+    override_params.vulkan_gpu_index =
+        (!options.use_virtual_capture && video.devices.resolved_gpu.has_value())
+            ? video.devices.resolved_gpu->vulkan_index
+            : -1;
+    override_params.system_key = backends.system_key;
+    override_params.core_path = game.launch_config.core_path;
+    override_params.resolution_scale = video.retroarch_scale;
+    override_params.slot_index = options.slot_index;
+    override_params.network_cmd_port = options.network_cmd_port;
+    override_params.display_layout = options.display_layout;
+    return override_params;
 }
 
 void plug_session_gamepads(VirtualGamepadBus& gamepads, RetroArchPort players) {

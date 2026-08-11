@@ -320,30 +320,31 @@ void prepare_direct_backend(
                 video.capture.gamescope_capture,
                 video.switch_scale,
                 /*prefer_handheld_mode=*/false,
-                &video.resolved_gpu,
+                &video.devices.resolved_gpu,
                 user.participants.profile_display_name,
-                std::move(devices.resolved_pads),
+                std::move(devices.input.resolved_pads),
                 /*slot_index=*/0,
                 launch_plan.game_id,
                 switch_content.content_stem,
                 switch_content.title_id,
             });
-        devices.resolved_pads = std::move(switch_prep.resolved_pads);
+        devices.input.resolved_pads = std::move(switch_prep.resolved_pads);
         backends.switch_backend->assign_launch_env_profile(launch_env_request, switch_prep);
         log_switch_backend_prep(
             *backends.switch_backend,
             launch_env_request,
             switch_prep,
             video.switch_scale,
-            video.resolved_gpu);
+            video.devices.resolved_gpu);
         backends.switch_launch_content_stem = switch_content.content_stem;
         backends.switch_launch_title_id = switch_content.title_id;
         if (backends.switch_backend->enable_soft_keyboard()) {
-            if (!devices.standalone_soft_keyboard) {
-                devices.standalone_soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();
+            if (!devices.keyboard.standalone_soft_keyboard) {
+                devices.keyboard.standalone_soft_keyboard =
+                    std::make_shared<SoftKeyboardHostBridge>();
             }
-            devices.soft_keyboard_fallback = user.participants.profile_display_name;
-            devices.arm_soft_keyboard = true;
+            devices.keyboard.soft_keyboard_fallback = user.participants.profile_display_name;
+            devices.keyboard.arm_soft_keyboard = true;
         }
     } else if (backends.melonds_backend) {
         auto melonds_prep = backends.melonds_backend->prepare(
@@ -359,32 +360,21 @@ void prepare_direct_backend(
                 /*slot_index=*/0,
                 user.participants.profile_display_name,
                 user.participants.display_layout,
-                std::move(devices.resolved_pads),
+                std::move(devices.input.resolved_pads),
             });
-        devices.resolved_pads = std::move(melonds_prep.resolved_pads);
+        devices.input.resolved_pads = std::move(melonds_prep.resolved_pads);
         backends.melonds_backend->assign_launch_env_profile(launch_env_request, melonds_prep);
         log_melonds_backend_prep(*backends.melonds_backend, launch_env_request, melonds_prep);
     } else {
-        RetroArchOverrideParams override_params;
-        override_params.first_virtual_joypad_index = devices.virtual_joypad_index;
-        override_params.identities = &launch_plan.virtual_identities;
-        override_params.joypad_driver = config.retroarch_joypad_driver;
-        override_params.players = launch_plan.players;
-        override_params.save_profile = &user.save_profile;
-        override_params.realtime_pacing = config.audio || config.video;
-        override_params.capture_fullscreen = devices.capture_fullscreen && devices.use_virtual_capture;
-        override_params.capture_resolution = std::string(video.video_resolution);
-        override_params.vulkan_gpu_index =
-            (!devices.use_virtual_capture && video.resolved_gpu.has_value())
-                ? video.resolved_gpu->vulkan_index
-                : -1;
-        override_params.system_key = backends.system_key;
-        override_params.core_path = launch_config.core_path;
-        override_params.resolution_scale = video.retroarch_scale;
+        const auto override_params = build_session_retroarch_override(
+            backend,
+            SessionRetroArchOverrideOptions{
+                devices.capture.use_virtual_capture,
+            });
         const auto runtime_override = apply_retroarch_override(launch_config, override_params);
         std::cout
             << "RetroArch config: " << runtime_override
-            << "\nVirtual joypad index: " << devices.virtual_joypad_index
+            << "\nVirtual joypad index: " << devices.input.virtual_joypad_index
             << " (driver=" << config.retroarch_joypad_driver << ")\n";
         {
             const int scale = std::clamp(video.retroarch_scale, 1, 6);
@@ -395,8 +385,8 @@ void prepare_direct_backend(
             std::cout << "Face buttons: system=" << backends.system_key
                       << " (" << face_button_map_name(backends.system_key) << ")\n";
         }
-        launch_env_request.pad_plan = devices.shared_pad_plan;
-        log_pad_plan(devices.shared_pad_plan);
+        launch_env_request.pad_plan = devices.input.shared_pad_plan;
+        log_pad_plan(devices.input.shared_pad_plan);
     }
 }
 

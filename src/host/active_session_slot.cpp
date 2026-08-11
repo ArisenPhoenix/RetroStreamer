@@ -670,29 +670,29 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
                 save_profile,
                 launch_plan.players,
                 config.verbose,
-                devices.product_id_base,
+                devices.input.product_id_base,
                 config.ignore_controller.value_or(""),
                 config.graphics_api,
                 video.capture.virtualgl_capture,
                 req.gamescope_capture,
                 video.switch_scale,
                 prefer_handheld_mode,
-                &video.resolved_gpu,
+                &video.devices.resolved_gpu,
                 user.participants.profile_display_name,
-                std::move(devices.resolved_pads),
+                std::move(devices.input.resolved_pads),
                 static_cast<std::size_t>(std::max(0, req.slot)),
                 launch_plan.game_id,
                 switch_content.content_stem,
                 switch_content.title_id,
             });
-        devices.resolved_pads = std::move(switch_prep.resolved_pads);
+        devices.input.resolved_pads = std::move(switch_prep.resolved_pads);
         backends.switch_backend->assign_launch_env_profile(launch_env_request, switch_prep);
         log_switch_backend_prep(
             *backends.switch_backend,
             launch_env_request,
             switch_prep,
             video.switch_scale,
-            video.resolved_gpu,
+            video.devices.resolved_gpu,
             req.slot);
         backends.switch_launch_content_stem = switch_content.content_stem;
         backends.switch_launch_title_id = switch_content.title_id;
@@ -700,8 +700,8 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
             if (!req.plan.soft_keyboard) {
                 req.plan.soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();
             }
-            devices.soft_keyboard_fallback = user.participants.profile_display_name;
-            devices.arm_soft_keyboard = true;
+            devices.keyboard.soft_keyboard_fallback = user.participants.profile_display_name;
+            devices.keyboard.arm_soft_keyboard = true;
         }
     } else if (backends.melonds_backend) {
         auto melonds_prep = backends.melonds_backend->prepare(
@@ -710,16 +710,16 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
                 save_profile,
                 launch_plan.players,
                 config.verbose,
-                devices.product_id_base,
+                devices.input.product_id_base,
                 config.ignore_controller.value_or(""),
                 video.capture.virtualgl_capture,
                 req.gamescope_capture,
                 req.slot,
                 user.participants.profile_display_name,
                 user.participants.display_layout,
-                std::move(devices.resolved_pads),
+                std::move(devices.input.resolved_pads),
             });
-        devices.resolved_pads = std::move(melonds_prep.resolved_pads);
+        devices.input.resolved_pads = std::move(melonds_prep.resolved_pads);
         backends.melonds_backend->assign_launch_env_profile(launch_env_request, melonds_prep);
         log_melonds_backend_prep(
             *backends.melonds_backend,
@@ -729,29 +729,17 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
     } else if (launch_config.standalone) {
         throw std::runtime_error("standalone launch missing backend for system=" + system_key);
     } else {
-        RetroArchOverrideParams override_params;
-        override_params.first_virtual_joypad_index = devices.virtual_joypad_index;
-        override_params.identities = &launch_plan.virtual_identities;
-        override_params.joypad_driver = config.retroarch_joypad_driver;
-        override_params.players = launch_plan.players;
-        override_params.save_profile = &save_profile;
-        override_params.realtime_pacing = config.audio || config.video;
-        override_params.capture_fullscreen =
-            video.capture.capture_fullscreen && req.use_virtual_capture;
-        override_params.capture_resolution = std::string(video.video_resolution);
-        override_params.vulkan_gpu_index =
-            (!req.use_virtual_capture && video.resolved_gpu.has_value())
-                ? video.resolved_gpu->vulkan_index
-                : -1;
-        override_params.system_key = system_key;
-        override_params.core_path = launch_config.core_path;
-        override_params.resolution_scale = video.retroarch_scale;
-        override_params.slot_index = req.slot;
-        override_params.network_cmd_port = req.plan.retroarch_netcmd_port;
-        override_params.display_layout = user.participants.display_layout;
+        const auto override_params = build_session_retroarch_override(
+            req.backend,
+            SessionRetroArchOverrideOptions{
+                req.use_virtual_capture,
+                req.slot,
+                req.plan.retroarch_netcmd_port,
+                user.participants.display_layout,
+            });
         apply_retroarch_override(launch_config, override_params);
-        launch_env_request.pad_plan = devices.shared_pad_plan;
-        log_pad_plan(devices.shared_pad_plan, req.slot);
+        launch_env_request.pad_plan = devices.input.shared_pad_plan;
+        log_pad_plan(devices.input.shared_pad_plan, req.slot);
     }
 }
 
@@ -1053,7 +1041,7 @@ void ActiveSessionSlot::run_session() {
         config,
         launch_env.capture,
         launch_env.resolved_gpu);
-    virtual_joypad_index_ = devices.virtual_joypad_index;
+    virtual_joypad_index_ = devices.input.virtual_joypad_index;
 
     auto backend_context = make_session_backend_prepare_context(
         config,
@@ -1209,14 +1197,14 @@ void ActiveSessionSlot::run_session() {
         }
     }
 
-    if (devices.arm_soft_keyboard && plan.soft_keyboard) {
+    if (devices.keyboard.arm_soft_keyboard && plan.soft_keyboard) {
         std::string display = launch_env.xtest_display;
         if (keyboard_ != nullptr && keyboard_->plugged()) {
             display = keyboard_->capture_display();
         }
         schedule_soft_keyboard(
             plan.soft_keyboard,
-            devices.soft_keyboard_fallback,
+            devices.keyboard.soft_keyboard_fallback,
             // Prefer OCR of Ryujinx HeaderText when the dialog appears.
             {},
             display,

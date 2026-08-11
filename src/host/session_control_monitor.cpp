@@ -138,11 +138,11 @@ void reset_video_stall_tracking(SessionPlan& plan) {
 }
 
 void sync_applied_to_session(SessionClientConnection& client, const SessionPlan& plan) {
-    client.applied_size = plan.session_video_size;
-    client.applied_tier = plan.session_video_tier;
-    client.applied_feel = plan.session_video_feel;
-    client.applied_bitrate = plan.session_video_bitrate;
-    client.applied_fps = plan.session_video_fps;
+    client.applied_size = plan.stream.video_size;
+    client.applied_tier = plan.stream.video_tier;
+    client.applied_feel = plan.stream.video_feel;
+    client.applied_bitrate = plan.stream.video_bitrate;
+    client.applied_fps = plan.stream.video_fps;
 }
 
 void sync_all_applied_to_session(SessionPlan& plan) {
@@ -341,13 +341,13 @@ SessionVideoCeiling compute_session_video_ceiling(
         }
     }
     if (!ceiling.any_player) {
-        if (plan.session_video_configured) {
-            ceiling.settings = plan.session_video_settings;
-            ceiling.size = plan.session_video_size;
-            ceiling.tier = plan.session_video_tier;
-            ceiling.feel = plan.session_video_feel;
-            ceiling.bitrate = plan.session_video_bitrate;
-            ceiling.fps = plan.session_video_fps;
+        if (plan.stream.video_configured) {
+            ceiling.settings = plan.stream.video_settings;
+            ceiling.size = plan.stream.video_size;
+            ceiling.tier = plan.stream.video_tier;
+            ceiling.feel = plan.stream.video_feel;
+            ceiling.bitrate = plan.stream.video_bitrate;
+            ceiling.fps = plan.stream.video_fps;
         } else {
             ceiling.settings = video_encode_settings(
                 MediaStreamSize::P720,
@@ -729,7 +729,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
                             client,
                             true,
                             true,
-                            plan_.session_video_settings,
+                            plan_.stream.video_settings,
                             ceiling.settings,
                             ceiling.size,
                             ceiling.tier,
@@ -753,13 +753,13 @@ std::optional<std::string> SessionControlMonitor::poll() {
                                 client.client_id,
                                 video_ready->video_uri)) {
                             // Promote the already-warm encode; client keeps that URI.
-                            plan_.session_video_settings = fanout.proposed_trunk;
-                            plan_.session_video_size = fanout.proposed_size;
-                            plan_.session_video_tier = fanout.proposed_tier;
-                            plan_.session_video_feel = fanout.proposed_feel;
-                            plan_.session_video_bitrate = fanout.proposed_bitrate;
-                            plan_.session_video_fps = fanout.proposed_fps;
-                            plan_.session_video_configured = true;
+                            plan_.stream.video_settings = fanout.proposed_trunk;
+                            plan_.stream.video_size = fanout.proposed_size;
+                            plan_.stream.video_tier = fanout.proposed_tier;
+                            plan_.stream.video_feel = fanout.proposed_feel;
+                            plan_.stream.video_bitrate = fanout.proposed_bitrate;
+                            plan_.stream.video_fps = fanout.proposed_fps;
+                            plan_.stream.video_configured = true;
                             sync_all_applied_from_fanout(plan_, fanout);
 
                             auto endpoint = client.media_endpoint.value_or(MediaEndpoint{});
@@ -778,13 +778,13 @@ std::optional<std::string> SessionControlMonitor::poll() {
                             if (media_server_.apply_video_branch_layout(
                                     fanout.proposed_trunk,
                                     branch_layout_client_settings(fanout))) {
-                                plan_.session_video_settings = fanout.proposed_trunk;
-                                plan_.session_video_size = fanout.proposed_size;
-                                plan_.session_video_tier = fanout.proposed_tier;
-                                plan_.session_video_feel = fanout.proposed_feel;
-                                plan_.session_video_bitrate = fanout.proposed_bitrate;
-                                plan_.session_video_fps = fanout.proposed_fps;
-                                plan_.session_video_configured = true;
+                                plan_.stream.video_settings = fanout.proposed_trunk;
+                                plan_.stream.video_size = fanout.proposed_size;
+                                plan_.stream.video_tier = fanout.proposed_tier;
+                                plan_.stream.video_feel = fanout.proposed_feel;
+                                plan_.stream.video_bitrate = fanout.proposed_bitrate;
+                                plan_.stream.video_fps = fanout.proposed_fps;
+                                plan_.stream.video_configured = true;
                                 sync_all_applied_from_fanout(plan_, fanout);
                                 if (client.media_endpoint.has_value()) {
                                     send_media_endpoint_to_client(
@@ -858,7 +858,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
                         outbound.push_back({client.client_id, std::move(err)});
                     }
                 } else {
-                    outbound = plan_.link_coordinator.handle(
+                    outbound = plan_.link.coordinator.handle(
                         plan_,
                         client.client_id,
                         client.hello.username,
@@ -886,7 +886,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
                                     }
                                 }
                             }
-                            const auto start = plan_.link_cable.begin(
+                            const auto start = plan_.link.cable.begin(
                                 plan_.system_key,
                                 peer_id,
                                 client.client_id,
@@ -904,11 +904,11 @@ std::optional<std::string> SessionControlMonitor::poll() {
                             if (start.ok) {
                                 std::cout << "Link cable: " << start.message << '\n';
                                 if (start.needs_runtime_promotion) {
-                                    plan_.pending_link_promotion = true;
-                                    plan_.pending_link_host_client_id = start.logical_host_client_id;
-                                    plan_.pending_link_client_client_id = start.logical_client_client_id;
-                                    plan_.pending_link_host_username = start.logical_host_username;
-                                    plan_.pending_link_client_username = start.logical_client_username;
+                                    plan_.link.pending_promotion = true;
+                                    plan_.link.pending_host_client_id = start.logical_host_client_id;
+                                    plan_.link.pending_client_client_id = start.logical_client_client_id;
+                                    plan_.link.pending_host_username = start.logical_host_username;
+                                    plan_.link.pending_client_username = start.logical_client_username;
                                 }
 #if defined(ARCHSTREAMER_DEBUG_GB_LINK)
                                 send_retroarch_netcmd(
@@ -1366,7 +1366,7 @@ bool SessionControlMonitor::recover_stalled_video_if_needed(
     }
     // Warm cutover / pending URI: zero frames on the old or new path are normal.
     if (!client_is_seated_player(client) ||
-        !plan_.session_video_configured ||
+        !plan_.stream.video_configured ||
         emulator_pause_requested_ ||
         client.pending_video_uri.has_value() ||
         media_server_.video_cutover_in_flight(client.client_id)) {
@@ -1418,7 +1418,7 @@ bool SessionControlMonitor::recover_stalled_video_if_needed(
         << " (" << static_cast<int>(client.video_zero_frame_streak)
         << " zero-frame heartbeats, loss=" << heartbeat.loss_permille
         << "‰); restarting shared media fanout\n";
-    if (!media_server_.reconfigure_shared_video(plan_.session_video_settings)) {
+    if (!media_server_.reconfigure_shared_video(plan_.stream.video_settings)) {
         return false;
     }
     if (media_server_.restart_shared_audio()) {
@@ -1568,8 +1568,8 @@ void SessionControlMonitor::apply_video_encode(
     const auto fanout = build_stream_fanout_plan(
         client,
         client_is_seated_player(client),
-        plan_.session_video_configured,
-        plan_.session_video_settings,
+        plan_.stream.video_configured,
+        plan_.stream.video_settings,
         ceiling.settings,
         ceiling.size,
         ceiling.tier,
@@ -1604,13 +1604,13 @@ void SessionControlMonitor::apply_video_encode(
     log_stream_fanout_plan(fanout, reason);
 
     auto commit_session_trunk = [&]() {
-        plan_.session_video_settings = fanout.proposed_trunk;
-        plan_.session_video_size = fanout.proposed_size;
-        plan_.session_video_tier = fanout.proposed_tier;
-        plan_.session_video_feel = fanout.proposed_feel;
-        plan_.session_video_bitrate = fanout.proposed_bitrate;
-        plan_.session_video_fps = fanout.proposed_fps;
-        plan_.session_video_configured = true;
+        plan_.stream.video_settings = fanout.proposed_trunk;
+        plan_.stream.video_size = fanout.proposed_size;
+        plan_.stream.video_tier = fanout.proposed_tier;
+        plan_.stream.video_feel = fanout.proposed_feel;
+        plan_.stream.video_bitrate = fanout.proposed_bitrate;
+        plan_.stream.video_fps = fanout.proposed_fps;
+        plan_.stream.video_configured = true;
     };
 
     auto apply_layout = [&]() -> bool {
@@ -1721,13 +1721,13 @@ bool SessionControlMonitor::remove_viewer(std::size_t index, std::string_view re
         << "Removing viewer " << static_cast<int>(plan_.clients[index].client_id)
         << " (" << username << "): "
         << reason << '\n';
-    plan_.link_coordinator.clear_client(plan_.clients[index].client_id);
+    plan_.link.coordinator.clear_client(plan_.clients[index].client_id);
     if (host_hub_ != nullptr) {
         host_hub_->clear_link_client(plan_.clients[index].client_id);
     }
-    if (plan_.clients[index].client_id == plan_.link_cable.client_a() ||
-        plan_.clients[index].client_id == plan_.link_cable.client_b()) {
-        plan_.link_cable.clear();
+    if (plan_.clients[index].client_id == plan_.link.cable.client_a() ||
+        plan_.clients[index].client_id == plan_.link.cable.client_b()) {
+        plan_.link.cable.clear();
     }
     media_server_.remove_client(plan_.clients[index].client_id);
     clear_connected_client(save_root_, plan_.clients[index].client_id, slot_index_);
@@ -1742,13 +1742,13 @@ bool SessionControlMonitor::remove_viewer(std::size_t index, std::string_view re
 }
 
 void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& client, std::string_view reason) {
-    plan_.link_coordinator.clear_client(client.client_id);
+    plan_.link.coordinator.clear_client(client.client_id);
     if (host_hub_ != nullptr) {
         host_hub_->clear_link_client(client.client_id);
     }
-    if (client.client_id == plan_.link_cable.client_a() ||
-        client.client_id == plan_.link_cable.client_b()) {
-        plan_.link_cable.clear();
+    if (client.client_id == plan_.link.cable.client_a() ||
+        client.client_id == plan_.link.cable.client_b()) {
+        plan_.link.cable.clear();
     }
     media_server_.remove_client(client.client_id);
     clear_connected_client(save_root_, client.client_id, slot_index_);
@@ -1765,7 +1765,7 @@ void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& cl
     input_router_.neutralize_client(client.client_id);
 
     // Drop this seat's contribution; remaining players own the ceiling.
-    if (plan_.session_video_configured && client.hello.wants_video) {
+    if (plan_.stream.video_configured && client.hello.wants_video) {
         const auto ceiling = compute_session_video_ceiling(
             plan_,
             capture_width_,
@@ -1777,14 +1777,14 @@ void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& cl
             MediaStreamBitrate::Auto,
             MediaStreamFps::Fps30,
             false);
-        if (ceiling.settings != plan_.session_video_settings) {
+        if (ceiling.settings != plan_.stream.video_settings) {
             if (media_server_.reconfigure_shared_video(ceiling.settings)) {
-                plan_.session_video_settings = ceiling.settings;
-                plan_.session_video_size = ceiling.size;
-                plan_.session_video_tier = ceiling.tier;
-                plan_.session_video_feel = ceiling.feel;
-                plan_.session_video_bitrate = ceiling.bitrate;
-                plan_.session_video_fps = ceiling.fps;
+                plan_.stream.video_settings = ceiling.settings;
+                plan_.stream.video_size = ceiling.size;
+                plan_.stream.video_tier = ceiling.tier;
+                plan_.stream.video_feel = ceiling.feel;
+                plan_.stream.video_bitrate = ceiling.bitrate;
+                plan_.stream.video_fps = ceiling.fps;
                 sync_all_applied_to_session(plan_);
                 const auto now = std::chrono::steady_clock::now();
                 for (auto& other : plan_.clients) {

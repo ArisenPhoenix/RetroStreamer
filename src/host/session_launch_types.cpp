@@ -132,7 +132,7 @@ SessionMediaPlan build_session_media_plan(
     }
     media.config = media_plan_config_for(config);
     if (kind == SessionMediaPlanKind::Slot) {
-        media.config.initial_video_settings = session_plan->session_video_settings;
+        media.config.initial_video_settings = session_plan->stream.video_settings;
     }
     if (config.video || config.audio) {
         if (kind == SessionMediaPlanKind::Slot) {

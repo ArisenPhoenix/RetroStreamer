@@ -285,11 +285,11 @@ std::vector<LinkOutbound> HostSessionHub::handle_link(
                 // Cross-slot: both emulators already running — no promote.
                 // Same-slot multi: keep existing promote flag path on that plan.
                 if (start.needs_runtime_promotion && !cross_slot) {
-                    from_slot.plan().pending_link_promotion = true;
-                    from_slot.plan().pending_link_host_client_id = start.logical_host_client_id;
-                    from_slot.plan().pending_link_client_client_id = start.logical_client_client_id;
-                    from_slot.plan().pending_link_host_username = start.logical_host_username;
-                    from_slot.plan().pending_link_client_username = start.logical_client_username;
+                    from_slot.plan().link.pending_promotion = true;
+                    from_slot.plan().link.pending_host_client_id = start.logical_host_client_id;
+                    from_slot.plan().link.pending_client_client_id = start.logical_client_client_id;
+                    from_slot.plan().link.pending_host_username = start.logical_host_username;
+                    from_slot.plan().link.pending_client_username = start.logical_client_username;
                 }
                 if (start.needs_gba_netplay && cross_slot && peer_slot != nullptr) {
                     ActiveSessionSlot* host_slot =

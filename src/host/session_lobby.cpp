@@ -236,35 +236,35 @@ void configure_initial_session_video(
     if (policy.align_encode_to_macroblocks) {
         initial_settings = align_encode_to_h264_macroblocks(initial_settings);
     }
-    plan.session_video_settings = initial_settings;
-    plan.session_video_size = policy.size;
-    plan.session_video_tier = policy.tier;
-    plan.session_video_feel = MediaStreamFeel::LowLatency;
-    plan.session_video_bitrate = policy.bitrate;
-    plan.session_video_fps = policy.fps;
-    plan.session_video_configured = true;
+    plan.stream.video_settings = initial_settings;
+    plan.stream.video_size = policy.size;
+    plan.stream.video_tier = policy.tier;
+    plan.stream.video_feel = MediaStreamFeel::LowLatency;
+    plan.stream.video_bitrate = policy.bitrate;
+    plan.stream.video_fps = policy.fps;
+    plan.stream.video_configured = true;
 
     std::cerr
         << "Initial stream policy: " << policy.reason
-        << " -> " << media_stream_size_name(plan.session_video_size)
-        << "/" << media_quality_tier_name(plan.session_video_tier)
-        << "/" << media_stream_bitrate_name(plan.session_video_bitrate)
-        << "/" << media_stream_feel_name(plan.session_video_feel)
-        << "/" << media_stream_fps_name(plan.session_video_fps)
-        << " @" << plan.session_video_settings.bitrate_kbps << "kbps/"
-        << static_cast<int>(plan.session_video_settings.framerate) << "fps/"
-        << plan.session_video_settings.width << "x" << plan.session_video_settings.height
+        << " -> " << media_stream_size_name(plan.stream.video_size)
+        << "/" << media_quality_tier_name(plan.stream.video_tier)
+        << "/" << media_stream_bitrate_name(plan.stream.video_bitrate)
+        << "/" << media_stream_feel_name(plan.stream.video_feel)
+        << "/" << media_stream_fps_name(plan.stream.video_fps)
+        << " @" << plan.stream.video_settings.bitrate_kbps << "kbps/"
+        << static_cast<int>(plan.stream.video_settings.framerate) << "fps/"
+        << plan.stream.video_settings.width << "x" << plan.stream.video_settings.height
         << '\n';
 
     for (auto& client : plan.clients) {
         if (client.connection_state != SessionConnectionState::Connected) {
             continue;
         }
-        client.applied_size = plan.session_video_size;
-        client.applied_tier = plan.session_video_tier;
-        client.applied_feel = plan.session_video_feel;
-        client.applied_bitrate = plan.session_video_bitrate;
-        client.applied_fps = plan.session_video_fps;
+        client.applied_size = plan.stream.video_size;
+        client.applied_tier = plan.stream.video_tier;
+        client.applied_feel = plan.stream.video_feel;
+        client.applied_bitrate = plan.stream.video_bitrate;
+        client.applied_fps = plan.stream.video_fps;
     }
 }
 

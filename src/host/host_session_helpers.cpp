@@ -139,12 +139,12 @@ void reset_reconnected_session_client(
     client.last_seen = std::chrono::steady_clock::now();
     client.disconnected_at = {};
     client.disconnect_reason.clear();
-    client.applied_tier = plan.session_video_tier;
-    client.applied_size = plan.session_video_size;
-    client.applied_feel = plan.session_video_feel;
-    client.applied_bitrate = plan.session_video_bitrate;
+    client.applied_tier = plan.stream.video_tier;
+    client.applied_size = plan.stream.video_size;
+    client.applied_feel = plan.stream.video_feel;
+    client.applied_bitrate = plan.stream.video_bitrate;
     client.adaptive_fps_cap = MediaStreamFps::Auto;
-    client.applied_fps = plan.session_video_fps;
+    client.applied_fps = plan.stream.video_fps;
     client.pending_tier.reset();
     client.pending_size.reset();
     client.pending_feel.reset();

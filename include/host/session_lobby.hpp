@@ -83,6 +83,35 @@ struct SessionClientConnection {
     std::optional<MediaEndpoint> media_endpoint;
 };
 
+struct SessionLinkState {
+    // Mid-session mutual link matchmaking (backends wired later).
+    LinkCoordinator coordinator;
+    LinkCableBackend cable;
+    /**
+     * Set by SessionControlMonitor when a match needs SessionRuntime promotion.
+     * Consumed by host_app (fields mirror LinkPromotionRequest).
+     */
+    bool pending_promotion = false;
+    ClientId pending_host_client_id = 0;
+    ClientId pending_client_client_id = 0;
+    std::string pending_host_username;
+    std::string pending_client_username;
+};
+
+struct SessionStreamState {
+    /**
+     * Single shared video encode for this session slot.
+     * Ceiling is owned by seated players only; viewers/Watch receive this bitstream.
+     */
+    VideoEncodeSettings video_settings = video_encode_settings(MediaStreamSize::P720, MediaQualityTier::Medium);
+    MediaStreamSize video_size = MediaStreamSize::P720;
+    MediaQualityTier video_tier = MediaQualityTier::Medium;
+    MediaStreamFeel video_feel = MediaStreamFeel::LowLatency;
+    MediaStreamBitrate video_bitrate = MediaStreamBitrate::Auto;
+    MediaStreamFps video_fps = MediaStreamFps::Fps30;
+    bool video_configured = false;
+};
+
 struct SessionPlan {
     std::vector<SessionClientConnection> clients;
     std::optional<ClientHello> host_hello;
@@ -99,33 +128,10 @@ struct SessionPlan {
     bool framecount_osd_enabled = false;
     std::uint32_t framecount_osd_tick = 0;
     std::chrono::steady_clock::time_point framecount_osd_last_sent = {};
-    // Mid-session mutual link matchmaking (backends wired later).
-    LinkCoordinator link_coordinator;
-    LinkCableBackend link_cable;
-    /**
-     * Set by SessionControlMonitor when a match needs SessionRuntime promotion.
-     * Consumed by host_app (fields mirror LinkPromotionRequest).
-     */
-    bool pending_link_promotion = false;
-    ClientId pending_link_host_client_id = 0;
-    ClientId pending_link_client_client_id = 0;
-    std::string pending_link_host_username;
-    std::string pending_link_client_username;
+    SessionLinkState link;
     /** Pad OSK for Ryujinx Software Keyboard (optional; set for Switch sessions). */
     std::shared_ptr<SoftKeyboardHostBridge> soft_keyboard;
-
-    /**
-     * Single shared video encode for this session slot.
-     * Ceiling is owned by seated players only; viewers/Watch receive this bitstream.
-     */
-    VideoEncodeSettings session_video_settings =
-        video_encode_settings(MediaStreamSize::P720, MediaQualityTier::Medium);
-    MediaStreamSize session_video_size = MediaStreamSize::P720;
-    MediaQualityTier session_video_tier = MediaQualityTier::Medium;
-    MediaStreamFeel session_video_feel = MediaStreamFeel::LowLatency;
-    MediaStreamBitrate session_video_bitrate = MediaStreamBitrate::Auto;
-    MediaStreamFps session_video_fps = MediaStreamFps::Fps30;
-    bool session_video_configured = false;
+    SessionStreamState stream;
 };
 
 const char* session_mode_name(GameSessionMode mode);

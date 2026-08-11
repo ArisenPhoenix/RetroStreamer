@@ -282,15 +282,15 @@ std::optional<std::string> ActiveSessionSlot::poll_session_monitor_stop() {
 
 std::optional<std::string> ActiveSessionSlot::handle_pending_link_promotion() {
     auto& plan = config_.plan;
-    if (!plan.pending_link_promotion) {
+    if (!plan.link.pending_promotion) {
         return std::nullopt;
     }
-    plan.pending_link_promotion = false;
+    plan.link.pending_promotion = false;
     LinkPromotionRequest promotion;
-    promotion.logical_host_client_id = plan.pending_link_host_client_id;
-    promotion.logical_client_client_id = plan.pending_link_client_client_id;
-    promotion.logical_host_username = plan.pending_link_host_username;
-    promotion.logical_client_username = plan.pending_link_client_username;
+    promotion.logical_host_client_id = plan.link.pending_host_client_id;
+    promotion.logical_client_client_id = plan.link.pending_client_client_id;
+    promotion.logical_host_username = plan.link.pending_host_username;
+    promotion.logical_client_username = plan.link.pending_client_username;
     promotion.system_key = plan.system_key;
 
     auto link_runtime = promote_to_link_runtime(std::move(session_runtime_), std::move(promotion));
@@ -311,11 +311,11 @@ std::optional<std::string> ActiveSessionSlot::handle_gb_link_relaunch(const Rela
     auto& plan = config_.plan;
     if (session_runtime_ == nullptr ||
         session_runtime_->launch_config().standalone ||
-        !plan.link_cable.consume_relaunch_request()) {
+        !plan.link.cable.consume_relaunch_request()) {
         return std::nullopt;
     }
 #if defined(ARCHSTREAMER_DEBUG_GB_LINK)
-    const auto link_core = plan.link_cable.pending_core_path();
+    const auto link_core = plan.link.cable.pending_core_path();
     if (!link_core.has_value()) {
         return std::nullopt;
     }

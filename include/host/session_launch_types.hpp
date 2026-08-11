@@ -68,6 +68,11 @@ struct SessionLaunchContext {
     SessionLaunchAssets assets;
 };
 
+struct SwitchLaunchContent {
+    std::string content_stem;
+    std::string title_id;
+};
+
 enum class SessionMediaPlanKind {
     Direct,
     Slot,
@@ -145,6 +150,16 @@ void apply_session_content_launch_adjustments(
     const ResolvedRetroArch& resolved_retroarch,
     const SessionContentInfo& content,
     std::string_view log_prefix = {});
+
+void prepare_session_standalone_backend(
+    std::string_view system_key,
+    RetroArchLaunchConfig& launch_config,
+    SessionBackendState& backends);
+
+SwitchLaunchContent resolve_switch_launch_content(
+    const SaveProfile& save_profile,
+    const RetroArchLaunchConfig& launch_config,
+    const SessionContentInfo& content);
 
 void plug_session_gamepads(VirtualGamepadBus& gamepads, RetroArchPort players);
 

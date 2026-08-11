@@ -4,6 +4,8 @@
 #include "common/cli_common.hpp"
 #include "host/host_session_helpers.hpp"
 #include "host/session_lobby.hpp"
+#include "host/standalone_emulator.hpp"
+#include "host/switch_save_share.hpp"
 #include "host/virtual_display.hpp"
 
 #include <chrono>
@@ -232,6 +234,53 @@ void apply_session_content_launch_adjustments(
     if (config.verbose && !launch_config.standalone) {
         launch_config.extra_args.insert(launch_config.extra_args.begin(), "--verbose");
     }
+}
+
+void prepare_session_standalone_backend(
+    std::string_view system_key,
+    RetroArchLaunchConfig& launch_config,
+    SessionBackendState& backends) {
+    if (system_key == "switch") {
+        const auto runtime = resolve_switch_runtime();
+        if (!runtime.has_value()) {
+            throw std::runtime_error(switch_runtime_unavailable_message());
+        }
+        launch_config.standalone = true;
+        launch_config.core_path = runtime->path;
+        launch_config.standalone_args_before_content = runtime->args_before_content;
+        backends.switch_backend = make_switch_backend(*runtime);
+    } else if (system_key == "nds" && melonds_runtime_available()) {
+        const auto runtime = resolve_melonds_runtime();
+        if (!runtime.has_value()) {
+            throw std::runtime_error(melonds_unavailable_message());
+        }
+        launch_config.standalone = true;
+        launch_config.core_path = runtime->path;
+        launch_config.standalone_args_before_content = runtime->args_before_content;
+        backends.melonds_backend = make_melonds_backend();
+    } else if (launch_config.standalone) {
+        throw std::runtime_error(
+            "standalone launch requested for unsupported system_key=" +
+            std::string(system_key));
+    }
+}
+
+SwitchLaunchContent resolve_switch_launch_content(
+    const SaveProfile& save_profile,
+    const RetroArchLaunchConfig& launch_config,
+    const SessionContentInfo& content) {
+    SwitchLaunchContent switch_content;
+    switch_content.content_stem = !content.catalog_content_path.empty()
+        ? content.catalog_content_path.stem().string()
+        : launch_config.content_path.stem().string();
+    switch_content.title_id = content.m3m_title_id;
+    if (switch_content.title_id.empty()) {
+        switch_content.title_id = resolve_switch_title_id_for_catalog(
+            save_profile,
+            switch_content.content_stem,
+            launch_config.content_path);
+    }
+    return switch_content;
 }
 
 void plug_session_gamepads(VirtualGamepadBus& gamepads, RetroArchPort players) {

@@ -15,9 +15,7 @@
 #include "host/session_launch_assemble.hpp"
 #include "host/session_run_helpers.hpp"
 #include "host/soft_keyboard_host.hpp"
-#include "host/standalone_emulator.hpp"
 #include "host/switch/switch_backend.hpp"
-#include "host/switch_save_share.hpp"
 #include "host/virtual_joypad_resolve.hpp"
 
 #include <algorithm>
@@ -302,41 +300,14 @@ void prepare_direct_backend(
     auto& assets = context.assets;
     auto& launch_config = assets.launch_config;
 
-    if (backends.system_key == "switch") {
-        const auto runtime = resolve_switch_runtime();
-        if (!runtime.has_value()) {
-            throw std::runtime_error(switch_runtime_unavailable_message());
-        }
-        launch_config.standalone = true;
-        launch_config.core_path = runtime->path;
-        launch_config.standalone_args_before_content = runtime->args_before_content;
-        backends.switch_backend = make_switch_backend(*runtime);
-    } else if (backends.system_key == "nds" && melonds_runtime_available()) {
-        const auto runtime = resolve_melonds_runtime();
-        if (!runtime.has_value()) {
-            throw std::runtime_error(melonds_unavailable_message());
-        }
-        launch_config.standalone = true;
-        launch_config.core_path = runtime->path;
-        launch_config.standalone_args_before_content = runtime->args_before_content;
-        backends.melonds_backend = make_melonds_backend();
-    } else if (launch_config.standalone) {
-        throw std::runtime_error(
-            "standalone launch requested for unsupported system_key=" + backends.system_key);
-    }
+    prepare_session_standalone_backend(backends.system_key, launch_config, backends);
 
     if (backends.switch_backend) {
         keyboard.set_switch_style_hotkeys(true);
         const auto profile_name =
             preferred_steam_or_username_display_name(assets.save_profile.username);
-        const auto switch_content_stem = !assets.content.catalog_content_path.empty()
-            ? assets.content.catalog_content_path.stem().string()
-            : launch_config.content_path.stem().string();
-        auto switch_title_id = assets.content.m3m_title_id;
-        if (switch_title_id.empty()) {
-            switch_title_id = resolve_switch_title_id_for_catalog(
-                assets.save_profile, switch_content_stem, launch_config.content_path);
-        }
+        const auto switch_content =
+            resolve_switch_launch_content(assets.save_profile, launch_config, assets.content);
         auto switch_prep = backends.switch_backend->prepare(
             launch_config,
             SwitchBackendPrepContext{
@@ -355,8 +326,8 @@ void prepare_direct_backend(
                 std::move(devices.resolved_pads),
                 /*slot_index=*/0,
                 launch_plan.game_id,
-                switch_content_stem,
-                switch_title_id,
+                switch_content.content_stem,
+                switch_content.title_id,
             });
         devices.resolved_pads = std::move(switch_prep.resolved_pads);
         backends.switch_backend->assign_launch_env_profile(launch_env_request, switch_prep);
@@ -366,8 +337,8 @@ void prepare_direct_backend(
             switch_prep,
             config.resolution.switch_scale,
             devices.resolved_gpu);
-        backends.switch_launch_content_stem = switch_content_stem;
-        backends.switch_launch_title_id = switch_title_id;
+        backends.switch_launch_content_stem = switch_content.content_stem;
+        backends.switch_launch_title_id = switch_content.title_id;
         if (backends.switch_backend->enable_soft_keyboard()) {
             if (!devices.standalone_soft_keyboard) {
                 devices.standalone_soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();

@@ -22,9 +22,7 @@
 #include "host/session_launch_assemble.hpp"
 #include "host/session_run_helpers.hpp"
 #include "host/session_audio_channel.hpp"
-#include "host/standalone_emulator.hpp"
 #include "host/session_launch_types.hpp"
-#include "host/switch_save_share.hpp"
 #include "host/switch/switch_backend.hpp"
 #include "host/switch/ryujinx_controls.hpp"
 #include "host/nds/melonds_backend.hpp"
@@ -649,33 +647,11 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
     const auto& content = launch_assets.content;
     const auto& system_key = content.system_key;
 
-    if (system_key == "switch") {
-        const auto runtime = resolve_switch_runtime();
-        if (!runtime.has_value()) {
-            const auto message = switch_runtime_unavailable_message();
-            send_error_to_session_clients(req.plan, message);
-            throw std::runtime_error(message);
-        }
-        launch_config.standalone = true;
-        launch_config.core_path = runtime->path;
-        launch_config.standalone_args_before_content = runtime->args_before_content;
-        req.backends.switch_backend = make_switch_backend(*runtime);
-    } else if (system_key == "nds" && melonds_runtime_available()) {
-        const auto runtime = resolve_melonds_runtime();
-        if (!runtime.has_value()) {
-            const auto message = melonds_unavailable_message();
-            send_error_to_session_clients(req.plan, message);
-            throw std::runtime_error(message);
-        }
-        launch_config.standalone = true;
-        launch_config.core_path = runtime->path;
-        launch_config.standalone_args_before_content = runtime->args_before_content;
-        req.backends.melonds_backend = make_melonds_backend();
-    } else if (launch_config.standalone) {
-        const auto message =
-            "standalone launch requested for unsupported system_key=" + system_key;
-        send_error_to_session_clients(req.plan, message);
-        throw std::runtime_error(message);
+    try {
+        prepare_session_standalone_backend(system_key, launch_config, req.backends);
+    } catch (const std::runtime_error& error) {
+        send_error_to_session_clients(req.plan, error.what());
+        throw;
     }
 
     if (req.backends.switch_backend && req.keyboard != nullptr) {
@@ -691,16 +667,8 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
         const auto prefer_handheld_mode = session_prefers_switch_handheld_mode(req.plan);
         const auto profile_name = resolve_switch_profile_display_name(
             save_profile.username, req.plan.host_hello, client_hellos);
-        const auto switch_content_stem = !content.catalog_content_path.empty()
-            ? content.catalog_content_path.stem().string()
-            : launch_config.content_path.stem().string();
-        auto switch_title_id = content.m3m_title_id;
-        if (switch_title_id.empty()) {
-            switch_title_id = resolve_switch_title_id_for_catalog(
-                save_profile,
-                switch_content_stem,
-                launch_config.content_path);
-        }
+        const auto switch_content =
+            resolve_switch_launch_content(save_profile, launch_config, content);
         auto switch_prep = req.backends.switch_backend->prepare(
             launch_config,
             SwitchBackendPrepContext{
@@ -719,8 +687,8 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
                 std::move(req.devices.resolved_pads),
                 static_cast<std::size_t>(std::max(0, req.slot)),
                 req.launch_plan.game_id,
-                switch_content_stem,
-                switch_title_id,
+                switch_content.content_stem,
+                switch_content.title_id,
             });
         req.devices.resolved_pads = std::move(switch_prep.resolved_pads);
         req.backends.switch_backend->assign_launch_env_profile(req.launch_env.request, switch_prep);
@@ -731,8 +699,8 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
             req.config.resolution.switch_scale,
             req.launch_env.resolved_gpu,
             req.slot);
-        req.backends.switch_launch_content_stem = switch_content_stem;
-        req.backends.switch_launch_title_id = switch_title_id;
+        req.backends.switch_launch_content_stem = switch_content.content_stem;
+        req.backends.switch_launch_title_id = switch_content.title_id;
         if (req.backends.switch_backend->enable_soft_keyboard()) {
             if (!req.plan.soft_keyboard) {
                 req.plan.soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();

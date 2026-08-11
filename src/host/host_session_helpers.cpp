@@ -97,8 +97,8 @@ MediaEndpoint send_live_session_join_handshake(const LiveSessionJoinHandshake& j
     join.stream.send_packet(serialize_packet(welcome));
     join.stream.send_packet(serialize_packet(join.plan.seats));
     join.stream.send_packet(serialize_packet(SessionReady{
-        join.plan.selected_game_id,
-        join.plan.session_mode,
+        join.plan.game.selected_game_id,
+        join.plan.game.session_mode,
         static_cast<std::uint8_t>(assigned_player_count(join.plan.seats)),
     }));
 
@@ -120,8 +120,8 @@ MediaEndpoint send_live_session_join_handshake(const LiveSessionJoinHandshake& j
     }
 
     join.stream.send_packet(serialize_packet(SessionStarting{
-        join.plan.selected_game_id,
-        join.plan.session_mode,
+        join.plan.game.selected_game_id,
+        join.plan.game.session_mode,
         static_cast<std::uint8_t>(assigned_player_count(join.plan.seats)),
     }));
     return endpoint;
@@ -336,10 +336,10 @@ void poll_active_session_joins(
             authenticated_hello.username,
             authenticated_hello.client_blocks_revision);
         if (!authenticated_hello.selected_game_id.has_value() ||
-            *authenticated_hello.selected_game_id != plan.selected_game_id) {
+            *authenticated_hello.selected_game_id != plan.game.selected_game_id) {
             throw std::runtime_error("active-session client selected a different game");
         }
-        if (authenticated_hello.session_mode != plan.session_mode) {
+        if (authenticated_hello.session_mode != plan.game.session_mode) {
             throw std::runtime_error("active-session client selected a different session mode");
         }
         if (!valid_player_count(authenticated_hello.requested_players)) {

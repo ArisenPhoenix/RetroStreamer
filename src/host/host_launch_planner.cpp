@@ -124,10 +124,10 @@ ClientHello host_player_hello_for_session(
 
 HostLaunchPlan launch_plan_for_session(const SessionPlan& plan) {
     auto launch_plan = HostLaunchPlan{};
-    launch_plan.game_id = plan.selected_game_id;
-    launch_plan.session_mode = plan.session_mode;
+    launch_plan.game_id = plan.game.selected_game_id;
+    launch_plan.session_mode = plan.game.session_mode;
     launch_plan.players = static_cast<std::uint8_t>(assigned_player_count(plan.seats));
-    launch_plan.save_username = plan.save_username;
+    launch_plan.save_username = plan.game.save_username;
     launch_plan.seats = plan.seats;
     launch_plan.virtual_identities = virtual_identities_for_session(plan);
     return launch_plan;

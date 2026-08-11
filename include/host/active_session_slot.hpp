@@ -85,7 +85,7 @@ public:
     SessionPlan& plan() { return config_.plan; }
     const SessionPlan& plan() const { return config_.plan; }
     bool is_multiplayer() const {
-        return config_.plan.session_mode == GameSessionMode::Multiplayer;
+        return config_.plan.game.session_mode == GameSessionMode::Multiplayer;
     }
 
     /** Read-only diagnostics for Lobby / HostApp / UI. */

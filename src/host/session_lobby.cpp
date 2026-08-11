@@ -139,8 +139,8 @@ ActiveSessionInfo active_session_info_for(
 
     return ActiveSessionInfo{
         true,
-        plan.selected_game_id,
-        plan.session_mode,
+        plan.game.selected_game_id,
+        plan.game.session_mode,
         static_cast<std::uint8_t>(assigned_player_count(plan.seats)),
         connected_players,
         disconnected_players,
@@ -161,10 +161,10 @@ std::uint8_t required_player_count(GameSessionMode mode, const GameInfo& game) {
 }
 
 bool launch_requirements_satisfied(const SessionPlan& plan, const GameInfo& game) {
-    if (plan.session_mode == GameSessionMode::SinglePlayer && !game.supports_singleplayer) {
+    if (plan.game.session_mode == GameSessionMode::SinglePlayer && !game.supports_singleplayer) {
         throw std::runtime_error("selected game does not support singleplayer");
     }
-    if (plan.session_mode == GameSessionMode::Multiplayer && !game.supports_multiplayer) {
+    if (plan.game.session_mode == GameSessionMode::Multiplayer && !game.supports_multiplayer) {
         throw std::runtime_error("selected game does not support multiplayer");
     }
 
@@ -173,7 +173,7 @@ bool launch_requirements_satisfied(const SessionPlan& plan, const GameInfo& game
         throw std::runtime_error("too many players selected for game");
     }
 
-    return players >= required_player_count(plan.session_mode, game);
+    return players >= required_player_count(plan.game.session_mode, game);
 }
 
 void send_error_to_session_clients(SessionPlan& plan, std::string_view message) {
@@ -187,8 +187,8 @@ void send_error_to_session_clients(SessionPlan& plan, std::string_view message) 
 
 void send_session_ready_to_clients(SessionPlan& plan) {
     const auto ready = SessionReady{
-        plan.selected_game_id,
-        plan.session_mode,
+        plan.game.selected_game_id,
+        plan.game.session_mode,
         static_cast<std::uint8_t>(assigned_player_count(plan.seats)),
     };
 
@@ -199,8 +199,8 @@ void send_session_ready_to_clients(SessionPlan& plan) {
 
 void send_session_starting_to_clients(SessionPlan& plan) {
     const auto starting = SessionStarting{
-        plan.selected_game_id,
-        plan.session_mode,
+        plan.game.selected_game_id,
+        plan.game.session_mode,
         static_cast<std::uint8_t>(assigned_player_count(plan.seats)),
     };
 
@@ -282,27 +282,27 @@ void send_session_ended_to_clients(SessionPlan& plan, std::string_view reason) {
 DiscControlResponse apply_disc_control(SessionPlan& plan, const DiscControlRequest& request) {
     DiscControlResponse response;
     response.disc_count = static_cast<std::uint8_t>(
-        std::min<std::size_t>(plan.playlist_discs.size(), 255));
-    response.disc_index = plan.current_disc_index;
+        std::min<std::size_t>(plan.game.playlist_discs.size(), 255));
+    response.disc_index = plan.game.current_disc_index;
 
-    if (plan.playlist_discs.size() < 2) {
+    if (plan.game.playlist_discs.size() < 2) {
         response.message = "Active game is not a multi-disc playlist";
         return response;
     }
-    if (!request.game_id.empty() && request.game_id != plan.selected_game_id) {
+    if (!request.game_id.empty() && request.game_id != plan.game.selected_game_id) {
         response.message = "Disc control game_id does not match the active session";
         return response;
     }
 
-    const auto disc_count = static_cast<std::uint8_t>(plan.playlist_discs.size());
-    std::uint8_t target = plan.current_disc_index;
+    const auto disc_count = static_cast<std::uint8_t>(plan.game.playlist_discs.size());
+    std::uint8_t target = plan.game.current_disc_index;
     switch (request.action) {
         case DiscControlAction::Next:
-            target = static_cast<std::uint8_t>((plan.current_disc_index + 1) % disc_count);
+            target = static_cast<std::uint8_t>((plan.game.current_disc_index + 1) % disc_count);
             break;
         case DiscControlAction::Prev:
             target = static_cast<std::uint8_t>(
-                (plan.current_disc_index + disc_count - 1) % disc_count);
+                (plan.game.current_disc_index + disc_count - 1) % disc_count);
             break;
         case DiscControlAction::SetIndex:
             if (request.disc_index >= disc_count) {
@@ -313,13 +313,13 @@ DiscControlResponse apply_disc_control(SessionPlan& plan, const DiscControlReque
             break;
     }
 
-    if (target == plan.current_disc_index) {
+    if (target == plan.game.current_disc_index) {
         response.ok = true;
         response.message = "Already on requested disc";
         return response;
     }
 
-    const auto port = plan.retroarch_netcmd_port;
+    const auto port = plan.control.retroarch_netcmd_port;
     if (!send_retroarch_netcmd("DISK_EJECT_TOGGLE", port)) {
         response.message = "Failed to send DISK_EJECT_TOGGLE to RetroArch";
         return response;
@@ -328,14 +328,14 @@ DiscControlResponse apply_disc_control(SessionPlan& plan, const DiscControlReque
 
     // Walk forward with DISK_NEXT (wraps) until host-tracked index matches target.
     const auto steps = static_cast<std::uint8_t>(
-        (target + disc_count - plan.current_disc_index) % disc_count);
+        (target + disc_count - plan.game.current_disc_index) % disc_count);
     for (std::uint8_t i = 0; i < steps; ++i) {
         if (!send_retroarch_netcmd("DISK_NEXT", port)) {
             response.message = "Failed to send DISK_NEXT to RetroArch";
             return response;
         }
-        plan.current_disc_index = static_cast<std::uint8_t>(
-            (plan.current_disc_index + 1) % disc_count);
+        plan.game.current_disc_index = static_cast<std::uint8_t>(
+            (plan.game.current_disc_index + 1) % disc_count);
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
@@ -345,10 +345,10 @@ DiscControlResponse apply_disc_control(SessionPlan& plan, const DiscControlReque
     }
 
     response.ok = true;
-    response.disc_index = plan.current_disc_index;
+    response.disc_index = plan.game.current_disc_index;
     response.disc_count = disc_count;
-    if (plan.current_disc_index < plan.playlist_discs.size()) {
-        response.message = "Switched to " + plan.playlist_discs[plan.current_disc_index];
+    if (plan.game.current_disc_index < plan.game.playlist_discs.size()) {
+        response.message = "Switched to " + plan.game.playlist_discs[plan.game.current_disc_index];
     } else {
         response.message = "Disc switched";
     }
@@ -442,29 +442,29 @@ void assign_seats_welcome_and_save_username(SessionPlan& plan) {
     send_session_ready_to_clients(plan);
 
     if (plan.host_hello.has_value() && !plan.host_hello->username.empty()) {
-        plan.save_username = plan.host_hello->username;
+        plan.game.save_username = plan.host_hello->username;
     }
     for (const auto& client : plan.clients) {
         if (client.hello.requested_players > 0) {
-            if (plan.save_username.empty()) {
-                plan.save_username = client.hello.username;
+            if (plan.game.save_username.empty()) {
+                plan.game.save_username = client.hello.username;
             }
             break;
         }
     }
-    if (plan.save_username.empty() && !plan.clients.empty()) {
-        plan.save_username = plan.clients.front().hello.username;
+    if (plan.game.save_username.empty() && !plan.clients.empty()) {
+        plan.game.save_username = plan.clients.front().hello.username;
     }
 }
 
 void enforce_user_save_stem_for_plan(
     const SessionPlan& plan,
     const std::filesystem::path& save_root) {
-    if (save_root.empty() || plan.save_username.empty() || plan.selected_game_id.empty()) {
+    if (save_root.empty() || plan.game.save_username.empty() || plan.game.selected_game_id.empty()) {
         return;
     }
     if (user_has_mismatched_save_for_game(
-            save_root, plan.save_username, plan.selected_game_id)) {
+            save_root, plan.game.save_username, plan.game.selected_game_id)) {
         throw std::runtime_error(
             "save file name does not match the catalog stem for this game; "
             "rename the save under this user (see Users tab) before playing");
@@ -534,8 +534,8 @@ SessionPlan make_singleplayer_session_plan(
     }
 
     SessionPlan plan;
-    plan.selected_game_id = *hello.selected_game_id;
-    plan.session_mode = GameSessionMode::SinglePlayer;
+    plan.game.selected_game_id = *hello.selected_game_id;
+    plan.game.session_mode = GameSessionMode::SinglePlayer;
     log_client_hello(client_id, hello);
     plan.clients.push_back(SessionClientConnection{
         client_id,
@@ -616,8 +616,8 @@ SessionPlan gather_session_clients(
         }
         plan.clients.push_back(std::move(*first_client));
         publish_lobby_client(plan.clients.back());
-        plan.selected_game_id = selected_game.value_or(GameId{});
-        plan.session_mode = selected_mode.value_or(GameSessionMode::Multiplayer);
+        plan.game.selected_game_id = selected_game.value_or(GameId{});
+        plan.game.session_mode = selected_mode.value_or(GameSessionMode::Multiplayer);
         if (selected_game_info.has_value() &&
             launch_requirements_satisfied(plan, *selected_game_info)) {
             assign_seats_welcome_and_save_username(plan);
@@ -646,8 +646,8 @@ SessionPlan gather_session_clients(
             throw std::runtime_error("selected game has invalid player metadata");
         }
         selected_mode = plan.host_hello->session_mode;
-        plan.selected_game_id = *selected_game;
-        plan.session_mode = *selected_mode;
+        plan.game.selected_game_id = *selected_game;
+        plan.game.session_mode = *selected_mode;
 
         if (launch_requirements_satisfied(plan, *selected_game_info)) {
             std::cout
@@ -839,8 +839,8 @@ SessionPlan gather_session_clients(
             accepted_client = true;
             ++client_id;
 
-            plan.selected_game_id = *selected_game;
-            plan.session_mode = *selected_mode;
+            plan.game.selected_game_id = *selected_game;
+            plan.game.session_mode = *selected_mode;
             if (launch_requirements_satisfied(plan, *selected_game_info)) {
                 break;
             }
@@ -859,8 +859,8 @@ SessionPlan gather_session_clients(
     if (!launch_requirements_satisfied(plan, *selected_game_info)) {
         std::ostringstream message;
         message
-            << "timed out waiting for enough players for " << session_mode_name(plan.session_mode)
-            << " session: need " << static_cast<int>(required_player_count(plan.session_mode, *selected_game_info))
+            << "timed out waiting for enough players for " << session_mode_name(plan.game.session_mode)
+            << " session: need " << static_cast<int>(required_player_count(plan.game.session_mode, *selected_game_info))
             << ", have " << static_cast<int>(requested_player_count(plan));
         send_error_to_session_clients(plan, message.str());
         throw std::runtime_error(message.str());

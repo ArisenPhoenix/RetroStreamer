@@ -127,10 +127,10 @@ void SessionManager::start_session(SessionPlan plan, SessionId session_id) {
             }),
         slots_.end());
 
-    if (!plan.save_username.empty() &&
-        config_.hub->save_profile_active(plan.save_username)) {
+    if (!plan.game.save_username.empty() &&
+        config_.hub->save_profile_active(plan.game.save_username)) {
         throw std::runtime_error(
-            "user " + plan.save_username +
+            "user " + plan.game.save_username +
             " already has an active session; reconnect to it or end it first");
     }
     if (config_.hub->live_slot_count() >= config_.max_slots) {
@@ -166,9 +166,9 @@ void SessionManager::start_session(SessionPlan plan, SessionId session_id) {
     std::cout
         << "Starting session " << slot->session_id()
         << " slot=" << slot->slot_index()
-        << " mode=" << session_mode_name(slot->plan().session_mode)
-        << " game=" << slot->plan().selected_game_id
-        << " save_user=" << slot->plan().save_username << '\n';
+        << " mode=" << session_mode_name(slot->plan().game.session_mode)
+        << " game=" << slot->plan().game.selected_game_id
+        << " save_user=" << slot->plan().game.save_username << '\n';
     slot->start();
     slots_.push_back(std::move(slot));
 }

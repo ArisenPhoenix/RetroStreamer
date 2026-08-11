@@ -195,9 +195,9 @@ SessionStatusSnapshot ActiveSessionSlot::status_snapshot() const {
     SessionStatusSnapshot snap;
     snap.session_id = config_.session_id;
     snap.slot_index = config_.slot_index;
-    snap.mode = config_.plan.session_mode;
-    snap.game_id = config_.plan.selected_game_id;
-    snap.save_username = config_.plan.save_username;
+    snap.mode = config_.plan.game.session_mode;
+    snap.game_id = config_.plan.game.selected_game_id;
+    snap.save_username = config_.plan.game.save_username;
     snap.finished = finished_.load();
     snap.phase = snap.finished ? SessionPhase::Finished
         : (stop_requested_.load() ? SessionPhase::Stopping : SessionPhase::Running);
@@ -262,7 +262,7 @@ RetroArchOverrideParams ActiveSessionSlot::make_relaunch_override_params(
     override_params.core_path = core_path;
     override_params.resolution_scale = slot_config_.resolution.retroarch_scale;
     override_params.slot_index = config_.slot_index;
-    override_params.network_cmd_port = config_.plan.retroarch_netcmd_port;
+    override_params.network_cmd_port = config_.plan.control.retroarch_netcmd_port;
     override_params.display_layout =
         resolve_session_plan_participants(save_profile_.username, config_.plan).display_layout;
     return override_params;
@@ -291,7 +291,7 @@ std::optional<std::string> ActiveSessionSlot::handle_pending_link_promotion() {
     promotion.logical_client_client_id = plan.link.pending_client_client_id;
     promotion.logical_host_username = plan.link.pending_host_username;
     promotion.logical_client_username = plan.link.pending_client_username;
-    promotion.system_key = plan.system_key;
+    promotion.system_key = plan.game.system_key;
 
     auto link_runtime = promote_to_link_runtime(std::move(session_runtime_), std::move(promotion));
     if (!link_runtime) {
@@ -302,7 +302,7 @@ std::optional<std::string> ActiveSessionSlot::handle_pending_link_promotion() {
         << link_runtime->kind_name() << '\n';
     send_retroarch_netcmd(
         "SHOW_MSG Link runtime: peer instance pending",
-        plan.retroarch_netcmd_port);
+        plan.control.retroarch_netcmd_port);
     session_runtime_ = std::move(link_runtime);
     return std::nullopt;
 }
@@ -339,7 +339,7 @@ std::optional<std::string> ActiveSessionSlot::handle_gb_link_relaunch(const Rela
     }
     send_retroarch_netcmd(
         "SHOW_MSG Link cable active — Cable Club",
-        plan.retroarch_netcmd_port);
+        plan.control.retroarch_netcmd_port);
 #else
     (void)ctx;
     std::cerr
@@ -398,7 +398,7 @@ std::optional<std::string> ActiveSessionSlot::handle_gba_netplay_relaunch(const 
         gba->is_host
             ? "SHOW_MSG GBA cable host ready — Cable Club"
             : "SHOW_MSG GBA cable connected — Cable Club",
-        config_.plan.retroarch_netcmd_port);
+        config_.plan.control.retroarch_netcmd_port);
     return std::nullopt;
 }
 
@@ -479,8 +479,8 @@ void ActiveSessionSlot::shutdown_media_and_clients(const std::string& end_reason
     if (cadence_session_live_) {
         record_session_ended(
             config_.slot_index,
-            config_.plan.save_username,
-            config_.plan.selected_game_id,
+            config_.plan.game.save_username,
+            config_.plan.game.selected_game_id,
             end_reason,
             cadence_tracker_.session_id());
         cadence_session_live_ = false;
@@ -498,7 +498,7 @@ void ActiveSessionSlot::publish_connected_presence(
     presence.username = hello.username;
     presence.client_id = client_id;
     presence.slot_index = config_.slot_index;
-    presence.game_id = plan.selected_game_id;
+    presence.game_id = plan.game.selected_game_id;
     presence.phase = "session";
     presence.seated = hello.requested_players > 0;
     publish_connected_client(config_.host_config.save_root, presence);
@@ -524,7 +524,7 @@ SessionClientConnection* ActiveSessionSlot::attach_pending_join(
         record_client_joined(
             config_.slot_index,
             pending.hello.username,
-            plan.selected_game_id,
+            plan.game.selected_game_id,
             "reconnect",
             cadence_tracker_.session_id());
         publish_connected_presence(client_id, pending.hello, plan);
@@ -542,7 +542,7 @@ SessionClientConnection* ActiveSessionSlot::attach_pending_join(
         record_client_joined(
             config_.slot_index,
             pending.hello.username,
-            plan.selected_game_id,
+            plan.game.selected_game_id,
             pending.hello.requested_players > 0 ? "player" : "viewer",
             cadence_tracker_.session_id());
         publish_connected_presence(client_id, pending.hello, plan);
@@ -684,8 +684,8 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
         backends.switch_launch_content_stem = switch_content.content_stem;
         backends.switch_launch_title_id = switch_content.title_id;
         if (backends.switch_backend->enable_soft_keyboard()) {
-            if (!req.plan.soft_keyboard) {
-                req.plan.soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();
+            if (!req.plan.control.soft_keyboard) {
+                req.plan.control.soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();
             }
             devices.keyboard.soft_keyboard_fallback = user.participants.profile_display_name;
             devices.keyboard.arm_soft_keyboard = true;
@@ -721,7 +721,7 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
             SessionRetroArchOverrideOptions{
                 req.use_virtual_capture,
                 req.slot,
-                req.plan.retroarch_netcmd_port,
+                req.plan.control.retroarch_netcmd_port,
                 user.participants.display_layout,
             });
         apply_retroarch_override(launch_config, override_params);
@@ -855,7 +855,7 @@ void ActiveSessionSlot::run_session() {
         }
     }
 
-    plan.retroarch_netcmd_port =
+    plan.control.retroarch_netcmd_port =
         static_cast<std::uint16_t>(DefaultRetroArchNetcmdPort + slot);
 
     if (launch_plan.save_username.empty()) {
@@ -865,8 +865,8 @@ void ActiveSessionSlot::run_session() {
         throw std::runtime_error(
             "save username must be 1-64 characters and contain only letters, numbers, underscores, or hyphens");
     }
-    if (plan.save_username.empty()) {
-        plan.save_username = launch_plan.save_username;
+    if (plan.game.save_username.empty()) {
+        plan.game.save_username = launch_plan.save_username;
     }
 
     {
@@ -880,14 +880,14 @@ void ActiveSessionSlot::run_session() {
             : std::string{};
         cadence_tracker_.begin(
             slot,
-            plan.save_username,
-            plan.selected_game_id,
-            plan.system_key,
-            session_mode_name(plan.session_mode),
+            plan.game.save_username,
+            plan.game.selected_game_id,
+            plan.game.system_key,
+            session_mode_name(plan.game.session_mode),
             config.virtual_display,
             config.video_port,
             config.audio_port,
-            plan.retroarch_netcmd_port,
+            plan.control.retroarch_netcmd_port,
             pulse_sink,
             pulse_app,
             product_id_base);
@@ -908,7 +908,7 @@ void ActiveSessionSlot::run_session() {
     const auto& content = launch_assets.content;
     system_key_.clear();
     system_key_ = content.system_key;
-    plan.system_key = system_key_;
+    plan.game.system_key = system_key_;
 
     // Advertise this live save profile to the host Users browser (cleared on exit).
     ActiveSaveSessionGuard active_save_guard{config.save_root, slot};
@@ -961,15 +961,15 @@ void ActiveSessionSlot::run_session() {
     }
 #endif
 
-    if (plan.playlist_discs.empty()) {
-        plan.playlist_discs = content.playlist_discs;
-        plan.current_disc_index = 0;
+    if (plan.game.playlist_discs.empty()) {
+        plan.game.playlist_discs = content.playlist_discs;
+        plan.game.current_disc_index = 0;
     }
-    if (!plan.playlist_discs.empty()) {
+    if (!plan.game.playlist_discs.empty()) {
         std::cout
             << "session slot " << slot << ": multi-disc playlist "
-            << plan.playlist_discs.size() << " disc(s); netcmd port "
-            << plan.retroarch_netcmd_port << '\n';
+            << plan.game.playlist_discs.size() << " disc(s); netcmd port "
+            << plan.control.retroarch_netcmd_port << '\n';
     }
 
     const bool host_plays_locally =
@@ -1013,7 +1013,7 @@ void ActiveSessionSlot::run_session() {
     plug_session_gamepads(*gamepads_, launch_plan.players);
 
     keyboard_ = std::make_unique<VirtualKeyboard>(launch_env.xtest_display);
-    keyboard_->set_netcmd_port(plan.retroarch_netcmd_port);
+    keyboard_->set_netcmd_port(plan.control.retroarch_netcmd_port);
     wait_for_session_input_enumeration();
 
     // Concurrent slots must not see each other's ArchStreamer uinput pads. Exclusive
@@ -1173,7 +1173,7 @@ void ActiveSessionSlot::run_session() {
             record_client_joined(
                 slot,
                 client.hello.username,
-                plan.selected_game_id,
+                plan.game.selected_game_id,
                 client.hello.requested_players > 0 ? "player" : "viewer",
                 cadence_tracker_.session_id());
             publish_connected_presence(client.client_id, client.hello, plan);
@@ -1182,19 +1182,19 @@ void ActiveSessionSlot::run_session() {
             record_client_joined(
                 slot,
                 plan.host_hello->username,
-                plan.selected_game_id,
+                plan.game.selected_game_id,
                 "host",
                 cadence_tracker_.session_id());
         }
     }
 
-    if (devices.keyboard.arm_soft_keyboard && plan.soft_keyboard) {
+    if (devices.keyboard.arm_soft_keyboard && plan.control.soft_keyboard) {
         std::string display = launch_env.xtest_display;
         if (keyboard_ != nullptr && keyboard_->plugged()) {
             display = keyboard_->capture_display();
         }
         schedule_soft_keyboard(
-            plan.soft_keyboard,
+            plan.control.soft_keyboard,
             devices.keyboard.soft_keyboard_fallback,
             // Prefer OCR of Ryujinx HeaderText when the dialog appears.
             {},
@@ -1229,14 +1229,14 @@ void ActiveSessionSlot::run_session() {
 
 void ActiveSessionSlot::print_session_data(int slot, const SessionPlan& plan) {
     std::ostringstream detail;
-    detail << session_mode_name(plan.session_mode);
-    if (!plan.system_key.empty()) {
-        detail << " system=" << plan.system_key;
+    detail << session_mode_name(plan.game.session_mode);
+    if (!plan.game.system_key.empty()) {
+        detail << " system=" << plan.game.system_key;
     }
     record_session_started(
         slot,
-        plan.save_username,
-        plan.selected_game_id,
+        plan.game.save_username,
+        plan.game.selected_game_id,
         detail.str(),
         cadence_tracker_.session_id());
 }

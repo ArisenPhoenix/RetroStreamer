@@ -56,7 +56,7 @@ bool HostSessionHub::username_seated(std::string_view username, const GameId& ga
             continue;
         }
         const auto& plan = slot->plan();
-        if (!game_id.empty() && plan.selected_game_id != game_id) {
+        if (!game_id.empty() && plan.game.selected_game_id != game_id) {
             continue;
         }
         for (const auto& client : plan.clients) {
@@ -80,7 +80,7 @@ bool HostSessionHub::save_profile_active(std::string_view username) const {
         if (slot == nullptr || slot->finished()) {
             continue;
         }
-        if (username_equal(slot->plan().save_username, username)) {
+        if (username_equal(slot->plan().game.save_username, username)) {
             return true;
         }
     }
@@ -113,10 +113,10 @@ ActiveSessionSlot* HostSessionHub::slot_for_reconnect(const ClientHello& hello) 
             continue;
         }
         if (!hello.selected_game_id.has_value() ||
-            slot->plan().selected_game_id != *hello.selected_game_id) {
+            slot->plan().game.selected_game_id != *hello.selected_game_id) {
             continue;
         }
-        if (slot->plan().session_mode != hello.session_mode) {
+        if (slot->plan().game.session_mode != hello.session_mode) {
             continue;
         }
         if (disconnected_player_for_reconnect(slot->plan(), hello) != nullptr) {
@@ -133,10 +133,10 @@ ActiveSessionSlot* HostSessionHub::slot_for_late_viewer(const ClientHello& hello
             continue;
         }
         if (!hello.selected_game_id.has_value() ||
-            slot->plan().selected_game_id != *hello.selected_game_id) {
+            slot->plan().game.selected_game_id != *hello.selected_game_id) {
             continue;
         }
-        if (slot->plan().session_mode != hello.session_mode) {
+        if (slot->plan().game.session_mode != hello.session_mode) {
             continue;
         }
         return slot;
@@ -242,9 +242,9 @@ std::vector<LinkOutbound> HostSessionHub::handle_link(
                 peer_slot != nullptr && peer_slot != &from_slot;
 
             // Peer bond always succeeds; cable/LDN only when both share a system.
-            const std::string& from_system = from_slot.plan().system_key;
+            const std::string& from_system = from_slot.plan().game.system_key;
             const std::string peer_system =
-                peer_slot != nullptr ? peer_slot->plan().system_key : std::string{};
+                peer_slot != nullptr ? peer_slot->plan().game.system_key : std::string{};
             if (peer_slot == nullptr || from_system.empty() || from_system != peer_system) {
                 const std::string soft =
                     "Matched with " + peer_user +
@@ -384,11 +384,11 @@ std::vector<LinkOutbound> HostSessionHub::handle_link(
                 }
                 send_retroarch_netcmd(
                     std::string("SHOW_MSG ") + start.message,
-                    from_slot.plan().retroarch_netcmd_port);
+                    from_slot.plan().control.retroarch_netcmd_port);
                 if (cross_slot && peer_slot != nullptr) {
                     send_retroarch_netcmd(
                         std::string("SHOW_MSG ") + start.message,
-                        peer_slot->plan().retroarch_netcmd_port);
+                        peer_slot->plan().control.retroarch_netcmd_port);
                 }
             } else {
                 std::cerr << "Link cable: " << start.message << '\n';

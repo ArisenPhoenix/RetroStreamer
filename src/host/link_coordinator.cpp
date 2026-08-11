@@ -123,8 +123,8 @@ std::vector<LinkOutbound> LinkCoordinator::handle(
         return out;
     }
     if (!request.game_id.empty() &&
-        !plan.selected_game_id.empty() &&
-        request.game_id != plan.selected_game_id) {
+        !plan.game.selected_game_id.empty() &&
+        request.game_id != plan.game.selected_game_id) {
         base.status = LinkStatus::Error;
         base.message = "Link game_id does not match the active session";
         out.push_back({from_client_id, std::move(base)});
@@ -145,7 +145,7 @@ std::vector<LinkOutbound> LinkCoordinator::handle(
 
     erase_from(from_client_id);
     const auto game_id =
-        !request.game_id.empty() ? request.game_id : plan.selected_game_id;
+        !request.game_id.empty() ? request.game_id : plan.game.selected_game_id;
 
     // Match on mutual usernames only — game_id is not a gate (Sword↔Shield, etc.).
     if (const auto* mutual = find_mutual(

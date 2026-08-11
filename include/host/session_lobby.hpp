@@ -112,10 +112,7 @@ struct SessionStreamState {
     bool video_configured = false;
 };
 
-struct SessionPlan {
-    std::vector<SessionClientConnection> clients;
-    std::optional<ClientHello> host_hello;
-    SeatAssignment seats;
+struct SessionGameState {
     GameId selected_game_id;
     GameSessionMode session_mode = GameSessionMode::SinglePlayer;
     std::string save_username;
@@ -123,14 +120,25 @@ struct SessionPlan {
     // Multi-disc playlist state (from launched .m3u); empty when not applicable.
     std::vector<std::string> playlist_discs;
     std::uint8_t current_disc_index = 0;
+};
+
+struct SessionControlState {
     std::uint16_t retroarch_netcmd_port = DefaultRetroArchNetcmdPort;
     // Client-requested RetroArch Frames OSD (OR of heartbeats); driven via SHOW_MSG.
     bool framecount_osd_enabled = false;
     std::uint32_t framecount_osd_tick = 0;
     std::chrono::steady_clock::time_point framecount_osd_last_sent = {};
-    SessionLinkState link;
     /** Pad OSK for Ryujinx Software Keyboard (optional; set for Switch sessions). */
     std::shared_ptr<SoftKeyboardHostBridge> soft_keyboard;
+};
+
+struct SessionPlan {
+    std::vector<SessionClientConnection> clients;
+    std::optional<ClientHello> host_hello;
+    SeatAssignment seats;
+    SessionGameState game;
+    SessionControlState control;
+    SessionLinkState link;
     SessionStreamState stream;
 };
 

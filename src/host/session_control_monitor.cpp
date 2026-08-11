@@ -449,13 +449,13 @@ std::optional<std::string> SessionControlMonitor::poll() {
         if (!any_connected_seated_player(plan_)) {
             return client_label(client) + " kicked; ending session for a new lobby";
         }
-        if (plan_.session_mode == GameSessionMode::SinglePlayer) {
+        if (plan_.game.session_mode == GameSessionMode::SinglePlayer) {
             return client_label(client) + " kicked; ending singleplayer session";
         }
         ++i;
     }
 
-    if (plan_.soft_keyboard) {
+    if (plan_.control.soft_keyboard) {
         // Only consume the request once somebody can actually receive it, otherwise it
         // is marked sent and lost. This replaces the old timed re-publish.
         const bool any_connected = std::any_of(
@@ -466,7 +466,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
             });
         std::optional<SoftKeyboardRequest> request;
         if (any_connected) {
-            request = plan_.soft_keyboard->take_unsent_request();
+            request = plan_.control.soft_keyboard->take_unsent_request();
         }
         if (request.has_value()) {
             for (auto& client : plan_.clients) {
@@ -537,7 +537,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
                     return client_label(client) + " left; ending session for a new lobby";
                 }
                 // Singleplayer: one seated player left — end even if viewers remain wait.
-                if (plan_.session_mode == GameSessionMode::SinglePlayer) {
+                if (plan_.game.session_mode == GameSessionMode::SinglePlayer) {
                     return client_label(client) + " left; ending singleplayer session";
                 }
                 ++i;
@@ -563,8 +563,8 @@ std::optional<std::string> SessionControlMonitor::poll() {
                 }
             } else if (const auto* soft_keyboard = std::get_if<SoftKeyboardResponse>(&payload);
                        soft_keyboard != nullptr) {
-                if (plan_.soft_keyboard) {
-                    plan_.soft_keyboard->submit_response(*soft_keyboard);
+                if (plan_.control.soft_keyboard) {
+                    plan_.control.soft_keyboard->submit_response(*soft_keyboard);
                     if (soft_keyboard->request_id == 0) {
                         std::cout
                             << "Soft keyboard manual inject"
@@ -612,7 +612,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
                 try {
                     const auto claimed = !client.hello.username.empty()
                         ? client.hello.username
-                        : plan_.save_username;
+                        : plan_.game.save_username;
                     auto reply = handle_controls_db_packet(save_root_, claimed, payload);
                     if (!reply.empty()) {
                         client.stream.send_packet(reply);
@@ -887,7 +887,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
                                 }
                             }
                             const auto start = plan_.link.cable.begin(
-                                plan_.system_key,
+                                plan_.game.system_key,
                                 peer_id,
                                 client.client_id,
                                 peer_user,
@@ -913,7 +913,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
 #if defined(ARCHSTREAMER_DEBUG_GB_LINK)
                                 send_retroarch_netcmd(
                                     std::string("SHOW_MSG ") + "Link cable: dual GB ready",
-                                    plan_.retroarch_netcmd_port);
+                                    plan_.control.retroarch_netcmd_port);
 #endif
                             } else {
                                 std::cerr << "Link cable: " << start.message << '\n';
@@ -1018,26 +1018,26 @@ std::optional<std::string> SessionControlMonitor::poll() {
             break;
         }
     }
-    if (want_framecount != plan_.framecount_osd_enabled) {
-        plan_.framecount_osd_enabled = want_framecount;
+    if (want_framecount != plan_.control.framecount_osd_enabled) {
+        plan_.control.framecount_osd_enabled = want_framecount;
         std::cout
             << "RetroArch Frames OSD "
             << (want_framecount ? "enabled" : "disabled")
             << " (client request)\n";
         if (!want_framecount) {
-            plan_.framecount_osd_tick = 0;
+            plan_.control.framecount_osd_tick = 0;
         }
     }
-    if (plan_.framecount_osd_enabled &&
-        (plan_.framecount_osd_last_sent.time_since_epoch().count() == 0 ||
-         now - plan_.framecount_osd_last_sent >= kFramecountOsdInterval)) {
+    if (plan_.control.framecount_osd_enabled &&
+        (plan_.control.framecount_osd_last_sent.time_since_epoch().count() == 0 ||
+         now - plan_.control.framecount_osd_last_sent >= kFramecountOsdInterval)) {
         // RetroArch has no netcmd for framecount_show; SHOW_MSG is the live toggle path.
         // Changing text each tick also forces GL/Xvfb presents on static menus.
-        const auto message = "Frames: " + std::to_string(plan_.framecount_osd_tick++);
+        const auto message = "Frames: " + std::to_string(plan_.control.framecount_osd_tick++);
         if (send_retroarch_netcmd(
                 std::string("SHOW_MSG ") + message,
-                plan_.retroarch_netcmd_port)) {
-            plan_.framecount_osd_last_sent = now;
+                plan_.control.retroarch_netcmd_port)) {
+            plan_.control.framecount_osd_last_sent = now;
         }
     }
 
@@ -1078,7 +1078,7 @@ void SessionControlMonitor::handle_heartbeat(
         heartbeat.display_layout != client.display_layout) {
         client.display_layout = heartbeat.display_layout;
         client.hello.display_layout = heartbeat.display_layout;
-        if (plan_.system_key == "nds") {
+        if (plan_.game.system_key == "nds") {
             apply_nds_screen_layout(heartbeat.display_layout);
         }
     } else if (heartbeat.display_layout != DisplayLayoutPreference::Auto) {
@@ -1735,7 +1735,7 @@ bool SessionControlMonitor::remove_viewer(std::size_t index, std::string_view re
     record_client_left(
         slot_index_,
         username,
-        plan_.selected_game_id,
+        plan_.game.selected_game_id,
         std::string(reason),
         session_id_);
     return true;
@@ -1813,7 +1813,7 @@ void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& cl
     record_client_left(
         slot_index_,
         client.hello.username,
-        plan_.selected_game_id,
+        plan_.game.selected_game_id,
         std::string(reason),
         session_id_);
 }

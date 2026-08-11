@@ -113,13 +113,36 @@ struct SessionDevicePlan {
     std::string capture_info() const;
 };
 
+struct SessionUserContext {
+    SaveProfile& save_profile;
+    SessionParticipantContext participants;
+};
+
+struct SessionGameContext {
+    HostLaunchPlan& launch_plan;
+    RetroArchLaunchConfig& launch_config;
+    SessionContentInfo& content;
+};
+
+struct SessionVideoContext {
+    const CapturePlan& capture;
+    std::optional<GpuDevice>& resolved_gpu;
+    std::string_view video_resolution;
+    int retroarch_scale = 1;
+    int switch_scale = 1;
+};
+
+struct SessionInputContext {
+    SessionDevicePlan& devices;
+};
+
 struct SessionBackendPrepareContext {
     const HostAppConfig& config;
-    HostLaunchPlan& launch_plan;
-    SessionLaunchAssets& assets;
-    SessionDevicePlan& devices;
+    SessionUserContext user;
+    SessionGameContext game;
+    SessionVideoContext video;
+    SessionInputContext input;
     SessionBackendState& backends;
-    const CapturePlan& capture;
     EmulatorLaunchEnvRequest& launch_env_request;
 };
 
@@ -185,6 +208,16 @@ SessionParticipantContext resolve_direct_session_participants(
 SessionParticipantContext resolve_session_plan_participants(
     std::string_view save_username,
     const SessionPlan& plan);
+
+SessionBackendPrepareContext make_session_backend_prepare_context(
+    const HostAppConfig& config,
+    HostLaunchPlan& launch_plan,
+    SessionLaunchAssets& assets,
+    SessionDevicePlan& devices,
+    SessionBackendState& backends,
+    const CapturePlan& capture,
+    EmulatorLaunchEnvRequest& launch_env_request,
+    SessionParticipantContext participants);
 
 void plug_session_gamepads(VirtualGamepadBus& gamepads, RetroArchPort players);
 

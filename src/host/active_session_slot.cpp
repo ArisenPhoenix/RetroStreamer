@@ -637,18 +637,17 @@ struct SlotBackendPrepareRequest {
 
 void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
     const auto& config = req.backend.config;
-    auto& launch_plan = req.backend.launch_plan;
-    auto& launch_assets = req.backend.assets;
-    auto& launch_config = launch_assets.launch_config;
-    auto& save_profile = launch_assets.save_profile;
-    const auto& content = launch_assets.content;
-    const auto& system_key = content.system_key;
-    auto& devices = req.backend.devices;
+    auto& user = req.backend.user;
+    auto& game = req.backend.game;
+    auto& video = req.backend.video;
+    auto& input = req.backend.input;
+    auto& launch_plan = game.launch_plan;
+    auto& launch_config = game.launch_config;
+    auto& save_profile = user.save_profile;
+    const auto& system_key = game.content.system_key;
+    auto& devices = input.devices;
     auto& backends = req.backend.backends;
-    const auto& capture = req.backend.capture;
     auto& launch_env_request = req.backend.launch_env_request;
-    const auto participants =
-        resolve_session_plan_participants(save_profile.username, req.plan);
 
     try {
         prepare_session_standalone_backend(system_key, launch_config, backends);
@@ -664,7 +663,7 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
     if (backends.switch_backend) {
         const auto prefer_handheld_mode = session_prefers_switch_handheld_mode(req.plan);
         const auto switch_content =
-            resolve_switch_launch_content(save_profile, launch_config, content);
+            resolve_switch_launch_content(save_profile, launch_config, game.content);
         auto switch_prep = backends.switch_backend->prepare(
             launch_config,
             SwitchBackendPrepContext{
@@ -674,12 +673,12 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
                 devices.product_id_base,
                 config.ignore_controller.value_or(""),
                 config.graphics_api,
-                capture.virtualgl_capture,
+                video.capture.virtualgl_capture,
                 req.gamescope_capture,
-                config.resolution.switch_scale,
+                video.switch_scale,
                 prefer_handheld_mode,
-                &devices.resolved_gpu,
-                participants.profile_display_name,
+                &video.resolved_gpu,
+                user.participants.profile_display_name,
                 std::move(devices.resolved_pads),
                 static_cast<std::size_t>(std::max(0, req.slot)),
                 launch_plan.game_id,
@@ -692,8 +691,8 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
             *backends.switch_backend,
             launch_env_request,
             switch_prep,
-            config.resolution.switch_scale,
-            devices.resolved_gpu,
+            video.switch_scale,
+            video.resolved_gpu,
             req.slot);
         backends.switch_launch_content_stem = switch_content.content_stem;
         backends.switch_launch_title_id = switch_content.title_id;
@@ -701,7 +700,7 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
             if (!req.plan.soft_keyboard) {
                 req.plan.soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();
             }
-            devices.soft_keyboard_fallback = participants.profile_display_name;
+            devices.soft_keyboard_fallback = user.participants.profile_display_name;
             devices.arm_soft_keyboard = true;
         }
     } else if (backends.melonds_backend) {
@@ -713,11 +712,11 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
                 config.verbose,
                 devices.product_id_base,
                 config.ignore_controller.value_or(""),
-                capture.virtualgl_capture,
+                video.capture.virtualgl_capture,
                 req.gamescope_capture,
                 req.slot,
-                participants.profile_display_name,
-                participants.display_layout,
+                user.participants.profile_display_name,
+                user.participants.display_layout,
                 std::move(devices.resolved_pads),
             });
         devices.resolved_pads = std::move(melonds_prep.resolved_pads);
@@ -737,18 +736,19 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
         override_params.players = launch_plan.players;
         override_params.save_profile = &save_profile;
         override_params.realtime_pacing = config.audio || config.video;
-        override_params.capture_fullscreen = capture.capture_fullscreen && req.use_virtual_capture;
-        override_params.capture_resolution = config.video_resolution;
+        override_params.capture_fullscreen =
+            video.capture.capture_fullscreen && req.use_virtual_capture;
+        override_params.capture_resolution = std::string(video.video_resolution);
         override_params.vulkan_gpu_index =
-            (!req.use_virtual_capture && devices.resolved_gpu.has_value())
-                ? devices.resolved_gpu->vulkan_index
+            (!req.use_virtual_capture && video.resolved_gpu.has_value())
+                ? video.resolved_gpu->vulkan_index
                 : -1;
         override_params.system_key = system_key;
         override_params.core_path = launch_config.core_path;
-        override_params.resolution_scale = config.resolution.retroarch_scale;
+        override_params.resolution_scale = video.retroarch_scale;
         override_params.slot_index = req.slot;
         override_params.network_cmd_port = req.plan.retroarch_netcmd_port;
-        override_params.display_layout = participants.display_layout;
+        override_params.display_layout = user.participants.display_layout;
         apply_retroarch_override(launch_config, override_params);
         launch_env_request.pad_plan = devices.shared_pad_plan;
         log_pad_plan(devices.shared_pad_plan, req.slot);
@@ -1055,7 +1055,7 @@ void ActiveSessionSlot::run_session() {
         launch_env.resolved_gpu);
     virtual_joypad_index_ = devices.virtual_joypad_index;
 
-    auto backend_context = SessionBackendPrepareContext{
+    auto backend_context = make_session_backend_prepare_context(
         config,
         launch_plan,
         launch_assets,
@@ -1063,7 +1063,7 @@ void ActiveSessionSlot::run_session() {
         backends,
         launch_env.capture,
         launch_env.request,
-    };
+        resolve_session_plan_participants(save_profile_.username, plan));
     prepare_slot_backend(SlotBackendPrepareRequest{
         slot,
         plan,

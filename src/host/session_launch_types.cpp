@@ -310,6 +310,41 @@ SessionParticipantContext resolve_session_plan_participants(
     return participants;
 }
 
+SessionBackendPrepareContext make_session_backend_prepare_context(
+    const HostAppConfig& config,
+    HostLaunchPlan& launch_plan,
+    SessionLaunchAssets& assets,
+    SessionDevicePlan& devices,
+    SessionBackendState& backends,
+    const CapturePlan& capture,
+    EmulatorLaunchEnvRequest& launch_env_request,
+    SessionParticipantContext participants) {
+    return SessionBackendPrepareContext{
+        config,
+        SessionUserContext{
+            assets.save_profile,
+            std::move(participants),
+        },
+        SessionGameContext{
+            launch_plan,
+            assets.launch_config,
+            assets.content,
+        },
+        SessionVideoContext{
+            capture,
+            devices.resolved_gpu,
+            config.video_resolution,
+            config.resolution.retroarch_scale,
+            config.resolution.switch_scale,
+        },
+        SessionInputContext{
+            devices,
+        },
+        backends,
+        launch_env_request,
+    };
+}
+
 void plug_session_gamepads(VirtualGamepadBus& gamepads, RetroArchPort players) {
     for (RetroArchPort port = 0; port < players; ++port) {
         gamepads.plug(port);

@@ -291,37 +291,37 @@ void prepare_direct_backend(
     SessionBackendPrepareContext& backend,
     VirtualKeyboard& keyboard) {
     const auto& config = backend.config;
-    auto& launch_plan = backend.launch_plan;
-    auto& assets = backend.assets;
-    auto& launch_config = assets.launch_config;
-    auto& devices = backend.devices;
+    auto& user = backend.user;
+    auto& game = backend.game;
+    auto& video = backend.video;
+    auto& input = backend.input;
+    auto& launch_plan = game.launch_plan;
+    auto& launch_config = game.launch_config;
+    auto& devices = input.devices;
     auto& backends = backend.backends;
-    const auto& capture = backend.capture;
     auto& launch_env_request = backend.launch_env_request;
-    const auto participants =
-        resolve_direct_session_participants(assets.save_profile.username);
 
     prepare_session_standalone_backend(backends.system_key, launch_config, backends);
 
     if (backends.switch_backend) {
         keyboard.set_switch_style_hotkeys(true);
         const auto switch_content =
-            resolve_switch_launch_content(assets.save_profile, launch_config, assets.content);
+            resolve_switch_launch_content(user.save_profile, launch_config, game.content);
         auto switch_prep = backends.switch_backend->prepare(
             launch_config,
             SwitchBackendPrepContext{
-                assets.save_profile,
+                user.save_profile,
                 launch_plan.players,
                 config.verbose,
                 /*product_id_base=*/0,
                 config.ignore_controller.value_or(""),
                 config.graphics_api,
-                capture.virtualgl_capture,
-                capture.gamescope_capture,
-                config.resolution.switch_scale,
+                video.capture.virtualgl_capture,
+                video.capture.gamescope_capture,
+                video.switch_scale,
                 /*prefer_handheld_mode=*/false,
-                &devices.resolved_gpu,
-                participants.profile_display_name,
+                &video.resolved_gpu,
+                user.participants.profile_display_name,
                 std::move(devices.resolved_pads),
                 /*slot_index=*/0,
                 launch_plan.game_id,
@@ -334,31 +334,31 @@ void prepare_direct_backend(
             *backends.switch_backend,
             launch_env_request,
             switch_prep,
-            config.resolution.switch_scale,
-            devices.resolved_gpu);
+            video.switch_scale,
+            video.resolved_gpu);
         backends.switch_launch_content_stem = switch_content.content_stem;
         backends.switch_launch_title_id = switch_content.title_id;
         if (backends.switch_backend->enable_soft_keyboard()) {
             if (!devices.standalone_soft_keyboard) {
                 devices.standalone_soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();
             }
-            devices.soft_keyboard_fallback = participants.profile_display_name;
+            devices.soft_keyboard_fallback = user.participants.profile_display_name;
             devices.arm_soft_keyboard = true;
         }
     } else if (backends.melonds_backend) {
         auto melonds_prep = backends.melonds_backend->prepare(
             launch_config,
             MelonDsBackendPrepContext{
-                assets.save_profile,
+                user.save_profile,
                 launch_plan.players,
                 config.verbose,
                 /*product_id_base=*/0,
                 config.ignore_controller.value_or(""),
-                capture.virtualgl_capture,
-                capture.gamescope_capture,
+                video.capture.virtualgl_capture,
+                video.capture.gamescope_capture,
                 /*slot_index=*/0,
-                participants.profile_display_name,
-                participants.display_layout,
+                user.participants.profile_display_name,
+                user.participants.display_layout,
                 std::move(devices.resolved_pads),
             });
         devices.resolved_pads = std::move(melonds_prep.resolved_pads);
@@ -370,22 +370,24 @@ void prepare_direct_backend(
         override_params.identities = &launch_plan.virtual_identities;
         override_params.joypad_driver = config.retroarch_joypad_driver;
         override_params.players = launch_plan.players;
-        override_params.save_profile = &assets.save_profile;
+        override_params.save_profile = &user.save_profile;
         override_params.realtime_pacing = config.audio || config.video;
         override_params.capture_fullscreen = devices.capture_fullscreen && devices.use_virtual_capture;
-        override_params.capture_resolution = config.video_resolution;
+        override_params.capture_resolution = std::string(video.video_resolution);
         override_params.vulkan_gpu_index =
-            (!devices.use_virtual_capture && devices.resolved_gpu.has_value()) ? devices.resolved_gpu->vulkan_index : -1;
+            (!devices.use_virtual_capture && video.resolved_gpu.has_value())
+                ? video.resolved_gpu->vulkan_index
+                : -1;
         override_params.system_key = backends.system_key;
         override_params.core_path = launch_config.core_path;
-        override_params.resolution_scale = config.resolution.retroarch_scale;
+        override_params.resolution_scale = video.retroarch_scale;
         const auto runtime_override = apply_retroarch_override(launch_config, override_params);
         std::cout
             << "RetroArch config: " << runtime_override
             << "\nVirtual joypad index: " << devices.virtual_joypad_index
             << " (driver=" << config.retroarch_joypad_driver << ")\n";
         {
-            const int scale = std::clamp(config.resolution.retroarch_scale, 1, 6);
+            const int scale = std::clamp(video.retroarch_scale, 1, 6);
             std::cout << "RetroArch resolution: " << scale << "x native"
                       << " (known cores via .opt)\n";
         }

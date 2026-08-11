@@ -14,6 +14,34 @@ namespace archstreamer {
 
 ClientId next_session_client_id(const SessionPlan& plan);
 SessionClientConnection* disconnected_player_for_reconnect(SessionPlan& plan, const ClientHello& hello);
+struct LiveSessionJoinTarget {
+    ClientId client_id = 0;
+    SessionClientConnection* reconnecting_client = nullptr;
+};
+
+struct LiveSessionJoinHandshake {
+    TcpStream& stream;
+    const ClientHello& hello;
+    ClientId client_id = 0;
+    SessionPlan& plan;
+    const HostMediaPlanConfig& media_config;
+    std::size_t& media_index;
+    MediaServer& media_server;
+};
+
+LiveSessionJoinTarget resolve_live_session_join_target(
+    SessionPlan& plan,
+    const ClientHello& hello,
+    bool reconnect_requested = false);
+
+MediaEndpoint send_live_session_join_handshake(const LiveSessionJoinHandshake& join);
+
+void reset_reconnected_session_client(
+    SessionClientConnection& client,
+    const ClientHello& hello,
+    TcpStream&& stream,
+    const SessionPlan& plan,
+    const MediaEndpoint& endpoint);
 
 std::string hex_vid_pid(std::uint16_t vendor_id, std::uint16_t product_id);
 std::optional<std::string> sdl_ignore_list_for_session(const SessionPlan& plan);

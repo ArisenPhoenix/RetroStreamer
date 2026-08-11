@@ -1,9 +1,12 @@
 #include "host/session_run_helpers.hpp"
 
+#include "common/ds_touch_mapping.hpp"
 #include "host/capture_platform.hpp"
 #include "host/input_router.hpp"
 #include "host/local_controller_bridge.hpp"
+#include "host/nds/melonds_ctrl_client.hpp"
 #include "host/platform/default_host_platform.hpp"
+#include "host/session_launch_types.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -253,6 +256,42 @@ std::unique_ptr<MediaServer> start_host_media_server_if_needed(
     });
     media_server->start(req.media_config, req.destinations, req.streams);
     return media_server;
+}
+
+std::unique_ptr<MelonDsCtrlClient> configure_session_input_router(
+    InputRouter& input_router,
+    VirtualKeyboard& keyboard,
+    const HostLaunchPlan& launch_plan,
+    const SessionBackendState& backends) {
+    input_router.set_seat_assignment(launch_plan.seats);
+    if (backends.switch_backend) {
+        input_router.set_emulator_backend(EmulatorControlBackend::Ryujinx);
+    } else if (backends.melonds_backend != nullptr) {
+        input_router.set_emulator_backend(EmulatorControlBackend::MelonDS);
+    } else {
+        input_router.set_emulator_backend(EmulatorControlBackend::RetroArch);
+    }
+
+    auto melonds_touch_ctrl = std::unique_ptr<MelonDsCtrlClient>{};
+    if (backends.melonds_backend != nullptr && backends.melonds_backend->profile() != nullptr) {
+        const auto& ctrl_name = backends.melonds_backend->profile()->ctrl_server_name;
+        keyboard.set_melonds_ctrl_name(ctrl_name);
+        melonds_touch_ctrl = std::make_unique<MelonDsCtrlClient>(ctrl_name);
+        MelonDsCtrlClient* touch_ctrl = melonds_touch_ctrl.get();
+        input_router.set_touch_handler([touch_ctrl](const TouchInput& input) {
+            if (touch_ctrl == nullptr) {
+                return false;
+            }
+            if (input.pressed) {
+                std::uint16_t x = 0;
+                std::uint16_t y = 0;
+                ds_coords_from_normalized_u16(input.x, input.y, x, y);
+                return touch_ctrl->touch(x, y);
+            }
+            return touch_ctrl->touch_end();
+        });
+    }
+    return melonds_touch_ctrl;
 }
 
 void park_session_game_audio(

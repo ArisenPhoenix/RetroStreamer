@@ -21,6 +21,8 @@ namespace archstreamer {
 
 class InputRouter;
 class LocalControllerBridge;
+class MelonDsCtrlClient;
+struct SessionBackendState;
 
 /** Soft-fail keyboard plug: retry on virtual Xvfb/Xephyr; single try on host.
  *  Gamescope: deferred — call plug_gamescope_virtual_keyboard_after_start once
@@ -59,6 +61,12 @@ struct HostMediaStartRequest {
  */
 std::unique_ptr<MediaServer> start_host_media_server_if_needed(
     const HostMediaStartRequest& req);
+
+std::unique_ptr<MelonDsCtrlClient> configure_session_input_router(
+    InputRouter& input_router,
+    VirtualKeyboard& keyboard,
+    const HostLaunchPlan& launch_plan,
+    const SessionBackendState& backends);
 
 enum class EmulatorStartFailDetail {
     Brief,

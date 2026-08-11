@@ -1,16 +1,13 @@
 #include "host/active_session_slot.hpp"
 
 #include "common/cli_common.hpp"
-#include "common/ds_touch_mapping.hpp"
 #include "common/participant_role.hpp"
 #include "common/serialization.hpp"
-#include "client/controller_backend.hpp"
 #include "host/cadence_session_events.hpp"
 #include "host/cadence_session_tracker.hpp"
 #include "host/capture_platform.hpp"
 #include "host/client_stream_policy.hpp"
 #include "host/game_catalog.hpp"
-#include "host/gpu_select.hpp"
 #include "host/host_launch_planner.hpp"
 #include "host/host_session_helpers.hpp"
 #include "host/launch_environment.hpp"
@@ -162,121 +159,15 @@ SlotLaunchEnvironment prepare_slot_launch_environment(
         }
     }
 
-    auto resolved_encode = resolve_render_gpu(config.encode_gpu);
-    env.resolved_gpu = resolve_render_gpu(effective_render_gpu_selection(config));
-    if (resolved_encode.has_value() && resolved_encode->nvidia_index >= 0) {
-        env.nvenc_cuda_device_id = resolved_encode->nvidia_index;
-    }
-    if (env.resolved_gpu.has_value()) {
-        if (resolved_encode.has_value() && resolved_encode->id == env.resolved_gpu->id) {
-            std::cout
-                << "session slot " << slot << ": GPU " << env.resolved_gpu->name
-                << " [" << env.resolved_gpu->id << "] (encode+render)\n";
-        } else {
-            if (resolved_encode.has_value()) {
-                std::cout
-                    << "session slot " << slot << ": encode GPU " << resolved_encode->name
-                    << " [" << resolved_encode->id << "]\n";
-            }
-            std::cout
-                << "session slot " << slot << ": render GPU " << env.resolved_gpu->name
-                << " [" << env.resolved_gpu->id << "]\n";
-        }
-        if (const auto vd = pci_vendor_device_id(env.resolved_gpu->pci_bus); vd.has_value()) {
-            env.gamescope_vk_device = *vd;
-        }
-        env.request.render_gpu = *env.resolved_gpu;
-    } else if (resolved_encode.has_value()) {
-        std::cout
-            << "session slot " << slot << ": encode GPU " << resolved_encode->name
-            << " [" << resolved_encode->id << "]\n";
-    }
-    if (env.gamescope_vk_device.empty()) {
-        env.gamescope_vk_device = "10de:2504";
-    }
+    const auto gpu = resolve_session_gpu_selection(
+        config,
+        env.capture,
+        "session slot " + std::to_string(slot) + ": ");
+    env.resolved_gpu = gpu.resolved_gpu;
+    env.gamescope_vk_device = gpu.gamescope_vk_device;
+    env.nvenc_cuda_device_id = gpu.nvenc_cuda_device_id;
+    apply_session_gpu_to_launch_request(env.request, gpu);
     return env;
-}
-
-SessionMediaPlan prepare_slot_media_plan(HostAppConfig& config, SessionPlan& plan) {
-    SessionMediaPlan media;
-    parse_video_resolution(config.video_resolution, media.capture_w, media.capture_h);
-    configure_initial_session_video(plan, media.capture_w, media.capture_h);
-    media.config = media_plan_config_for(config);
-    media.config.initial_video_settings = plan.session_video_settings;
-    if (config.video || config.audio) {
-        media.destinations = media_destinations_for_session(media.config, plan);
-        media.streams = media_streams_for_dry_run(media.config, media.destinations);
-    }
-    return media;
-}
-
-SessionDevicePlan resolve_slot_device_plan(
-    const HostAppConfig& config,
-    const HostLaunchPlan& launch_plan,
-    int slot) {
-    SessionDevicePlan selection;
-    selection.product_id_base = static_cast<std::uint16_t>(0xa517 + slot * 8);
-    const bool use_udev = config.retroarch_joypad_driver == "udev";
-    // Concurrent slots must not see each other's ArchStreamer uinput pads. Exclusive
-    // PadPlan IGNORES sibling VID/PIDs (EXCEPT alone fails for uinput under Ryujinx).
-    selection.shared_pad_plan = resolve_retroarch_slot_pad_plan(
-        launch_plan.players,
-        config.ignore_controller.value_or(""),
-        config.verbose,
-        selection.product_id_base,
-        use_udev);
-    if (use_udev) {
-        selection.resolved_indices = selection.shared_pad_plan.udev_indices;
-        selection.resolved_pads = selection.shared_pad_plan.pads;
-    } else {
-        selection.resolved_pads = selection.shared_pad_plan.pads;
-        selection.resolved_indices.reserve(selection.resolved_pads.size());
-        for (const auto& pad : selection.resolved_pads) {
-            selection.resolved_indices.push_back(pad.sdl_index);
-        }
-    }
-    if (config.virtual_joypad_index.has_value()) {
-        selection.virtual_joypad_index = *config.virtual_joypad_index;
-    } else if (!selection.resolved_indices.empty()) {
-        selection.virtual_joypad_index = selection.resolved_indices.front();
-    }
-    return selection;
-}
-
-std::unique_ptr<MelonDsCtrlClient> configure_slot_input_router(
-    InputRouter& input_router,
-    VirtualKeyboard& keyboard,
-    const HostLaunchPlan& launch_plan,
-    const SessionBackendState& backends) {
-    input_router.set_seat_assignment(launch_plan.seats);
-    if (backends.switch_backend) {
-        input_router.set_emulator_backend(EmulatorControlBackend::Ryujinx);
-    } else if (backends.melonds_backend != nullptr) {
-        input_router.set_emulator_backend(EmulatorControlBackend::MelonDS);
-    } else {
-        input_router.set_emulator_backend(EmulatorControlBackend::RetroArch);
-    }
-
-    auto melonds_touch_ctrl = std::unique_ptr<MelonDsCtrlClient>{};
-    if (backends.melonds_backend != nullptr && backends.melonds_backend->profile() != nullptr) {
-        const auto& ctrl_name = backends.melonds_backend->profile()->ctrl_server_name;
-        keyboard.set_melonds_ctrl_name(ctrl_name);
-        melonds_touch_ctrl = std::make_unique<MelonDsCtrlClient>(ctrl_name);
-        MelonDsCtrlClient* touch_ctrl = melonds_touch_ctrl.get();
-        input_router.set_touch_handler([touch_ctrl](const TouchInput& input) {
-            if (touch_ctrl == nullptr) {
-                return false;
-            }
-            if (input.pressed) {
-                std::uint16_t x = 0;
-                std::uint16_t y = 0;
-                ds_coords_from_normalized_u16(input.x, input.y, x, y);
-                return touch_ctrl->touch(x, y);
-            }
-            return touch_ctrl->touch_end();
-        });
-    }
-    return melonds_touch_ctrl;
 }
 
 ActiveSessionSlot::ActiveSessionSlot(ActiveSessionSlotConfig config)
@@ -614,6 +505,67 @@ void ActiveSessionSlot::shutdown_media_and_clients(const std::string& end_reason
     send_session_ended_to_clients(config_.plan, end_reason);
 }
 
+void ActiveSessionSlot::publish_connected_presence(
+    ClientId client_id,
+    const ClientHello& hello,
+    const SessionPlan& plan) const {
+    ConnectedClientPresence presence;
+    presence.username = hello.username;
+    presence.client_id = client_id;
+    presence.slot_index = config_.slot_index;
+    presence.game_id = plan.selected_game_id;
+    presence.phase = "session";
+    presence.seated = hello.requested_players > 0;
+    publish_connected_client(config_.host_config.save_root, presence);
+}
+
+SessionClientConnection* ActiveSessionSlot::attach_pending_join(
+    ClientId client_id,
+    const MediaEndpoint& endpoint,
+    SessionClientConnection* reconnecting_client,
+    PendingJoin& pending,
+    SessionPlan& plan) {
+    if (reconnecting_client != nullptr) {
+        reset_reconnected_session_client(
+            *reconnecting_client,
+            pending.hello,
+            std::move(pending.stream),
+            plan,
+            endpoint);
+        std::cout
+            << "session slot " << config_.slot_index << ": player "
+            << static_cast<int>(client_id)
+            << " reconnected username=" << pending.hello.username << ".\n";
+        record_client_joined(
+            config_.slot_index,
+            pending.hello.username,
+            plan.selected_game_id,
+            "reconnect",
+            cadence_tracker_.session_id());
+        publish_connected_presence(client_id, pending.hello, plan);
+        return reconnecting_client;
+    } else {
+        plan.clients.push_back(SessionClientConnection{
+            client_id,
+            pending.hello,
+            std::move(pending.stream),
+        });
+        std::cout
+            << "session slot " << config_.slot_index << ": late viewer "
+            << static_cast<int>(client_id)
+            << " joined username=" << pending.hello.username << ".\n";
+        record_client_joined(
+            config_.slot_index,
+            pending.hello.username,
+            plan.selected_game_id,
+            pending.hello.requested_players > 0 ? "player" : "viewer",
+            cadence_tracker_.session_id());
+        publish_connected_presence(client_id, pending.hello, plan);
+        return &plan.clients.back();
+    }
+}
+
+
 void ActiveSessionSlot::drain_pending_joins() {
     std::vector<PendingJoin> joins;
     {
@@ -627,18 +579,6 @@ void ActiveSessionSlot::drain_pending_joins() {
     auto& plan = config_.plan;
     for (auto& pending : joins) {
         try {
-            auto* reconnected_player = static_cast<SessionClientConnection*>(nullptr);
-            auto client_id = next_session_client_id(plan);
-            if (pending.is_reconnect || pending.hello.requested_players > 0) {
-                reconnected_player = disconnected_player_for_reconnect(plan, pending.hello);
-                if (reconnected_player == nullptr && pending.hello.requested_players > 0) {
-                    throw std::runtime_error("active sessions only accept late viewers or reconnecting players");
-                }
-                if (reconnected_player != nullptr) {
-                    client_id = reconnected_player->client_id;
-                }
-            }
-
             if (media_server_ == nullptr) {
                 throw std::runtime_error("media server unavailable for pending join");
             }
@@ -647,135 +587,34 @@ void ActiveSessionSlot::drain_pending_joins() {
             // Welcome → Seats → Ready → MediaEndpoint → SessionStarting.
             // Skipping Welcome left Android (and any ClientHello waiter) hanging on an
             // open TCP with no heartbeats until the reconnect seat timed out.
-            auto welcome = HostWelcome{};
-            welcome.client_id = client_id;
-            welcome.max_players_for_client = MaxPlayersPerClient;
-            welcome.host_is_player = plan.host_hello.has_value();
-            pending.stream.send_packet(serialize_packet(welcome));
-            pending.stream.send_packet(serialize_packet(plan.seats));
-            pending.stream.send_packet(serialize_packet(SessionReady{
-                plan.selected_game_id,
-                plan.session_mode,
-                static_cast<std::uint8_t>(assigned_player_count(plan.seats)),
-            }));
-
-            const auto destination_host = media_destination_host(
+            const auto join = resolve_live_session_join_target(
+                plan,
+                pending.hello,
+                pending.is_reconnect);
+            auto endpoint = send_live_session_join_handshake(LiveSessionJoinHandshake{
+                pending.stream,
+                pending.hello,
+                join.client_id,
+                plan,
                 media_plan_config_for(slot_config_),
-                pending.stream.peer_address());
-            auto endpoint = MediaEndpoint{};
-            if (pending.hello.wants_video || pending.hello.wants_audio) {
-                endpoint = media_server_->add_client(
-                    client_id,
-                    destination_host,
-                    media_index_,
-                    pending.hello.wants_video,
-                    pending.hello.wants_audio);
-                if (!endpoint.video_uri.empty() || !endpoint.audio_uri.empty()) {
-                    ++media_index_;
-                    pending.stream.send_packet(serialize_packet(endpoint));
-                }
-            }
-
-            pending.stream.send_packet(serialize_packet(SessionStarting{
-                plan.selected_game_id,
-                plan.session_mode,
-                static_cast<std::uint8_t>(assigned_player_count(plan.seats)),
-            }));
-
-            if (reconnected_player != nullptr) {
-                reconnected_player->hello = pending.hello;
-                reconnected_player->stream = std::move(pending.stream);
-                reconnected_player->connection_state = SessionConnectionState::Connected;
-                reconnected_player->last_seen = std::chrono::steady_clock::now();
-                reconnected_player->disconnected_at = {};
-                reconnected_player->disconnect_reason.clear();
-                reconnected_player->applied_tier = plan.session_video_tier;
-                reconnected_player->applied_size = plan.session_video_size;
-                reconnected_player->applied_feel = plan.session_video_feel;
-                reconnected_player->applied_bitrate = plan.session_video_bitrate;
-                reconnected_player->adaptive_fps_cap = MediaStreamFps::Auto;
-                reconnected_player->applied_fps = plan.session_video_fps;
-                reconnected_player->pending_tier.reset();
-                reconnected_player->pending_size.reset();
-                reconnected_player->pending_feel.reset();
-                reconnected_player->pending_bitrate.reset();
-                reconnected_player->pending_fps.reset();
-                reconnected_player->pending_video_uri.reset();
-                reconnected_player->video_cutover_started = {};
-                reconnected_player->video_cutover_failures = 0;
-                reconnected_player->video_cutover_suppressed = false;
-                reconnected_player->positive_video_heartbeats = 0;
-                reconnected_player->initial_video_settings_ready = false;
-                reconnected_player->initial_video_settings_defer_logged = false;
-                // add_client restarts the shared encode; arm stall recovery window.
-                reconnected_player->last_video_reconfigure = std::chrono::steady_clock::now();
-                reconnected_player->video_zero_frame_streak = 0;
-                if (!endpoint.video_uri.empty() || !endpoint.audio_uri.empty()) {
-                    reconnected_player->media_endpoint = endpoint;
-                } else {
-                    reconnected_player->media_endpoint.reset();
-                }
-                std::cout
-                    << "session slot " << config_.slot_index << ": player "
-                    << static_cast<int>(client_id)
-                    << " reconnected username=" << pending.hello.username << ".\n";
-                record_client_joined(
-                    config_.slot_index,
-                    pending.hello.username,
-                    plan.selected_game_id,
-                    "reconnect",
-                    cadence_tracker_.session_id());
-                {
-                    ConnectedClientPresence presence;
-                    presence.username = pending.hello.username;
-                    presence.client_id = client_id;
-                    presence.slot_index = config_.slot_index;
-                    presence.game_id = plan.selected_game_id;
-                    presence.phase = "session";
-                    presence.seated = pending.hello.requested_players > 0;
-                    publish_connected_client(config_.host_config.save_root, presence);
-                }
-            } else {
-                plan.clients.push_back(SessionClientConnection{
-                    client_id,
-                    pending.hello,
-                    std::move(pending.stream),
-                });
-                std::cout
-                    << "session slot " << config_.slot_index << ": late viewer "
-                    << static_cast<int>(client_id)
-                    << " joined username=" << pending.hello.username << ".\n";
-                record_client_joined(
-                    config_.slot_index,
-                    pending.hello.username,
-                    plan.selected_game_id,
-                    pending.hello.requested_players > 0 ? "player" : "viewer",
-                    cadence_tracker_.session_id());
-                {
-                    ConnectedClientPresence presence;
-                    presence.username = pending.hello.username;
-                    presence.client_id = client_id;
-                    presence.slot_index = config_.slot_index;
-                    presence.game_id = plan.selected_game_id;
-                    presence.phase = "session";
-                    presence.seated = pending.hello.requested_players > 0;
-                    publish_connected_client(config_.host_config.save_root, presence);
-                }
-            }
+                media_index_,
+                *media_server_,
+            });
+            auto* joined_client =
+                attach_pending_join(
+                    join.client_id,
+                    endpoint,
+                    join.reconnecting_client,
+                    pending,
+                    plan);
 
             if (config_.input_demux != nullptr && input_router_ != nullptr) {
-                config_.input_demux->register_router(client_id, input_router_.get());
+                config_.input_demux->register_router(join.client_id, input_router_.get());
             }
 
             // Late join / reconnect: push current bottom-screen hit target if known.
             if (last_ds_screen_layout_.has_value()) {
-                auto* target = reconnected_player;
-                if (target == nullptr && !plan.clients.empty()) {
-                    target = &plan.clients.back();
-                }
-                if (target != nullptr) {
-                    send_ds_screen_layout_to_client(*target, *last_ds_screen_layout_);
-                }
+                send_ds_screen_layout_to_client(*joined_client, *last_ds_screen_layout_);
             }
         } catch (const std::exception& error) {
             try {
@@ -789,21 +628,12 @@ void ActiveSessionSlot::drain_pending_joins() {
     }
 }
 
-struct SlotContent {
-    std::string active_display_name;
-    std::filesystem::path catalog_content_path;
-    std::string m3m_title_id;
-};
-
 struct SlotBackendPrepareRequest {
     int slot = 0;
     HostAppConfig& config;
     SessionPlan& plan;
     HostLaunchPlan& launch_plan;
-    RetroArchLaunchConfig& launch_config;
-    SaveProfile& save_profile;
-    const SlotContent& content;
-    const std::string& system_key;
+    SessionLaunchContext& launch_context;
     bool use_virtual_capture = false;
     bool gamescope_capture = false;
     VirtualKeyboard* keyboard = nullptr;
@@ -813,31 +643,37 @@ struct SlotBackendPrepareRequest {
 };
 
 void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
-    if (req.system_key == "switch") {
+    auto& launch_assets = req.launch_context.assets;
+    auto& launch_config = launch_assets.launch_config;
+    auto& save_profile = launch_assets.save_profile;
+    const auto& content = launch_assets.content;
+    const auto& system_key = content.system_key;
+
+    if (system_key == "switch") {
         const auto runtime = resolve_switch_runtime();
         if (!runtime.has_value()) {
             const auto message = switch_runtime_unavailable_message();
             send_error_to_session_clients(req.plan, message);
             throw std::runtime_error(message);
         }
-        req.launch_config.standalone = true;
-        req.launch_config.core_path = runtime->path;
-        req.launch_config.standalone_args_before_content = runtime->args_before_content;
+        launch_config.standalone = true;
+        launch_config.core_path = runtime->path;
+        launch_config.standalone_args_before_content = runtime->args_before_content;
         req.backends.switch_backend = make_switch_backend(*runtime);
-    } else if (req.system_key == "nds" && melonds_runtime_available()) {
+    } else if (system_key == "nds" && melonds_runtime_available()) {
         const auto runtime = resolve_melonds_runtime();
         if (!runtime.has_value()) {
             const auto message = melonds_unavailable_message();
             send_error_to_session_clients(req.plan, message);
             throw std::runtime_error(message);
         }
-        req.launch_config.standalone = true;
-        req.launch_config.core_path = runtime->path;
-        req.launch_config.standalone_args_before_content = runtime->args_before_content;
+        launch_config.standalone = true;
+        launch_config.core_path = runtime->path;
+        launch_config.standalone_args_before_content = runtime->args_before_content;
         req.backends.melonds_backend = make_melonds_backend();
-    } else if (req.launch_config.standalone) {
+    } else if (launch_config.standalone) {
         const auto message =
-            "standalone launch requested for unsupported system_key=" + req.system_key;
+            "standalone launch requested for unsupported system_key=" + system_key;
         send_error_to_session_clients(req.plan, message);
         throw std::runtime_error(message);
     }
@@ -854,21 +690,21 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
         }
         const auto prefer_handheld_mode = session_prefers_switch_handheld_mode(req.plan);
         const auto profile_name = resolve_switch_profile_display_name(
-            req.save_profile.username, req.plan.host_hello, client_hellos);
-        const auto switch_content_stem = !req.content.catalog_content_path.empty()
-            ? req.content.catalog_content_path.stem().string()
-            : req.launch_config.content_path.stem().string();
-        auto switch_title_id = req.content.m3m_title_id;
+            save_profile.username, req.plan.host_hello, client_hellos);
+        const auto switch_content_stem = !content.catalog_content_path.empty()
+            ? content.catalog_content_path.stem().string()
+            : launch_config.content_path.stem().string();
+        auto switch_title_id = content.m3m_title_id;
         if (switch_title_id.empty()) {
             switch_title_id = resolve_switch_title_id_for_catalog(
-                req.save_profile,
+                save_profile,
                 switch_content_stem,
-                req.launch_config.content_path);
+                launch_config.content_path);
         }
         auto switch_prep = req.backends.switch_backend->prepare(
-            req.launch_config,
+            launch_config,
             SwitchBackendPrepContext{
-                req.save_profile,
+                save_profile,
                 req.launch_plan.players,
                 req.config.verbose,
                 req.devices.product_id_base,
@@ -911,15 +747,15 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
             client_hellos.push_back(client.hello);
         }
         const auto profile_name = resolve_switch_profile_display_name(
-            req.save_profile.username,
+            save_profile.username,
             req.plan.host_hello,
             client_hellos);
         const auto nds_layout =
             resolve_display_layout_preference(req.plan.host_hello, client_hellos);
         auto melonds_prep = req.backends.melonds_backend->prepare(
-            req.launch_config,
+            launch_config,
             MelonDsBackendPrepContext{
-                req.save_profile,
+                save_profile,
                 req.launch_plan.players,
                 req.config.verbose,
                 req.devices.product_id_base,
@@ -938,15 +774,15 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
             req.launch_env.request,
             melonds_prep,
             req.slot);
-    } else if (req.launch_config.standalone) {
-        throw std::runtime_error("standalone launch missing backend for system=" + req.system_key);
+    } else if (launch_config.standalone) {
+        throw std::runtime_error("standalone launch missing backend for system=" + system_key);
     } else {
         RetroArchOverrideParams override_params;
         override_params.first_virtual_joypad_index = req.devices.virtual_joypad_index;
         override_params.identities = &req.launch_plan.virtual_identities;
         override_params.joypad_driver = req.config.retroarch_joypad_driver;
         override_params.players = req.launch_plan.players;
-        override_params.save_profile = &req.save_profile;
+        override_params.save_profile = &save_profile;
         override_params.realtime_pacing = req.config.audio || req.config.video;
         override_params.capture_fullscreen =
             req.launch_env.capture.capture_fullscreen && req.use_virtual_capture;
@@ -955,8 +791,8 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
             (!req.use_virtual_capture && req.launch_env.resolved_gpu.has_value())
                 ? req.launch_env.resolved_gpu->vulkan_index
                 : -1;
-        override_params.system_key = req.system_key;
-        override_params.core_path = req.launch_config.core_path;
+        override_params.system_key = system_key;
+        override_params.core_path = launch_config.core_path;
         override_params.resolution_scale = req.config.resolution.retroarch_scale;
         override_params.slot_index = req.slot;
         override_params.network_cmd_port = req.plan.retroarch_netcmd_port;
@@ -969,55 +805,9 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
             override_params.display_layout =
                 resolve_display_layout_preference(req.plan.host_hello, hellos);
         }
-        apply_retroarch_override(req.launch_config, override_params);
+        apply_retroarch_override(launch_config, override_params);
         req.launch_env.request.pad_plan = req.devices.shared_pad_plan;
         log_pad_plan(req.devices.shared_pad_plan, req.slot);
-    }
-}
-
-SlotContent build_slot_content(
-    GameCatalog& catalog,
-    const HostLaunchPlan& launch_plan,
-    std::string& system_key) {
-    SlotContent content{};
-    if (const auto hosted = catalog.find_hosted(launch_plan.game_id); hosted.has_value()) {
-        auto hosted_ = hosted->get();
-        system_key = hosted_.info.system_key;
-        content.active_display_name = hosted_.info.display_name;
-        content.catalog_content_path = hosted_.content_path;
-        content.m3m_title_id = hosted_.m3m_title_id;
-    } else if (const auto info = catalog.find(launch_plan.game_id); info.has_value()) {
-        system_key = info->system_key;
-        content.active_display_name = info->display_name;
-    }
-    return content;
-}
-
-void append_detected_host_controller_ignore_list(HostAppConfig& config, int slot) {
-    try {
-        ControllerBackend host_pads;
-        std::string host_ignore;
-        for (const auto& device : host_pads.list_devices()) {
-            if (device.vendor_id == 0 || device.product_id == 0) {
-                continue;
-            }
-            const auto id = hex_vid_pid(device.vendor_id, device.product_id);
-            if (!host_ignore.empty()) {
-                host_ignore += ",";
-            }
-            host_ignore += id;
-        }
-        if (!host_ignore.empty()) {
-            if (config.ignore_controller.has_value() && !config.ignore_controller->empty()) {
-                config.ignore_controller = *config.ignore_controller + "," + host_ignore;
-            } else {
-                config.ignore_controller = host_ignore;
-            }
-        }
-    } catch (const std::exception& error) {
-        std::cerr
-            << "session slot " << slot << ": warning: host controller scan failed: "
-            << error.what() << '\n';
     }
 }
 
@@ -1188,12 +978,17 @@ void ActiveSessionSlot::run_session() {
         launch_plan.virtual_identities.resize(launch_plan.players);
     }
 
-    save_profile_ = prepare_save_profile(config.save_root, launch_plan.save_username);
-
-    auto launch_config = catalog.launch_config_for(launch_plan.game_id);
-    const auto resolved_retroarch = resolve_retroarch();
+    auto launch_context = prepare_session_launch_context(
+        config,
+        catalog,
+        launch_plan,
+        "session slot " + std::to_string(slot) + ": ");
+    auto& launch_assets = launch_context.assets;
+    save_profile_ = launch_assets.save_profile;
+    auto& launch_config = launch_assets.launch_config;
+    const auto& content = launch_assets.content;
     system_key_.clear();
-    SlotContent content = build_slot_content(catalog, launch_plan, system_key_);
+    system_key_ = content.system_key;
     plan.system_key = system_key_;
 
     // Advertise this live save profile to the host Users browser (cleared on exit).
@@ -1238,32 +1033,8 @@ void ActiveSessionSlot::run_session() {
         if (client.hello.username.empty()) {
             continue;
         }
-        ConnectedClientPresence presence;
-        presence.username = client.hello.username;
-        presence.client_id = client.client_id;
-        presence.slot_index = slot;
-        presence.game_id = plan.selected_game_id;
-        presence.phase = "session";
-        presence.seated = client.hello.requested_players > 0;
-        publish_connected_client(config.save_root, presence);
+        publish_connected_presence(client.client_id, client.hello, plan);
     }
-
-    if (!launch_config.standalone && system_key_ == "ps2") {
-        std::cout
-            << "session slot " << slot << ": PS2 memcards "
-            << user_ps2_memcard_directory(save_profile_) << '\n';
-    }
-
-#if !defined(_WIN32)
-    if (!launch_config.standalone &&
-        (system_key_ == "ps1" || system_key_ == "ps2" || system_key_ == "psp") &&
-        config.retroarch_joypad_driver == "sdl2") {
-        std::cout
-            << "session slot " << slot << ": forcing joypad driver udev for " << system_key_
-            << " (sdl2 stalls PlayStation cores).\n";
-        config.retroarch_joypad_driver = "udev";
-    }
-#endif
 
 #if defined(ARCHSTREAMER_DEBUG_GB_LINK)
     if (system_key_ == "gb" || system_key_ == "gbc" || system_key_ == "gb-gbc") {
@@ -1271,47 +1042,24 @@ void ActiveSessionSlot::run_session() {
     }
 #endif
 
-    if (const auto hosted = catalog.find_hosted(launch_plan.game_id); hosted.has_value()) {
-        if (plan.playlist_discs.empty()) {
-            plan.playlist_discs = hosted->get().info.playlist_discs;
-            plan.current_disc_index = 0;
-        }
-        if (!plan.playlist_discs.empty()) {
-            std::cout
-                << "session slot " << slot << ": multi-disc playlist "
-                << plan.playlist_discs.size() << " disc(s); netcmd port "
-                << plan.retroarch_netcmd_port << '\n';
-        }
+    if (plan.playlist_discs.empty()) {
+        plan.playlist_discs = content.playlist_discs;
+        plan.current_disc_index = 0;
     }
-
-    if (!launch_config.standalone) {
-        launch_config.retroarch_path = resolved_retroarch.display_path;
-        launch_config.command_prefix = resolved_retroarch.argv_prefix;
-    }
-    if (config.verbose && !launch_config.standalone) {
-        launch_config.extra_args.insert(launch_config.extra_args.begin(), "--verbose");
+    if (!plan.playlist_discs.empty()) {
+        std::cout
+            << "session slot " << slot << ": multi-disc playlist "
+            << plan.playlist_discs.size() << " disc(s); netcmd port "
+            << plan.retroarch_netcmd_port << '\n';
     }
 
     const bool host_plays_locally =
         config.host_role == ParticipantRole::Player && config_.bridge_device.has_value();
 
-    if (config_.bridge_device.has_value() && !config.ignore_controller.has_value()) {
-        if (config_.bridge_device->vendor_id != 0 && config_.bridge_device->product_id != 0) {
-            config.ignore_controller =
-                hex_vid_pid(config_.bridge_device->vendor_id, config_.bridge_device->product_id);
-        }
-    }
-
-    append_detected_host_controller_ignore_list(config, slot);
-
-    auto ignore_devices = config.ignore_controller.value_or("");
-    const char* steam_input = "0x28de/0x11ff,0x28de/0x1205,0x28de/0x1201";
-    if (ignore_devices.empty()) {
-        ignore_devices = steam_input;
-    } else {
-        ignore_devices = ignore_devices + "," + steam_input;
-    }
-    config.ignore_controller = ignore_devices;
+    append_session_controller_ignore_list(
+        config,
+        config_.bridge_device,
+        "session slot " + std::to_string(slot) + ": ");
 
     auto launch_env = prepare_slot_launch_environment(
         config,
@@ -1322,7 +1070,10 @@ void ActiveSessionSlot::run_session() {
     use_virtual_capture_ = launch_env.capture.use_virtual_capture;
     gamescope_capture_ = launch_env.capture.gamescope_capture;
 
-    auto media = prepare_slot_media_plan(config, plan);
+    auto media = build_session_media_plan(
+        config,
+        &plan,
+        SessionMediaPlanKind::Slot);
 
     print_session_info(slot, launch_plan, launch_config, config, save_profile_);
 
@@ -1346,7 +1097,13 @@ void ActiveSessionSlot::run_session() {
     keyboard_->set_netcmd_port(plan.retroarch_netcmd_port);
     wait_for_session_input_enumeration();
 
-    auto devices = resolve_slot_device_plan(config, launch_plan, slot);
+    // Concurrent slots must not see each other's ArchStreamer uinput pads. Exclusive
+    // PadPlan IGNORES sibling VID/PIDs (EXCEPT alone fails for uinput under Ryujinx).
+    auto devices = resolve_session_device_plan(
+        config,
+        launch_plan,
+        SessionPadPlanKind::RetroArchSlot,
+        static_cast<std::uint16_t>(0xa517 + slot * 8));
     apply_capture_to_session_device_plan(
         devices,
         config,
@@ -1359,10 +1116,7 @@ void ActiveSessionSlot::run_session() {
         config,
         plan,
         launch_plan,
-        launch_config,
-        save_profile_,
-        content,
-        system_key_,
+        launch_context,
         use_virtual_capture_,
         gamescope_capture_,
         keyboard_.get(),
@@ -1396,7 +1150,7 @@ void ActiveSessionSlot::run_session() {
     }
 
     input_router_ = std::make_unique<InputRouter>(*gamepads_, keyboard_.get());
-    melonds_touch_ctrl_ = configure_slot_input_router(
+    melonds_touch_ctrl_ = configure_session_input_router(
         *input_router_,
         *keyboard_,
         launch_plan,
@@ -1495,14 +1249,7 @@ void ActiveSessionSlot::run_session() {
                 plan.selected_game_id,
                 client.hello.requested_players > 0 ? "player" : "viewer",
                 cadence_tracker_.session_id());
-            ConnectedClientPresence presence;
-            presence.username = client.hello.username;
-            presence.client_id = client.client_id;
-            presence.slot_index = slot;
-            presence.game_id = plan.selected_game_id;
-            presence.phase = "session";
-            presence.seated = client.hello.requested_players > 0;
-            publish_connected_client(config.save_root, presence);
+            publish_connected_presence(client.client_id, client.hello, plan);
         }
         if (plan.host_hello.has_value() && !plan.host_hello->username.empty()) {
             record_client_joined(

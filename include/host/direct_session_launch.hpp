@@ -14,7 +14,6 @@
 #include "host/session_runtime.hpp"
 #include "host/virtual_keyboard.hpp"
 
-#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -24,23 +23,8 @@
 namespace archstreamer {
 
 class InputRouter;
-struct ControllerDevice;
 
-struct SessionLaunchTarget {
-    HostLaunchPlan launch_plan;
-    SaveProfile save_profile;
-    RetroArchLaunchConfig launch_config;
-    ResolvedRetroArch resolved_retroarch;
-    std::string system_key;
-    std::filesystem::path catalog_content_path;
-    std::string m3m_title_id;
-};
-
-void append_direct_controller_ignore_list(
-    HostAppConfig& config,
-    const std::optional<ControllerDevice>& bridge_device);
-
-std::optional<SessionLaunchTarget> prepare_direct_session_target(
+std::optional<SessionLaunchContext> prepare_direct_session_context(
     HostAppConfig& config,
     GameCatalog& catalog,
     const GameList& list,
@@ -57,13 +41,6 @@ void print_direct_launch_summary(
 void log_direct_emulator_command(
     const RetroArchLaunchConfig& launch_config,
     const ResolvedRetroArch& resolved_retroarch);
-
-std::unique_ptr<MelonDsCtrlClient> configure_direct_input_router(
-    InputRouter& input_router,
-    VirtualKeyboard& keyboard,
-    const HostLaunchPlan& launch_plan,
-    const std::unique_ptr<SwitchBackend>& switch_backend,
-    const std::unique_ptr<MelonDsBackend>& melonds_backend);
 
 void print_input_seats(const SeatAssignment& seats);
 
@@ -82,19 +59,10 @@ SessionLaunchEnvironment prepare_direct_launch_environment(
     RetroArchLaunchConfig& launch_config,
     bool host_plays_locally);
 
-SessionMediaPlan build_direct_media_plan(const HostAppConfig& config);
-
-SessionDevicePlan resolve_direct_device_plan(
-    const HostLaunchPlan& launch_plan,
-    const HostAppConfig& config,
-    const CapturePlan& capture);
-
 void prepare_direct_backend(
     const HostAppConfig& config,
-    RetroArchLaunchConfig& launch_config,
     const CapturePlan& capture,
-    const SessionLaunchTarget& target,
-    HostLaunchPlan& launch_plan,
+    SessionLaunchContext& context,
     SessionDevicePlan& devices,
     VirtualKeyboard& keyboard,
     EmulatorLaunchEnvRequest& launch_env_request,

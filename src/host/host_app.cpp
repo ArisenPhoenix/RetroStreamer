@@ -21,6 +21,7 @@
 #include "host/network_input_receiver.hpp"
 #include "host/platform/default_host_platform.hpp"
 #include "host/session_launch_assemble.hpp"
+#include "host/session_launch_types.hpp"
 #include "host/session_run_helpers.hpp"
 #include "host/session_lobby.hpp"
 #include "host/session_runtime.hpp"
@@ -131,33 +132,44 @@ int HostApp::run_direct_session(
     auto backends = SessionBackendState{};
     std::optional<std::string> session_end_reason;
 
-    auto target_result = prepare_direct_session_target(config, catalog, list, bridge_identity);
-    if (!target_result.has_value()) {
+    auto context_result = prepare_direct_session_context(config, catalog, list, bridge_identity);
+    if (!context_result.has_value()) {
         return 1;
     }
-    auto target = std::move(*target_result);
-    backends.system_key = std::move(target.system_key);
+    auto context = std::move(*context_result);
+    auto& launch_plan = context.launch_plan;
+    auto& assets = context.assets;
+    backends.system_key = assets.content.system_key;
 
     // Streaming already forced off above for Host Player.
     // Emulator child env is assembled once later (audio/input/gpu/capture/emulator).
-    append_direct_controller_ignore_list(config, bridge_device);
+    // Blacklist every physical pad currently attached so RetroArch is less likely to
+    // bind P1 to a host controller. Virtual ArchStreamer pads are created after this.
+    append_session_controller_ignore_list(
+        config,
+        bridge_device,
+        {},
+        /*warn_if_not_sdl2=*/true);
 
     // Host Player keeps the real DISPLAY (and speakers). Streamed RetroArch needs a
     // virtual capture surface. Switch standalone defaults to headless gamescope on Linux;
     // Windows captures the desktop/HWND via d3d11screencapturesrc (no gamescope).
     auto launch_env = prepare_direct_launch_environment(
         config,
-        target.launch_config,
+        assets.launch_config,
         host_plays_locally);
     register_session_xtest_display(launch_env.request.session_id, launch_env.request.xtest_display);
 
-    auto media = build_direct_media_plan(config);
+    auto media = build_session_media_plan(
+        config,
+        nullptr,
+        SessionMediaPlanKind::Direct);
 
     print_direct_launch_summary(
         config,
-        target.launch_plan,
-        target.save_profile,
-        target.launch_config,
+        launch_plan,
+        assets.save_profile,
+        assets.launch_config,
         media.streams,
         launch_env.capture.capture_display);
 
@@ -165,28 +177,31 @@ int HostApp::run_direct_session(
         return 0;
     }
 
-    HostVirtualGamepadBus gamepads(target.launch_plan.virtual_identities);
-    plug_session_gamepads(gamepads, target.launch_plan.players);
+    HostVirtualGamepadBus gamepads(launch_plan.virtual_identities);
+    plug_session_gamepads(gamepads, launch_plan.players);
     // Virtual keyboard targets ARCHSTREAMER_XTEST_DISPLAY for gamescope, else Xvfb capture.
     VirtualKeyboard keyboard(launch_env.request.xtest_display);
     wait_for_session_input_enumeration();
 
-    auto devices = resolve_direct_device_plan(target.launch_plan, config, launch_env.capture);
+    auto devices = resolve_session_device_plan(
+        config,
+        launch_plan,
+        SessionPadPlanKind::Direct,
+        /*product_id_base=*/0);
+    apply_capture_to_session_device_plan(devices, config, launch_env.capture);
     devices.resolved_gpu = launch_env.gpu.resolved_gpu;
 
     prepare_direct_backend(
         config,
-        target.launch_config,
         launch_env.capture,
-        target,
-        target.launch_plan,
+        context,
         devices,
         keyboard,
         launch_env.request,
         backends);
 
     apply_capture_and_launch_environment(
-        target.launch_config,
+        assets.launch_config,
         launch_env.capture,
         config,
         launch_env.gpu.gamescope_vk_device,
@@ -203,13 +218,12 @@ int HostApp::run_direct_session(
     }
 
     InputRouter input_router(gamepads, &keyboard);
-    auto melonds_touch_ctrl = configure_direct_input_router(
+    auto melonds_touch_ctrl = configure_session_input_router(
         input_router,
         keyboard,
-        target.launch_plan,
-        backends.switch_backend,
-        backends.melonds_backend);
-    print_input_seats(target.launch_plan.seats);
+        launch_plan,
+        backends);
+    print_input_seats(launch_plan.seats);
 
     auto network_receiver = std::optional<NetworkInputReceiver>{};
     if (config.input_port.has_value()) {
@@ -238,11 +252,11 @@ int HostApp::run_direct_session(
         local_bridge.emplace(*bridge_device);
     }
 
-    auto session_runtime = make_session_runtime(target.launch_plan);
-    session_runtime->bind_launch_config(std::move(target.launch_config));
+    auto session_runtime = make_session_runtime(launch_plan);
+    session_runtime->bind_launch_config(std::move(assets.launch_config));
     std::cout << session_runtime->info();
 
-    log_direct_emulator_command(session_runtime->launch_config(), target.resolved_retroarch);
+    log_direct_emulator_command(session_runtime->launch_config(), assets.resolved_retroarch);
     start_emulator_and_verify(*session_runtime, EmulatorStartFailDetail::DirectCli);
     post_emulator_start_warmup(
         media_server.get(),
@@ -252,13 +266,13 @@ int HostApp::run_direct_session(
         &streaming_audio,
         std::nullopt,
         gamepads,
-        target.launch_plan.players,
+        launch_plan.players,
         &keyboard,
         launch_env.capture.gamescope_capture,
         launch_env.request.xtest_display);
 
     auto cadence_tracker = begin_direct_cadence_session(
-        target.launch_plan,
+        launch_plan,
         config,
         *session_runtime);
 
@@ -332,20 +346,20 @@ int HostApp::run_direct_session(
     }
     if (backends.switch_backend) {
         sync_and_log_post_exit_switch_saves(
-            target.save_profile,
+            assets.save_profile,
             std::nullopt,
             backends.switch_backend.get(),
             backends.switch_launch_content_stem,
             backends.switch_launch_title_id);
     }
     if (backends.melonds_backend) {
-        (void)backends.melonds_backend->post_exit_sync(target.save_profile);
+        (void)backends.melonds_backend->post_exit_sync(assets.save_profile);
     }
     const std::string end_reason = should_stop()
         ? "host stopped"
         : session_end_reason.value_or("session ended");
 
-    end_direct_cadence_session(cadence_tracker, target.launch_plan, end_reason);
+    end_direct_cadence_session(cadence_tracker, launch_plan, end_reason);
     stop_session_media(media_server);
     if (config.audio) {
         streaming_audio.restore_default_sink();

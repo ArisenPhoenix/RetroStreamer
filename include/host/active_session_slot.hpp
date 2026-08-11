@@ -116,6 +116,16 @@ private:
     void thread_main();
     void run_session();
     void print_session_data(int slot, const SessionPlan& plan);
+    void publish_connected_presence(
+        ClientId client_id,
+        const ClientHello& hello,
+        const SessionPlan& plan) const;
+    SessionClientConnection* attach_pending_join(
+        ClientId client_id,
+        const MediaEndpoint& endpoint,
+        SessionClientConnection* reconnecting_client,
+        PendingJoin& pending,
+        SessionPlan& plan);
 
     void cleanup(
         int slot,

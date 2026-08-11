@@ -122,12 +122,10 @@ std::vector<std::string> GStreamerVideoFanout::build_single_encode_args(
 
     const int bitrate = settings.bitrate_kbps == 0 ? 1500 : settings.bitrate_kbps;
     const int framerate = settings.framerate == 0 ? 30 : static_cast<int>(settings.framerate);
-    const int configured_key_int =
-        settings.key_int_max == 0 ? framerate : static_cast<int>(settings.key_int_max);
+    const int configured_key_int = settings.key_int_max == 0 ? framerate : static_cast<int>(settings.key_int_max);
     const int sixth_sec = std::max(5, framerate / 6);
     const int key_int_max = std::min(configured_key_int, sixth_sec);
-    const int queue_buffers =
-        settings.queue_buffers == 0 ? 1 : static_cast<int>(settings.queue_buffers);
+    const int queue_buffers = settings.queue_buffers == 0 ? 1 : static_cast<int>(settings.queue_buffers);
     const bool nvenc = gst_element_available("nvh264enc");
 
     auto args = std::vector<std::string>{"gst-launch-1.0", "-q"};

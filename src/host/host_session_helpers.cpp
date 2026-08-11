@@ -71,6 +71,102 @@ SessionClientConnection* disconnected_player_for_reconnect(SessionPlan& plan, co
     return nullptr;
 }
 
+LiveSessionJoinTarget resolve_live_session_join_target(
+    SessionPlan& plan,
+    const ClientHello& hello,
+    bool reconnect_requested) {
+    LiveSessionJoinTarget target;
+    target.client_id = next_session_client_id(plan);
+    if (reconnect_requested || hello.requested_players > 0) {
+        target.reconnecting_client = disconnected_player_for_reconnect(plan, hello);
+        if (target.reconnecting_client == nullptr && hello.requested_players > 0) {
+            throw std::runtime_error("active sessions only accept late viewers or reconnecting players");
+        }
+        if (target.reconnecting_client != nullptr) {
+            target.client_id = target.reconnecting_client->client_id;
+        }
+    }
+    return target;
+}
+
+MediaEndpoint send_live_session_join_handshake(const LiveSessionJoinHandshake& join) {
+    auto welcome = HostWelcome{};
+    welcome.client_id = join.client_id;
+    welcome.max_players_for_client = MaxPlayersPerClient;
+    welcome.host_is_player = join.plan.host_hello.has_value();
+    join.stream.send_packet(serialize_packet(welcome));
+    join.stream.send_packet(serialize_packet(join.plan.seats));
+    join.stream.send_packet(serialize_packet(SessionReady{
+        join.plan.selected_game_id,
+        join.plan.session_mode,
+        static_cast<std::uint8_t>(assigned_player_count(join.plan.seats)),
+    }));
+
+    const auto destination_host = media_destination_host(
+        join.media_config,
+        join.stream.peer_address());
+    auto endpoint = MediaEndpoint{};
+    if (join.hello.wants_video || join.hello.wants_audio) {
+        endpoint = join.media_server.add_client(
+            join.client_id,
+            destination_host,
+            join.media_index,
+            join.hello.wants_video,
+            join.hello.wants_audio);
+        if (!endpoint.video_uri.empty() || !endpoint.audio_uri.empty()) {
+            ++join.media_index;
+            join.stream.send_packet(serialize_packet(endpoint));
+        }
+    }
+
+    join.stream.send_packet(serialize_packet(SessionStarting{
+        join.plan.selected_game_id,
+        join.plan.session_mode,
+        static_cast<std::uint8_t>(assigned_player_count(join.plan.seats)),
+    }));
+    return endpoint;
+}
+
+void reset_reconnected_session_client(
+    SessionClientConnection& client,
+    const ClientHello& hello,
+    TcpStream&& stream,
+    const SessionPlan& plan,
+    const MediaEndpoint& endpoint) {
+    client.hello = hello;
+    client.stream = std::move(stream);
+    client.connection_state = SessionConnectionState::Connected;
+    client.last_seen = std::chrono::steady_clock::now();
+    client.disconnected_at = {};
+    client.disconnect_reason.clear();
+    client.applied_tier = plan.session_video_tier;
+    client.applied_size = plan.session_video_size;
+    client.applied_feel = plan.session_video_feel;
+    client.applied_bitrate = plan.session_video_bitrate;
+    client.adaptive_fps_cap = MediaStreamFps::Auto;
+    client.applied_fps = plan.session_video_fps;
+    client.pending_tier.reset();
+    client.pending_size.reset();
+    client.pending_feel.reset();
+    client.pending_bitrate.reset();
+    client.pending_fps.reset();
+    client.pending_video_uri.reset();
+    client.video_cutover_started = {};
+    client.video_cutover_failures = 0;
+    client.video_cutover_suppressed = false;
+    client.positive_video_heartbeats = 0;
+    client.initial_video_settings_ready = false;
+    client.initial_video_settings_defer_logged = false;
+    // add_client restarts the shared encode; arm stall recovery window.
+    client.last_video_reconfigure = std::chrono::steady_clock::now();
+    client.video_zero_frame_streak = 0;
+    if (!endpoint.video_uri.empty() || !endpoint.audio_uri.empty()) {
+        client.media_endpoint = endpoint;
+    } else {
+        client.media_endpoint.reset();
+    }
+}
+
 std::string hex_vid_pid(std::uint16_t vendor_id, std::uint16_t product_id) {
     std::ostringstream out;
     out
@@ -253,95 +349,35 @@ void poll_active_session_joins(
             throw std::runtime_error("active-session client supplied controller metadata for unrequested players");
         }
 
-        auto* reconnected_player = static_cast<SessionClientConnection*>(nullptr);
-        auto client_id = next_session_client_id(plan);
-        if (authenticated_hello.requested_players > 0) {
-            reconnected_player = disconnected_player_for_reconnect(plan, authenticated_hello);
-            if (reconnected_player == nullptr) {
-                throw std::runtime_error("active sessions only accept late viewers or reconnecting players");
-            }
-            client_id = reconnected_player->client_id;
-        }
-
-        auto welcome = HostWelcome{};
-        welcome.client_id = client_id;
-        welcome.max_players_for_client = MaxPlayersPerClient;
-        welcome.host_is_player = plan.host_hello.has_value();
-        stream->send_packet(serialize_packet(welcome));
-        stream->send_packet(serialize_packet(plan.seats));
-        stream->send_packet(serialize_packet(SessionReady{
-            plan.selected_game_id,
-            plan.session_mode,
-            static_cast<std::uint8_t>(assigned_player_count(plan.seats)),
-        }));
-
-        const auto destination_host = media_destination_host(
+        const auto join = resolve_live_session_join_target(plan, authenticated_hello);
+        auto endpoint = send_live_session_join_handshake(LiveSessionJoinHandshake{
+            *stream,
+            authenticated_hello,
+            join.client_id,
+            plan,
             media_plan_config_for(config),
-            stream->peer_address());
-        auto endpoint = MediaEndpoint{};
-        if (authenticated_hello.wants_video || authenticated_hello.wants_audio) {
-            endpoint = media_server.add_client(
-                client_id,
-                destination_host,
-                media_index,
-                authenticated_hello.wants_video,
-                authenticated_hello.wants_audio);
-            if (!endpoint.video_uri.empty() || !endpoint.audio_uri.empty()) {
-                ++media_index;
-                stream->send_packet(serialize_packet(endpoint));
-            }
-        }
+            media_index,
+            media_server,
+        });
 
-        stream->send_packet(serialize_packet(SessionStarting{
-            plan.selected_game_id,
-            plan.session_mode,
-            static_cast<std::uint8_t>(assigned_player_count(plan.seats)),
-        }));
-
-        if (reconnected_player != nullptr) {
-            reconnected_player->hello = authenticated_hello;
-            reconnected_player->stream = std::move(*stream);
-            reconnected_player->connection_state = SessionConnectionState::Connected;
-            reconnected_player->last_seen = std::chrono::steady_clock::now();
-            reconnected_player->disconnected_at = {};
-            reconnected_player->disconnect_reason.clear();
-            reconnected_player->applied_tier = plan.session_video_tier;
-            reconnected_player->applied_size = plan.session_video_size;
-            reconnected_player->applied_feel = plan.session_video_feel;
-            reconnected_player->applied_bitrate = plan.session_video_bitrate;
-            reconnected_player->adaptive_fps_cap = MediaStreamFps::Auto;
-            reconnected_player->applied_fps = plan.session_video_fps;
-            reconnected_player->pending_tier.reset();
-            reconnected_player->pending_size.reset();
-            reconnected_player->pending_feel.reset();
-            reconnected_player->pending_bitrate.reset();
-            reconnected_player->pending_fps.reset();
-            reconnected_player->pending_video_uri.reset();
-            reconnected_player->video_cutover_started = {};
-            reconnected_player->video_cutover_failures = 0;
-            reconnected_player->video_cutover_suppressed = false;
-            reconnected_player->positive_video_heartbeats = 0;
-            reconnected_player->initial_video_settings_ready = false;
-            reconnected_player->initial_video_settings_defer_logged = false;
-            // add_client restarts the shared encode; arm stall recovery window.
-            reconnected_player->last_video_reconfigure = std::chrono::steady_clock::now();
-            reconnected_player->video_zero_frame_streak = 0;
-            if (!endpoint.video_uri.empty() || !endpoint.audio_uri.empty()) {
-                reconnected_player->media_endpoint = endpoint;
-            } else {
-                reconnected_player->media_endpoint.reset();
-            }
+        if (join.reconnecting_client != nullptr) {
+            reset_reconnected_session_client(
+                *join.reconnecting_client,
+                authenticated_hello,
+                std::move(*stream),
+                plan,
+                endpoint);
             std::cout
-                << "Player " << static_cast<int>(client_id)
+                << "Player " << static_cast<int>(join.client_id)
                 << " reconnected username=" << authenticated_hello.username << ".\n";
         } else {
             plan.clients.push_back(SessionClientConnection{
-                client_id,
+                join.client_id,
                 authenticated_hello,
                 std::move(*stream),
             });
             std::cout
-                << "Late viewer " << static_cast<int>(client_id)
+                << "Late viewer " << static_cast<int>(join.client_id)
                 << " joined username=" << authenticated_hello.username << ".\n";
         }
     } catch (const std::exception& error) {

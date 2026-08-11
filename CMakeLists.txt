@@ -278,118 +278,118 @@ set(ARCHSTREAMER_INSTALL_TARGETS
 
 if(ARCHSTREAMER_BUILD_HOST)
     set(ARCHSTREAMER_HOST_SOURCES
-        src/host/game_catalog.cpp
-        src/host/game_catalog_scanner.cpp
-        src/host/gpu_select.cpp
+        src/host/console/game_catalog.cpp
+        src/host/console/game_catalog_scanner.cpp
+        src/host/hardware/gpu_select.cpp
         src/host/host_app.cpp
         src/host/host_app_config.cpp
-        src/host/host_concurrent_lobby.cpp
-        src/host/direct_session_launch.cpp
-        src/host/session_launch_types.cpp
-        src/host/lobby.cpp
-        src/host/session_manager.cpp
+        src/host/lobby/host_concurrent_lobby.cpp
+        src/host/session/direct_session_launch.cpp
+        src/host/session/launch_types.cpp
+        src/host/lobby/lobby.cpp
+        src/host/session/manager.cpp
         src/host/host_launch_planner.cpp
-        src/host/host_session_helpers.cpp
-        src/host/host_session_hub.cpp
-        src/host/input_router.cpp
-        src/host/input_router_demux.cpp
-        src/host/emulator_control_plane.cpp
-        src/host/active_session_slot.cpp
-        src/host/launch_environment.cpp
-        src/host/libretro_core_registry.cpp
-        src/host/local_controller_bridge.cpp
-        src/host/network_input_receiver.cpp
-        src/host/platform_host_pad_match.cpp
-        src/host/retroarch_config_writer.cpp
-        src/host/retroarch_netcmd.cpp
-        src/host/save_profile.cpp
+        src/host/lobby/host_session_helpers.cpp
+        src/host/lobby/host_session_hub.cpp
+        src/host/virtual/input_router.cpp
+        src/host/virtual/input_router_demux.cpp
+        src/host/virtual/emulator_control_plane.cpp
+        src/host/session/active_session_slot.cpp
+        src/host/hardware/launch_environment.cpp
+        src/host/console/libretro_core_registry.cpp
+        src/host/hardware/local_controller_bridge.cpp
+        src/host/virtual/network_input_receiver.cpp
+        src/host/hardware/platform_host_pad_match.cpp
+        src/host/console/retroarch_config_writer.cpp
+        src/host/console/retroarch_netcmd.cpp
+        src/host/console/save_profile.cpp
         src/host/save_manager.cpp
-        src/host/ps2_memcard.cpp
-        src/host/save_active_sessions.cpp
-        src/host/game_meta_store.cpp
-        src/host/game_meta_edit_log.cpp
-        src/host/catalog_ops.cpp
-        src/host/catalog_repair.cpp
-        src/host/user_credentials.cpp
-        src/host/user_controls_db.cpp
-        src/host/controls_db_sync.cpp
+        src/host/console/ps2_memcard.cpp
+        src/host/db/save_active_sessions.cpp
+        src/host/db/game_meta_store.cpp
+        src/host/db/game_meta_edit_log.cpp
+        src/host/console/catalog_ops.cpp
+        src/host/console/catalog_repair.cpp
+        src/host/user/user_credentials.cpp
+        src/host/db/user_controls_db.cpp
+        src/host/user/controls_db_sync.cpp
         src/host/pair_form_relay.cpp
-        src/host/standalone_emulator.cpp
-        src/host/switch/switch_fs.cpp
-        src/host/switch/switch_system_defaults.cpp
-        src/host/switch/qt_ini_editor.cpp
-        src/host/switch/yuzu_user_profile.cpp
-        src/host/switch/yuzu_controls.cpp
-        src/host/switch/yuzu_launch_env.cpp
-        src/host/switch/ryujinx_user_profile.cpp
-        src/host/switch/ryujinx_controls.cpp
-        src/host/switch/ryujinx_launch_env.cpp
-        src/host/switch/switch_backend.cpp
-        src/host/switch/ryujinx_backend.cpp
-        src/host/switch/yuzu_backend.cpp
-        src/host/switch/switch_runtime.cpp
-        src/host/switch/ryujinx_title_updates.cpp
-        src/host/nds_display_layout.cpp
-        src/host/nds/melonds_user_profile.cpp
-        src/host/nds/melonds_ctrl_client.cpp
-        src/host/nds/melonds_backend.cpp
-        src/host/switch_save_share.cpp
+        src/host/console/standalone_emulator.cpp
+        src/host/console/switch/switch_fs.cpp
+        src/host/console/switch/switch_system_defaults.cpp
+        src/host/console/switch/qt_ini_editor.cpp
+        src/host/console/switch/yuzu_user_profile.cpp
+        src/host/console/switch/yuzu_controls.cpp
+        src/host/console/switch/yuzu_launch_env.cpp
+        src/host/console/switch/ryujinx_user_profile.cpp
+        src/host/console/switch/ryujinx_controls.cpp
+        src/host/console/switch/ryujinx_launch_env.cpp
+        src/host/console/switch/switch_backend.cpp
+        src/host/console/switch/ryujinx_backend.cpp
+        src/host/console/switch/yuzu_backend.cpp
+        src/host/console/switch/switch_runtime.cpp
+        src/host/console/switch/ryujinx_title_updates.cpp
+        src/host/console/nds_display_layout.cpp
+        src/host/console/nds/melonds_user_profile.cpp
+        src/host/console/nds/melonds_ctrl_client.cpp
+        src/host/console/nds/melonds_backend.cpp
+        src/host/console/switch_save_share.cpp
         src/host/link_coordinator.cpp
         src/host/link_cable_backend.cpp
-        src/host/seat_manager.cpp
-        src/host/client_stream_policy.cpp
-        src/host/session_control_monitor.cpp
-        src/host/stream_adaptation.cpp
-        src/host/cadence_session_events.cpp
-        src/host/cadence_session_tracker.cpp
-        src/host/session_emulator_backend.cpp
-        src/host/session_launch_assemble.cpp
-        src/host/session_run_helpers.cpp
-        src/host/session_lobby.cpp
-        src/host/session_runtime.cpp
-        src/host/session_slot_lease.cpp
-        src/host/pad_plan.cpp
-        src/host/virtual_joypad_resolve.cpp
+        src/host/virtual/seat_manager.cpp
+        src/host/client/client_stream_policy.cpp
+        src/host/session/control_monitor.cpp
+        src/host/client/stream_adaptation.cpp
+        src/host/db/cadence_session_events.cpp
+        src/host/db/cadence_session_tracker.cpp
+        src/host/session/emulator_backend.cpp
+        src/host/session/launch_assemble.cpp
+        src/host/session/run_helpers.cpp
+        src/host/session/lobby.cpp
+        src/host/session/runtime.cpp
+        src/host/session/slot_lease.cpp
+        src/host/virtual/pad_plan.cpp
+        src/host/virtual/virtual_joypad_resolve.cpp
     )
     if(WIN32)
         list(APPEND ARCHSTREAMER_HOST_SOURCES
-            src/host/windows_launch_environment.cpp
+            src/host/hardware/windows_launch_environment.cpp
             src/host/windows_session_slot_lease.cpp
-            src/host/windows_retroarch_process.cpp
-            src/host/windows_retroarch_resolve.cpp
-            src/host/windows_vigem_gamepad.cpp
-            src/host/windows_media_server.cpp
-            src/host/windows_capture_platform.cpp
+            src/host/console/windows_retroarch_process.cpp
+            src/host/console/windows_retroarch_resolve.cpp
+            src/host/virtual/windows_vigem_gamepad.cpp
+            src/host/hardware/windows_media_server.cpp
+            src/host/hardware/windows_capture_platform.cpp
             src/host/windows_emulator_orphan_reaper.cpp
-            src/host/windows_virtual_keyboard.cpp
-            src/host/windows_soft_keyboard.cpp
-            src/host/windows_streaming_audio_sink.cpp
-            src/host/windows_save_profile_paths.cpp
-            src/host/switch/windows_switch_paths.cpp
-            src/host/switch/windows_yuzu_runtime.cpp
-            src/host/switch/windows_ryujinx_runtime.cpp
-            src/host/nds/windows_melonds_runtime.cpp
+            src/host/virtual/windows_virtual_keyboard.cpp
+            src/host/virtual/windows_soft_keyboard.cpp
+            src/host/hardware/windows_streaming_audio_sink.cpp
+            src/host/console/windows_save_profile_paths.cpp
+            src/host/console/switch/windows_switch_paths.cpp
+            src/host/console/switch/windows_yuzu_runtime.cpp
+            src/host/console/switch/windows_ryujinx_runtime.cpp
+            src/host/console/nds/windows_melonds_runtime.cpp
         )
     else()
         list(APPEND ARCHSTREAMER_HOST_SOURCES
-            src/host/posix_launch_environment.cpp
+            src/host/hardware/posix_launch_environment.cpp
             src/host/posix_session_slot_lease.cpp
-            src/host/gstreamer_media_server.cpp
+            src/host/hardware/gstreamer_media_server.cpp
             src/host/rtp_frame_pace_debug.cpp
-            src/host/linux_uinput_gamepad.cpp
-            src/host/posix_retroarch_process.cpp
-            src/host/virtual_display.cpp
-            src/host/gamescope_pipewire_node.cpp
-            src/host/linux_capture_platform.cpp
+            src/host/virtual/linux_uinput_gamepad.cpp
+            src/host/console/posix_retroarch_process.cpp
+            src/host/virtual/virtual_display.cpp
+            src/host/hardware/gamescope_pipewire_node.cpp
+            src/host/hardware/linux_capture_platform.cpp
             src/host/linux_emulator_orphan_reaper.cpp
-            src/host/virtual_keyboard.cpp
-            src/host/streaming_audio_sink.cpp
-            src/host/retroarch_resolve.cpp
-            src/host/switch/posix_switch_paths.cpp
-            src/host/switch/posix_yuzu_runtime.cpp
-            src/host/switch/posix_ryujinx_runtime.cpp
-            src/host/switch/ldn_net_isolation.cpp
-            src/host/nds/posix_melonds_runtime.cpp
+            src/host/virtual/virtual_keyboard.cpp
+            src/host/hardware/streaming_audio_sink.cpp
+            src/host/console/retroarch_resolve.cpp
+            src/host/console/switch/posix_switch_paths.cpp
+            src/host/console/switch/posix_yuzu_runtime.cpp
+            src/host/console/switch/posix_ryujinx_runtime.cpp
+            src/host/console/switch/ldn_net_isolation.cpp
+            src/host/console/nds/posix_melonds_runtime.cpp
         )
     endif()
 

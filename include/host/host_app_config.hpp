@@ -4,7 +4,7 @@
 #include "common/participant_role.hpp"
 #include "common/protocol.hpp"
 #include "host/host_launch_planner.hpp"
-#include "host/media_capture.hpp"
+#include "host/hardware/media_capture.hpp"
 #include "host/platform/host_pad_platform.hpp"
 
 #include <cstddef>

@@ -1,6 +1,6 @@
 #include "host/link_coordinator.hpp"
 
-#include "host/session_lobby.hpp"
+#include "host/session/lobby.hpp"
 
 #include <algorithm>
 

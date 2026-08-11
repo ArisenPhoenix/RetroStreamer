@@ -1,6 +1,6 @@
 #include "common/catalog_paths.hpp"
 #include "common/dlc_paths.hpp"
-#include "host/catalog_repair.hpp"
+#include "host/console/catalog_repair.hpp"
 
 #include <filesystem>
 #include <iostream>

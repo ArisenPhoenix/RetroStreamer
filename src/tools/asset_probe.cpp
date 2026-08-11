@@ -1,5 +1,5 @@
 #include "common/game_assets.hpp"
-#include "host/game_catalog_scanner.hpp"
+#include "host/console/game_catalog_scanner.hpp"
 
 #include <filesystem>
 #include <iostream>

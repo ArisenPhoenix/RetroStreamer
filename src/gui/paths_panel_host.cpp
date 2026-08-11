@@ -1,9 +1,9 @@
 #include "paths_panel.hpp"
 
 #include "common/catalog_paths.hpp"
-#include "host/game_catalog_scanner.hpp"
-#include "host/libretro_core_registry.hpp"
-#include "host/save_profile.hpp"
+#include "host/console/game_catalog_scanner.hpp"
+#include "host/console/libretro_core_registry.hpp"
+#include "host/console/save_profile.hpp"
 
 #include <QLabel>
 #include <QLineEdit>

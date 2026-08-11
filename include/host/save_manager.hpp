@@ -1,7 +1,7 @@
 #pragma once
 
 #include "common/protocol.hpp"
-#include "host/save_profile.hpp"
+#include "host/console/save_profile.hpp"
 
 #include <cstdint>
 #include <filesystem>

@@ -2,9 +2,9 @@
 
 #include "common/link_capability.hpp"
 #include "common/platform/paths.hpp"
-#include "host/libretro_core_registry.hpp"
-#include "host/nds/melonds_backend.hpp"
-#include "host/standalone_emulator.hpp"
+#include "host/console/libretro_core_registry.hpp"
+#include "host/console/nds/melonds_backend.hpp"
+#include "host/console/standalone_emulator.hpp"
 
 #include <fstream>
 #include <unordered_map>

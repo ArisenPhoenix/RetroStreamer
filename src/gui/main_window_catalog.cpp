@@ -2,9 +2,9 @@
 
 #ifdef ARCHSTREAMER_HAS_HOST
 #include "common/game_identity.hpp"
-#include "host/catalog_ops.hpp"
-#include "host/game_meta_edit_log.hpp"
-#include "host/game_meta_store.hpp"
+#include "host/console/catalog_ops.hpp"
+#include "host/db/game_meta_edit_log.hpp"
+#include "host/db/game_meta_store.hpp"
 #endif
 
 #include <QAbstractItemView>

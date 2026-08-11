@@ -1,7 +1,7 @@
 #pragma once
 
 #if defined(_WIN32)
-#include "host/windows_save_profile_paths.hpp"
+#include "host/console/windows_save_profile_paths.hpp"
 #endif
 
 namespace archstreamer {

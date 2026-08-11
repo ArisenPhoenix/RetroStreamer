@@ -1,6 +1,6 @@
 #include "host/emulator_orphan_reaper.hpp"
 
-#include "host/standalone_emulator.hpp"
+#include "host/console/standalone_emulator.hpp"
 
 #include <algorithm>
 #include <chrono>

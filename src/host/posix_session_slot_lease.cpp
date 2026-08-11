@@ -1,4 +1,4 @@
-#include "host/session_slot_lease.hpp"
+#include "host/session/slot_lease.hpp"
 
 #include "common/platform/paths.hpp"
 

@@ -1,6 +1,6 @@
 #include "profile_controls.hpp"
 
-#include "host/user_controls_db.hpp"
+#include "host/db/user_controls_db.hpp"
 
 namespace archstreamer::gui {
 

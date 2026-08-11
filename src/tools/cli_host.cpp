@@ -1,7 +1,7 @@
 #include "tools/cli.hpp"
 
 #include "common/cli_common.hpp"
-#include "host/save_profile.hpp"
+#include "host/console/save_profile.hpp"
 
 #include <algorithm>
 #include <cstdlib>

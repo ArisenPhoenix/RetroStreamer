@@ -1,6 +1,6 @@
 #include "common/catalog_paths.hpp"
 #include "common/steam_art_import.hpp"
-#include "host/game_catalog_scanner.hpp"
+#include "host/console/game_catalog_scanner.hpp"
 
 #include <algorithm>
 #include <filesystem>

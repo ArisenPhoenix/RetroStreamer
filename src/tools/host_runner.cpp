@@ -2,7 +2,7 @@
 #include "tools/host_runner_app.hpp"
 
 #include "common/cli_common.hpp"
-#include "host/gpu_select.hpp"
+#include "host/hardware/gpu_select.hpp"
 #include "host/host_app.hpp"
 
 #include <csignal>

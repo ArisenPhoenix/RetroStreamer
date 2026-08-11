@@ -1,4 +1,58 @@
-# ArchStreamer Controller Architecture
+# ArchStreamer Architecture
+
+ArchStreamer is organized around a small set of runtime flows:
+
+1. A host process owns games, users, save data, emulator launch, virtual devices,
+   media capture, and active session state.
+2. Desktop and Android clients connect through the shared protocol, choose games,
+   send controls, and receive media.
+3. Shared common code defines the packet formats, normalized input vocabulary,
+   catalog identity, pairing data, and portable utilities used by every target.
+4. Tools and deployment scripts wrap the same host/client libraries for CLI,
+   GUI, diagnostics, packaging, and remote startup.
+
+The source tree is split by responsibility rather than by executable. Headers in
+`include/` describe the boundaries; implementation in `src/` mirrors those
+boundaries where practical.
+
+## Directory Architecture
+
+- [include](include/ARCHITECTURE.md): public C++ API surface.
+- [include/client](include/client/ARCHITECTURE.md): desktop client interfaces.
+- [include/common](include/common/ARCHITECTURE.md): protocol and shared data model.
+- [include/common/platform](include/common/platform/ARCHITECTURE.md): shared platform contracts.
+- [include/host](include/host/ARCHITECTURE.md): host subsystem boundaries.
+- [include/tools](include/tools/ARCHITECTURE.md): reusable CLI/tool interfaces.
+- [src](src/ARCHITECTURE.md): implementation layout.
+- [src/client](src/client/ARCHITECTURE.md): desktop client runtime.
+- [src/common](src/common/ARCHITECTURE.md): shared implementation.
+- [src/common/platform](src/common/platform/ARCHITECTURE.md): POSIX/Windows common adapters.
+- [src/gui](src/gui/ARCHITECTURE.md): Qt GUI composition.
+- [src/host](src/host/ARCHITECTURE.md): host runtime implementation.
+- [src/tools](src/tools/ARCHITECTURE.md): executable entry points and probes.
+- [branding](branding/ARCHITECTURE.md): packaged visual/application identity assets.
+- [docs](docs/ARCHITECTURE.md): durable design and behavior notes.
+- [mobile](mobile/ARCHITECTURE.md): Android client architecture.
+- [mobile/android](mobile/android/ARCHITECTURE.md): Android app module and package layout.
+- [runtime_cadence](runtime_cadence/ARCHITECTURE.md): sidecar state service.
+- [deploy](deploy/ARCHITECTURE.md): installation and packaging flow.
+- [scripts](scripts/ARCHITECTURE.md): developer and environment automation.
+- [shared](shared/ARCHITECTURE.md): checked-in runtime data shared across targets.
+- [third_party](third_party/ARCHITECTURE.md): vendored external code boundaries.
+
+Host subdirectories have their own architecture notes for the current cleanup
+boundaries:
+
+- [host/client](include/host/client/ARCHITECTURE.md): host-side client identity and stream policy.
+- [host/console](include/host/console/ARCHITECTURE.md): emulator, catalog, and save-profile concerns.
+- [host/db](include/host/db/ARCHITECTURE.md): persistence APIs.
+- [host/hardware](include/host/hardware/ARCHITECTURE.md): physical host platform and media adapters.
+- [host/lobby](include/host/lobby/ARCHITECTURE.md): pre-session lobby and join admission.
+- [host/session](include/host/session/ARCHITECTURE.md): active session lifecycle.
+- [host/user](include/host/user/ARCHITECTURE.md): user identity and user-facing sync.
+- [host/virtual](include/host/virtual/ARCHITECTURE.md): emulator-visible virtual devices.
+
+## Channel Model
 
 This project has three separate channels:
 

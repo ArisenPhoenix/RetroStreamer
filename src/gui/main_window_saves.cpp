@@ -5,14 +5,14 @@
 
 #ifdef ARCHSTREAMER_HAS_HOST
 #include "archstreamer/runtime_cadence/cadence.hpp"
-#include "host/game_catalog.hpp"
-#include "host/game_catalog_scanner.hpp"
-#include "host/game_meta_store.hpp"
-#include "host/libretro_core_registry.hpp"
-#include "host/save_active_sessions.hpp"
+#include "host/console/game_catalog.hpp"
+#include "host/console/game_catalog_scanner.hpp"
+#include "host/db/game_meta_store.hpp"
+#include "host/console/libretro_core_registry.hpp"
+#include "host/db/save_active_sessions.hpp"
 #include "host/save_manager.hpp"
-#include "host/save_profile.hpp"
-#include "host/ps2_memcard.hpp"
+#include "host/console/save_profile.hpp"
+#include "host/console/ps2_memcard.hpp"
 #endif
 
 #include <QAbstractItemView>

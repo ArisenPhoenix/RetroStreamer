@@ -13,7 +13,7 @@
 
 #ifdef ARCHSTREAMER_HAS_HOST
 #include "client/client_media_playback.hpp"
-#include "host/media_capture.hpp"
+#include "host/hardware/media_capture.hpp"
 #include "host/save_manager.hpp"
 #endif
 

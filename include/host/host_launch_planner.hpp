@@ -1,7 +1,7 @@
 #pragma once
 
 #include "common/media.hpp"
-#include "host/session_lobby.hpp"
+#include "host/session/lobby.hpp"
 
 #include <cstddef>
 #include <cstdint>

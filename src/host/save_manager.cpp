@@ -2,12 +2,12 @@
 
 #include "archstreamer/runtime_cadence/cadence.hpp"
 #include "common/game_identity.hpp"
-#include "host/game_catalog_scanner.hpp"
-#include "host/game_meta_store.hpp"
-#include "host/ps2_memcard.hpp"
-#include "host/save_active_sessions.hpp"
-#include "host/switch_save_share.hpp"
-#include "host/user_credentials.hpp"
+#include "host/console/game_catalog_scanner.hpp"
+#include "host/db/game_meta_store.hpp"
+#include "host/console/ps2_memcard.hpp"
+#include "host/db/save_active_sessions.hpp"
+#include "host/console/switch_save_share.hpp"
+#include "host/user/user_credentials.hpp"
 
 #include <nlohmann/json.hpp>
 

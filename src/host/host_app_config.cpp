@@ -1,7 +1,7 @@
 #include "host/host_app_config.hpp"
 
 #include "common/participant_role.hpp"
-#include "host/session_lobby.hpp"
+#include "host/session/lobby.hpp"
 
 #include <vector>
 

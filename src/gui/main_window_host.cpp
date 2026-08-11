@@ -47,12 +47,12 @@
 #ifdef ARCHSTREAMER_HAS_HOST
 #include "gui_host_runner.hpp"
 #include "host/emulator_orphan_reaper.hpp"
-#include "host/game_catalog_scanner.hpp"
-#include "host/gpu_select.hpp"
+#include "host/console/game_catalog_scanner.hpp"
+#include "host/hardware/gpu_select.hpp"
 #include "host/host_app_config.hpp"
-#include "host/media_capture.hpp"
-#include "host/save_profile.hpp"
-#include "host/standalone_emulator.hpp"
+#include "host/hardware/media_capture.hpp"
+#include "host/console/save_profile.hpp"
+#include "host/console/standalone_emulator.hpp"
 #include <QGuiApplication>
 #endif
 

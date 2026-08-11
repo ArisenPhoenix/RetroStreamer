@@ -1,7 +1,7 @@
 #pragma once
 
 #include "host/host_app_config.hpp"
-#include "host/streaming_audio_sink.hpp"
+#include "host/hardware/streaming_audio_sink.hpp"
 #include "client/controller_manager.hpp"
 #include "common/protocol.hpp"
 

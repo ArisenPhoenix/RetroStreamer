@@ -38,10 +38,10 @@
 #include <iostream>
 #include <optional>
 #ifdef ARCHSTREAMER_HAS_HOST
-#include "host/gpu_select.hpp"
+#include "host/hardware/gpu_select.hpp"
 #include "host/host_app_config.hpp"
-#include "host/media_capture.hpp"
-#include "host/standalone_emulator.hpp"
+#include "host/hardware/media_capture.hpp"
+#include "host/console/standalone_emulator.hpp"
 #endif
 
 

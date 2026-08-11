@@ -46,7 +46,7 @@ void send_user_catalog_blocks(
 ClientId next_session_client_id(const SessionPlan& plan) {
     auto next_id = ClientId{1};
     for (const auto& client : plan.clients) {
-        next_id = std::max<ClientId>(next_id, static_cast<ClientId>(client.client_id + 1));
+        next_id = std::max<ClientId>(next_id, static_cast<ClientId>(client.info.client_id + 1));
     }
     return next_id;
 }
@@ -59,7 +59,7 @@ SessionClientConnection* disconnected_player_for_reconnect(SessionPlan& plan, co
         if (client.hello.requested_players == 0) {
             continue;
         }
-        if (client.hello.username != hello.username) {
+        if (client.info.username != hello.username) {
             continue;
         }
         if (client.hello.requested_players != hello.requested_players) {
@@ -83,7 +83,7 @@ LiveSessionJoinTarget resolve_live_session_join_target(
             throw std::runtime_error("active sessions only accept late viewers or reconnecting players");
         }
         if (target.reconnecting_client != nullptr) {
-            target.client_id = target.reconnecting_client->client_id;
+            target.client_id = target.reconnecting_client->info.client_id;
         }
     }
     return target;
@@ -134,6 +134,7 @@ void reset_reconnected_session_client(
     const SessionPlan& plan,
     const MediaEndpoint& endpoint) {
     client.hello = hello;
+    client.info.username = hello.username;
     client.lifecycle.stream = std::move(stream);
     client.lifecycle.connection_state = SessionConnectionState::Connected;
     client.lifecycle.last_seen = std::chrono::steady_clock::now();
@@ -372,7 +373,7 @@ void poll_active_session_joins(
                 << " reconnected username=" << authenticated_hello.username << ".\n";
         } else {
             plan.clients.push_back(SessionClientConnection{
-                join.client_id,
+                ClientInfo{join.client_id, authenticated_hello.username},
                 authenticated_hello,
                 SessionClientLifecycle{std::move(*stream)},
             });
@@ -503,8 +504,7 @@ std::optional<AcceptedControlHello> try_accept_control_hello(
                 presence->client_blocks_revision);
             AcceptedControlHello accepted;
             accepted.presence = ControlClientConnection{
-                0,
-                presence->username,
+                ClientInfo{0, presence->username},
                 std::move(*stream),
             };
             return accepted;

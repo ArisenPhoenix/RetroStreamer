@@ -172,7 +172,7 @@ void sync_applied_from_branch_decision(
 void sync_all_applied_from_fanout(SessionPlan& plan, const StreamFanoutPlan& fanout) {
     for (const auto& decision : fanout.branches) {
         for (auto& client : plan.clients) {
-            if (client.client_id != decision.client_id ||
+            if (client.info.client_id != decision.client_id ||
                 client.lifecycle.connection_state != SessionConnectionState::Connected) {
                 continue;
             }
@@ -302,7 +302,7 @@ SessionVideoCeiling compute_session_video_ceiling(
             continue;
         }
         const bool use_override =
-            use_override_client && client.client_id == override_client_id;
+            use_override_client && client.info.client_id == override_client_id;
         const auto contrib = player_encode_contribution(
             client,
             capture_width,
@@ -427,19 +427,19 @@ std::optional<std::string> SessionControlMonitor::poll() {
             continue;
         }
         auto reason = take_connected_client_disconnect_request(
-            save_root_, client.client_id, slot_index_);
+            save_root_, client.info.client_id, slot_index_);
         if (!reason.has_value()) {
             ++i;
             continue;
         }
         std::cerr
-            << "Admin disconnect client " << static_cast<int>(client.client_id)
-            << " (" << client.hello.username << "): " << *reason << '\n';
+            << "Admin disconnect client " << static_cast<int>(client.info.client_id)
+            << " (" << client.info.username << "): " << *reason << '\n';
         try {
             client.lifecycle.stream = TcpStream{};
         } catch (const std::exception&) {
         }
-        clear_connected_client(save_root_, client.client_id, slot_index_);
+        clear_connected_client(save_root_, client.info.client_id, slot_index_);
         if (remove_viewer(i, *reason)) {
             continue;
         }
@@ -545,7 +545,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
                 break;
             }
             if (const auto* heartbeat = std::get_if<ViewerHeartbeat>(&payload); heartbeat != nullptr) {
-                if (heartbeat->client_id == client.client_id) {
+                if (heartbeat->client_id == client.info.client_id) {
                     handle_heartbeat(client, *heartbeat);
                 }
             } else if (const auto* disc_request = std::get_if<DiscControlRequest>(&payload);
@@ -579,7 +579,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
                 }
             } else if (const auto* emu_control = std::get_if<EmulatorControl>(&payload);
                        emu_control != nullptr) {
-                if (emu_control->client_id == client.client_id) {
+                if (emu_control->client_id == client.info.client_id) {
                     if (emu_control->pause == EmulatorControlState::On) {
                         emulator_pause_requested_ = true;
                         for (auto& session_client : plan_.clients) {
@@ -610,8 +610,8 @@ std::optional<std::string> SessionControlMonitor::poll() {
             } else if (std::holds_alternative<ControlsDbPull>(payload)
                        || std::holds_alternative<ControlsDbPush>(payload)) {
                 try {
-                    const auto claimed = !client.hello.username.empty()
-                        ? client.hello.username
+                    const auto claimed = !client.info.username.empty()
+                        ? client.info.username
                         : plan_.game.save_username;
                     auto reply = handle_controls_db_packet(save_root_, claimed, payload);
                     if (!reply.empty()) {
@@ -631,7 +631,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
                        video_ready != nullptr) {
                 if (client.video_cutover.pending_video_uri.has_value()) {
                     if (video_ready->video_uri.empty()) {
-                        media_server_.abort_video_tier_cutover(client.client_id);
+                        media_server_.abort_video_tier_cutover(client.info.client_id);
                         client.video_cutover.pending_video_uri.reset();
                         client.video_cutover.pending_tier.reset();
                         client.video_cutover.pending_size.reset();
@@ -655,7 +655,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
                             plan_,
                             capture_width_,
                             capture_height_,
-                            client.client_id,
+                            client.info.client_id,
                             pending_size,
                             pending_tier,
                             pending_feel,
@@ -671,12 +671,12 @@ std::optional<std::string> SessionControlMonitor::poll() {
                                 continue;
                             }
                             StreamBranchCandidate candidate{};
-                            candidate.client_id = other.client_id;
+                            candidate.client_id = other.info.client_id;
                             candidate.connected = true;
                             candidate.wants_video = true;
                             if (!client_is_seated_player(other)) {
                                 candidate.target_settings = ceiling.settings;
-                            } else if (other.client_id == client.client_id) {
+                            } else if (other.info.client_id == client.info.client_id) {
                                 candidate.target_settings = player_encode_contribution(
                                     other,
                                     capture_width_,
@@ -750,7 +750,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
                         bool committed = false;
                         if (trunk_only_promote &&
                             media_server_.complete_video_tier_cutover(
-                                client.client_id,
+                                client.info.client_id,
                                 video_ready->video_uri)) {
                             // Promote the already-warm encode; client keeps that URI.
                             plan_.stream.video_settings = fanout.proposed_trunk;
@@ -765,7 +765,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
                             auto endpoint = client.media.endpoint.value_or(MediaEndpoint{});
                             endpoint.video_uri = video_ready->video_uri;
                             client.media.endpoint = endpoint;
-                            send_media_endpoint_to_client(plan_, client.client_id, endpoint);
+                            send_media_endpoint_to_client(plan_, client.info.client_id, endpoint);
                             committed = true;
                             std::cerr
                                 << "Trunk replace promoted warm encode for "
@@ -773,7 +773,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
                                 << " -> " << video_ready->video_uri << '\n';
                         } else {
                             // Sample branches (or promote failure): fall back to shared restart.
-                            media_server_.abort_video_tier_cutover(client.client_id);
+                            media_server_.abort_video_tier_cutover(client.info.client_id);
                             reset_video_stall_tracking(plan_);
                             if (media_server_.apply_video_branch_layout(
                                     fanout.proposed_trunk,
@@ -789,7 +789,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
                                 if (client.media.endpoint.has_value()) {
                                     send_media_endpoint_to_client(
                                         plan_,
-                                        client.client_id,
+                                        client.info.client_id,
                                         *client.media.endpoint);
                                 }
                                 committed = true;
@@ -826,7 +826,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
                         client.video_cutover.started = {};
                         client.video_cutover.failures = 0;
                     } else {
-                        media_server_.abort_video_tier_cutover(client.client_id);
+                        media_server_.abort_video_tier_cutover(client.info.client_id);
                         client.video_cutover.pending_video_uri.reset();
                         client.video_cutover.pending_tier.reset();
                         client.video_cutover.pending_size.reset();
@@ -844,24 +844,24 @@ std::optional<std::string> SessionControlMonitor::poll() {
                 std::vector<LinkOutbound> outbound;
                 if (host_hub_ != nullptr) {
                     // Need ActiveSessionSlot& — hub looks up from client id.
-                    if (auto* slot = host_hub_->slot_for_client(client.client_id);
+                    if (auto* slot = host_hub_->slot_for_client(client.info.client_id);
                         slot != nullptr) {
                         outbound = host_hub_->handle_link(
                             *slot,
-                            client.client_id,
-                            client.hello.username,
+                            client.info.client_id,
+                            client.info.username,
                             *link_request);
                     } else {
                         LinkResponse err;
                         err.status = LinkStatus::Error;
                         err.message = "Link: session slot not registered";
-                        outbound.push_back({client.client_id, std::move(err)});
+                        outbound.push_back({client.info.client_id, std::move(err)});
                     }
                 } else {
                     outbound = plan_.link.coordinator.handle(
                         plan_,
-                        client.client_id,
-                        client.hello.username,
+                        client.info.client_id,
+                        client.info.username,
                         *link_request);
 
                     bool started_cable = false;
@@ -878,10 +878,10 @@ std::optional<std::string> SessionControlMonitor::poll() {
                             }
                             if (peer_id == 0) {
                                 for (const auto& candidate : plan_.clients) {
-                                    if (candidate.client_id != client.client_id &&
+                                    if (candidate.info.client_id != client.info.client_id &&
                                         candidate.lifecycle.connection_state == SessionConnectionState::Connected &&
-                                        candidate.hello.username == peer_user) {
-                                        peer_id = candidate.client_id;
+                                        candidate.info.username == peer_user) {
+                                        peer_id = candidate.info.client_id;
                                         break;
                                     }
                                 }
@@ -889,9 +889,9 @@ std::optional<std::string> SessionControlMonitor::poll() {
                             const auto start = plan_.link.cable.begin(
                                 plan_.game.system_key,
                                 peer_id,
-                                client.client_id,
+                                client.info.client_id,
                                 peer_user,
-                                client.hello.username,
+                                client.info.username,
                                 assigned_player_count(plan_.seats),
                                 false);
                             for (auto& update : outbound) {
@@ -927,7 +927,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
                     if (host_hub_ != nullptr) {
                         if (auto* slot = host_hub_->slot_for_client(item.client_id); slot != nullptr) {
                             for (auto& candidate : slot->plan().clients) {
-                                if (candidate.client_id == item.client_id &&
+                                if (candidate.info.client_id == item.client_id &&
                                     candidate.lifecycle.connection_state == SessionConnectionState::Connected) {
                                     target = &candidate;
                                     break;
@@ -936,7 +936,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
                         }
                     } else {
                         for (auto& candidate : plan_.clients) {
-                            if (candidate.client_id == item.client_id &&
+                            if (candidate.info.client_id == item.client_id &&
                                 candidate.lifecycle.connection_state == SessionConnectionState::Connected) {
                                 target = &candidate;
                                 break;
@@ -970,7 +970,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
         if (client.video_cutover.pending_video_uri.has_value() &&
             client.video_cutover.started.time_since_epoch().count() != 0 &&
             now - client.video_cutover.started >= kVideoCutoverTimeout) {
-            media_server_.abort_video_tier_cutover(client.client_id);
+            media_server_.abort_video_tier_cutover(client.info.client_id);
             std::cerr
                 << "Clearing stale video pending for " << client_label(client)
                 << " (staging warm-up timed out)\n";
@@ -1118,7 +1118,7 @@ void SessionControlMonitor::handle_heartbeat(
     }
 
     if (client.video_cutover.pending_video_uri.has_value() ||
-        media_server_.video_cutover_in_flight(client.client_id)) {
+        media_server_.video_cutover_in_flight(client.info.client_id)) {
         return;
     }
 
@@ -1148,7 +1148,7 @@ void SessionControlMonitor::handle_heartbeat(
     // Handover / post-promote blanks and stale queue samples are not encode overload.
     const bool within_cutover_grace =
         client.video_cutover.pending_video_uri.has_value() ||
-        media_server_.video_cutover_in_flight(client.client_id) ||
+        media_server_.video_cutover_in_flight(client.info.client_id) ||
         (client.video_health.last_video_reconfigure.time_since_epoch().count() != 0 &&
          now - client.video_health.last_video_reconfigure < kPostReconfigureGrace);
     if (within_cutover_grace) {
@@ -1369,7 +1369,7 @@ bool SessionControlMonitor::recover_stalled_video_if_needed(
         !plan_.stream.video_configured ||
         emulator_pause_requested_ ||
         client.video_cutover.pending_video_uri.has_value() ||
-        media_server_.video_cutover_in_flight(client.client_id)) {
+        media_server_.video_cutover_in_flight(client.info.client_id)) {
         client.video_health.video_zero_frame_streak = 0;
         return false;
     }
@@ -1432,7 +1432,7 @@ bool SessionControlMonitor::recover_stalled_video_if_needed(
             !other.hello.wants_video) {
             continue;
         }
-        const auto video_uri = media_server_.current_video_uri(other.client_id);
+        const auto video_uri = media_server_.current_video_uri(other.info.client_id);
         if (!video_uri.has_value()) {
             continue;
         }
@@ -1442,7 +1442,7 @@ bool SessionControlMonitor::recover_stalled_video_if_needed(
         }
         endpoint.video_uri = *video_uri;
         other.media.endpoint = endpoint;
-        send_media_endpoint_to_client(plan_, other.client_id, endpoint);
+        send_media_endpoint_to_client(plan_, other.info.client_id, endpoint);
         std::cerr
             << "Stall recovery retargeted video for " << client_label(other)
             << " -> " << *video_uri << '\n';
@@ -1472,7 +1472,7 @@ void SessionControlMonitor::apply_video_encode(
     const auto now = std::chrono::steady_clock::now();
     const bool cutover_in_flight =
         client.video_cutover.pending_video_uri.has_value() ||
-        media_server_.video_cutover_in_flight(client.client_id);
+        media_server_.video_cutover_in_flight(client.info.client_id);
     const bool within_reconfigure_cooldown =
         client.video_health.last_video_reconfigure.time_since_epoch().count() != 0 &&
         now - client.video_health.last_video_reconfigure < kMinReconfigureInterval;
@@ -1498,7 +1498,7 @@ void SessionControlMonitor::apply_video_encode(
         plan_,
         capture_width_,
         capture_height_,
-        client.client_id,
+        client.info.client_id,
         size,
         resolved,
         feel,
@@ -1515,13 +1515,13 @@ void SessionControlMonitor::apply_video_encode(
             continue;
         }
         StreamBranchCandidate candidate{};
-        candidate.client_id = other.client_id;
+        candidate.client_id = other.info.client_id;
         candidate.connected = true;
         candidate.wants_video = true;
         if (!client_is_seated_player(other)) {
             // Viewers never raise the trunk; they ride it (or a later sample of it).
             candidate.target_settings = ceiling.settings;
-        } else if (other.client_id == client.client_id) {
+        } else if (other.info.client_id == client.info.client_id) {
             candidate.target_settings = player_encode_contribution(
                 other,
                 capture_width_,
@@ -1636,7 +1636,7 @@ void SessionControlMonitor::apply_video_encode(
 
     auto begin_trunk_replace = [&]() {
         if (const auto staging_uri = media_server_.begin_video_tier_cutover(
-                client.client_id,
+                client.info.client_id,
                 fanout.proposed_trunk);
             staging_uri.has_value()) {
             client.video_cutover.pending_video_uri = *staging_uri;
@@ -1656,7 +1656,7 @@ void SessionControlMonitor::apply_video_encode(
                     << "]\n";
                 return true;
             } catch (const std::exception& error) {
-                media_server_.abort_video_tier_cutover(client.client_id);
+                media_server_.abort_video_tier_cutover(client.info.client_id);
                 client.video_cutover.pending_video_uri.reset();
                 client.video_cutover.pending_tier.reset();
                 client.video_cutover.pending_size.reset();
@@ -1716,21 +1716,21 @@ bool SessionControlMonitor::remove_viewer(std::size_t index, std::string_view re
         return false;
     }
 
-    const auto username = plan_.clients[index].hello.username;
+    const auto username = plan_.clients[index].info.username;
     std::cerr
-        << "Removing viewer " << static_cast<int>(plan_.clients[index].client_id)
+        << "Removing viewer " << static_cast<int>(plan_.clients[index].info.client_id)
         << " (" << username << "): "
         << reason << '\n';
-    plan_.link.coordinator.clear_client(plan_.clients[index].client_id);
+    plan_.link.coordinator.clear_client(plan_.clients[index].info.client_id);
     if (host_hub_ != nullptr) {
-        host_hub_->clear_link_client(plan_.clients[index].client_id);
+        host_hub_->clear_link_client(plan_.clients[index].info.client_id);
     }
-    if (plan_.clients[index].client_id == plan_.link.cable.client_a() ||
-        plan_.clients[index].client_id == plan_.link.cable.client_b()) {
+    if (plan_.clients[index].info.client_id == plan_.link.cable.client_a() ||
+        plan_.clients[index].info.client_id == plan_.link.cable.client_b()) {
         plan_.link.cable.clear();
     }
-    media_server_.remove_client(plan_.clients[index].client_id);
-    clear_connected_client(save_root_, plan_.clients[index].client_id, slot_index_);
+    media_server_.remove_client(plan_.clients[index].info.client_id);
+    clear_connected_client(save_root_, plan_.clients[index].info.client_id, slot_index_);
     plan_.clients.erase(plan_.clients.begin() + static_cast<std::ptrdiff_t>(index));
     record_client_left(
         slot_index_,
@@ -1742,16 +1742,16 @@ bool SessionControlMonitor::remove_viewer(std::size_t index, std::string_view re
 }
 
 void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& client, std::string_view reason) {
-    plan_.link.coordinator.clear_client(client.client_id);
+    plan_.link.coordinator.clear_client(client.info.client_id);
     if (host_hub_ != nullptr) {
-        host_hub_->clear_link_client(client.client_id);
+        host_hub_->clear_link_client(client.info.client_id);
     }
-    if (client.client_id == plan_.link.cable.client_a() ||
-        client.client_id == plan_.link.cable.client_b()) {
+    if (client.info.client_id == plan_.link.cable.client_a() ||
+        client.info.client_id == plan_.link.cable.client_b()) {
         plan_.link.cable.clear();
     }
-    media_server_.remove_client(client.client_id);
-    clear_connected_client(save_root_, client.client_id, slot_index_);
+    media_server_.remove_client(client.info.client_id);
+    clear_connected_client(save_root_, client.info.client_id, slot_index_);
     client.lifecycle.connection_state = SessionConnectionState::Disconnected;
     client.lifecycle.disconnected_at = std::chrono::steady_clock::now();
     client.lifecycle.disconnect_reason = std::string(reason);
@@ -1762,7 +1762,7 @@ void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& cl
     client.video_cutover.pending_fps.reset();
     client.video_cutover.pending_video_uri.reset();
     client.video_cutover.started = {};
-    input_router_.neutralize_client(client.client_id);
+    input_router_.neutralize_client(client.info.client_id);
 
     // Drop this seat's contribution; remaining players own the ceiling.
     if (plan_.stream.video_configured && client.hello.wants_video) {
@@ -1770,7 +1770,7 @@ void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& cl
             plan_,
             capture_width_,
             capture_height_,
-            client.client_id,
+            client.info.client_id,
             MediaStreamSize::P720,
             MediaQualityTier::Medium,
             MediaStreamFeel::LowLatency,
@@ -1802,8 +1802,8 @@ void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& cl
 
     const auto grace = reconnect_grace_for(client, reconnect_timeout_);
     std::cerr
-        << "Player " << static_cast<int>(client.client_id)
-        << " (" << client.hello.username << ") disconnected: "
+        << "Player " << static_cast<int>(client.info.client_id)
+        << " (" << client.info.username << ") disconnected: "
         << reason;
     if (grace.count() == 0) {
         std::cerr << "; ending seat immediately (client left)\n";
@@ -1812,7 +1812,7 @@ void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& cl
     }
     record_client_left(
         slot_index_,
-        client.hello.username,
+        client.info.username,
         plan_.game.selected_game_id,
         std::string(reason),
         session_id_);
@@ -1820,7 +1820,7 @@ void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& cl
 
 std::string SessionControlMonitor::client_label(const SessionClientConnection& client) {
     std::ostringstream out;
-    out << "client " << static_cast<int>(client.client_id) << " (" << client.hello.username << ")";
+    out << "client " << static_cast<int>(client.info.client_id) << " (" << client.info.username << ")";
     return out.str();
 }
 

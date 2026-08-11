@@ -169,15 +169,13 @@ LobbyStatusSnapshot Lobby::status_snapshot() const {
         std::lock_guard lock(mutex_);
         for (const auto& client : connected_) {
             LobbyClientSnapshot row;
-            row.client_id = client.client_id;
-            row.username = client.username;
+            row.info = client.info;
             row.bucket = LobbyClientBucket::Connected;
             snap.connected.push_back(std::move(row));
         }
         for (const auto& client : multiplayer_) {
             LobbyClientSnapshot row;
-            row.client_id = client.client_id;
-            row.username = client.username;
+            row.info = client.info;
             row.bucket = LobbyClientBucket::Multiplayer;
             row.session_id = client.session_id;
             row.reconnect_deadline = client.reconnect_deadline;
@@ -192,7 +190,7 @@ LobbyStatusSnapshot Lobby::status_snapshot() const {
         LobbyClientSnapshot row;
         row.bucket = LobbyClientBucket::SinglePlayerSession;
         row.session_id = session.session_id;
-        row.username = session.save_username;
+        row.info.username = session.save_username;
         snap.singleplayer_sessions.push_back(std::move(row));
     }
     if (hub_.link_cable().active()) {
@@ -203,8 +201,7 @@ LobbyStatusSnapshot Lobby::status_snapshot() const {
 
 void Lobby::publish_connected(const ControlClientConnection& client) const {
     ConnectedClientPresence presence;
-    presence.username = client.username;
-    presence.client_id = client.client_id;
+    presence.info = client.info;
     presence.slot_index = -1;
     presence.phase = "catalog";
     presence.seated = false;
@@ -217,7 +214,7 @@ void Lobby::erase_connected_at(std::size_t index) {
     }
     clear_connected_client(
         config_.host_config.save_root,
-        connected_[index].client_id,
+        connected_[index].info.client_id,
         -1);
     connected_.erase(connected_.begin() + static_cast<std::ptrdiff_t>(index));
 }
@@ -227,11 +224,11 @@ void Lobby::poll_connected_bucket() {
     for (std::size_t i = 0; i < connected_.size();) {
         auto& client = connected_[i];
         if (auto reason = take_connected_client_disconnect_request(
-                config_.host_config.save_root, client.client_id, -1);
+                config_.host_config.save_root, client.info.client_id, -1);
             reason.has_value()) {
             std::cerr
-                << "Lobby connected " << static_cast<int>(client.client_id)
-                << " (" << client.username << ") kicked: " << *reason << '\n';
+                << "Lobby connected " << static_cast<int>(client.info.client_id)
+                << " (" << client.info.username << ") kicked: " << *reason << '\n';
             try {
                 client.stream = TcpStream{};
             } catch (const std::exception&) {
@@ -241,8 +238,8 @@ void Lobby::poll_connected_bucket() {
         }
         if (!client.stream.open() || client.stream.peer_closed()) {
             std::cout
-                << "Lobby connected " << static_cast<int>(client.client_id)
-                << " (" << client.username << ") disconnected.\n";
+                << "Lobby connected " << static_cast<int>(client.info.client_id)
+                << " (" << client.info.username << ") disconnected.\n";
             erase_connected_at(i);
             continue;
         }
@@ -258,7 +255,7 @@ void Lobby::poll_connected_bucket() {
                 if (std::holds_alternative<ControlsDbPull>(payload)
                     || std::holds_alternative<ControlsDbPush>(payload)) {
                     auto reply = handle_controls_db_packet(
-                        config_.host_config.save_root, client.username, payload);
+                        config_.host_config.save_root, client.info.username, payload);
                     if (!reply.empty()) {
                         client.stream.send_packet(reply);
                     }
@@ -277,24 +274,24 @@ void Lobby::poll_connected_bucket() {
 void Lobby::handle_presence(ControlClientConnection client) {
     std::lock_guard lock(mutex_);
     for (std::size_t i = 0; i < connected_.size();) {
-        if (connected_[i].username == client.username) {
+        if (connected_[i].info.username == client.info.username) {
             erase_connected_at(i);
             continue;
         }
         ++i;
     }
-    client.client_id = hub_.allocate_client_id();
+    client.info.client_id = hub_.allocate_client_id();
     try {
-        client.stream.send_packet(serialize_packet(LobbyPresenceAck{client.client_id}));
+        client.stream.send_packet(serialize_packet(LobbyPresenceAck{client.info.client_id}));
     } catch (const std::exception& error) {
         std::cerr
-            << "Failed to ack lobby presence for " << client.username
+            << "Failed to ack lobby presence for " << client.info.username
             << ": " << error.what() << '\n';
         return;
     }
     std::cout
-        << "Lobby connected " << static_cast<int>(client.client_id)
-        << " username=" << client.username << " (catalog)\n";
+        << "Lobby connected " << static_cast<int>(client.info.client_id)
+        << " username=" << client.info.username << " (catalog)\n";
     publish_connected(client);
     connected_.push_back(std::move(client));
 }
@@ -303,7 +300,7 @@ void Lobby::handle_hello(TcpStream stream, ClientHello hello) {
     {
         std::lock_guard lock(mutex_);
         for (std::size_t i = 0; i < connected_.size();) {
-            if (connected_[i].username == hello.username) {
+            if (connected_[i].info.username == hello.username) {
                 erase_connected_at(i);
                 continue;
             }
@@ -353,15 +350,14 @@ void Lobby::handle_hello(TcpStream stream, ClientHello hello) {
                     "cannot start Multiplayer while singleplayer session slots are active");
             }
             SessionClientConnection first{
-                hub_.allocate_client_id(),
+                ClientInfo{hub_.allocate_client_id(), hello.username},
                 hello,
                 SessionClientLifecycle{std::move(stream)},
             };
             {
                 std::lock_guard lock(mutex_);
                 MultiplayerClient waiting;
-                waiting.client_id = first.client_id;
-                waiting.username = first.hello.username;
+                waiting.info = first.info;
                 waiting.hello = first.hello;
                 multiplayer_.push_back(std::move(waiting));
             }

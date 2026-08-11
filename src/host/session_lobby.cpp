@@ -211,7 +211,7 @@ void send_session_starting_to_clients(SessionPlan& plan) {
 
 void send_media_endpoint_to_client(SessionPlan& plan, ClientId client_id, const MediaEndpoint& endpoint) {
     for (auto& client : plan.clients) {
-        if (client.client_id == client_id && (client.hello.wants_video || client.hello.wants_audio)) {
+        if (client.info.client_id == client_id && (client.hello.wants_video || client.hello.wants_audio)) {
             client.media.endpoint = endpoint;
             client.lifecycle.stream.send_packet(serialize_packet(endpoint));
             return;
@@ -357,7 +357,7 @@ DiscControlResponse apply_disc_control(SessionPlan& plan, const DiscControlReque
 
 const SessionClientConnection* session_client_for(const SessionPlan& plan, ClientId client_id) {
     for (const auto& client : plan.clients) {
-        if (client.client_id == client_id) {
+        if (client.info.client_id == client_id) {
             return &client;
         }
     }
@@ -408,7 +408,7 @@ std::vector<VirtualGamepadIdentity> virtual_identities_for_session(const Session
                 controller_name_for(*plan.host_hello, seat.local_player);
         } else if (const auto* client = session_client_for(plan, seat.client_id); client != nullptr) {
             identity.name =
-                "ArchStreamer " + sanitize_virtual_device_text(client->hello.username) + " " +
+                "ArchStreamer " + sanitize_virtual_device_text(client->info.username) + " " +
                 controller_name_for(client->hello, seat.local_player);
         }
         identities[seat.retroarch_port] = std::move(identity);
@@ -425,7 +425,7 @@ void assign_seats_welcome_and_save_username(SessionPlan& plan) {
     seat_requests.reserve(plan.clients.size());
     for (const auto& client : plan.clients) {
         seat_requests.push_back(ClientSeatRequest{
-            client.client_id,
+            client.info.client_id,
             client.hello.requested_players,
         });
     }
@@ -433,7 +433,7 @@ void assign_seats_welcome_and_save_username(SessionPlan& plan) {
 
     for (auto& client : plan.clients) {
         HostWelcome welcome;
-        welcome.client_id = client.client_id;
+        welcome.client_id = client.info.client_id;
         welcome.max_players_for_client = MaxPlayersPerClient;
         welcome.host_is_player = plan.host_hello.has_value();
         client.lifecycle.stream.send_packet(serialize_packet(welcome));
@@ -447,13 +447,13 @@ void assign_seats_welcome_and_save_username(SessionPlan& plan) {
     for (const auto& client : plan.clients) {
         if (client.hello.requested_players > 0) {
             if (plan.game.save_username.empty()) {
-                plan.game.save_username = client.hello.username;
+                plan.game.save_username = client.info.username;
             }
             break;
         }
     }
     if (plan.game.save_username.empty() && !plan.clients.empty()) {
-        plan.game.save_username = plan.clients.front().hello.username;
+        plan.game.save_username = plan.clients.front().info.username;
     }
 }
 
@@ -538,7 +538,7 @@ SessionPlan make_singleplayer_session_plan(
     plan.game.session_mode = GameSessionMode::SinglePlayer;
     log_client_hello(client_id, hello);
     plan.clients.push_back(SessionClientConnection{
-        client_id,
+        ClientInfo{client_id, hello.username},
         std::move(hello),
         SessionClientLifecycle{std::move(stream)},
     });
@@ -587,18 +587,17 @@ SessionPlan gather_session_clients(
     } lobby_presence{save_root, {}};
 
     const auto publish_lobby_client = [&](const SessionClientConnection& client) {
-        if (save_root.empty() || client.hello.username.empty()) {
+        if (save_root.empty() || client.info.username.empty()) {
             return;
         }
         ConnectedClientPresence presence;
-        presence.username = client.hello.username;
-        presence.client_id = client.client_id;
+        presence.info = client.info;
         presence.slot_index = -1;
         presence.game_id = client.hello.selected_game_id.value_or(GameId{});
         presence.phase = "lobby";
         presence.seated = client.hello.requested_players > 0;
         publish_connected_client(save_root, presence);
-        lobby_presence.track(client.client_id);
+        lobby_presence.track(client.info.client_id);
     };
 
     auto selected_game = std::optional<GameId>{};
@@ -608,7 +607,7 @@ SessionPlan gather_session_clients(
 
     ClientId client_id = 1;
     if (first_client.has_value()) {
-        client_id = static_cast<ClientId>(first_client->client_id + 1);
+        client_id = static_cast<ClientId>(first_client->info.client_id + 1);
         selected_game = first_client->hello.selected_game_id;
         selected_mode = first_client->hello.session_mode;
         if (selected_game.has_value()) {
@@ -667,16 +666,16 @@ SessionPlan gather_session_clients(
         for (std::size_t i = 0; i < plan.clients.size();) {
             auto& client = plan.clients[i];
             if (auto reason = take_connected_client_disconnect_request(
-                    save_root, client.client_id, -1);
+                    save_root, client.info.client_id, -1);
                 reason.has_value()) {
                 std::cerr
-                    << "Lobby client " << static_cast<int>(client.client_id)
-                    << " (" << client.hello.username << ") kicked: " << *reason << '\n';
+                    << "Lobby client " << static_cast<int>(client.info.client_id)
+                    << " (" << client.info.username << ") kicked: " << *reason << '\n';
                 try {
                     client.lifecycle.stream = TcpStream{};
                 } catch (const std::exception&) {
                 }
-                clear_connected_client(save_root, client.client_id, -1);
+                clear_connected_client(save_root, client.info.client_id, -1);
                 plan.clients.erase(plan.clients.begin() + static_cast<std::ptrdiff_t>(i));
                 continue;
             }
@@ -831,7 +830,7 @@ SessionPlan gather_session_clients(
             log_client_hello(client_id, authenticated_hello);
 
             plan.clients.push_back(SessionClientConnection{
-                client_id,
+                ClientInfo{client_id, authenticated_hello.username},
                 std::move(authenticated_hello),
                 SessionClientLifecycle{std::move(*stream)},
             });

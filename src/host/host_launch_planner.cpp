@@ -183,12 +183,12 @@ std::vector<HostMediaDestination> media_destinations_for_session(
         });
     }
     for (const auto& client : plan.clients) {
-        if (client.client_id == HostClientId) {
+        if (client.info.client_id == HostClientId) {
             continue;
         }
         if ((config.video && client.hello.wants_video) || (config.audio && client.hello.wants_audio)) {
             destinations.push_back(HostMediaDestination{
-                client.client_id,
+                client.info.client_id,
                 media_destination_host(config, client.lifecycle.stream.peer_address()),
             });
         }

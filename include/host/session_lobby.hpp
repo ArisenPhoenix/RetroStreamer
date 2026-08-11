@@ -2,6 +2,7 @@
 
 #include "common/serialization.hpp"
 #include "common/platform/default_platform.hpp"
+#include "host/client_info.hpp"
 #include "host/link_cable_backend.hpp"
 #include "host/link_coordinator.hpp"
 #include "host/soft_keyboard_host.hpp"
@@ -94,7 +95,7 @@ struct SessionClientMediaState {
 };
 
 struct SessionClientConnection {
-    ClientId client_id = 0;
+    ClientInfo info;
     ClientHello hello;
     SessionClientLifecycle lifecycle;
     SessionClientStreamPreferences stream_preferences;

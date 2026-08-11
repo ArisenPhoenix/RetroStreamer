@@ -1,5 +1,6 @@
 #pragma once
 
+#include "host/client_info.hpp"
 #include "host/save_manager.hpp"
 
 #include <cstdint>
@@ -27,8 +28,7 @@ struct ActiveSaveSession {
  * slot_index < 0 means lobby (not yet in a live slot).
  */
 struct ConnectedClientPresence {
-    std::string username;
-    std::uint32_t client_id = 0;
+    ClientInfo info;
     int slot_index = -1;
     std::string game_id;
     /** "lobby" or "session". */

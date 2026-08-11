@@ -66,7 +66,7 @@ void send_ds_screen_layout_to_client(
     } catch (const std::exception& error) {
         std::cerr
             << "Failed to send DsScreenLayout to client "
-            << static_cast<int>(client.client_id) << ": " << error.what() << '\n';
+            << static_cast<int>(client.info.client_id) << ": " << error.what() << '\n';
     }
 }
 
@@ -495,8 +495,7 @@ void ActiveSessionSlot::publish_connected_presence(
     const ClientHello& hello,
     const SessionPlan& plan) const {
     ConnectedClientPresence presence;
-    presence.username = hello.username;
-    presence.client_id = client_id;
+    presence.info = ClientInfo{client_id, hello.username};
     presence.slot_index = config_.slot_index;
     presence.game_id = plan.game.selected_game_id;
     presence.phase = "session";
@@ -531,7 +530,7 @@ SessionClientConnection* ActiveSessionSlot::attach_pending_join(
         return reconnecting_client;
     } else {
         plan.clients.push_back(SessionClientConnection{
-            client_id,
+            ClientInfo{client_id, pending.hello.username},
             pending.hello,
             SessionClientLifecycle{std::move(pending.stream)},
         });
@@ -949,10 +948,10 @@ void ActiveSessionSlot::run_session() {
 
     // Advertise clients as Connected while the emulator boots (before Active).
     for (const auto& client : plan.clients) {
-        if (client.hello.username.empty()) {
+        if (client.info.username.empty()) {
             continue;
         }
-        publish_connected_presence(client.client_id, client.hello, plan);
+        publish_connected_presence(client.info.client_id, client.hello, plan);
     }
 
 #if defined(ARCHSTREAMER_DEBUG_GB_LINK)
@@ -1167,16 +1166,16 @@ void ActiveSessionSlot::run_session() {
             cadence_tracker_.claim_emulator_pid(*pid);
         }
         for (const auto& client : plan.clients) {
-            if (client.hello.username.empty()) {
+            if (client.info.username.empty()) {
                 continue;
             }
             record_client_joined(
                 slot,
-                client.hello.username,
+                client.info.username,
                 plan.game.selected_game_id,
                 client.hello.requested_players > 0 ? "player" : "viewer",
                 cadence_tracker_.session_id());
-            publish_connected_presence(client.client_id, client.hello, plan);
+            publish_connected_presence(client.info.client_id, client.hello, plan);
         }
         if (plan.host_hello.has_value() && !plan.host_hello->username.empty()) {
             record_client_joined(

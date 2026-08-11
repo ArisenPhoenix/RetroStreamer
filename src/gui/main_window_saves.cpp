@@ -743,11 +743,11 @@ void MainWindow::refresh_saves_browser_list() {
     std::unordered_set<std::string> connected_usernames;
     std::unordered_map<std::string, ConnectedClientPresence> connected_by_user;
     for (const auto& client : connected_clients) {
-        if (active_usernames.contains(client.username)) {
+        if (active_usernames.contains(client.info.username)) {
             continue;
         }
-        connected_usernames.insert(client.username);
-        connected_by_user.emplace(client.username, client);
+        connected_usernames.insert(client.info.username);
+        connected_by_user.emplace(client.info.username, client);
     }
 
     // Key by user+game — title-id / file keys are shared across profiles.
@@ -897,16 +897,16 @@ void MainWindow::refresh_saves_browser_list() {
         users_in_pending.insert(row.username.toStdString());
     }
     for (const auto& client : connected_clients) {
-        if (active_usernames.contains(client.username)) {
+        if (active_usernames.contains(client.info.username)) {
             continue;
         }
-        if (!user.empty() && client.username != user) {
+        if (!user.empty() && client.info.username != user) {
             continue;
         }
-        if (users_in_pending.contains(client.username)) {
+        if (users_in_pending.contains(client.info.username)) {
             continue;
         }
-        const auto username_q = QString::fromStdString(client.username);
+        const auto username_q = QString::fromStdString(client.info.username);
         if (!filter.isEmpty() && !username_q.toLower().contains(filter)) {
             continue;
         }
@@ -914,7 +914,7 @@ void MainWindow::refresh_saves_browser_list() {
         PendingGameRow row;
         row.username = username_q;
         pending.push_back(std::move(row));
-        users_in_pending.insert(client.username);
+        users_in_pending.insert(client.info.username);
     }
 
     // Group by user/system for tree construction; header sort reorders siblings after.
@@ -961,7 +961,7 @@ void MainWindow::refresh_saves_browser_list() {
                 it != connected_by_user.end()) {
                 user_item->setData(0, kUserRoleSlot, it->second.slot_index);
                 tip = QStringLiteral("Connected as client %1 (%2)")
-                    .arg(it->second.client_id)
+                    .arg(it->second.info.client_id)
                     .arg(QString::fromStdString(
                         it->second.phase.empty() ? "session" : it->second.phase));
             }
@@ -1314,7 +1314,7 @@ void MainWindow::saves_kick_user() {
         bool covered_by_active = false;
         for (const auto& active : actives) {
             if (active.slot_index == client.slot_index
-                && active.username == client.username
+                && active.username == client.info.username
                 && client.seated) {
                 covered_by_active = true;
                 break;
@@ -1330,8 +1330,8 @@ void MainWindow::saves_kick_user() {
             ? (client.slot_index < 0 ? QStringLiteral("lobby") : QStringLiteral("session"))
             : QString::fromStdString(client.phase);
         target.label = QStringLiteral("Connected — %1 (client %2, %3)")
-            .arg(QString::fromStdString(client.username))
-            .arg(client.client_id)
+            .arg(QString::fromStdString(client.info.username))
+            .arg(client.info.client_id)
             .arg(phase);
         labels << target.label;
         targets.push_back(std::move(target));
@@ -1398,8 +1398,8 @@ void MainWindow::saves_kick_user() {
                                "This closes their control connection only — not a blacklist. "
                                "If they are a seated primary, existing host rules may end "
                                "the shared session.")
-                    .arg(QString::fromStdString(target.client.username))
-                    .arg(target.client.client_id),
+                    .arg(QString::fromStdString(target.client.info.username))
+                    .arg(target.client.info.client_id),
                 QMessageBox::Yes | QMessageBox::No,
                 QMessageBox::No)
             != QMessageBox::Yes) {
@@ -1407,18 +1407,18 @@ void MainWindow::saves_kick_user() {
         }
         request_connected_client_disconnect(
             root,
-            target.client.client_id,
+            target.client.info.client_id,
             target.client.slot_index,
             "kicked");
         saves_status_->setText(
             QStringLiteral("Disconnect requested for %1 (client %2).")
-                .arg(QString::fromStdString(target.client.username))
-                .arg(target.client.client_id));
+                .arg(QString::fromStdString(target.client.info.username))
+                .arg(target.client.info.client_id));
         append_log(
             host_log_,
             QStringLiteral("[users] disconnect connected %1 client %2")
-                .arg(QString::fromStdString(target.client.username))
-                .arg(target.client.client_id));
+                .arg(QString::fromStdString(target.client.info.username))
+                .arg(target.client.info.client_id));
     }
     QTimer::singleShot(800, this, [this] { refresh_saves_browser_list(); });
 }

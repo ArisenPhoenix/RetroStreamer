@@ -66,7 +66,7 @@ bool HostSessionHub::username_seated(std::string_view username, const GameId& ga
             if (client.hello.requested_players == 0) {
                 continue;
             }
-            if (username_equal(client.hello.username, username)) {
+            if (username_equal(client.info.username, username)) {
                 return true;
             }
         }
@@ -94,7 +94,7 @@ ActiveSessionSlot* HostSessionHub::slot_for_client(ClientId client_id) {
             continue;
         }
         for (const auto& client : slot->plan().clients) {
-            if (client.client_id == client_id) {
+            if (client.info.client_id == client_id) {
                 return slot;
             }
         }
@@ -224,10 +224,10 @@ std::vector<LinkOutbound> HostSessionHub::handle_link(
                         continue;
                     }
                     for (const auto& candidate : slot->plan().clients) {
-                        if (candidate.client_id != from_client_id &&
+                        if (candidate.info.client_id != from_client_id &&
                             candidate.lifecycle.connection_state == SessionConnectionState::Connected &&
-                            username_equal(candidate.hello.username, peer_user)) {
-                            peer_id = candidate.client_id;
+                            username_equal(candidate.info.username, peer_user)) {
+                            peer_id = candidate.info.client_id;
                             break;
                         }
                     }

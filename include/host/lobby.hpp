@@ -81,8 +81,7 @@ public:
 
 private:
     struct MultiplayerClient {
-        ClientId client_id = 0;
-        std::string username;
+        ClientInfo info;
         ClientHello hello;
         /** Empty while still holding the TCP stream in-lobby (gather / reconnect). */
         std::optional<TcpStream> stream;

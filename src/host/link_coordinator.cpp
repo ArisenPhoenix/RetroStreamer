@@ -22,7 +22,7 @@ bool username_equal(std::string_view a, std::string_view b) {
 
 bool client_connected(const SessionPlan& plan, ClientId id) {
     for (const auto& client : plan.clients) {
-        if (client.client_id == id &&
+        if (client.info.client_id == id &&
             client.lifecycle.connection_state == SessionConnectionState::Connected) {
             return true;
         }
@@ -35,7 +35,7 @@ bool target_is_seated(const SessionPlan& plan, std::string_view target_username)
         if (client.lifecycle.connection_state != SessionConnectionState::Connected) {
             continue;
         }
-        if (username_equal(client.hello.username, target_username)) {
+        if (username_equal(client.info.username, target_username)) {
             return true;
         }
     }

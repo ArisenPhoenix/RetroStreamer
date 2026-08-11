@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/protocol.hpp"
+#include "host/client_info.hpp"
 #include "host/session_lobby.hpp"
 
 #include <chrono>
@@ -48,8 +49,7 @@ enum class LobbyClientBucket : std::uint8_t {
 };
 
 struct LobbyClientSnapshot {
-    ClientId client_id = 0;
-    std::string username;
+    ClientInfo info;
     LobbyClientBucket bucket = LobbyClientBucket::Connected;
     std::optional<SessionId> session_id;
     std::optional<std::chrono::steady_clock::time_point> reconnect_deadline;
@@ -64,8 +64,7 @@ struct LobbyStatusSnapshot {
 };
 
 struct ControlClientConnection {
-    ClientId client_id = 0;
-    std::string username;
+    ClientInfo info;
     TcpStream stream;
 };
 

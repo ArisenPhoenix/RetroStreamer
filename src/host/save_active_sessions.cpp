@@ -254,7 +254,7 @@ void publish_connected_client(
     const std::filesystem::path& save_root,
     const ConnectedClientPresence& client) {
     (void)save_root;
-    if (client.username.empty() || client.client_id == 0) {
+    if (client.info.username.empty() || client.info.client_id == 0) {
         return;
     }
     auto store = cadence_store_or_null();
@@ -263,10 +263,10 @@ void publish_connected_client(
     }
     cadence::ConnectionRecord row;
     row.host_id = cadence_host_id();
-    row.client_id = client.client_id;
+    row.client_id = client.info.client_id;
     row.slot = client.slot_index;
     row.connection_id = cadence::make_connection_id(row.host_id, row.client_id, row.slot);
-    row.username = client.username;
+    row.username = client.info.username;
     row.game_key = client.game_id;
     row.phase = client.phase.empty()
         ? (client.slot_index < 0 ? "lobby" : "session")
@@ -341,13 +341,13 @@ std::vector<ConnectedClientPresence> list_connected_clients(
     }
     for (const auto& row : store->list_connections(true)) {
         ConnectedClientPresence client;
-        client.username = row.username;
-        client.client_id = row.client_id;
+        client.info.username = row.username;
+        client.info.client_id = row.client_id;
         client.slot_index = row.slot;
         client.game_id = row.game_key;
         client.phase = row.phase;
         client.seated = row.seated;
-        if (!client.username.empty() && client.client_id != 0) {
+        if (!client.info.username.empty() && client.info.client_id != 0) {
             out.push_back(std::move(client));
         }
     }
@@ -355,13 +355,13 @@ std::vector<ConnectedClientPresence> list_connected_clients(
         out.begin(),
         out.end(),
         [](const ConnectedClientPresence& a, const ConnectedClientPresence& b) {
-            if (a.username != b.username) {
-                return a.username < b.username;
+            if (a.info.username != b.info.username) {
+                return a.info.username < b.info.username;
             }
             if (a.slot_index != b.slot_index) {
                 return a.slot_index < b.slot_index;
             }
-            return a.client_id < b.client_id;
+            return a.info.client_id < b.info.client_id;
         });
     return out;
 }

@@ -63,6 +63,23 @@ struct LobbyStatusSnapshot {
     std::size_t active_link_count = 0;
 };
 
+struct ControlClientConnection {
+    ClientId client_id = 0;
+    std::string username;
+    TcpStream stream;
+};
+
+struct AuthenticatedControlClient {
+    ClientHello hello;
+    TcpStream stream;
+};
+
+struct PendingSessionJoin {
+    ClientHello hello;
+    TcpStream stream;
+    bool is_reconnect = false;
+};
+
 /**
  * Commands Lobby emits for SessionManager / HostApp to apply.
  * Lobby never starts emulator threads itself — it only decides membership.
@@ -80,9 +97,7 @@ struct LobbyCommand {
     SessionId session_id;
     std::string reason;
     std::optional<SessionPlan> plan;
-    std::optional<ClientHello> hello;
-    std::optional<TcpStream> stream;
-    bool is_reconnect = false;
+    std::optional<PendingSessionJoin> join;
 };
 
 inline const char* session_phase_name(SessionPhase phase) {

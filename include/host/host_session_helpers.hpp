@@ -4,7 +4,7 @@
 #include "common/protocol.hpp"
 #include "host/host_app_config.hpp"
 #include "host/media_server.hpp"
-#include "host/session_lobby.hpp"
+#include "host/session_types.hpp"
 
 #include <functional>
 #include <optional>
@@ -61,11 +61,8 @@ void poll_active_session_joins(
  * On LobbyPresence, returns presence credentials + stream for the catalog Connected hold.
  */
 struct AcceptedControlHello {
-    bool have_hello = false;
-    bool have_presence = false;
-    ClientHello hello;
-    LobbyPresence presence;
-    TcpStream stream;
+    std::optional<AuthenticatedControlClient> client;
+    std::optional<ControlClientConnection> presence;
 };
 
 std::optional<AcceptedControlHello> try_accept_control_hello(

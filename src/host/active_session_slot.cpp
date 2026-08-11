@@ -222,9 +222,9 @@ void ActiveSessionSlot::join() {
     }
 }
 
-void ActiveSessionSlot::enqueue_join(TcpStream stream, ClientHello hello, bool is_reconnect) {
+void ActiveSessionSlot::enqueue_join(PendingSessionJoin join) {
     std::lock_guard lock(join_mutex_);
-    pending_joins_.push(PendingJoin{std::move(stream), std::move(hello), is_reconnect});
+    pending_joins_.push(std::move(join));
 }
 
 void ActiveSessionSlot::request_gba_netplay_relaunch(GbaNetplayRelaunchRequest request) {
@@ -508,7 +508,7 @@ SessionClientConnection* ActiveSessionSlot::attach_pending_join(
     ClientId client_id,
     const MediaEndpoint& endpoint,
     SessionClientConnection* reconnecting_client,
-    PendingJoin& pending,
+    PendingSessionJoin& pending,
     SessionPlan& plan) {
     if (reconnecting_client != nullptr) {
         reset_reconnected_session_client(
@@ -552,7 +552,7 @@ SessionClientConnection* ActiveSessionSlot::attach_pending_join(
 
 
 void ActiveSessionSlot::drain_pending_joins() {
-    std::vector<PendingJoin> joins;
+    std::vector<PendingSessionJoin> joins;
     {
         std::lock_guard lock(join_mutex_);
         while (!pending_joins_.empty()) {

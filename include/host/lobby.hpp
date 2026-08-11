@@ -80,12 +80,6 @@ public:
     std::vector<LobbyCommand> drain_commands();
 
 private:
-    struct ConnectedClient {
-        ClientId client_id = 0;
-        std::string username;
-        TcpStream stream;
-    };
-
     struct MultiplayerClient {
         ClientId client_id = 0;
         std::string username;
@@ -101,10 +95,10 @@ private:
     void shutdown_runtime();
     void poll_connected_bucket();
     void accept_once();
-    void handle_presence(TcpStream stream, LobbyPresence presence);
+    void handle_presence(ControlClientConnection client);
     void handle_hello(TcpStream stream, ClientHello hello);
     void enqueue_command(LobbyCommand command);
-    void publish_connected(const ConnectedClient& client) const;
+    void publish_connected(const ControlClientConnection& client) const;
     void erase_connected_at(std::size_t index);
     std::uint8_t max_slots() const;
 
@@ -116,7 +110,7 @@ private:
     std::unique_ptr<SessionManager> session_manager_;
 
     mutable std::mutex mutex_;
-    std::vector<ConnectedClient> connected_;
+    std::vector<ControlClientConnection> connected_;
     std::vector<MultiplayerClient> multiplayer_;
     std::vector<LobbyCommand> pending_commands_;
 

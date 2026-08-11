@@ -201,7 +201,7 @@ LobbyStatusSnapshot Lobby::status_snapshot() const {
     return snap;
 }
 
-void Lobby::publish_connected(const ConnectedClient& client) const {
+void Lobby::publish_connected(const ControlClientConnection& client) const {
     ConnectedClientPresence presence;
     presence.username = client.username;
     presence.client_id = client.client_id;
@@ -274,32 +274,29 @@ void Lobby::poll_connected_bucket() {
     }
 }
 
-void Lobby::handle_presence(TcpStream stream, LobbyPresence presence) {
+void Lobby::handle_presence(ControlClientConnection client) {
     std::lock_guard lock(mutex_);
     for (std::size_t i = 0; i < connected_.size();) {
-        if (connected_[i].username == presence.username) {
+        if (connected_[i].username == client.username) {
             erase_connected_at(i);
             continue;
         }
         ++i;
     }
-    ConnectedClient held;
-    held.client_id = hub_.allocate_client_id();
-    held.username = presence.username;
-    held.stream = std::move(stream);
+    client.client_id = hub_.allocate_client_id();
     try {
-        held.stream.send_packet(serialize_packet(LobbyPresenceAck{held.client_id}));
+        client.stream.send_packet(serialize_packet(LobbyPresenceAck{client.client_id}));
     } catch (const std::exception& error) {
         std::cerr
-            << "Failed to ack lobby presence for " << held.username
+            << "Failed to ack lobby presence for " << client.username
             << ": " << error.what() << '\n';
         return;
     }
     std::cout
-        << "Lobby connected " << static_cast<int>(held.client_id)
-        << " username=" << held.username << " (catalog)\n";
-    publish_connected(held);
-    connected_.push_back(std::move(held));
+        << "Lobby connected " << static_cast<int>(client.client_id)
+        << " username=" << client.username << " (catalog)\n";
+    publish_connected(client);
+    connected_.push_back(std::move(client));
 }
 
 void Lobby::handle_hello(TcpStream stream, ClientHello hello) {
@@ -321,9 +318,11 @@ void Lobby::handle_hello(TcpStream stream, ClientHello hello) {
                 LobbyCommand command;
                 command.kind = LobbyCommand::Kind::EnqueueJoin;
                 command.session_id = slot->session_id();
-                command.hello = std::move(hello);
-                command.stream = std::move(stream);
-                command.is_reconnect = true;
+                command.join = PendingSessionJoin{
+                    std::move(hello),
+                    std::move(stream),
+                    true,
+                };
                 enqueue_command(std::move(command));
                 handed_off = true;
                 return;
@@ -335,9 +334,11 @@ void Lobby::handle_hello(TcpStream stream, ClientHello hello) {
                 LobbyCommand command;
                 command.kind = LobbyCommand::Kind::EnqueueJoin;
                 command.session_id = slot->session_id();
-                command.hello = std::move(hello);
-                command.stream = std::move(stream);
-                command.is_reconnect = false;
+                command.join = PendingSessionJoin{
+                    std::move(hello),
+                    std::move(stream),
+                    false,
+                };
                 enqueue_command(std::move(command));
                 handed_off = true;
                 return;
@@ -354,7 +355,7 @@ void Lobby::handle_hello(TcpStream stream, ClientHello hello) {
             SessionClientConnection first{
                 hub_.allocate_client_id(),
                 hello,
-                std::move(stream),
+                SessionClientLifecycle{std::move(stream)},
             };
             {
                 std::lock_guard lock(mutex_);
@@ -460,12 +461,14 @@ void Lobby::accept_once() {
     if (!accepted.has_value()) {
         return;
     }
-    if (accepted->have_presence) {
-        handle_presence(std::move(accepted->stream), std::move(accepted->presence));
+    if (accepted->presence.has_value()) {
+        handle_presence(std::move(*accepted->presence));
         return;
     }
-    if (accepted->have_hello) {
-        handle_hello(std::move(accepted->stream), std::move(accepted->hello));
+    if (accepted->client.has_value()) {
+        handle_hello(
+            std::move(accepted->client->stream),
+            std::move(accepted->client->hello));
     }
 }
 

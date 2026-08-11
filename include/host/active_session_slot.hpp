@@ -98,7 +98,7 @@ public:
     void request_destroy(std::string reason);
 
     /** Queue an already-handshaken late viewer / reconnect stream for this slot. */
-    void enqueue_join(TcpStream stream, ClientHello hello, bool is_reconnect);
+    void enqueue_join(PendingSessionJoin join);
 
     /** After GBA Link match: relaunch this slot's RetroArch as netplay host or client. */
     void request_gba_netplay_relaunch(GbaNetplayRelaunchRequest request);
@@ -108,12 +108,6 @@ public:
     std::size_t& media_index() { return media_index_; }
 
 private:
-    struct PendingJoin {
-        TcpStream stream;
-        ClientHello hello;
-        bool is_reconnect = false;
-    };
-
     void thread_main();
     void run_session();
     void print_session_data(int slot, const SessionPlan& plan);
@@ -125,7 +119,7 @@ private:
         ClientId client_id,
         const MediaEndpoint& endpoint,
         SessionClientConnection* reconnecting_client,
-        PendingJoin& pending,
+        PendingSessionJoin& pending,
         SessionPlan& plan);
 
     void cleanup(
@@ -170,7 +164,7 @@ private:
     std::optional<std::string> request_destroy_reason_;
 
     std::mutex join_mutex_;
-    std::queue<PendingJoin> pending_joins_;
+    std::queue<PendingSessionJoin> pending_joins_;
 
     std::mutex gba_netplay_mutex_;
     std::optional<GbaNetplayRelaunchRequest> pending_gba_netplay_;

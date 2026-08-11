@@ -70,27 +70,24 @@ void SessionManager::apply_one(LobbyCommand& command) {
             command.session_id.empty() ? make_session_id() : std::move(command.session_id));
         break;
     case LobbyCommand::Kind::EnqueueJoin: {
-        if (!command.stream.has_value() || !command.hello.has_value()) {
-            throw std::runtime_error("EnqueueJoin missing stream/hello");
+        if (!command.join.has_value()) {
+            throw std::runtime_error("EnqueueJoin missing join");
         }
         ActiveSessionSlot* slot = nullptr;
         if (!command.session_id.empty()) {
             slot = find_by_session_id(command.session_id);
         }
         if (slot == nullptr) {
-            if (command.is_reconnect) {
-                slot = config_.hub->slot_for_reconnect(*command.hello);
+            if (command.join->is_reconnect) {
+                slot = config_.hub->slot_for_reconnect(command.join->hello);
             } else {
-                slot = config_.hub->slot_for_late_viewer(*command.hello);
+                slot = config_.hub->slot_for_late_viewer(command.join->hello);
             }
         }
         if (slot == nullptr) {
             throw std::runtime_error("EnqueueJoin: no matching session");
         }
-        slot->enqueue_join(
-            std::move(*command.stream),
-            std::move(*command.hello),
-            command.is_reconnect);
+        slot->enqueue_join(std::move(*command.join));
         break;
     }
     case LobbyCommand::Kind::DestroySession:

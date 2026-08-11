@@ -502,9 +502,11 @@ std::optional<AcceptedControlHello> try_accept_control_hello(
                 presence->username,
                 presence->client_blocks_revision);
             AcceptedControlHello accepted;
-            accepted.have_presence = true;
-            accepted.presence = *presence;
-            accepted.stream = std::move(*stream);
+            accepted.presence = ControlClientConnection{
+                0,
+                presence->username,
+                std::move(*stream),
+            };
             return accepted;
         }
 
@@ -532,9 +534,10 @@ std::optional<AcceptedControlHello> try_accept_control_hello(
             authenticated_hello.client_blocks_revision);
 
         AcceptedControlHello accepted;
-        accepted.have_hello = true;
-        accepted.hello = std::move(authenticated_hello);
-        accepted.stream = std::move(*stream);
+        accepted.client = AuthenticatedControlClient{
+            std::move(authenticated_hello),
+            std::move(*stream),
+        };
         return accepted;
     } catch (const std::exception& error) {
         try {

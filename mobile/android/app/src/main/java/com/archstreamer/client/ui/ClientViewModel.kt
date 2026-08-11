@@ -285,6 +285,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private var artJob: Job? = null
     private var discoveryJob: Job? = null
     private var menuPauseJob: Job? = null
+    private var overlayEditPauseJob: Job? = null
     private var ffJob: Job? = null
     /** Debounce brief L2/R2/Space releases so F1 is not toggled every flicker. */
     private var ffHoldReleaseJob: Job? = null
@@ -793,6 +794,13 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
             OverlayOrientation.Landscape -> landscape
             OverlayOrientation.Portrait -> portrait
         }
+        if (snap.playing) {
+            menuPauseJob?.cancel()
+            menuPauseJob = null
+            overlayEditPauseJob?.cancel()
+            menuDrawerOpen = false
+            _menuEffects.tryEmit(MenuEffect.CloseDrawer)
+        }
         _state.update {
             it.copy(
                 section = if (it.playing) NavSection.Games else it.section,
@@ -809,7 +817,20 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 ),
             )
         }
-        syncMenuPause()
+        if (snap.playing) {
+            // Controls replaces the video surface; keep the stream live briefly so the
+            // editor has a real frame behind the overlay before we pause gameplay.
+            pushEmulatorControls(pause = false, force = true)
+            overlayEditPauseJob = viewModelScope.launch {
+                delay(OVERLAY_EDIT_PAUSE_DELAY_MS)
+                val current = _state.value
+                if (current.playing && current.controls.overlayEditing) {
+                    pushEmulatorControls(pause = true, force = true)
+                }
+            }
+        } else {
+            syncMenuPause()
+        }
         refreshPhysicalPads()
     }
 
@@ -882,7 +903,13 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 ), overlayEditNameDraft = custom.name))
         }
         applyLiveOverlayFrom(family, next)
-        syncMenuPause()
+        if (snap.playing) {
+            overlayEditPauseJob?.cancel()
+            overlayEditPauseJob = null
+            returnToPlay()
+        } else {
+            syncMenuPause()
+        }
         refreshPhysicalPads()
     }
 
@@ -898,7 +925,13 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                     it.controls.overlayOrientation,
                 )))
         }
-        syncMenuPause()
+        if (snap.playing) {
+            overlayEditPauseJob?.cancel()
+            overlayEditPauseJob = null
+            returnToPlay()
+        } else {
+            syncMenuPause()
+        }
         refreshPhysicalPads()
     }
 
@@ -2091,6 +2124,8 @@ fun clearBackMenuChromeFocus() {
         if (!_state.value.playing) return
         val wasMenuOpen = menuDrawerOpen
         val wasMenuPaused = lastSentMenuPause == true
+        overlayEditPauseJob?.cancel()
+        overlayEditPauseJob = null
         menuDrawerOpen = false
         backMenuChromeFocused = false
         resetMenuHats()
@@ -5011,6 +5046,8 @@ fun clearBackMenuChromeFocus() {
         private const val HOST_EDIT_SUPPRESS_MS = 4_000L
         /** Wait for drawer settle; coalesce flash Open→Closed before poking the host. */
         private const val MENU_PAUSE_DEBOUNCE_MS = 250L
+        /** Let a newly attached editor surface paint one live frame before pausing. */
+        private const val OVERLAY_EDIT_PAUSE_DELAY_MS = 500L
         /** Hat axis magnitude that counts as a D-pad press while navigating menus. */
         private const val HAT_EDGE = 0.5f
         /** Ignore FF button bounce before rate-limit clock. */

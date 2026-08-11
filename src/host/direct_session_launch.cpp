@@ -289,16 +289,16 @@ SessionLaunchEnvironment prepare_direct_launch_environment(
 }
 
 void prepare_direct_backend(
-    const HostAppConfig& config,
-    const CapturePlan& capture,
-    SessionLaunchContext& context,
-    SessionDevicePlan& devices,
-    VirtualKeyboard& keyboard,
-    EmulatorLaunchEnvRequest& launch_env_request,
-    SessionBackendState& backends) {
-    auto& launch_plan = context.launch_plan;
-    auto& assets = context.assets;
+    SessionBackendPrepareContext& backend,
+    VirtualKeyboard& keyboard) {
+    const auto& config = backend.config;
+    auto& launch_plan = backend.launch_plan;
+    auto& assets = backend.assets;
     auto& launch_config = assets.launch_config;
+    auto& devices = backend.devices;
+    auto& backends = backend.backends;
+    const auto& capture = backend.capture;
+    auto& launch_env_request = backend.launch_env_request;
 
     prepare_session_standalone_backend(backends.system_key, launch_config, backends);
 

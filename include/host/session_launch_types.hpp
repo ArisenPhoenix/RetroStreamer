@@ -105,6 +105,16 @@ struct SessionDevicePlan {
     std::string capture_info() const;
 };
 
+struct SessionBackendPrepareContext {
+    const HostAppConfig& config;
+    HostLaunchPlan& launch_plan;
+    SessionLaunchAssets& assets;
+    SessionDevicePlan& devices;
+    SessionBackendState& backends;
+    const CapturePlan& capture;
+    EmulatorLaunchEnvRequest& launch_env_request;
+};
+
 enum class SessionPadPlanKind {
     Direct,
     RetroArchSlot,

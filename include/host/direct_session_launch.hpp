@@ -60,12 +60,7 @@ SessionLaunchEnvironment prepare_direct_launch_environment(
     bool host_plays_locally);
 
 void prepare_direct_backend(
-    const HostAppConfig& config,
-    const CapturePlan& capture,
-    SessionLaunchContext& context,
-    SessionDevicePlan& devices,
-    VirtualKeyboard& keyboard,
-    EmulatorLaunchEnvRequest& launch_env_request,
-    SessionBackendState& backends);
+    SessionBackendPrepareContext& backend,
+    VirtualKeyboard& keyboard);
 
 } // namespace archstreamer

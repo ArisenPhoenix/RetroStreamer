@@ -191,14 +191,16 @@ int HostApp::run_direct_session(
     apply_capture_to_session_device_plan(devices, config, launch_env.capture);
     devices.resolved_gpu = launch_env.gpu.resolved_gpu;
 
-    prepare_direct_backend(
+    auto backend_context = SessionBackendPrepareContext{
         config,
-        launch_env.capture,
-        context,
+        launch_plan,
+        assets,
         devices,
-        keyboard,
+        backends,
+        launch_env.capture,
         launch_env.request,
-        backends);
+    };
+    prepare_direct_backend(backend_context, keyboard);
 
     apply_capture_and_launch_environment(
         assets.launch_config,

@@ -2,7 +2,9 @@
 
 #include "client/controller_backend.hpp"
 #include "common/cli_common.hpp"
+#include "common/steam_art_import.hpp"
 #include "host/host_session_helpers.hpp"
+#include "host/session_launch_assemble.hpp"
 #include "host/session_lobby.hpp"
 #include "host/standalone_emulator.hpp"
 #include "host/switch_save_share.hpp"
@@ -281,6 +283,31 @@ SwitchLaunchContent resolve_switch_launch_content(
             launch_config.content_path);
     }
     return switch_content;
+}
+
+SessionParticipantContext resolve_direct_session_participants(
+    std::string_view save_username) {
+    SessionParticipantContext participants;
+    participants.profile_display_name = preferred_steam_or_username_display_name(save_username);
+    participants.display_layout = DisplayLayoutPreference::Auto;
+    return participants;
+}
+
+SessionParticipantContext resolve_session_plan_participants(
+    std::string_view save_username,
+    const SessionPlan& plan) {
+    SessionParticipantContext participants;
+    participants.client_hellos.reserve(plan.clients.size());
+    for (const auto& client : plan.clients) {
+        participants.client_hellos.push_back(client.hello);
+    }
+    participants.profile_display_name = resolve_switch_profile_display_name(
+        save_username,
+        plan.host_hello,
+        participants.client_hellos);
+    participants.display_layout =
+        resolve_display_layout_preference(plan.host_hello, participants.client_hellos);
+    return participants;
 }
 
 void plug_session_gamepads(VirtualGamepadBus& gamepads, RetroArchPort players) {

@@ -3,7 +3,6 @@
 #include "common/catalog_presenter.hpp"
 #include "common/cli_common.hpp"
 #include "common/participant_role.hpp"
-#include "common/steam_art_import.hpp"
 #include "host/cadence_session_events.hpp"
 #include "host/host_session_helpers.hpp"
 #include "host/input_router.hpp"
@@ -299,13 +298,13 @@ void prepare_direct_backend(
     auto& backends = backend.backends;
     const auto& capture = backend.capture;
     auto& launch_env_request = backend.launch_env_request;
+    const auto participants =
+        resolve_direct_session_participants(assets.save_profile.username);
 
     prepare_session_standalone_backend(backends.system_key, launch_config, backends);
 
     if (backends.switch_backend) {
         keyboard.set_switch_style_hotkeys(true);
-        const auto profile_name =
-            preferred_steam_or_username_display_name(assets.save_profile.username);
         const auto switch_content =
             resolve_switch_launch_content(assets.save_profile, launch_config, assets.content);
         auto switch_prep = backends.switch_backend->prepare(
@@ -322,7 +321,7 @@ void prepare_direct_backend(
                 config.resolution.switch_scale,
                 /*prefer_handheld_mode=*/false,
                 &devices.resolved_gpu,
-                profile_name,
+                participants.profile_display_name,
                 std::move(devices.resolved_pads),
                 /*slot_index=*/0,
                 launch_plan.game_id,
@@ -343,12 +342,10 @@ void prepare_direct_backend(
             if (!devices.standalone_soft_keyboard) {
                 devices.standalone_soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();
             }
-            devices.soft_keyboard_fallback = profile_name;
+            devices.soft_keyboard_fallback = participants.profile_display_name;
             devices.arm_soft_keyboard = true;
         }
     } else if (backends.melonds_backend) {
-        const auto profile_name =
-            preferred_steam_or_username_display_name(assets.save_profile.username);
         auto melonds_prep = backends.melonds_backend->prepare(
             launch_config,
             MelonDsBackendPrepContext{
@@ -360,8 +357,8 @@ void prepare_direct_backend(
                 capture.virtualgl_capture,
                 capture.gamescope_capture,
                 /*slot_index=*/0,
-                profile_name,
-                DisplayLayoutPreference::Auto,
+                participants.profile_display_name,
+                participants.display_layout,
                 std::move(devices.resolved_pads),
             });
         devices.resolved_pads = std::move(melonds_prep.resolved_pads);

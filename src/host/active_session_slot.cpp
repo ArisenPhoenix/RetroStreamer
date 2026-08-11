@@ -647,6 +647,8 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
     auto& backends = req.backend.backends;
     const auto& capture = req.backend.capture;
     auto& launch_env_request = req.backend.launch_env_request;
+    const auto participants =
+        resolve_session_plan_participants(save_profile.username, req.plan);
 
     try {
         prepare_session_standalone_backend(system_key, launch_config, backends);
@@ -660,14 +662,7 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
     }
 
     if (backends.switch_backend) {
-        std::vector<ClientHello> client_hellos;
-        client_hellos.reserve(req.plan.clients.size());
-        for (const auto& client : req.plan.clients) {
-            client_hellos.push_back(client.hello);
-        }
         const auto prefer_handheld_mode = session_prefers_switch_handheld_mode(req.plan);
-        const auto profile_name = resolve_switch_profile_display_name(
-            save_profile.username, req.plan.host_hello, client_hellos);
         const auto switch_content =
             resolve_switch_launch_content(save_profile, launch_config, content);
         auto switch_prep = backends.switch_backend->prepare(
@@ -684,7 +679,7 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
                 config.resolution.switch_scale,
                 prefer_handheld_mode,
                 &devices.resolved_gpu,
-                profile_name,
+                participants.profile_display_name,
                 std::move(devices.resolved_pads),
                 static_cast<std::size_t>(std::max(0, req.slot)),
                 launch_plan.game_id,
@@ -706,21 +701,10 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
             if (!req.plan.soft_keyboard) {
                 req.plan.soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();
             }
-            devices.soft_keyboard_fallback = profile_name;
+            devices.soft_keyboard_fallback = participants.profile_display_name;
             devices.arm_soft_keyboard = true;
         }
     } else if (backends.melonds_backend) {
-        std::vector<ClientHello> client_hellos;
-        client_hellos.reserve(req.plan.clients.size());
-        for (const auto& client : req.plan.clients) {
-            client_hellos.push_back(client.hello);
-        }
-        const auto profile_name = resolve_switch_profile_display_name(
-            save_profile.username,
-            req.plan.host_hello,
-            client_hellos);
-        const auto nds_layout =
-            resolve_display_layout_preference(req.plan.host_hello, client_hellos);
         auto melonds_prep = backends.melonds_backend->prepare(
             launch_config,
             MelonDsBackendPrepContext{
@@ -732,8 +716,8 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
                 capture.virtualgl_capture,
                 req.gamescope_capture,
                 req.slot,
-                profile_name,
-                nds_layout,
+                participants.profile_display_name,
+                participants.display_layout,
                 std::move(devices.resolved_pads),
             });
         devices.resolved_pads = std::move(melonds_prep.resolved_pads);
@@ -764,15 +748,7 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
         override_params.resolution_scale = config.resolution.retroarch_scale;
         override_params.slot_index = req.slot;
         override_params.network_cmd_port = req.plan.retroarch_netcmd_port;
-        {
-            std::vector<ClientHello> hellos;
-            hellos.reserve(req.plan.clients.size());
-            for (const auto& client : req.plan.clients) {
-                hellos.push_back(client.hello);
-            }
-            override_params.display_layout =
-                resolve_display_layout_preference(req.plan.host_hello, hellos);
-        }
+        override_params.display_layout = participants.display_layout;
         apply_retroarch_override(launch_config, override_params);
         launch_env_request.pad_plan = devices.shared_pad_plan;
         log_pad_plan(devices.shared_pad_plan, req.slot);

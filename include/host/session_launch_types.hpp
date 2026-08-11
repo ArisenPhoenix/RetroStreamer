@@ -27,6 +27,8 @@
 
 namespace archstreamer {
 
+struct SessionPlan;
+
 struct SessionGpuSelection {
     std::optional<GpuDevice> resolved_encode;
     std::optional<GpuDevice> resolved_gpu;
@@ -71,6 +73,12 @@ struct SessionLaunchContext {
 struct SwitchLaunchContent {
     std::string content_stem;
     std::string title_id;
+};
+
+struct SessionParticipantContext {
+    std::vector<ClientHello> client_hellos;
+    std::string profile_display_name;
+    DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto;
 };
 
 enum class SessionMediaPlanKind {
@@ -170,6 +178,13 @@ SwitchLaunchContent resolve_switch_launch_content(
     const SaveProfile& save_profile,
     const RetroArchLaunchConfig& launch_config,
     const SessionContentInfo& content);
+
+SessionParticipantContext resolve_direct_session_participants(
+    std::string_view save_username);
+
+SessionParticipantContext resolve_session_plan_participants(
+    std::string_view save_username,
+    const SessionPlan& plan);
 
 void plug_session_gamepads(VirtualGamepadBus& gamepads, RetroArchPort players);
 

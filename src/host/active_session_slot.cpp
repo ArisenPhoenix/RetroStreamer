@@ -116,12 +116,8 @@ struct ActiveSaveSessionGuard {
 };
 
 struct SlotLaunchEnvironment {
-    CapturePlan capture;
-    EmulatorLaunchEnvRequest request;
-    std::optional<GpuDevice> resolved_gpu;
-    std::string gamescope_vk_device;
+    SessionLaunchEnvironment session;
     std::string xtest_display;
-    int nvenc_cuda_device_id = -1;
 };
 
 SlotLaunchEnvironment prepare_slot_launch_environment(
@@ -131,25 +127,25 @@ SlotLaunchEnvironment prepare_slot_launch_environment(
     bool host_plays_locally,
     const SessionId& session_id) {
     SlotLaunchEnvironment env;
-    env.capture = resolve_capture_plan(config, launch_config);
-    env.request.stream_media = config.audio || config.video;
-    env.request.stream_audio = config.audio;
-    env.request.host_plays_locally = host_plays_locally;
-    env.request.audio_source = config.audio_source;
-    env.request.ignore_devices = *config.ignore_controller;
-    env.request.use_virtual_capture = env.capture.use_virtual_capture;
-    env.request.gamescope_capture = env.capture.gamescope_capture;
-    env.request.virtualgl_capture = env.capture.virtualgl_capture;
-    env.request.capture_display = env.capture.capture_display;
-    env.xtest_display = env.capture.gamescope_capture
+    env.session.capture = resolve_capture_plan(config, launch_config);
+    env.session.request.stream_media = config.audio || config.video;
+    env.session.request.stream_audio = config.audio;
+    env.session.request.host_plays_locally = host_plays_locally;
+    env.session.request.audio_source = config.audio_source;
+    env.session.request.ignore_devices = *config.ignore_controller;
+    env.session.request.use_virtual_capture = env.session.capture.use_virtual_capture;
+    env.session.request.gamescope_capture = env.session.capture.gamescope_capture;
+    env.session.request.virtualgl_capture = env.session.capture.virtualgl_capture;
+    env.session.request.capture_display = env.session.capture.capture_display;
+    env.xtest_display = env.session.capture.gamescope_capture
         ? gamescope_xtest_display_for_slot(slot)
-        : env.capture.capture_display;
-    if (env.capture.gamescope_capture) {
-        env.request.xtest_display = env.xtest_display;
+        : env.session.capture.capture_display;
+    if (env.session.capture.gamescope_capture) {
+        env.session.request.xtest_display = env.xtest_display;
     }
     if (!session_id.empty()) {
-        env.request.session_id = session_id;
-        if (env.capture.gamescope_capture || env.capture.use_virtual_capture) {
+        env.session.request.session_id = session_id;
+        if (env.session.capture.gamescope_capture || env.session.capture.use_virtual_capture) {
             register_session_xtest_display(session_id, env.xtest_display);
             std::cout
                 << "session slot " << slot << ": session " << session_id
@@ -159,12 +155,10 @@ SlotLaunchEnvironment prepare_slot_launch_environment(
 
     const auto gpu = resolve_session_gpu_selection(
         config,
-        env.capture,
+        env.session.capture,
         "session slot " + std::to_string(slot) + ": ");
-    env.resolved_gpu = gpu.resolved_gpu;
-    env.gamescope_vk_device = gpu.gamescope_vk_device;
-    env.nvenc_cuda_device_id = gpu.nvenc_cuda_device_id;
-    apply_session_gpu_to_launch_request(env.request, gpu);
+    env.session.gpu = std::move(gpu);
+    apply_session_gpu_to_launch_request(env.session.request, env.session.gpu);
     return env;
 }
 
@@ -992,8 +986,8 @@ void ActiveSessionSlot::run_session() {
         slot,
         host_plays_locally,
         config_.session_id);
-    use_virtual_capture_ = launch_env.capture.use_virtual_capture;
-    gamescope_capture_ = launch_env.capture.gamescope_capture;
+    use_virtual_capture_ = launch_env.session.capture.use_virtual_capture;
+    gamescope_capture_ = launch_env.session.capture.gamescope_capture;
 
     auto media = build_session_media_plan(
         config,
@@ -1032,8 +1026,8 @@ void ActiveSessionSlot::run_session() {
     apply_capture_to_session_device_plan(
         devices,
         config,
-        launch_env.capture,
-        launch_env.resolved_gpu);
+        launch_env.session.capture,
+        launch_env.session.gpu.resolved_gpu);
     virtual_joypad_index_ = devices.input.virtual_joypad_index;
 
     auto backend_context = make_session_backend_prepare_context(
@@ -1042,8 +1036,8 @@ void ActiveSessionSlot::run_session() {
         launch_assets,
         devices,
         backends,
-        launch_env.capture,
-        launch_env.request,
+        launch_env.session.capture,
+        launch_env.session.request,
         resolve_session_plan_participants(save_profile_.username, plan));
     prepare_slot_backend(SlotBackendPrepareRequest{
         slot,
@@ -1056,11 +1050,11 @@ void ActiveSessionSlot::run_session() {
 
     apply_capture_and_launch_environment(
         launch_config,
-        launch_env.capture,
+        launch_env.session.capture,
         config,
-        launch_env.gamescope_vk_device,
-        launch_env.resolved_gpu,
-        launch_env.request);
+        launch_env.session.gpu.gamescope_vk_device,
+        launch_env.session.gpu.resolved_gpu,
+        launch_env.session.request);
 
     // Channel owns the authoritative Pulse identity for this slot.
     if (audio_channel_ != nullptr) {
@@ -1091,9 +1085,9 @@ void ActiveSessionSlot::run_session() {
     media_server_ = start_host_media_server_if_needed(HostMediaStartRequest{
         config,
         SessionMediaCaptureContext{
-            launch_env.capture.capture_display,
-            launch_env.capture.display_backend,
-            launch_env.nvenc_cuda_device_id,
+            launch_env.session.capture.capture_display,
+            launch_env.session.capture.display_backend,
+            launch_env.session.gpu.nvenc_cuda_device_id,
         },
         SessionMediaStreamContext{
             media.config,
@@ -1211,14 +1205,14 @@ void ActiveSessionSlot::run_session() {
     std::optional<std::string> session_end_reason;
     const RelaunchContext relaunch_ctx{
         SessionCaptureDevices{
-            launch_env.resolved_gpu,
-            launch_env.capture.use_virtual_capture,
-            launch_env.capture.capture_fullscreen,
-            launch_env.capture.capture_display,
-            launch_env.capture.display_backend,
+            launch_env.session.gpu.resolved_gpu,
+            launch_env.session.capture.use_virtual_capture,
+            launch_env.session.capture.capture_fullscreen,
+            launch_env.session.capture.capture_display,
+            launch_env.session.capture.display_backend,
             config.video_resolution,
         },
-        &launch_env.request,
+        &launch_env.session.request,
     };
     SessionLoopCadence loop_cadence(
         local_bridge.has_value() ? &*local_bridge : nullptr,

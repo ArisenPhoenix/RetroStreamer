@@ -49,4 +49,4 @@ cp -v build/melonDS /srv/emus/melonDS
 cp -v build/melonDS ~/.local/share/archstreamer/melonds/melonDS
 ```
 
-ArchStreamer host code talks only through `MelonDsBackend` (`include/host/nds/`).
+ArchStreamer host code talks only through `MelonDsBackend` (`include/host/console/nds/`).

@@ -246,15 +246,18 @@ std::unique_ptr<MediaServer> start_host_media_server_if_needed(
     auto media_server = make_host_media_server(GStreamerMediaCaptureConfig{
         req.config.video,
         req.config.audio,
-        req.capture_display,
+        req.capture.capture_display,
         req.config.video_resolution,
-        req.display_backend,
+        req.capture.display_backend,
         req.config.audio_backend,
         req.config.audio_source,
         req.config.verbose,
-        req.nvenc_cuda_device_id,
+        req.capture.nvenc_cuda_device_id,
     });
-    media_server->start(req.media_config, req.destinations, req.streams);
+    media_server->start(
+        req.stream.media_config,
+        req.stream.destinations,
+        req.stream.streams);
     return media_server;
 }
 

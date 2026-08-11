@@ -234,12 +234,16 @@ int HostApp::run_direct_session(
 
     auto media_server = start_host_media_server_if_needed(HostMediaStartRequest{
         config,
-        devices.capture.capture_display,
-        devices.capture.display_backend,
-        launch_env.gpu.nvenc_cuda_device_id,
-        media.config,
-        media.destinations,
-        media.streams,
+        SessionMediaCaptureContext{
+            devices.capture.capture_display,
+            devices.capture.display_backend,
+            launch_env.gpu.nvenc_cuda_device_id,
+        },
+        SessionMediaStreamContext{
+            media.config,
+            media.destinations,
+            media.streams,
+        },
     });
     // Plug after Xvfb/Xephyr is up. Soft-fail so a keyboard issue never kills the session.
     if (!plug_virtual_keyboard_with_retry(

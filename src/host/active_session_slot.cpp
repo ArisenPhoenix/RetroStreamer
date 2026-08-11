@@ -1090,12 +1090,16 @@ void ActiveSessionSlot::run_session() {
 
     media_server_ = start_host_media_server_if_needed(HostMediaStartRequest{
         config,
-        launch_env.capture.capture_display,
-        launch_env.capture.display_backend,
-        launch_env.nvenc_cuda_device_id,
-        media.config,
-        media.destinations,
-        media.streams,
+        SessionMediaCaptureContext{
+            launch_env.capture.capture_display,
+            launch_env.capture.display_backend,
+            launch_env.nvenc_cuda_device_id,
+        },
+        SessionMediaStreamContext{
+            media.config,
+            media.destinations,
+            media.streams,
+        },
     });
     if (media_server_ != nullptr) {
         media_index_ = media.destinations.size();

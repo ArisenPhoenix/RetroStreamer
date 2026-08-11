@@ -45,14 +45,22 @@ bool plug_gamescope_virtual_keyboard_after_start(
     std::optional<int> emulator_pid = std::nullopt,
     std::string_view log_prefix = {});
 
-struct HostMediaStartRequest {
-    HostAppConfig& config;
+struct SessionMediaCaptureContext {
     std::string capture_display;
     VirtualDisplayBackend display_backend;
     int nvenc_cuda_device_id = -1;
+};
+
+struct SessionMediaStreamContext {
     const HostMediaPlanConfig& media_config;
     const std::vector<HostMediaDestination>& destinations;
     std::vector<MediaClientStream>& streams;
+};
+
+struct HostMediaStartRequest {
+    HostAppConfig& config;
+    SessionMediaCaptureContext capture;
+    SessionMediaStreamContext stream;
 };
 
 /**

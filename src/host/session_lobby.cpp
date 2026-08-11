@@ -120,13 +120,13 @@ ActiveSessionInfo active_session_info_for(
 
     for (const auto& client : plan.clients) {
         if (client.hello.requested_players == 0) {
-            if (client.connection_state == SessionConnectionState::Connected) {
+            if (client.lifecycle.connection_state == SessionConnectionState::Connected) {
                 ++viewer_count;
             }
             continue;
         }
 
-        if (client.connection_state == SessionConnectionState::Connected) {
+        if (client.lifecycle.connection_state == SessionConnectionState::Connected) {
             connected_players = static_cast<std::uint8_t>(connected_players + client.hello.requested_players);
         } else {
             disconnected_players = static_cast<std::uint8_t>(disconnected_players + client.hello.requested_players);
@@ -179,7 +179,7 @@ bool launch_requirements_satisfied(const SessionPlan& plan, const GameInfo& game
 void send_error_to_session_clients(SessionPlan& plan, std::string_view message) {
     for (auto& client : plan.clients) {
         try {
-            client.stream.send_packet(serialize_packet(ErrorPacket{std::string(message)}));
+            client.lifecycle.stream.send_packet(serialize_packet(ErrorPacket{std::string(message)}));
         } catch (const std::exception&) {
         }
     }
@@ -193,7 +193,7 @@ void send_session_ready_to_clients(SessionPlan& plan) {
     };
 
     for (auto& client : plan.clients) {
-        client.stream.send_packet(serialize_packet(ready));
+        client.lifecycle.stream.send_packet(serialize_packet(ready));
     }
 }
 
@@ -205,15 +205,15 @@ void send_session_starting_to_clients(SessionPlan& plan) {
     };
 
     for (auto& client : plan.clients) {
-        client.stream.send_packet(serialize_packet(starting));
+        client.lifecycle.stream.send_packet(serialize_packet(starting));
     }
 }
 
 void send_media_endpoint_to_client(SessionPlan& plan, ClientId client_id, const MediaEndpoint& endpoint) {
     for (auto& client : plan.clients) {
         if (client.client_id == client_id && (client.hello.wants_video || client.hello.wants_audio)) {
-            client.media_endpoint = endpoint;
-            client.stream.send_packet(serialize_packet(endpoint));
+            client.media.endpoint = endpoint;
+            client.lifecycle.stream.send_packet(serialize_packet(endpoint));
             return;
         }
     }
@@ -257,14 +257,14 @@ void configure_initial_session_video(
         << '\n';
 
     for (auto& client : plan.clients) {
-        if (client.connection_state != SessionConnectionState::Connected) {
+        if (client.lifecycle.connection_state != SessionConnectionState::Connected) {
             continue;
         }
-        client.applied_size = plan.stream.video_size;
-        client.applied_tier = plan.stream.video_tier;
-        client.applied_feel = plan.stream.video_feel;
-        client.applied_bitrate = plan.stream.video_bitrate;
-        client.applied_fps = plan.stream.video_fps;
+        client.stream_preferences.applied_size = plan.stream.video_size;
+        client.stream_preferences.applied_tier = plan.stream.video_tier;
+        client.stream_preferences.applied_feel = plan.stream.video_feel;
+        client.stream_preferences.applied_bitrate = plan.stream.video_bitrate;
+        client.stream_preferences.applied_fps = plan.stream.video_fps;
     }
 }
 
@@ -273,7 +273,7 @@ void send_session_ended_to_clients(SessionPlan& plan, std::string_view reason) {
 
     for (auto& client : plan.clients) {
         try {
-            client.stream.send_packet(serialize_packet(ended));
+            client.lifecycle.stream.send_packet(serialize_packet(ended));
         } catch (const std::exception&) {
         }
     }
@@ -436,8 +436,8 @@ void assign_seats_welcome_and_save_username(SessionPlan& plan) {
         welcome.client_id = client.client_id;
         welcome.max_players_for_client = MaxPlayersPerClient;
         welcome.host_is_player = plan.host_hello.has_value();
-        client.stream.send_packet(serialize_packet(welcome));
-        client.stream.send_packet(serialize_packet(plan.seats));
+        client.lifecycle.stream.send_packet(serialize_packet(welcome));
+        client.lifecycle.stream.send_packet(serialize_packet(plan.seats));
     }
     send_session_ready_to_clients(plan);
 
@@ -540,7 +540,7 @@ SessionPlan make_singleplayer_session_plan(
     plan.clients.push_back(SessionClientConnection{
         client_id,
         std::move(hello),
-        std::move(stream),
+        SessionClientLifecycle{std::move(stream)},
     });
     if (!launch_requirements_satisfied(plan, *selected_game)) {
         throw std::runtime_error("singleplayer launch requirements not satisfied");
@@ -673,7 +673,7 @@ SessionPlan gather_session_clients(
                     << "Lobby client " << static_cast<int>(client.client_id)
                     << " (" << client.hello.username << ") kicked: " << *reason << '\n';
                 try {
-                    client.stream = TcpStream{};
+                    client.lifecycle.stream = TcpStream{};
                 } catch (const std::exception&) {
                 }
                 clear_connected_client(save_root, client.client_id, -1);
@@ -833,7 +833,7 @@ SessionPlan gather_session_clients(
             plan.clients.push_back(SessionClientConnection{
                 client_id,
                 std::move(authenticated_hello),
-                std::move(*stream),
+                SessionClientLifecycle{std::move(*stream)},
             });
             publish_lobby_client(plan.clients.back());
             accepted_client = true;

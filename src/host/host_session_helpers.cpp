@@ -53,7 +53,7 @@ ClientId next_session_client_id(const SessionPlan& plan) {
 
 SessionClientConnection* disconnected_player_for_reconnect(SessionPlan& plan, const ClientHello& hello) {
     for (auto& client : plan.clients) {
-        if (client.connection_state != SessionConnectionState::Disconnected) {
+        if (client.lifecycle.connection_state != SessionConnectionState::Disconnected) {
             continue;
         }
         if (client.hello.requested_players == 0) {
@@ -134,36 +134,36 @@ void reset_reconnected_session_client(
     const SessionPlan& plan,
     const MediaEndpoint& endpoint) {
     client.hello = hello;
-    client.stream = std::move(stream);
-    client.connection_state = SessionConnectionState::Connected;
-    client.last_seen = std::chrono::steady_clock::now();
-    client.disconnected_at = {};
-    client.disconnect_reason.clear();
-    client.applied_tier = plan.stream.video_tier;
-    client.applied_size = plan.stream.video_size;
-    client.applied_feel = plan.stream.video_feel;
-    client.applied_bitrate = plan.stream.video_bitrate;
-    client.adaptive_fps_cap = MediaStreamFps::Auto;
-    client.applied_fps = plan.stream.video_fps;
-    client.pending_tier.reset();
-    client.pending_size.reset();
-    client.pending_feel.reset();
-    client.pending_bitrate.reset();
-    client.pending_fps.reset();
-    client.pending_video_uri.reset();
-    client.video_cutover_started = {};
-    client.video_cutover_failures = 0;
-    client.video_cutover_suppressed = false;
-    client.positive_video_heartbeats = 0;
-    client.initial_video_settings_ready = false;
-    client.initial_video_settings_defer_logged = false;
+    client.lifecycle.stream = std::move(stream);
+    client.lifecycle.connection_state = SessionConnectionState::Connected;
+    client.lifecycle.last_seen = std::chrono::steady_clock::now();
+    client.lifecycle.disconnected_at = {};
+    client.lifecycle.disconnect_reason.clear();
+    client.stream_preferences.applied_tier = plan.stream.video_tier;
+    client.stream_preferences.applied_size = plan.stream.video_size;
+    client.stream_preferences.applied_feel = plan.stream.video_feel;
+    client.stream_preferences.applied_bitrate = plan.stream.video_bitrate;
+    client.stream_preferences.adaptive_fps_cap = MediaStreamFps::Auto;
+    client.stream_preferences.applied_fps = plan.stream.video_fps;
+    client.video_cutover.pending_tier.reset();
+    client.video_cutover.pending_size.reset();
+    client.video_cutover.pending_feel.reset();
+    client.video_cutover.pending_bitrate.reset();
+    client.video_cutover.pending_fps.reset();
+    client.video_cutover.pending_video_uri.reset();
+    client.video_cutover.started = {};
+    client.video_cutover.failures = 0;
+    client.video_cutover.suppressed = false;
+    client.video_health.positive_video_heartbeats = 0;
+    client.video_health.initial_video_settings_ready = false;
+    client.video_health.initial_video_settings_defer_logged = false;
     // add_client restarts the shared encode; arm stall recovery window.
-    client.last_video_reconfigure = std::chrono::steady_clock::now();
-    client.video_zero_frame_streak = 0;
+    client.video_health.last_video_reconfigure = std::chrono::steady_clock::now();
+    client.video_health.video_zero_frame_streak = 0;
     if (!endpoint.video_uri.empty() || !endpoint.audio_uri.empty()) {
-        client.media_endpoint = endpoint;
+        client.media.endpoint = endpoint;
     } else {
-        client.media_endpoint.reset();
+        client.media.endpoint.reset();
     }
 }
 
@@ -374,7 +374,7 @@ void poll_active_session_joins(
             plan.clients.push_back(SessionClientConnection{
                 join.client_id,
                 authenticated_hello,
-                std::move(*stream),
+                SessionClientLifecycle{std::move(*stream)},
             });
             std::cout
                 << "Late viewer " << static_cast<int>(join.client_id)

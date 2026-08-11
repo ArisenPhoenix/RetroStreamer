@@ -58,11 +58,11 @@ bool should_use_slot_streaming_sink(const std::string& audio_source) {
 void send_ds_screen_layout_to_client(
     SessionClientConnection& client,
     const DsScreenLayout& layout) {
-    if (client.connection_state != SessionConnectionState::Connected) {
+    if (client.lifecycle.connection_state != SessionConnectionState::Connected) {
         return;
     }
     try {
-        client.stream.send_packet(serialize_packet(layout));
+        client.lifecycle.stream.send_packet(serialize_packet(layout));
     } catch (const std::exception& error) {
         std::cerr
             << "Failed to send DsScreenLayout to client "
@@ -204,7 +204,7 @@ SessionStatusSnapshot ActiveSessionSlot::status_snapshot() const {
     snap.seated_players = static_cast<std::uint8_t>(assigned_player_count(config_.plan.seats));
     std::uint8_t connected = 0;
     for (const auto& client : config_.plan.clients) {
-        if (client.connection_state == SessionConnectionState::Connected) {
+        if (client.lifecycle.connection_state == SessionConnectionState::Connected) {
             ++connected;
         }
     }
@@ -533,7 +533,7 @@ SessionClientConnection* ActiveSessionSlot::attach_pending_join(
         plan.clients.push_back(SessionClientConnection{
             client_id,
             pending.hello,
-            std::move(pending.stream),
+            SessionClientLifecycle{std::move(pending.stream)},
         });
         std::cout
             << "session slot " << config_.slot_index << ": late viewer "

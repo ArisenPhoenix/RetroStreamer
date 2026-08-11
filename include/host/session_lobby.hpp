@@ -26,15 +26,16 @@ enum class SessionConnectionState {
     Disconnected,
 };
 
-struct SessionClientConnection {
-    ClientId client_id = 0;
-    ClientHello hello;
+struct SessionClientLifecycle {
     TcpStream stream;
     SessionConnectionState connection_state = SessionConnectionState::Connected;
     std::chrono::steady_clock::time_point last_seen = std::chrono::steady_clock::now();
     std::chrono::steady_clock::time_point disconnected_at = {};
     // "left" (ClientSessionLeave) vs "disconnected" (TCP close) vs "heartbeat timed out".
     std::string disconnect_reason;
+};
+
+struct SessionClientStreamPreferences {
     MediaQualityTier wanted_tier = MediaQualityTier::Auto;
     MediaQualityTier applied_tier = MediaQualityTier::Medium;
     MediaStreamSize wanted_size = MediaStreamSize::Auto;
@@ -46,6 +47,11 @@ struct SessionClientConnection {
     MediaStreamFps adaptive_fps_cap = MediaStreamFps::Auto;
     MediaStreamFps applied_fps = MediaStreamFps::Fps30;
     DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto;
+    std::uint16_t max_bitrate_kbps = 0;
+    bool show_framecount = false;
+};
+
+struct SessionClientVideoCutover {
     /** Tier/size/feel/bitrate being warmed on a staging RTP path (cutover in flight). */
     std::optional<MediaQualityTier> pending_tier;
     std::optional<MediaStreamSize> pending_size;
@@ -53,9 +59,14 @@ struct SessionClientConnection {
     std::optional<MediaStreamBitrate> pending_bitrate;
     std::optional<MediaStreamFps> pending_fps;
     std::optional<std::string> pending_video_uri;
-    std::chrono::steady_clock::time_point video_cutover_started = {};
-    std::uint16_t max_bitrate_kbps = 0;
-    bool show_framecount = false;
+    std::chrono::steady_clock::time_point started = {};
+    // Consecutive MediaVideoPending timeouts without MediaVideoReady (e.g. older
+    // clients). After a few, stop staging size changes until reconnect.
+    std::uint8_t failures = 0;
+    bool suppressed = false;
+};
+
+struct SessionClientVideoHealth {
     std::uint8_t bad_health_streak = 0;
     std::uint8_t good_health_streak = 0;
     // After Auto steps down from High due to loss/no frames, hold off retrying High.
@@ -74,13 +85,22 @@ struct SessionClientConnection {
     std::uint8_t positive_video_heartbeats = 0;
     bool initial_video_settings_ready = false;
     bool initial_video_settings_defer_logged = false;
-    // Consecutive MediaVideoPending timeouts without MediaVideoReady (e.g. older
-    // clients). After a few, stop staging size changes until reconnect.
-    std::uint8_t video_cutover_failures = 0;
-    bool video_cutover_suppressed = false;
+};
+
+struct SessionClientMediaState {
     // Last advertised RTP endpoints (resent after video ladder restart so the
     // client can one-shot resync A/V without the host bouncing shared audio).
-    std::optional<MediaEndpoint> media_endpoint;
+    std::optional<MediaEndpoint> endpoint;
+};
+
+struct SessionClientConnection {
+    ClientId client_id = 0;
+    ClientHello hello;
+    SessionClientLifecycle lifecycle;
+    SessionClientStreamPreferences stream_preferences;
+    SessionClientVideoCutover video_cutover;
+    SessionClientVideoHealth video_health;
+    SessionClientMediaState media;
 };
 
 struct SessionLinkState {

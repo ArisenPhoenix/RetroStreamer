@@ -231,7 +231,7 @@ StreamPipelineAction decide_stream_pipeline_action(
     if (!is_seated_player) {
         return StreamPipelineAction::None;
     }
-    if (client.video_cutover_suppressed) {
+    if (client.video_cutover.suppressed) {
         return StreamPipelineAction::None;
     }
     if (cutover_in_flight) {
@@ -510,12 +510,12 @@ MediaStreamFps step_stream_fps_down(MediaStreamFps fps) {
 }
 
 MediaStreamFps effective_fps_cap_for(const SessionClientConnection& client) {
-    if (client.adaptive_fps_cap != MediaStreamFps::Auto) {
-        return client.adaptive_fps_cap;
+    if (client.stream_preferences.adaptive_fps_cap != MediaStreamFps::Auto) {
+        return client.stream_preferences.adaptive_fps_cap;
     }
     return media_stream_fps_for_framerate(
         framerate_for_quality_tier(
-            select_video_tier(client.wanted_tier, client.applied_tier, client.max_bitrate_kbps)));
+            select_video_tier(client.stream_preferences.wanted_tier, client.stream_preferences.applied_tier, client.stream_preferences.max_bitrate_kbps)));
 }
 
 StreamRequest clamp_stream_request_for_client(
@@ -547,21 +547,21 @@ StreamRequest clamp_stream_request_for_client(
 
 StreamRequest stream_request_from_applied(const SessionClientConnection& client) {
     return StreamRequest{
-        client.applied_size,
-        client.applied_tier,
-        client.applied_feel,
-        client.applied_bitrate,
-        client.applied_fps,
+        client.stream_preferences.applied_size,
+        client.stream_preferences.applied_tier,
+        client.stream_preferences.applied_feel,
+        client.stream_preferences.applied_bitrate,
+        client.stream_preferences.applied_fps,
     };
 }
 
 StreamClientHealthMetrics stream_health_metrics_from_client(const SessionClientConnection& client) {
     return StreamClientHealthMetrics{
-        client.last_loss_permille,
-        client.last_frames_decoded_delta,
-        client.decode_queue_p95_ms,
-        client.decode_queue_max_ms,
-        client.au_queue_p95_ms,
+        client.video_health.last_loss_permille,
+        client.video_health.last_frames_decoded_delta,
+        client.video_health.decode_queue_p95_ms,
+        client.video_health.decode_queue_max_ms,
+        client.video_health.au_queue_p95_ms,
     };
 }
 
@@ -587,14 +587,14 @@ StreamRequestResolution resolve_stream_request_for_client(
     if (resolution.request.tier != MediaQualityTier::Auto) {
         resolution.request.tier = select_video_tier(
             resolution.request.tier,
-            current.tier == MediaQualityTier::Auto ? client.applied_tier : current.tier,
-            client.max_bitrate_kbps);
+            current.tier == MediaQualityTier::Auto ? client.stream_preferences.applied_tier : current.tier,
+            client.stream_preferences.max_bitrate_kbps);
     }
 
-    if (client.adaptive_fps_cap != MediaStreamFps::Auto) {
+    if (client.stream_preferences.adaptive_fps_cap != MediaStreamFps::Auto) {
         if (resolution.request.fps == MediaStreamFps::Auto ||
-            stream_fps_rank(resolution.request.fps) > stream_fps_rank(client.adaptive_fps_cap)) {
-            resolution.request.fps = client.adaptive_fps_cap;
+            stream_fps_rank(resolution.request.fps) > stream_fps_rank(client.stream_preferences.adaptive_fps_cap)) {
+            resolution.request.fps = client.stream_preferences.adaptive_fps_cap;
             resolution.limited_by_metrics = true;
             resolution.reason = "adaptive fps cap";
         }
@@ -616,11 +616,11 @@ StreamRequestResolution resolve_stream_request_for_client(
     }
 
     if (decode_pressure) {
-        if (client.decode_pressure_streak < 255) {
-            ++client.decode_pressure_streak;
+        if (client.video_health.decode_pressure_streak < 255) {
+            ++client.video_health.decode_pressure_streak;
         }
-        if (client.decode_pressure_streak >= policy.decode_pressure_bad_heartbeats) {
-            client.decode_pressure_streak = 0;
+        if (client.video_health.decode_pressure_streak >= policy.decode_pressure_bad_heartbeats) {
+            client.video_health.decode_pressure_streak = 0;
             MediaStreamFps fps = resolution.request.fps;
             if (fps == MediaStreamFps::Auto) {
                 fps = current.fps == MediaStreamFps::Auto ? MediaStreamFps::Fps30 : current.fps;
@@ -628,7 +628,7 @@ StreamRequestResolution resolve_stream_request_for_client(
             const auto next_fps = step_stream_fps_down(fps);
             if (next_fps != fps) {
                 resolution.request.fps = next_fps;
-                client.adaptive_fps_cap = next_fps;
+                client.stream_preferences.adaptive_fps_cap = next_fps;
                 resolution.limited_by_metrics = true;
                 resolution.reason = "decode pressure: step fps";
             } else {
@@ -673,7 +673,7 @@ StreamRequestResolution resolve_stream_request_for_client(
             }
         }
     } else {
-        client.decode_pressure_streak = 0;
+        client.video_health.decode_pressure_streak = 0;
     }
 
     return resolution;
@@ -690,16 +690,16 @@ std::optional<StreamAdaptationDecision> adapt_stream_for_heartbeat(
     if (now - started_at < startup_grace) {
         return std::nullopt;
     }
-    if (client.last_video_reconfigure.time_since_epoch().count() != 0 &&
-        now - client.last_video_reconfigure < post_reconfigure_grace) {
+    if (client.video_health.last_video_reconfigure.time_since_epoch().count() != 0 &&
+        now - client.video_health.last_video_reconfigure < post_reconfigure_grace) {
         return std::nullopt;
     }
     const bool hard_loss = heartbeat.loss_permille >= kHighLossPermille;
     const auto policy = client_stream_policy_for(client);
     const bool tv_decode_pressure =
         policy.is_tv &&
-        valid_latency_ms(client.decode_queue_p95_ms) &&
-        client.decode_queue_p95_ms >= policy.decode_pressure_step_down_p95_ms &&
+        valid_latency_ms(client.video_health.decode_queue_p95_ms) &&
+        client.video_health.decode_queue_p95_ms >= policy.decode_pressure_step_down_p95_ms &&
         heartbeat.frames_decoded_delta > 0 &&
         !hard_loss;
     if (!tv_decode_pressure) {

@@ -60,7 +60,7 @@ bool HostSessionHub::username_seated(std::string_view username, const GameId& ga
             continue;
         }
         for (const auto& client : plan.clients) {
-            if (client.connection_state != SessionConnectionState::Connected) {
+            if (client.lifecycle.connection_state != SessionConnectionState::Connected) {
                 continue;
             }
             if (client.hello.requested_players == 0) {
@@ -225,7 +225,7 @@ std::vector<LinkOutbound> HostSessionHub::handle_link(
                     }
                     for (const auto& candidate : slot->plan().clients) {
                         if (candidate.client_id != from_client_id &&
-                            candidate.connection_state == SessionConnectionState::Connected &&
+                            candidate.lifecycle.connection_state == SessionConnectionState::Connected &&
                             username_equal(candidate.hello.username, peer_user)) {
                             peer_id = candidate.client_id;
                             break;

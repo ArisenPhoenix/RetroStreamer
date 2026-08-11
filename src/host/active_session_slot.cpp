@@ -18,6 +18,7 @@
 #include "host/retroarch_resolve.hpp"
 #include "host/save_active_sessions.hpp"
 #include "host/game_meta_store.hpp"
+#include "host/session_emulator_backend.hpp"
 #include "host/session_lobby.hpp"
 #include "host/session_launch_assemble.hpp"
 #include "host/session_run_helpers.hpp"
@@ -494,13 +495,14 @@ void ActiveSessionSlot::publish_connected_presence(
     ClientId client_id,
     const ClientHello& hello,
     const SessionPlan& plan) const {
-    ConnectedClientPresence presence;
-    presence.info = ClientInfo{client_id, hello.username};
-    presence.slot_index = config_.slot_index;
-    presence.game_id = plan.game.selected_game_id;
-    presence.phase = "session";
-    presence.seated = hello.requested_players > 0;
-    publish_connected_client(config_.host_config.save_root, presence);
+    publish_connected_client(
+        config_.host_config.save_root,
+        make_connected_client_presence(
+            client_info_for(client_id, hello),
+            config_.slot_index,
+            plan.game.selected_game_id,
+            "session",
+            hello.requested_players > 0));
 }
 
 SessionClientConnection* ActiveSessionSlot::attach_pending_join(
@@ -529,11 +531,10 @@ SessionClientConnection* ActiveSessionSlot::attach_pending_join(
         publish_connected_presence(client_id, pending.hello, plan);
         return reconnecting_client;
     } else {
-        plan.clients.push_back(SessionClientConnection{
-            ClientInfo{client_id, pending.hello.username},
+        plan.clients.push_back(make_session_client(
+            client_id,
             pending.hello,
-            SessionClientLifecycle{std::move(pending.stream)},
-        });
+            std::move(pending.stream)));
         std::cout
             << "session slot " << config_.slot_index << ": late viewer "
             << static_cast<int>(client_id)
@@ -622,110 +623,26 @@ struct SlotBackendPrepareRequest {
 };
 
 void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
-    const auto& config = req.backend.config;
-    auto& user = req.backend.user;
-    auto& game = req.backend.game;
-    auto& video = req.backend.video;
-    auto& input = req.backend.input;
-    auto& launch_plan = game.launch_plan;
-    auto& launch_config = game.launch_config;
-    auto& save_profile = user.save_profile;
-    const auto& system_key = game.content.system_key;
-    auto& devices = input.devices;
-    auto& backends = req.backend.backends;
-    auto& launch_env_request = req.backend.launch_env_request;
-
     try {
-        prepare_session_standalone_backend(system_key, launch_config, backends);
+        req.backend.input.devices.keyboard.standalone_soft_keyboard =
+            req.plan.control.soft_keyboard;
+        const auto result = prepare_session_emulator_backend(
+            req.backend,
+            SessionBackendPrepareOptions{
+                req.slot,
+                req.use_virtual_capture,
+                req.gamescope_capture,
+                false,
+                session_prefers_switch_handheld_mode(req.plan),
+                req.plan.control.retroarch_netcmd_port,
+                req.keyboard,
+            });
+        if (result.soft_keyboard) {
+            req.plan.control.soft_keyboard = result.soft_keyboard;
+        }
     } catch (const std::runtime_error& error) {
         send_error_to_session_clients(req.plan, error.what());
         throw;
-    }
-
-    if (backends.switch_backend && req.keyboard != nullptr) {
-        req.keyboard->set_switch_style_hotkeys(true);
-    }
-
-    if (backends.switch_backend) {
-        const auto prefer_handheld_mode = session_prefers_switch_handheld_mode(req.plan);
-        const auto switch_content =
-            resolve_switch_launch_content(save_profile, launch_config, game.content);
-        auto switch_prep = backends.switch_backend->prepare(
-            launch_config,
-            SwitchBackendPrepContext{
-                save_profile,
-                launch_plan.players,
-                config.verbose,
-                devices.input.product_id_base,
-                config.ignore_controller.value_or(""),
-                config.graphics_api,
-                video.capture.virtualgl_capture,
-                req.gamescope_capture,
-                video.switch_scale,
-                prefer_handheld_mode,
-                &video.devices.resolved_gpu,
-                user.participants.profile_display_name,
-                std::move(devices.input.resolved_pads),
-                static_cast<std::size_t>(std::max(0, req.slot)),
-                launch_plan.game_id,
-                switch_content.content_stem,
-                switch_content.title_id,
-            });
-        devices.input.resolved_pads = std::move(switch_prep.resolved_pads);
-        backends.switch_backend->assign_launch_env_profile(launch_env_request, switch_prep);
-        log_switch_backend_prep(
-            *backends.switch_backend,
-            launch_env_request,
-            switch_prep,
-            video.switch_scale,
-            video.devices.resolved_gpu,
-            req.slot);
-        backends.switch_launch_content_stem = switch_content.content_stem;
-        backends.switch_launch_title_id = switch_content.title_id;
-        if (backends.switch_backend->enable_soft_keyboard()) {
-            if (!req.plan.control.soft_keyboard) {
-                req.plan.control.soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();
-            }
-            devices.keyboard.soft_keyboard_fallback = user.participants.profile_display_name;
-            devices.keyboard.arm_soft_keyboard = true;
-        }
-    } else if (backends.melonds_backend) {
-        auto melonds_prep = backends.melonds_backend->prepare(
-            launch_config,
-            MelonDsBackendPrepContext{
-                save_profile,
-                launch_plan.players,
-                config.verbose,
-                devices.input.product_id_base,
-                config.ignore_controller.value_or(""),
-                video.capture.virtualgl_capture,
-                req.gamescope_capture,
-                req.slot,
-                user.participants.profile_display_name,
-                user.participants.display_layout,
-                std::move(devices.input.resolved_pads),
-            });
-        devices.input.resolved_pads = std::move(melonds_prep.resolved_pads);
-        backends.melonds_backend->assign_launch_env_profile(launch_env_request, melonds_prep);
-        log_melonds_backend_prep(
-            *backends.melonds_backend,
-            launch_env_request,
-            melonds_prep,
-            req.slot);
-    } else if (launch_config.standalone) {
-        throw std::runtime_error("standalone launch missing backend for system=" + system_key);
-    } else {
-        const auto override_params = build_session_retroarch_override(
-            req.backend,
-            SessionRetroArchOverrideOptions{
-                req.use_virtual_capture,
-                req.slot,
-                req.plan.control.retroarch_netcmd_port,
-                user.participants.display_layout,
-            });
-        apply_retroarch_override(launch_config, override_params);
-        launch_env_request.pad_plan = devices.input.shared_pad_plan;
-        log_pad_plan(devices.input.shared_pad_plan, req.slot);
     }
 }
 

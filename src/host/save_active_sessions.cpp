@@ -13,8 +13,10 @@
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 namespace archstreamer {
 namespace {
@@ -250,11 +252,29 @@ std::optional<std::string> take_active_session_stop_request(
     return reason;
 }
 
+ConnectedClientPresence make_connected_client_presence(
+    ClientInfo info,
+    int slot_index,
+    std::string game_id,
+    std::string phase,
+    bool seated) {
+    ConnectedClientPresence presence;
+    presence.info = std::move(info);
+    presence.slot_index = slot_index;
+    presence.game_id = std::move(game_id);
+    presence.phase = std::move(phase);
+    presence.seated = seated;
+    return presence;
+}
+
 void publish_connected_client(
     const std::filesystem::path& save_root,
     const ConnectedClientPresence& client) {
     (void)save_root;
-    if (client.info.username.empty() || client.info.client_id == 0) {
+    if (client.info.client_id == UnassignedClientId) {
+        throw std::logic_error("connected client presence published before client id assignment");
+    }
+    if (client.info.username.empty() || client.info.client_id == HostClientId) {
         return;
     }
     auto store = cadence_store_or_null();

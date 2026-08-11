@@ -342,6 +342,7 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/stream_adaptation.cpp
         src/host/cadence_session_events.cpp
         src/host/cadence_session_tracker.cpp
+        src/host/session_emulator_backend.cpp
         src/host/session_launch_assemble.cpp
         src/host/session_run_helpers.cpp
         src/host/session_lobby.cpp

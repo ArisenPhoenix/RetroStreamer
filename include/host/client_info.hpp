@@ -6,8 +6,14 @@
 
 namespace archstreamer {
 
+constexpr ClientId UnassignedClientId = static_cast<ClientId>(-1);
+
+inline bool assigned_remote_client_id(ClientId client_id) {
+    return client_id != HostClientId && client_id != UnassignedClientId;
+}
+
 struct ClientInfo {
-    ClientId client_id = 0;
+    ClientId client_id = UnassignedClientId;
     std::string username;
 };
 

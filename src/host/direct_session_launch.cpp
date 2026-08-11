@@ -11,6 +11,7 @@
 #include "host/pad_plan.hpp"
 #include "host/retroarch_config_writer.hpp"
 #include "host/retroarch_resolve.hpp"
+#include "host/session_emulator_backend.hpp"
 #include "host/session_launch_assemble.hpp"
 #include "host/session_run_helpers.hpp"
 #include "host/soft_keyboard_host.hpp"
@@ -290,103 +291,19 @@ SessionLaunchEnvironment prepare_direct_launch_environment(
 void prepare_direct_backend(
     SessionBackendPrepareContext& backend,
     VirtualKeyboard& keyboard) {
-    const auto& config = backend.config;
-    auto& user = backend.user;
-    auto& game = backend.game;
-    auto& video = backend.video;
-    auto& input = backend.input;
-    auto& launch_plan = game.launch_plan;
-    auto& launch_config = game.launch_config;
-    auto& devices = input.devices;
-    auto& backends = backend.backends;
-    auto& launch_env_request = backend.launch_env_request;
-
-    prepare_session_standalone_backend(backends.system_key, launch_config, backends);
-
-    if (backends.switch_backend) {
-        keyboard.set_switch_style_hotkeys(true);
-        const auto switch_content =
-            resolve_switch_launch_content(user.save_profile, launch_config, game.content);
-        auto switch_prep = backends.switch_backend->prepare(
-            launch_config,
-            SwitchBackendPrepContext{
-                user.save_profile,
-                launch_plan.players,
-                config.verbose,
-                /*product_id_base=*/0,
-                config.ignore_controller.value_or(""),
-                config.graphics_api,
-                video.capture.virtualgl_capture,
-                video.capture.gamescope_capture,
-                video.switch_scale,
-                /*prefer_handheld_mode=*/false,
-                &video.devices.resolved_gpu,
-                user.participants.profile_display_name,
-                std::move(devices.input.resolved_pads),
-                /*slot_index=*/0,
-                launch_plan.game_id,
-                switch_content.content_stem,
-                switch_content.title_id,
-            });
-        devices.input.resolved_pads = std::move(switch_prep.resolved_pads);
-        backends.switch_backend->assign_launch_env_profile(launch_env_request, switch_prep);
-        log_switch_backend_prep(
-            *backends.switch_backend,
-            launch_env_request,
-            switch_prep,
-            video.switch_scale,
-            video.devices.resolved_gpu);
-        backends.switch_launch_content_stem = switch_content.content_stem;
-        backends.switch_launch_title_id = switch_content.title_id;
-        if (backends.switch_backend->enable_soft_keyboard()) {
-            if (!devices.keyboard.standalone_soft_keyboard) {
-                devices.keyboard.standalone_soft_keyboard =
-                    std::make_shared<SoftKeyboardHostBridge>();
-            }
-            devices.keyboard.soft_keyboard_fallback = user.participants.profile_display_name;
-            devices.keyboard.arm_soft_keyboard = true;
-        }
-    } else if (backends.melonds_backend) {
-        auto melonds_prep = backends.melonds_backend->prepare(
-            launch_config,
-            MelonDsBackendPrepContext{
-                user.save_profile,
-                launch_plan.players,
-                config.verbose,
-                /*product_id_base=*/0,
-                config.ignore_controller.value_or(""),
-                video.capture.virtualgl_capture,
-                video.capture.gamescope_capture,
-                /*slot_index=*/0,
-                user.participants.profile_display_name,
-                user.participants.display_layout,
-                std::move(devices.input.resolved_pads),
-            });
-        devices.input.resolved_pads = std::move(melonds_prep.resolved_pads);
-        backends.melonds_backend->assign_launch_env_profile(launch_env_request, melonds_prep);
-        log_melonds_backend_prep(*backends.melonds_backend, launch_env_request, melonds_prep);
-    } else {
-        const auto override_params = build_session_retroarch_override(
-            backend,
-            SessionRetroArchOverrideOptions{
-                devices.capture.use_virtual_capture,
-            });
-        const auto runtime_override = apply_retroarch_override(launch_config, override_params);
-        std::cout
-            << "RetroArch config: " << runtime_override
-            << "\nVirtual joypad index: " << devices.input.virtual_joypad_index
-            << " (driver=" << config.retroarch_joypad_driver << ")\n";
-        {
-            const int scale = std::clamp(video.retroarch_scale, 1, 6);
-            std::cout << "RetroArch resolution: " << scale << "x native"
-                      << " (known cores via .opt)\n";
-        }
-        if (!backends.system_key.empty()) {
-            std::cout << "Face buttons: system=" << backends.system_key
-                      << " (" << face_button_map_name(backends.system_key) << ")\n";
-        }
-        launch_env_request.pad_plan = devices.input.shared_pad_plan;
-        log_pad_plan(devices.input.shared_pad_plan);
+    const auto result = prepare_session_emulator_backend(
+        backend,
+        SessionBackendPrepareOptions{
+            0,
+            backend.input.devices.capture.use_virtual_capture,
+            backend.video.capture.gamescope_capture,
+            true,
+            false,
+            DefaultRetroArchNetcmdPort,
+            &keyboard,
+        });
+    if (result.soft_keyboard) {
+        backend.input.devices.keyboard.standalone_soft_keyboard = result.soft_keyboard;
     }
 }
 

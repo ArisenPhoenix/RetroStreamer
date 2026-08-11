@@ -28,6 +28,19 @@
 
 namespace archstreamer {
 
+ClientInfo client_info_for(ClientId client_id, const ClientHello& hello) {
+    return ClientInfo{client_id, hello.username};
+}
+
+SessionClientConnection make_session_client(ClientId client_id, ClientHello hello, TcpStream stream) {
+    const auto info = client_info_for(client_id, hello);
+    return SessionClientConnection{
+        info,
+        std::move(hello),
+        SessionClientLifecycle{std::move(stream)},
+    };
+}
+
 const char* session_mode_name(GameSessionMode mode) {
     switch (mode) {
         case GameSessionMode::SinglePlayer:
@@ -537,11 +550,7 @@ SessionPlan make_singleplayer_session_plan(
     plan.game.selected_game_id = *hello.selected_game_id;
     plan.game.session_mode = GameSessionMode::SinglePlayer;
     log_client_hello(client_id, hello);
-    plan.clients.push_back(SessionClientConnection{
-        ClientInfo{client_id, hello.username},
-        std::move(hello),
-        SessionClientLifecycle{std::move(stream)},
-    });
+    plan.clients.push_back(make_session_client(client_id, std::move(hello), std::move(stream)));
     if (!launch_requirements_satisfied(plan, *selected_game)) {
         throw std::runtime_error("singleplayer launch requirements not satisfied");
     }
@@ -590,13 +599,14 @@ SessionPlan gather_session_clients(
         if (save_root.empty() || client.info.username.empty()) {
             return;
         }
-        ConnectedClientPresence presence;
-        presence.info = client.info;
-        presence.slot_index = -1;
-        presence.game_id = client.hello.selected_game_id.value_or(GameId{});
-        presence.phase = "lobby";
-        presence.seated = client.hello.requested_players > 0;
-        publish_connected_client(save_root, presence);
+        publish_connected_client(
+            save_root,
+            make_connected_client_presence(
+                client.info,
+                -1,
+                client.hello.selected_game_id.value_or(GameId{}),
+                "lobby",
+                client.hello.requested_players > 0));
         lobby_presence.track(client.info.client_id);
     };
 
@@ -829,11 +839,10 @@ SessionPlan gather_session_clients(
 
             log_client_hello(client_id, authenticated_hello);
 
-            plan.clients.push_back(SessionClientConnection{
-                ClientInfo{client_id, authenticated_hello.username},
+            plan.clients.push_back(make_session_client(
+                client_id,
                 std::move(authenticated_hello),
-                SessionClientLifecycle{std::move(*stream)},
-            });
+                std::move(*stream)));
             publish_lobby_client(plan.clients.back());
             accepted_client = true;
             ++client_id;

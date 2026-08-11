@@ -36,6 +36,13 @@ struct ConnectedClientPresence {
     bool seated = false;
 };
 
+ConnectedClientPresence make_connected_client_presence(
+    ClientInfo info,
+    int slot_index,
+    std::string game_id = {},
+    std::string phase = {},
+    bool seated = false);
+
 /** Per-slot status files under <save_root>/.archstreamer_active/. */
 std::filesystem::path active_save_sessions_directory(const std::filesystem::path& save_root);
 

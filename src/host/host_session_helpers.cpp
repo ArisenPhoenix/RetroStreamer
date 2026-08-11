@@ -134,7 +134,7 @@ void reset_reconnected_session_client(
     const SessionPlan& plan,
     const MediaEndpoint& endpoint) {
     client.hello = hello;
-    client.info.username = hello.username;
+    client.info = client_info_for(client.info.client_id, hello);
     client.lifecycle.stream = std::move(stream);
     client.lifecycle.connection_state = SessionConnectionState::Connected;
     client.lifecycle.last_seen = std::chrono::steady_clock::now();
@@ -372,11 +372,10 @@ void poll_active_session_joins(
                 << "Player " << static_cast<int>(join.client_id)
                 << " reconnected username=" << authenticated_hello.username << ".\n";
         } else {
-            plan.clients.push_back(SessionClientConnection{
-                ClientInfo{join.client_id, authenticated_hello.username},
+            plan.clients.push_back(make_session_client(
+                join.client_id,
                 authenticated_hello,
-                SessionClientLifecycle{std::move(*stream)},
-            });
+                std::move(*stream)));
             std::cout
                 << "Late viewer " << static_cast<int>(join.client_id)
                 << " joined username=" << authenticated_hello.username << ".\n";
@@ -504,7 +503,7 @@ std::optional<AcceptedControlHello> try_accept_control_hello(
                 presence->client_blocks_revision);
             AcceptedControlHello accepted;
             accepted.presence = ControlClientConnection{
-                ClientInfo{0, presence->username},
+                ClientInfo{UnassignedClientId, presence->username},
                 std::move(*stream),
             };
             return accepted;

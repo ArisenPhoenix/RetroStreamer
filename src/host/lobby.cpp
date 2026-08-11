@@ -200,12 +200,9 @@ LobbyStatusSnapshot Lobby::status_snapshot() const {
 }
 
 void Lobby::publish_connected(const ControlClientConnection& client) const {
-    ConnectedClientPresence presence;
-    presence.info = client.info;
-    presence.slot_index = -1;
-    presence.phase = "catalog";
-    presence.seated = false;
-    publish_connected_client(config_.host_config.save_root, presence);
+    publish_connected_client(
+        config_.host_config.save_root,
+        make_connected_client_presence(client.info, -1, {}, "catalog", false));
 }
 
 void Lobby::erase_connected_at(std::size_t index) {
@@ -349,11 +346,7 @@ void Lobby::handle_hello(TcpStream stream, ClientHello hello) {
                 throw std::runtime_error(
                     "cannot start Multiplayer while singleplayer session slots are active");
             }
-            SessionClientConnection first{
-                ClientInfo{hub_.allocate_client_id(), hello.username},
-                hello,
-                SessionClientLifecycle{std::move(stream)},
-            };
+            auto first = make_session_client(hub_.allocate_client_id(), hello, std::move(stream));
             {
                 std::lock_guard lock(mutex_);
                 MultiplayerClient waiting;

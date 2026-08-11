@@ -163,6 +163,8 @@ struct SessionPlan {
     SessionStreamState stream;
 };
 
+ClientInfo client_info_for(ClientId client_id, const ClientHello& hello);
+SessionClientConnection make_session_client(ClientId client_id, ClientHello hello, TcpStream stream);
 const char* session_mode_name(GameSessionMode mode);
 PacketPayload receive_control_payload(TcpStream& stream);
 std::optional<GameInfo> game_info_for(const GameList& list, const GameId& game_id);

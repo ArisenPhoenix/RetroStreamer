@@ -313,8 +313,10 @@ void Lobby::handle_hello(TcpStream stream, ClientHello hello) {
                 command.kind = LobbyCommand::Kind::EnqueueJoin;
                 command.session_id = slot->session_id();
                 command.join = PendingSessionJoin{
-                    std::move(hello),
-                    std::move(stream),
+                    AuthenticatedSessionRequest{
+                        std::move(hello),
+                        std::move(stream),
+                    },
                     true,
                 };
                 enqueue_command(std::move(command));
@@ -329,8 +331,10 @@ void Lobby::handle_hello(TcpStream stream, ClientHello hello) {
                 command.kind = LobbyCommand::Kind::EnqueueJoin;
                 command.session_id = slot->session_id();
                 command.join = PendingSessionJoin{
-                    std::move(hello),
-                    std::move(stream),
+                    AuthenticatedSessionRequest{
+                        std::move(hello),
+                        std::move(stream),
+                    },
                     false,
                 };
                 enqueue_command(std::move(command));

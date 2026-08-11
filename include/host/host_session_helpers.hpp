@@ -61,7 +61,7 @@ void poll_active_session_joins(
  * On LobbyPresence, returns presence credentials + stream for the catalog Connected hold.
  */
 struct AcceptedControlHello {
-    std::optional<AuthenticatedControlClient> client;
+    std::optional<AuthenticatedSessionRequest> client;
     std::optional<ControlClientConnection> presence;
 };
 

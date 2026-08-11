@@ -514,38 +514,38 @@ SessionClientConnection* ActiveSessionSlot::attach_pending_join(
     if (reconnecting_client != nullptr) {
         reset_reconnected_session_client(
             *reconnecting_client,
-            pending.hello,
-            std::move(pending.stream),
+            pending.request.hello,
+            std::move(pending.request.stream),
             plan,
             endpoint);
         std::cout
             << "session slot " << config_.slot_index << ": player "
             << static_cast<int>(client_id)
-            << " reconnected username=" << pending.hello.username << ".\n";
+            << " reconnected username=" << pending.request.hello.username << ".\n";
         record_client_joined(
             config_.slot_index,
-            pending.hello.username,
+            pending.request.hello.username,
             plan.game.selected_game_id,
             "reconnect",
             cadence_tracker_.session_id());
-        publish_connected_presence(client_id, pending.hello, plan);
+        publish_connected_presence(client_id, pending.request.hello, plan);
         return reconnecting_client;
     } else {
         plan.clients.push_back(make_session_client(
             client_id,
-            pending.hello,
-            std::move(pending.stream)));
+            pending.request.hello,
+            std::move(pending.request.stream)));
         std::cout
             << "session slot " << config_.slot_index << ": late viewer "
             << static_cast<int>(client_id)
-            << " joined username=" << pending.hello.username << ".\n";
+            << " joined username=" << pending.request.hello.username << ".\n";
         record_client_joined(
             config_.slot_index,
-            pending.hello.username,
+            pending.request.hello.username,
             plan.game.selected_game_id,
-            pending.hello.requested_players > 0 ? "player" : "viewer",
+            pending.request.hello.requested_players > 0 ? "player" : "viewer",
             cadence_tracker_.session_id());
-        publish_connected_presence(client_id, pending.hello, plan);
+        publish_connected_presence(client_id, pending.request.hello, plan);
         return &plan.clients.back();
     }
 }
@@ -574,11 +574,11 @@ void ActiveSessionSlot::drain_pending_joins() {
             // open TCP with no heartbeats until the reconnect seat timed out.
             const auto join = resolve_live_session_join_target(
                 plan,
-                pending.hello,
+                pending.request.hello,
                 pending.is_reconnect);
             auto endpoint = send_live_session_join_handshake(LiveSessionJoinHandshake{
-                pending.stream,
-                pending.hello,
+                pending.request.stream,
+                pending.request.hello,
                 join.client_id,
                 plan,
                 media_plan_config_for(slot_config_),
@@ -603,7 +603,7 @@ void ActiveSessionSlot::drain_pending_joins() {
             }
         } catch (const std::exception& error) {
             try {
-                pending.stream.send_packet(serialize_packet(ErrorPacket{error.what()}));
+                pending.request.stream.send_packet(serialize_packet(ErrorPacket{error.what()}));
             } catch (const std::exception&) {
             }
             std::cerr

@@ -79,9 +79,9 @@ void SessionManager::apply_one(LobbyCommand& command) {
         }
         if (slot == nullptr) {
             if (command.join->is_reconnect) {
-                slot = config_.hub->slot_for_reconnect(command.join->hello);
+                slot = config_.hub->slot_for_reconnect(command.join->request.hello);
             } else {
-                slot = config_.hub->slot_for_late_viewer(command.join->hello);
+                slot = config_.hub->slot_for_late_viewer(command.join->request.hello);
             }
         }
         if (slot == nullptr) {

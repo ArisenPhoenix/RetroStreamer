@@ -68,14 +68,13 @@ struct ControlClientConnection {
     TcpStream stream;
 };
 
-struct AuthenticatedControlClient {
+struct AuthenticatedSessionRequest {
     ClientHello hello;
     TcpStream stream;
 };
 
 struct PendingSessionJoin {
-    ClientHello hello;
-    TcpStream stream;
+    AuthenticatedSessionRequest request;
     bool is_reconnect = false;
 };
 

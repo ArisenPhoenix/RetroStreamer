@@ -533,7 +533,7 @@ std::optional<AcceptedControlHello> try_accept_control_hello(
             authenticated_hello.client_blocks_revision);
 
         AcceptedControlHello accepted;
-        accepted.client = AuthenticatedControlClient{
+        accepted.client = AuthenticatedSessionRequest{
             std::move(authenticated_hello),
             std::move(*stream),
         };

@@ -25,6 +25,7 @@ struct Candidate {
     bool resolution_ok = false;
     bool running = false;
     int object_id = 0;
+    int object_serial = 0;
 };
 
 [[nodiscard]] std::optional<int> json_int(const nlohmann::json& value) {
@@ -174,7 +175,7 @@ struct Candidate {
 
 } // namespace
 
-std::optional<std::string> select_gamescope_pipewire_node_from_dump(
+std::optional<GamescopePipeWireTarget> select_gamescope_pipewire_node_from_dump(
     std::string_view pw_dump_json,
     int expect_width,
     int expect_height,
@@ -223,6 +224,7 @@ std::optional<std::string> select_gamescope_pipewire_node_from_dump(
         if (!object_id.has_value()) {
             continue;
         }
+        const auto object_serial = json_int(props.value("object.serial", nlohmann::json()));
 
         int width = 0;
         int height = 0;
@@ -261,6 +263,7 @@ std::optional<std::string> select_gamescope_pipewire_node_from_dump(
         candidate.resolution_ok = resolution_ok;
         candidate.running = info.value("state", "") == "running";
         candidate.object_id = *object_id;
+        candidate.object_serial = object_serial.value_or(0);
         candidates.push_back(candidate);
     }
 
@@ -300,7 +303,10 @@ std::optional<std::string> select_gamescope_pipewire_node_from_dump(
                 }
             }
             const auto pick = best_owned_res != candidates.end() ? best_owned_res : best_owned;
-            return std::to_string(pick->object_id);
+            return GamescopePipeWireTarget{
+                std::to_string(pick->object_id),
+                pick->object_serial > 0 ? std::to_string(pick->object_serial) : std::string{},
+            };
         }
 
         // Never latch an unowned gamescope source when we have an owner pid.
@@ -325,10 +331,13 @@ std::optional<std::string> select_gamescope_pipewire_node_from_dump(
         }
     }
     const auto pick = best_res != candidates.end() ? best_res : best_any;
-    return std::to_string(pick->object_id);
+    return GamescopePipeWireTarget{
+        std::to_string(pick->object_id),
+        pick->object_serial > 0 ? std::to_string(pick->object_serial) : std::string{},
+    };
 }
 
-std::optional<std::string> wait_for_gamescope_pipewire_node(
+std::optional<GamescopePipeWireTarget> wait_for_gamescope_pipewire_node(
     std::chrono::milliseconds timeout,
     int expect_width,
     int expect_height,

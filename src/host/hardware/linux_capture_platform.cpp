@@ -187,7 +187,11 @@ void start_deferred_gamescope_video_if_needed(
             "gamescope did not publish a PipeWire Video/Source for this session "
             "(media.name=gamescope; timed out waiting for this slot's node)");
     }
-    std::cout << "Gamescope PipeWire node: " << *node << '\n';
+    std::cout << "Gamescope PipeWire target: path=" << node->path;
+    if (!node->target_object.empty()) {
+        std::cout << " target-object=" << node->target_object;
+    }
+    std::cout << '\n';
     gst->start_pipewire_video(*node, media_streams);
 }
 

@@ -274,6 +274,9 @@ data class JoinedPlaySession(
     @Volatile
     private var stagingReadySent = false
 
+    @Volatile
+    private var stagingLastWaitLogMs = 0L
+
     /** Headless decode probe so cutover ACK waits for real frames, not just RTP AUs. */
     private var stagingProbeReader: ImageReader? = null
     private var stagingProbeThread: HandlerThread? = null
@@ -535,6 +538,7 @@ data class JoinedPlaySession(
         stagingPlayer = null
         stagingUri = null
         stagingReadySent = false
+        stagingLastWaitLogMs = 0L
         return try {
             val port = MediaUris.portFrom(videoUri, MediaUris.H264_SCHEME)
             if (port == videoPlayer?.port) {
@@ -565,6 +569,7 @@ data class JoinedPlaySession(
             clearStagingProbe()
             stagingPlayer = null
             stagingUri = null
+            stagingLastWaitLogMs = 0L
             // Empty URI → host aborts in-flight cutover instead of waiting out the timeout.
             runCatching { control.send(PacketCodec.mediaVideoReady("")) }
             ClientFileLog.append(
@@ -582,7 +587,18 @@ data class JoinedPlaySession(
         val uri = stagingUri ?: return null
         val staging = stagingPlayer ?: return null
         if (stagingReadySent) return null
-        if (!staging.hasDecodedFrames()) return null
+        if (!staging.hasDecodedFrames()) {
+            val now = System.currentTimeMillis()
+            if (ClientFileLog.logConnections && now - stagingLastWaitLogMs >= 1_000L) {
+                stagingLastWaitLogMs = now
+                ClientFileLog.conn(
+                    "video staging wait port=${staging.port} " +
+                        "au=${staging.hasReceivedAccessUnits()} " +
+                        "keyframe=${staging.hasReceivedKeyframeAccessUnit()} decoded=false",
+                )
+            }
+            return null
+        }
         return sendVideoReady(uri)
     }
 
@@ -621,6 +637,7 @@ data class JoinedPlaySession(
             stagingPlayer = null
             stagingUri = null
             stagingReadySent = false
+            stagingLastWaitLogMs = 0L
             runCatching { previous?.close() }
             ClientFileLog.conn("video promote staging→live port=$port")
             return videoPlayer
@@ -632,6 +649,7 @@ data class JoinedPlaySession(
             stagingPlayer = null
             stagingUri = null
             stagingReadySent = false
+            stagingLastWaitLogMs = 0L
             ClientFileLog.conn("video promote keep live port=$port")
             return videoPlayer
         }
@@ -641,6 +659,7 @@ data class JoinedPlaySession(
         stagingPlayer = null
         stagingUri = null
         stagingReadySent = false
+        stagingLastWaitLogMs = 0L
         runCatching { videoPlayer?.close() }
         videoPlayer = videoPlayerForPort(port).also { it.startReceiving() }
         ClientFileLog.conn("video rebind live port=$port")
@@ -675,6 +694,7 @@ data class JoinedPlaySession(
         runCatching { stagingPlayer?.close() }
         stagingPlayer = null
         stagingUri = null
+        stagingLastWaitLogMs = 0L
         runCatching { videoPlayer?.close() }
         runCatching { audioPlayer?.close() }
         runCatching { control.close() }

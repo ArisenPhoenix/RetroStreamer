@@ -7,7 +7,9 @@
 
 #include <array>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -72,6 +74,14 @@ std::string getenv_string(const char* key) {
     return value != nullptr ? std::string(value) : std::string{};
 }
 
+bool getenv_bool(const char* key) {
+    auto value = getenv_string(key);
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return value == "1" || value == "true" || value == "yes" || value == "on";
+}
+
 std::string pipewire_user_runtime_dir() {
     const auto env_runtime = getenv_string("XDG_RUNTIME_DIR");
     if (!env_runtime.empty()) {
@@ -91,14 +101,15 @@ void configure_managed_pipewire_environment() {
     if (runtime.empty()) {
         return;
     }
+    const auto original_pipewire_runtime = getenv_string("PIPEWIRE_RUNTIME_DIR");
     if (getenv_string("XDG_RUNTIME_DIR").empty()) {
         setenv("XDG_RUNTIME_DIR", runtime.c_str(), 1);
     }
-    setenv("PIPEWIRE_RUNTIME_DIR", runtime.c_str(), 1);
     std::cout
         << "Managed GStreamer PipeWire runtime: XDG_RUNTIME_DIR="
         << getenv_string("XDG_RUNTIME_DIR")
-        << " PIPEWIRE_RUNTIME_DIR=" << getenv_string("PIPEWIRE_RUNTIME_DIR")
+        << " PIPEWIRE_RUNTIME_DIR="
+        << (original_pipewire_runtime.empty() ? "<unset>" : original_pipewire_runtime)
         << '\n';
 #endif
 }
@@ -148,39 +159,81 @@ bool gst_element_available(const char* element) {
 }
 
 bool gst_element_has_writable_property(const char* element, const char* property) {
-#if defined(ARCHSTREAMER_HAS_GST_LIBS)
-    ensure_gst_initialized();
-    if (!g_gst_available) {
+    if (!command_available("gst-inspect-1.0")) {
         return false;
     }
-    auto* instance = gst_element_factory_make(element, nullptr);
-    if (instance == nullptr) {
-        return false;
-    }
-    auto* pspec = g_object_class_find_property(G_OBJECT_GET_CLASS(instance), property);
-    const bool writable = pspec != nullptr && (pspec->flags & G_PARAM_WRITABLE) != 0;
-    gst_object_unref(instance);
-    return writable;
-#else
-    (void)element;
-    (void)property;
-    return false;
-#endif
+    const auto output = read_command_output(
+        (std::string("gst-inspect-1.0 ") + element + " 2>/dev/null").c_str());
+    return output.find(std::string("\n  ") + property) != std::string::npos;
 }
 
-constexpr bool kEnableManagedVideoPipeline = false;
-constexpr bool kForceManagedVideoPipeline = false;
+enum class VideoPipelineMode {
+    Auto,
+    Child,
+    Managed,
+};
+
+VideoPipelineMode video_pipeline_mode_from_environment() {
+    auto mode = getenv_string("ARCHSTREAMER_VIDEO_PIPELINE");
+    std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    // temporarily default to Managed to test it without confusion in envs, later will use this though
+    return VideoPipelineMode::Managed;
+    if (mode == "managed" || mode == "in-process" || mode == "inprocess") {
+        return VideoPipelineMode::Managed;
+    }
+    if (mode == "child" || mode == "gst-launch") {
+        return VideoPipelineMode::Child;
+    }
+    if (mode == "auto") {
+        return VideoPipelineMode::Auto;
+    }
+    return VideoPipelineMode::Child;
+}
 
 struct SharedVideoSource {
     enum class Kind { X11, PipeWire };
     Kind kind = Kind::X11;
     std::string value;
+    std::string target_object;
 };
+
+struct PipeWireSourceSelector {
+    std::string property;
+    std::string value;
+};
+
+std::vector<PipeWireSourceSelector> pipewire_source_selectors(const SharedVideoSource& source) {
+    std::vector<PipeWireSourceSelector> selectors;
+    auto append = [&](std::string property, const std::string& value) {
+        if (!value.empty()) {
+            selectors.push_back(PipeWireSourceSelector{std::move(property), value});
+        }
+    };
+    append("path", source.value);
+    append("target-object", source.target_object);
+    return selectors;
+}
 
 struct SharedVideoBranch {
     VideoEncodeSettings settings;
     std::vector<std::pair<std::string, std::uint16_t>> clients;
 };
+
+std::string video_settings_summary(const VideoEncodeSettings& settings) {
+    const int bitrate = settings.bitrate_kbps == 0 ? 1500 : settings.bitrate_kbps;
+    const int framerate = settings.framerate == 0 ? 30 : static_cast<int>(settings.framerate);
+    const int queue_buffers =
+        settings.queue_buffers == 0 ? 1 : static_cast<int>(settings.queue_buffers);
+    std::ostringstream out;
+    out << bitrate << "kbps/" << framerate << "fps";
+    if (settings.width > 0 && settings.height > 0) {
+        out << "/" << settings.width << "x" << settings.height;
+    }
+    out << " queue=" << queue_buffers;
+    return out.str();
+}
 
 void apply_nvenc_environment_to_process(
     ChildProcess& process,
@@ -358,10 +411,10 @@ void append_h264_branch_desc(
         << " ! rtph264pay mtu=1200 config-interval=-1"
         << " aggregate-mode=zero-latency pt=96"
         << " ! multiudpsink clients="
-        << gst_quote(multiudp_clients_arg(
+        << multiudp_clients_arg(
                multiudp_clients_with_pace_tee(
                    clients,
-                   clients.empty() ? 0 : clients.front().second)))
+                   clients.empty() ? 0 : clients.front().second))
         << " sync=false async=false";
 }
 
@@ -378,6 +431,9 @@ void log_video_ladder(
               << ", " << mode;
     if (source.kind == SharedVideoSource::Kind::PipeWire) {
         std::cout << " path=" << source.value;
+        if (!source.target_object.empty()) {
+            std::cout << " target-object=" << source.target_object;
+        }
         if (attempt > 1) {
             std::cout << " attempt=" << attempt;
         }
@@ -398,6 +454,42 @@ void log_video_ladder(
     std::cout << '\n';
 }
 
+const char* h264_encoder_name(const H264BranchOptions& options) {
+    if (!options.use_nvenc) {
+        return "x264enc";
+    }
+    return options.managed_nvenc_device_select ? "nvautogpuh264enc" : "nvh264enc";
+}
+
+std::string managed_pipeline_summary(
+    const SharedVideoSource& source,
+    std::string_view selector_label,
+    const std::vector<SharedVideoBranch>& branches,
+    const H264BranchOptions& options,
+    int attempt) {
+    std::ostringstream out;
+    out << "source="
+        << (source.kind == SharedVideoSource::Kind::PipeWire ? "pipewire" : "ximagesrc");
+    if (!selector_label.empty()) {
+        out << " " << selector_label;
+    } else if (!source.value.empty()) {
+        out << " " << source.value;
+    }
+    out << " encoder=" << h264_encoder_name(options);
+    if (options.use_nvenc && options.nvenc_cuda_device_id >= 0) {
+        out << " cuda=" << options.nvenc_cuda_device_id;
+    }
+    if (attempt > 1) {
+        out << " attempt=" << attempt;
+    }
+    out << " branches=" << branches.size();
+    for (const auto& branch : branches) {
+        out << " [" << video_settings_summary(branch.settings)
+            << " -> " << multiudp_clients_arg(branch.clients) << "]";
+    }
+    return out.str();
+}
+
 class ChildProcessVideoPipelineRunner final : public SharedVideoPipelineRunner {
 public:
     void stop() override {
@@ -411,7 +503,8 @@ public:
     bool start(
         const SharedVideoSource& source,
         const std::vector<SharedVideoBranch>& branches,
-        const H264BranchOptions& options) {
+        const H264BranchOptions& options,
+        const std::optional<std::string>& stderr_path = std::nullopt) {
         stop();
         auto args = std::vector<std::string>{"gst-launch-1.0", "-q"};
         if (source.kind == SharedVideoSource::Kind::PipeWire) {
@@ -451,7 +544,8 @@ public:
         apply_nvenc_environment_to_process(
             process_,
             std::move(args),
-            options.nvenc_cuda_device_id);
+            options.nvenc_cuda_device_id,
+            stderr_path);
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         if (!process_.running()) {
             throw std::runtime_error(
@@ -480,6 +574,10 @@ public:
 
     void stop() override {
 #if defined(ARCHSTREAMER_HAS_GST_LIBS)
+        monitor_running_ = false;
+        if (monitor_.joinable()) {
+            monitor_.join();
+        }
         if (pipeline_ != nullptr) {
             auto* pipeline = static_cast<GstElement*>(pipeline_);
             gst_element_set_state(pipeline, GST_STATE_NULL);
@@ -511,49 +609,70 @@ public:
         constexpr auto PipeWireStartupRetryDelay = std::chrono::milliseconds(250);
         const int startup_attempts =
             source.kind == SharedVideoSource::Kind::PipeWire ? PipeWireStartupAttempts : 1;
+        const auto selectors = source.kind == SharedVideoSource::Kind::PipeWire
+            ? pipewire_source_selectors(source)
+            : std::vector<PipeWireSourceSelector>{};
 
         std::string managed_errors;
         for (int attempt = 1; attempt <= startup_attempts; ++attempt) {
             if (attempt > 1) {
                 std::this_thread::sleep_for(PipeWireStartupRetryDelay);
             }
-            std::ostringstream desc;
-            if (source.kind == SharedVideoSource::Kind::PipeWire) {
-                desc
-                    << "pipewiresrc path=" << gst_quote(source.value)
-                    << " do-timestamp=true ! video/x-raw,format=BGRx ! videoconvert";
-            } else {
-                desc
-                    << "ximagesrc display-name=" << gst_quote(source.value)
-                    << " use-damage=false show-pointer=false do-timestamp=true ! videoconvert";
-            }
-            if (branches.size() == 1) {
-                desc << " ! ";
-                append_h264_branch_desc(desc, branches[0].settings, branches[0].clients, options);
-            } else {
-                desc << " ! tee name=t";
-                for (const auto& branch : branches) {
-                    desc << " t. ! ";
-                    append_h264_branch_desc(desc, branch.settings, branch.clients, options);
+            const int selector_count = source.kind == SharedVideoSource::Kind::PipeWire
+                ? static_cast<int>(selectors.size())
+                : 1;
+            for (int selector_index = 0; selector_index < selector_count; ++selector_index) {
+                std::ostringstream desc;
+                std::string selector_label;
+                if (source.kind == SharedVideoSource::Kind::PipeWire) {
+                    const auto& selector = selectors[selector_index];
+                    selector_label = selector.property + "=" + selector.value;
+                    desc
+                        << "pipewiresrc " << selector.property << "=" << selector.value
+                        << " do-timestamp=true ! video/x-raw,format=BGRx ! videoconvert";
+                } else {
+                    desc
+                        << "ximagesrc display-name=" << gst_quote(source.value)
+                        << " use-damage=false show-pointer=false do-timestamp=true ! videoconvert";
                 }
-            }
+                if (branches.size() == 1) {
+                    desc << " ! ";
+                    append_h264_branch_desc(
+                        desc, branches[0].settings, branches[0].clients, options);
+                } else {
+                    desc << " ! tee name=t";
+                    for (const auto& branch : branches) {
+                        desc << " t. ! ";
+                        append_h264_branch_desc(desc, branch.settings, branch.clients, options);
+                    }
+                }
 
-            std::string managed_error;
-            if (start_description(desc.str(), &managed_error)) {
-                log_video_ladder(
-                    "in-process",
+                const auto summary = managed_pipeline_summary(
                     source,
+                    selector_label,
                     branches,
-                    options.use_nvenc,
-                    options.nvenc_cuda_device_id,
+                    options,
                     attempt);
-                return true;
+                std::string managed_error;
+                if (start_description(desc.str(), summary, &managed_error)) {
+                    log_video_ladder(
+                        "in-process",
+                        source,
+                        branches,
+                        options.use_nvenc,
+                        options.nvenc_cuda_device_id,
+                        attempt);
+                    return true;
+                }
+                if (!managed_errors.empty()) {
+                    managed_errors += " | ";
+                }
+                managed_errors += "attempt " + std::to_string(attempt);
+                if (!selector_label.empty()) {
+                    managed_errors += " " + selector_label;
+                }
+                managed_errors += ": " + managed_error;
             }
-            if (!managed_errors.empty()) {
-                managed_errors += " | ";
-            }
-            managed_errors += "attempt " + std::to_string(attempt) + " path=" +
-                source.value + ": " + managed_error;
         }
         last_error_ = managed_errors;
         return false;
@@ -564,7 +683,10 @@ public:
     }
 
 private:
-    bool start_description(std::string_view description, std::string* error_out) {
+    bool start_description(
+        std::string_view description,
+        std::string_view summary,
+        std::string* error_out) {
         auto fail = [&](std::string reason) {
             if (error_out != nullptr) {
                 *error_out = reason;
@@ -575,7 +697,10 @@ private:
 #if defined(ARCHSTREAMER_HAS_GST_LIBS)
         ensure_gst_initialized();
         if (g_gst_available) {
-            std::cout << "Managed GStreamer video pipeline: " << description << '\n';
+            std::cout << "Managed GStreamer video pipeline: " << summary << '\n';
+            if (getenv_bool("ARCHSTREAMER_GST_VERBOSE")) {
+                std::cout << "Managed GStreamer pipeline detail: " << description << '\n';
+            }
             GError* error = nullptr;
             auto* pipeline = gst_parse_launch(std::string(description).c_str(), &error);
             if (error != nullptr) {
@@ -647,6 +772,7 @@ private:
             }
 
             pipeline_ = pipeline;
+            start_bus_monitor();
             return true;
         }
 #else
@@ -657,7 +783,158 @@ private:
 
     void* pipeline_ = nullptr; // GstElement*
     std::string last_error_;
+    std::atomic<bool> monitor_running_{false};
+    std::thread monitor_;
+
+    void start_bus_monitor() {
+#if defined(ARCHSTREAMER_HAS_GST_LIBS)
+        monitor_running_ = false;
+        if (monitor_.joinable()) {
+            monitor_.join();
+        }
+        auto* pipeline = static_cast<GstElement*>(pipeline_);
+        if (pipeline == nullptr) {
+            return;
+        }
+        auto* bus = gst_element_get_bus(pipeline);
+        if (bus == nullptr) {
+            return;
+        }
+        monitor_running_ = true;
+        monitor_ = std::thread([this, bus] {
+            while (monitor_running_.load(std::memory_order_relaxed)) {
+                GstMessage* msg = gst_bus_timed_pop_filtered(
+                    bus,
+                    250 * GST_MSECOND,
+                    static_cast<GstMessageType>(
+                        GST_MESSAGE_ERROR |
+                        GST_MESSAGE_EOS |
+                        GST_MESSAGE_WARNING));
+                if (msg == nullptr) {
+                    continue;
+                }
+                if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_ERROR) {
+                    std::cerr
+                        << "Managed GStreamer video runtime error: "
+                        << gst_message_error_string(msg) << '\n';
+                } else if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_WARNING) {
+                    GError* warning = nullptr;
+                    gchar* debug = nullptr;
+                    gst_message_parse_warning(msg, &warning, &debug);
+                    std::cerr << "Managed GStreamer video warning";
+                    if (GST_OBJECT_NAME(msg->src) != nullptr) {
+                        std::cerr << " at " << GST_OBJECT_NAME(msg->src);
+                    }
+                    std::cerr << ": "
+                              << (warning != nullptr ? warning->message : "unknown warning");
+                    if (debug != nullptr) {
+                        std::cerr << " | debug: " << debug;
+                    }
+                    std::cerr << '\n';
+                    if (warning != nullptr) {
+                        g_error_free(warning);
+                    }
+                    if (debug != nullptr) {
+                        g_free(debug);
+                    }
+                } else if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_EOS) {
+                    std::cerr << "Managed GStreamer video runtime EOS\n";
+                }
+                gst_message_unref(msg);
+            }
+            gst_object_unref(bus);
+        });
+#endif
+    }
 };
+
+enum class VideoPipelineUse {
+    Shared,
+    Staging,
+};
+
+const char* video_pipeline_use_name(VideoPipelineUse use) {
+    switch (use) {
+    case VideoPipelineUse::Shared:
+        return "shared";
+    case VideoPipelineUse::Staging:
+        return "staging";
+    }
+    return "unknown";
+}
+
+H264BranchOptions probe_h264_branch_options(int nvenc_cuda_device_id) {
+    const bool legacy_nvenc = gst_element_available("nvh264enc");
+    const bool managed_nvenc_device_select =
+        nvenc_cuda_device_id >= 0 &&
+        gst_element_available("nvautogpuh264enc") &&
+        gst_element_has_writable_property("nvautogpuh264enc", "cuda-device-id");
+    return H264BranchOptions{
+        managed_nvenc_device_select || legacy_nvenc,
+        managed_nvenc_device_select,
+        nvenc_cuda_device_id,
+    };
+}
+
+bool managed_inprocess_can_run(const H264BranchOptions& options) {
+    return !options.use_nvenc ||
+        options.nvenc_cuda_device_id < 0 ||
+        options.managed_nvenc_device_select;
+}
+
+std::unique_ptr<SharedVideoPipelineRunner> start_selected_video_pipeline(
+    const SharedVideoSource& source,
+    const std::vector<SharedVideoBranch>& branches,
+    const H264BranchOptions& options,
+    VideoPipelineUse use,
+    const std::optional<std::string>& stderr_path = std::nullopt) {
+    const auto pipeline_mode = video_pipeline_mode_from_environment();
+    const bool use_managed_inprocess =
+        pipeline_mode == VideoPipelineMode::Managed ||
+        (pipeline_mode == VideoPipelineMode::Auto && managed_inprocess_can_run(options));
+
+    const auto* label = video_pipeline_use_name(use);
+    if (use_managed_inprocess) {
+        std::cout
+            << "Video pipeline runner (" << label << "): in-process GStreamer"
+            << (pipeline_mode == VideoPipelineMode::Managed ? " (forced)" : " (auto)")
+            << '\n';
+        auto managed = std::make_unique<ManagedGStreamerVideoPipelineRunner>();
+        if (managed->start(source, branches, options)) {
+            return managed;
+        }
+        if (pipeline_mode == VideoPipelineMode::Managed) {
+            throw std::runtime_error(
+                std::string{"forced in-process video pipeline failed for "} +
+                label + "; gst-launch fallback disabled: " + managed->last_error());
+        }
+        std::cerr
+            << "In-process video pipeline failed for " << label
+            << "; falling back to gst-launch\n";
+    } else if (pipeline_mode == VideoPipelineMode::Child) {
+        std::cout << "Video pipeline runner (" << label << "): gst-launch child process (forced)\n";
+    } else {
+        std::cerr
+            << "In-process video pipeline skipped for " << label
+            << ": explicit NVENC CUDA device requested but this GStreamer nvcodec build has "
+            << "no writable per-element device property; using gst-launch to preserve GPU binding\n";
+    }
+
+    auto child = std::make_unique<ChildProcessVideoPipelineRunner>();
+    child->start(source, branches, options, stderr_path);
+    return child;
+}
+
+bool pipeline_running(const std::unique_ptr<SharedVideoPipelineRunner>& pipeline) {
+    return pipeline != nullptr && pipeline->running();
+}
+
+void stop_pipeline(std::unique_ptr<SharedVideoPipelineRunner>& pipeline) {
+    if (pipeline != nullptr) {
+        pipeline->stop();
+        pipeline.reset();
+    }
+}
 
 } // namespace
 
@@ -691,133 +968,6 @@ std::string GStreamerVideoFanout::staging_encode_log_path() {
     return (directory / "gst-video-staging-encode.log").string();
 }
 
-void GStreamerVideoFanout::apply_nvenc_environment(
-    ChildProcess& process,
-    std::vector<std::string> args,
-    const std::optional<std::string>& stderr_path) {
-    apply_nvenc_environment_to_process(
-        process,
-        std::move(args),
-        nvenc_cuda_device_id_,
-        stderr_path);
-}
-
-std::vector<std::string> GStreamerVideoFanout::build_single_encode_args(
-    const VideoEncodeSettings& settings,
-    const std::string& host,
-    std::uint16_t port) const {
-    if (!gst_element_available("multiudpsink")) {
-        throw std::runtime_error("multiudpsink is required for video encode (gst-plugins-good)");
-    }
-    if (source_kind_ == SourceKind::PipeWire && !gst_element_available("pipewiresrc")) {
-        throw std::runtime_error("pipewiresrc is required for gamescope video capture");
-    }
-
-    const int bitrate = settings.bitrate_kbps == 0 ? 1500 : settings.bitrate_kbps;
-    const int framerate = settings.framerate == 0 ? 30 : static_cast<int>(settings.framerate);
-    const int configured_key_int = settings.key_int_max == 0 ? framerate : static_cast<int>(settings.key_int_max);
-    const int sixth_sec = std::max(5, framerate / 6);
-    const int key_int_max = std::min(configured_key_int, sixth_sec);
-    const int queue_buffers = settings.queue_buffers == 0 ? 1 : static_cast<int>(settings.queue_buffers);
-    const bool nvenc = gst_element_available("nvh264enc");
-
-    auto args = std::vector<std::string>{"gst-launch-1.0", "-q"};
-    if (source_kind_ == SourceKind::PipeWire) {
-        args.insert(args.end(), {
-            "pipewiresrc",
-            "path=" + pipewire_node_,
-            "do-timestamp=true",
-            "!",
-            "video/x-raw,format=BGRx",
-            "!",
-            "videoconvert",
-            "!",
-        });
-    } else {
-        args.insert(args.end(), {
-            "ximagesrc",
-            "display-name=" + display_,
-            "use-damage=false",
-            "show-pointer=false",
-            "do-timestamp=true",
-            "!",
-            "videoconvert",
-            "!",
-        });
-    }
-
-    args.insert(args.end(), {
-        "queue",
-        "max-size-buffers=" + std::to_string(queue_buffers),
-        "max-size-time=0",
-        "max-size-bytes=0",
-        "leaky=upstream",
-        "!",
-    });
-    if (settings.width > 0 && settings.height > 0) {
-        args.insert(args.end(), {
-            "videoscale",
-            "method=0",
-            "!",
-            "video/x-raw,width=" + std::to_string(settings.width) +
-                ",height=" + std::to_string(settings.height),
-            "!",
-        });
-    }
-    args.insert(args.end(), {
-        "videorate",
-        "drop-only=true",
-        "!",
-        "video/x-raw,framerate=" + std::to_string(framerate) + "/1",
-        "!",
-    });
-    if (nvenc) {
-        args.insert(args.end(), {
-            "nvh264enc",
-            "zerolatency=true",
-            std::string("preset=") +
-                (settings.nvenc_high_quality ? "low-latency-hq" : "low-latency-hp"),
-            "strict-gop=true",
-            "bitrate=" + std::to_string(bitrate),
-            "gop-size=" + std::to_string(key_int_max),
-            "!",
-            "video/x-h264,profile=baseline,stream-format=byte-stream",
-        });
-    } else {
-        args.insert(args.end(), {
-            "x264enc",
-            "tune=zerolatency",
-            "speed-preset=ultrafast",
-            "bitrate=" + std::to_string(bitrate),
-            "key-int-max=" + std::to_string(key_int_max),
-            "byte-stream=true",
-            "bframes=0",
-            "threads=1",
-            "option-string=scenecut=40",
-            "!",
-            "video/x-h264,profile=constrained-baseline,stream-format=byte-stream",
-        });
-    }
-    if (gst_element_available("h264parse")) {
-        args.insert(args.end(), {"!", "h264parse", "config-interval=-1"});
-    }
-    args.insert(args.end(), {
-        "!",
-        "rtph264pay",
-        "mtu=1200",
-        "config-interval=-1",
-        "aggregate-mode=zero-latency",
-        "pt=96",
-        "!",
-        "multiudpsink",
-        "clients=" + multiudp_clients_arg(
-            multiudp_clients_with_pace_tee({{host, port}}, port)),
-        "sync=false",
-        "async=false",
-    });
-    return args;
-}
-
 std::vector<MediaClientStream> GStreamerVideoFanout::start(
     const std::string& display,
     const std::vector<MediaStreamRequest>& destinations,
@@ -828,7 +978,7 @@ std::vector<MediaClientStream> GStreamerVideoFanout::start(
 
     source_kind_ = SourceKind::X11;
     display_ = display;
-    pipewire_node_.clear();
+    pipewire_target_ = {};
     auto streams = std::vector<MediaClientStream>{};
     streams.reserve(destinations.size());
     for (const auto& destination : destinations) {
@@ -854,7 +1004,7 @@ std::vector<MediaClientStream> GStreamerVideoFanout::start(
 }
 
 std::vector<MediaClientStream> GStreamerVideoFanout::start_pipewire(
-    const std::string& pipewire_node,
+    const GamescopePipeWireTarget& pipewire_target,
     const std::vector<MediaStreamRequest>& destinations,
     const VideoEncodeSettings& initial_settings) {
     if (!destinations_.empty() || shared_pipeline_running()) {
@@ -863,7 +1013,7 @@ std::vector<MediaClientStream> GStreamerVideoFanout::start_pipewire(
 
     source_kind_ = SourceKind::PipeWire;
     display_.clear();
-    pipewire_node_ = pipewire_node;
+    pipewire_target_ = pipewire_target;
     auto streams = std::vector<MediaClientStream>{};
     streams.reserve(destinations.size());
     for (const auto& destination : destinations) {
@@ -920,13 +1070,13 @@ bool GStreamerVideoFanout::reconfigure_shared(const VideoEncodeSettings& setting
     if (source_kind_ == SourceKind::X11 && display_.empty()) {
         return false;
     }
-    if (source_kind_ == SourceKind::PipeWire && pipewire_node_.empty()) {
+    if (source_kind_ == SourceKind::PipeWire && pipewire_target_.path.empty()) {
         return false;
     }
 
     for (auto& destination : destinations_) {
         if (destination.staging_active) {
-            destination.staging.stop();
+            stop_pipeline(destination.staging);
             if (destination.staging_port != 0) {
                 terminate_gst_multiudpsink_on_port(destination.staging_port);
                 rtp_frame_pace_debug::stop_tee(destination.staging_port);
@@ -934,9 +1084,7 @@ bool GStreamerVideoFanout::reconfigure_shared(const VideoEncodeSettings& setting
             destination.staging_active = false;
             destination.staging_port = 0;
         }
-        if (destination.dedicated.running()) {
-            destination.dedicated.stop();
-        }
+        stop_pipeline(destination.dedicated);
         if (destination.port != destination.base_port) {
             rtp_frame_pace_debug::stop_tee(destination.port);
             destination.port = destination.base_port;
@@ -975,13 +1123,13 @@ bool GStreamerVideoFanout::apply_branch_layout(
     if (source_kind_ == SourceKind::X11 && display_.empty()) {
         return false;
     }
-    if (source_kind_ == SourceKind::PipeWire && pipewire_node_.empty()) {
+    if (source_kind_ == SourceKind::PipeWire && pipewire_target_.path.empty()) {
         return false;
     }
 
     for (auto& destination : destinations_) {
         if (destination.staging_active) {
-            destination.staging.stop();
+            stop_pipeline(destination.staging);
             if (destination.staging_port != 0) {
                 terminate_gst_multiudpsink_on_port(destination.staging_port);
                 rtp_frame_pace_debug::stop_tee(destination.staging_port);
@@ -989,9 +1137,7 @@ bool GStreamerVideoFanout::apply_branch_layout(
             destination.staging_active = false;
             destination.staging_port = 0;
         }
-        if (destination.dedicated.running()) {
-            destination.dedicated.stop();
-        }
+        stop_pipeline(destination.dedicated);
         if (destination.port != destination.base_port) {
             rtp_frame_pace_debug::stop_tee(destination.port);
             destination.port = destination.base_port;
@@ -1031,12 +1177,12 @@ std::optional<std::string> GStreamerVideoFanout::begin_tier_cutover(
     if (source_kind_ == SourceKind::X11 && display_.empty()) {
         return std::nullopt;
     }
-    if (source_kind_ == SourceKind::PipeWire && pipewire_node_.empty()) {
+    if (source_kind_ == SourceKind::PipeWire && pipewire_target_.path.empty()) {
         return std::nullopt;
     }
 
     if (slot->staging_active) {
-        slot->staging.stop();
+        stop_pipeline(slot->staging);
         if (slot->staging_port != 0) {
             terminate_gst_multiudpsink_on_port(slot->staging_port);
             rtp_frame_pace_debug::stop_tee(slot->staging_port);
@@ -1057,10 +1203,37 @@ std::optional<std::string> GStreamerVideoFanout::begin_tier_cutover(
     }
     terminate_gst_multiudpsink_on_port(staging_port);
     rtp_frame_pace_debug::stop_tee(staging_port);
-    const auto args = build_single_encode_args(settings, slot->host, staging_port);
-    apply_nvenc_environment(slot->staging, args, staging_encode_log_path());
+    if (!gst_element_available("multiudpsink")) {
+        throw std::runtime_error("multiudpsink is required for video staging (gst-plugins-good)");
+    }
+    if (source_kind_ == SourceKind::PipeWire && !gst_element_available("pipewiresrc")) {
+        throw std::runtime_error("pipewiresrc is required for gamescope video staging");
+    }
+    const SharedVideoSource source{
+        source_kind_ == SourceKind::PipeWire
+            ? SharedVideoSource::Kind::PipeWire
+            : SharedVideoSource::Kind::X11,
+        source_kind_ == SourceKind::PipeWire ? pipewire_target_.path : display_,
+        source_kind_ == SourceKind::PipeWire ? pipewire_target_.target_object : std::string{},
+    };
+    const auto options = probe_h264_branch_options(nvenc_cuda_device_id_);
+    const auto branch = SharedVideoBranch{settings, {{slot->host, staging_port}}};
+    try {
+        slot->staging = start_selected_video_pipeline(
+            source,
+            {branch},
+            options,
+            VideoPipelineUse::Staging,
+            staging_encode_log_path());
+    } catch (const std::exception& ex) {
+        std::cerr
+            << "Video staging failed for client " << static_cast<int>(client_id)
+            << ": " << ex.what() << '\n';
+        slot->staging.reset();
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    if (!slot->staging.running()) {
+    if (!pipeline_running(slot->staging)) {
+        slot->staging.reset();
         slot->staging_port = 0;
         return std::nullopt;
     }
@@ -1088,9 +1261,7 @@ bool GStreamerVideoFanout::complete_tier_cutover(ClientId client_id, std::string
         return false;
     }
 
-    if (slot->dedicated.running()) {
-        slot->dedicated.stop();
-    }
+    stop_pipeline(slot->dedicated);
     if (slot->port != slot->base_port) {
         rtp_frame_pace_debug::stop_tee(slot->port);
     }
@@ -1106,7 +1277,7 @@ bool GStreamerVideoFanout::complete_tier_cutover(ClientId client_id, std::string
 
     bool any_shared = false;
     for (const auto& destination : destinations_) {
-        if (!destination.dedicated.running()) {
+        if (!pipeline_running(destination.dedicated)) {
             any_shared = true;
             break;
         }
@@ -1124,7 +1295,7 @@ void GStreamerVideoFanout::abort_tier_cutover(ClientId client_id) {
     if (slot == nullptr || !slot->staging_active) {
         return;
     }
-    slot->staging.stop();
+    stop_pipeline(slot->staging);
     if (slot->staging_port != 0) {
         terminate_gst_multiudpsink_on_port(slot->staging_port);
         rtp_frame_pace_debug::stop_tee(slot->staging_port);
@@ -1150,13 +1321,13 @@ std::optional<std::string> GStreamerVideoFanout::current_video_uri(ClientId clie
 void GStreamerVideoFanout::stop() {
     for (auto& destination : destinations_) {
         if (destination.staging_active) {
-            destination.staging.stop();
+            stop_pipeline(destination.staging);
             destination.staging_active = false;
             if (destination.staging_port != 0) {
                 rtp_frame_pace_debug::stop_tee(destination.staging_port);
             }
         }
-        destination.dedicated.stop();
+        stop_pipeline(destination.dedicated);
         rtp_frame_pace_debug::stop_tee(destination.port);
         rtp_frame_pace_debug::stop_tee(destination.base_port);
     }
@@ -1171,13 +1342,13 @@ void GStreamerVideoFanout::stop_client(ClientId client_id) {
     if (slot == nullptr) {
         return;
     }
-    const bool was_on_shared_tee = !slot->dedicated.running();
+    const bool was_on_shared_tee = !pipeline_running(slot->dedicated);
     if (slot->staging_active) {
         abort_tier_cutover(client_id);
     }
     rtp_frame_pace_debug::stop_tee(slot->port);
     rtp_frame_pace_debug::stop_tee(slot->base_port);
-    slot->dedicated.stop();
+    stop_pipeline(slot->dedicated);
     destinations_.erase(
         std::remove_if(
             destinations_.begin(),
@@ -1194,7 +1365,7 @@ void GStreamerVideoFanout::stop_client(ClientId client_id) {
         // Only rebuild shared tee when the removed client was on it.
         bool any_shared = false;
         for (const auto& destination : destinations_) {
-            if (!destination.dedicated.running()) {
+            if (!pipeline_running(destination.dedicated)) {
                 any_shared = true;
                 break;
             }
@@ -1222,7 +1393,7 @@ void GStreamerVideoFanout::restart_pipeline() {
 
     std::vector<SharedVideoBranch> branches;
     for (const auto& destination : destinations_) {
-        if (destination.dedicated.running()) {
+        if (pipeline_running(destination.dedicated)) {
             continue;
         }
         const auto client = std::make_pair(destination.host, destination.port);
@@ -1243,74 +1414,66 @@ void GStreamerVideoFanout::restart_pipeline() {
         return;
     }
 
+    const auto restart_started = std::chrono::steady_clock::now();
+    auto log_restart_step = [&](std::string_view step) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - restart_started);
+        std::cout << "Video pipeline restart +" << elapsed.count() << "ms: " << step << '\n';
+    };
+
     // Crash leftovers (e.g. black ximagesrc) can keep publishing on the same RTP ports.
     for (const auto& destination : destinations_) {
-        if (!destination.dedicated.running()) {
+        if (!pipeline_running(destination.dedicated)) {
             terminate_gst_multiudpsink_on_port(destination.port);
         }
     }
+    log_restart_step("stale destination ports cleared");
     if (source_kind_ == SourceKind::X11 && display_.empty()) {
         return;
     }
-    if (source_kind_ == SourceKind::PipeWire && pipewire_node_.empty()) {
+    if (source_kind_ == SourceKind::PipeWire && pipewire_target_.path.empty()) {
         return;
     }
     if (!gst_element_available("multiudpsink")) {
         throw std::runtime_error("multiudpsink is required for video ladder fanout (gst-plugins-good)");
     }
+    log_restart_step("multiudpsink available");
     if (source_kind_ == SourceKind::PipeWire && !gst_element_available("pipewiresrc")) {
         throw std::runtime_error("pipewiresrc is required for gamescope video capture (gst-plugin-pipewire)");
     }
     if (source_kind_ == SourceKind::PipeWire) {
+        log_restart_step("pipewiresrc available");
         configure_managed_pipewire_environment();
+        log_restart_step("pipewire environment configured");
     }
 
     const bool legacy_nvenc = gst_element_available("nvh264enc");
+    log_restart_step("legacy nvenc probe complete");
     const bool managed_nvenc_device_select =
         nvenc_cuda_device_id_ >= 0 &&
         gst_element_available("nvautogpuh264enc") &&
         gst_element_has_writable_property("nvautogpuh264enc", "cuda-device-id");
-    const bool nvenc = managed_nvenc_device_select || legacy_nvenc;
-    const bool managed_inprocess_can_run =
-        !nvenc || nvenc_cuda_device_id_ < 0 || managed_nvenc_device_select;
-    const bool use_managed_inprocess =
-        kForceManagedVideoPipeline || (kEnableManagedVideoPipeline && managed_inprocess_can_run);
+    log_restart_step("managed nvenc probe complete");
 
     const SharedVideoSource source{
         source_kind_ == SourceKind::PipeWire
             ? SharedVideoSource::Kind::PipeWire
             : SharedVideoSource::Kind::X11,
-        source_kind_ == SourceKind::PipeWire ? pipewire_node_ : display_,
+        source_kind_ == SourceKind::PipeWire ? pipewire_target_.path : display_,
+        source_kind_ == SourceKind::PipeWire ? pipewire_target_.target_object : std::string{},
     };
 
     const H264BranchOptions options{
-        nvenc,
+        managed_nvenc_device_select || legacy_nvenc,
         managed_nvenc_device_select,
         nvenc_cuda_device_id_,
     };
 
-    if (use_managed_inprocess) {
-        auto managed = std::make_unique<ManagedGStreamerVideoPipelineRunner>();
-        if (managed->start(source, branches, options)) {
-            shared_pipeline_ = std::move(managed);
-            return;
-        }
-        if (kForceManagedVideoPipeline) {
-            throw std::runtime_error(
-                "forced in-process video pipeline failed; gst-launch fallback disabled: " +
-                managed->last_error());
-        }
-        std::cerr << "In-process video pipeline failed; falling back to gst-launch\n";
-    } else {
-        std::cerr
-            << "In-process video pipeline skipped: explicit NVENC CUDA device requested "
-            << "but this GStreamer nvcodec build has no writable per-element device property; "
-            << "using gst-launch to preserve GPU binding\n";
-    }
-
-    auto child = std::make_unique<ChildProcessVideoPipelineRunner>();
-    child->start(source, branches, options);
-    shared_pipeline_ = std::move(child);
+    shared_pipeline_ = start_selected_video_pipeline(
+        source,
+        branches,
+        options,
+        VideoPipelineUse::Shared);
 }
 
 GStreamerAudioFanout::~GStreamerAudioFanout() {
@@ -1580,9 +1743,9 @@ bool GStreamerMediaServer::video_deferred() const {
 }
 
 void GStreamerMediaServer::start_pipewire_video(
-    const std::string& pipewire_node,
+    const GamescopePipeWireTarget& pipewire_target,
     std::vector<MediaClientStream>& streams) {
-    if (!capture_.video || pipewire_node.empty()) {
+    if (!capture_.video || pipewire_target.path.empty()) {
         return;
     }
     if (video_fanout_.has_value()) {
@@ -1592,7 +1755,7 @@ void GStreamerMediaServer::start_pipewire_video(
     video_fanout_.emplace();
     video_fanout_->set_nvenc_cuda_device_id(capture_.nvenc_cuda_device_id);
     const auto video_streams = video_fanout_->start_pipewire(
-        pipewire_node,
+        pipewire_target,
         video_requests_from_media_destinations(plan_, destinations_),
         plan_.initial_video_settings);
     for (const auto& stream : video_streams) {

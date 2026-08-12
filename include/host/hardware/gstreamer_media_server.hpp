@@ -2,6 +2,7 @@
 
 #include "common/protocol.hpp"
 #include "common/platform/default_platform.hpp"
+#include "host/hardware/gamescope_pipewire_node.hpp"
 #include "host/hardware/media_capture.hpp"
 #include "host/hardware/media_server.hpp"
 #include "host/virtual/virtual_display.hpp"
@@ -37,7 +38,7 @@ public:
         const std::vector<MediaStreamRequest>& destinations,
         const VideoEncodeSettings& initial_settings = {});
     std::vector<MediaClientStream> start_pipewire(
-        const std::string& pipewire_node,
+        const GamescopePipeWireTarget& pipewire_target,
         const std::vector<MediaStreamRequest>& destinations,
         const VideoEncodeSettings& initial_settings = {});
     MediaClientStream add(
@@ -80,9 +81,9 @@ private:
         std::uint16_t port = 0;
         /** Current encode settings (session ceiling; same for all shared clients). */
         VideoEncodeSettings settings{};
-        /** Legacy: leftover dedicated process (stopped on reconfigure_shared). */
-        ChildProcess dedicated;
-        ChildProcess staging;
+        /** Dedicated warm encode promoted during cutover. */
+        std::unique_ptr<SharedVideoPipelineRunner> dedicated;
+        std::unique_ptr<SharedVideoPipelineRunner> staging;
         bool staging_active = false;
         std::uint16_t staging_port = 0;
         VideoEncodeSettings staging_settings{};
@@ -94,21 +95,13 @@ private:
     void restart_pipeline();
     void stop_shared_pipeline();
     bool shared_pipeline_running() const;
-    std::vector<std::string> build_single_encode_args(
-        const VideoEncodeSettings& settings,
-        const std::string& host,
-        std::uint16_t port) const;
-    void apply_nvenc_environment(
-        ChildProcess& process,
-        std::vector<std::string> args,
-        const std::optional<std::string>& stderr_path = std::nullopt);
     /** Staging encodes log to a file so a failed cutover is diagnosable. */
     static std::string staging_encode_log_path();
 
     enum class SourceKind { X11, PipeWire };
     SourceKind source_kind_ = SourceKind::X11;
     std::string display_;
-    std::string pipewire_node_;
+    GamescopePipeWireTarget pipewire_target_;
     // nvidia-smi index for nvenc via CUDA_VISIBLE_DEVICES; -1 = leave unset.
     int nvenc_cuda_device_id_ = -1;
     std::vector<Destination> destinations_;
@@ -182,7 +175,7 @@ public:
     // Gamescope: video fanout is deferred until the PipeWire node appears after launch.
     [[nodiscard]] bool video_deferred() const;
     void start_pipewire_video(
-        const std::string& pipewire_node,
+        const GamescopePipeWireTarget& pipewire_target,
         std::vector<MediaClientStream>& streams);
 
 private:

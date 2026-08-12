@@ -183,6 +183,9 @@ void sync_all_applied_from_fanout(SessionPlan& plan, const StreamFanoutPlan& fan
 }
 
 void log_stream_fanout_plan(const StreamFanoutPlan& fanout, std::string_view reason) {
+    if (fanout.trunk_action == StreamPipelineAction::SyncToTrunk && !fanout.trunk_changes) {
+        return;
+    }
     std::cerr
         << "Stream fanout plan [" << stream_pipeline_action_name(fanout.trunk_action) << "]"
         << " trunk_changes=" << (fanout.trunk_changes ? "yes" : "no")
@@ -630,6 +633,10 @@ std::optional<std::string> SessionControlMonitor::poll() {
             } else if (const auto* video_ready = std::get_if<MediaVideoReady>(&payload);
                        video_ready != nullptr) {
                 if (client.video_cutover.pending_video_uri.has_value()) {
+                    const auto pending_elapsed = client.video_cutover.started.time_since_epoch().count() == 0
+                        ? std::chrono::milliseconds{0}
+                        : std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now() - client.video_cutover.started);
                     if (video_ready->video_uri.empty()) {
                         media_server_.abort_video_tier_cutover(client.info.client_id);
                         client.video_cutover.pending_video_uri.reset();
@@ -639,7 +646,9 @@ std::optional<std::string> SessionControlMonitor::poll() {
                         client.video_cutover.pending_bitrate.reset();
                         client.video_cutover.pending_fps.reset();
                         client.video_cutover.started = {};
-                        std::cerr << "Video staging NACK from " << client_label(client) << '\n';
+                        std::cerr
+                            << "Video staging NACK from " << client_label(client)
+                            << " after " << pending_elapsed.count() << "ms\n";
                     } else if (video_ready->video_uri == *client.video_cutover.pending_video_uri) {
                         const auto pending_size =
                             client.video_cutover.pending_size.value_or(client.stream_preferences.applied_size);
@@ -770,6 +779,7 @@ std::optional<std::string> SessionControlMonitor::poll() {
                             std::cerr
                                 << "Trunk replace promoted warm encode for "
                                 << client_label(client)
+                                << " after " << pending_elapsed.count() << "ms"
                                 << " -> " << video_ready->video_uri << '\n';
                         } else {
                             // Sample branches (or promote failure): fall back to shared restart.
@@ -836,7 +846,9 @@ std::optional<std::string> SessionControlMonitor::poll() {
                         client.video_cutover.started = {};
                         std::cerr
                             << "Video staging ACK rejected from " << client_label(client)
-                            << " uri=\"" << video_ready->video_uri << "\"\n";
+                            << " after " << pending_elapsed.count() << "ms"
+                            << " uri=\"" << video_ready->video_uri << "\""
+                            << " expected=\"" << *client.video_cutover.pending_video_uri << "\"\n";
                     }
                 }
             } else if (const auto* link_request = std::get_if<LinkRequest>(&payload);
@@ -970,9 +982,13 @@ std::optional<std::string> SessionControlMonitor::poll() {
         if (client.video_cutover.pending_video_uri.has_value() &&
             client.video_cutover.started.time_since_epoch().count() != 0 &&
             now - client.video_cutover.started >= kVideoCutoverTimeout) {
+            const auto pending_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - client.video_cutover.started);
             media_server_.abort_video_tier_cutover(client.info.client_id);
             std::cerr
                 << "Clearing stale video pending for " << client_label(client)
+                << " after " << pending_elapsed.count() << "ms"
+                << " uri=\"" << *client.video_cutover.pending_video_uri << "\""
                 << " (staging warm-up timed out)\n";
             if (client.video_cutover.failures < 255) {
                 ++client.video_cutover.failures;
@@ -1651,6 +1667,9 @@ void SessionControlMonitor::apply_video_encode(
                 std::cerr
                     << "Trunk replace warm-up for " << client_label(client)
                     << " uri=" << *staging_uri
+                    << " target=" << fanout.proposed_trunk.bitrate_kbps << "kbps/"
+                    << static_cast<int>(fanout.proposed_trunk.framerate) << "fps"
+                    << "/" << fanout.proposed_trunk.width << "x" << fanout.proposed_trunk.height
                     << " streams=" << fanout.streams.size()
                     << " [" << stream_pipeline_action_name(StreamPipelineAction::ReplaceTrunk)
                     << "]\n";

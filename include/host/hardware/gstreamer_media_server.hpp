@@ -144,6 +144,8 @@ private:
 class GStreamerMediaServer final : public MediaServer {
 public:
     explicit GStreamerMediaServer(GStreamerMediaCaptureConfig capture);
+    bool audio() const {return audio_fanout_.has_value();}
+    bool video() const {return video_fanout_.has_value();}
 
     void start(
         const HostMediaPlanConfig& plan,

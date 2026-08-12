@@ -1774,7 +1774,7 @@ void GStreamerMediaServer::start(
 }
 
 bool GStreamerMediaServer::video_deferred() const {
-    return defer_pipewire_video_ && !video_fanout_.has_value();
+    return defer_pipewire_video_ && !video();
 }
 
 void GStreamerMediaServer::start_pipewire_video(
@@ -1783,7 +1783,7 @@ void GStreamerMediaServer::start_pipewire_video(
     if (!capture_.video || pipewire_target.path.empty()) {
         return;
     }
-    if (video_fanout_.has_value()) {
+    if (video()) {
         video_fanout_->stop();
         video_fanout_.reset();
     }
@@ -1811,14 +1811,14 @@ MediaEndpoint GStreamerMediaServer::add_client(
     bool wants_audio) {
     auto endpoint = MediaEndpoint{};
     const auto destination = HostMediaDestination{client_id, destination_host};
-    if (wants_video && capture_.video && video_fanout_.has_value()) {
+    if (wants_video && capture_.video && video()) {
         const auto stream = video_fanout_->add(
             capture_.virtual_display,
             video_request_for_destination(plan_, destination, media_index),
             plan_.initial_video_settings);
         endpoint.video_uri = stream.endpoint.video_uri;
     }
-    if (wants_audio && capture_.audio && audio_fanout_.has_value()) {
+    if (wants_audio && capture_.audio && audio()) {
         const auto stream = audio_fanout_->add(
             capture_.audio_backend,
             capture_.audio_source,
@@ -1829,16 +1829,16 @@ MediaEndpoint GStreamerMediaServer::add_client(
 }
 
 void GStreamerMediaServer::remove_client(ClientId client_id) {
-    if (video_fanout_.has_value()) {
+    if (video()) {
         video_fanout_->stop_client(client_id);
     }
-    if (audio_fanout_.has_value()) {
+    if (audio()) {
         audio_fanout_->stop_client(client_id);
     }
 }
 
 bool GStreamerMediaServer::reconfigure_shared_video(const VideoEncodeSettings& settings) {
-    if (!video_fanout_.has_value()) {
+    if (!video()) {
         return false;
     }
     plan_.initial_video_settings = settings;
@@ -1848,7 +1848,7 @@ bool GStreamerMediaServer::reconfigure_shared_video(const VideoEncodeSettings& s
 bool GStreamerMediaServer::apply_video_branch_layout(
     const VideoEncodeSettings& trunk,
     const std::vector<std::pair<ClientId, VideoEncodeSettings>>& per_client) {
-    if (!video_fanout_.has_value()) {
+    if (!video()) {
         return false;
     }
     plan_.initial_video_settings = trunk;
@@ -1856,7 +1856,7 @@ bool GStreamerMediaServer::apply_video_branch_layout(
 }
 
 bool GStreamerMediaServer::restart_shared_audio() {
-    if (!audio_fanout_.has_value()) {
+    if (!audio()) {
         return false;
     }
     try {
@@ -1871,24 +1871,24 @@ bool GStreamerMediaServer::restart_shared_audio() {
 bool GStreamerMediaServer::complete_video_tier_cutover(
     ClientId client_id,
     std::string_view staging_video_uri) {
-    if (!video_fanout_.has_value()) {
+    if (!video()) {
         return false;
     }
     return video_fanout_->complete_tier_cutover(client_id, staging_video_uri);
 }
 
 void GStreamerMediaServer::abort_video_tier_cutover(ClientId client_id) {
-    if (video_fanout_.has_value()) {
+    if (video()) {
         video_fanout_->abort_tier_cutover(client_id);
     }
 }
 
 bool GStreamerMediaServer::video_cutover_in_flight(ClientId client_id) const {
-    return video_fanout_.has_value() && video_fanout_->cutover_in_flight(client_id);
+    return video() && video_fanout_->cutover_in_flight(client_id);
 }
 
 std::optional<std::string> GStreamerMediaServer::current_video_uri(ClientId client_id) const {
-    if (!video_fanout_.has_value()) {
+    if (!video()) {
         return std::nullopt;
     }
     return video_fanout_->current_video_uri(client_id);
@@ -1897,18 +1897,18 @@ std::optional<std::string> GStreamerMediaServer::current_video_uri(ClientId clie
 std::optional<std::string> GStreamerMediaServer::begin_video_tier_cutover(
     ClientId client_id,
     const VideoEncodeSettings& settings) {
-    if (!video_fanout_.has_value()) {
+    if (!video()) {
         return std::nullopt;
     }
     return video_fanout_->begin_tier_cutover(client_id, settings);
 }
 
 void GStreamerMediaServer::stop() {
-    if (audio_fanout_.has_value()) {
+    if (audio()) {
         audio_fanout_->stop();
         audio_fanout_.reset();
     }
-    if (video_fanout_.has_value()) {
+    if (video()) {
         video_fanout_->stop();
         video_fanout_.reset();
     }

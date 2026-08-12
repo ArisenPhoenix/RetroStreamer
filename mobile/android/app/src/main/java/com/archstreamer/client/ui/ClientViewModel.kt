@@ -376,9 +376,6 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private var backMenuChromeFocused = false
     /** Last pause On/Off actually sent — dedupe only, never used to invert. */
     private var lastSentMenuPause: Boolean? = null
-    /** Stream changes keep menu pause until the promoted media endpoint arrives. */
-    private var streamExitUnpausePending = false
-    private var streamExitUnpauseJob: Job? = null
     /** Live session system key — used to resolve Auto layout and apply live edits. */
     private var sessionSystemKey: String? = null
     private var sessionFamily: OverlaySystemFamily = OverlaySystemFamily.Standard
@@ -1054,9 +1051,6 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     private fun openTvPlayMenu() {
         val snap = _state.value
         if (menuDrawerOpen && snap.playPaneVisible()) return
-        streamExitUnpausePending = false
-        streamExitUnpauseJob?.cancel()
-        streamExitUnpauseJob = null
         val target = if (snap.playing && !snap.playPaneVisible()) {
             NavSection.Controls
         } else {
@@ -2130,13 +2124,10 @@ fun clearBackMenuChromeFocus() {
     /** Dismiss overlay/stream settings and return to the live play surface. */
     fun returnToPlay() {
         if (!_state.value.playing) return
-        val leavingStream = _state.value.section == NavSection.Stream
         val wasMenuOpen = menuDrawerOpen
         val wasMenuPaused = lastSentMenuPause == true
         overlayEditPauseJob?.cancel()
         overlayEditPauseJob = null
-        streamExitUnpauseJob?.cancel()
-        streamExitUnpauseJob = null
         menuDrawerOpen = false
         backMenuChromeFocused = false
         resetMenuHats()
@@ -2152,19 +2143,10 @@ fun clearBackMenuChromeFocus() {
         if (wasMenuPaused) {
             menuPauseJob?.cancel()
             menuPauseJob = null
-            if (leavingStream && commitStreamPrefsToSession("return to play")) {
-                streamExitUnpausePending = true
-                streamExitUnpauseJob = viewModelScope.launch(Dispatchers.IO) {
-                    delay(STREAM_EXIT_UNPAUSE_FALLBACK_MS)
-                    if (_state.value.playing && streamExitUnpausePending && !menuDrawerOpen) {
-                        ClientFileLog.append("emuControl stream-exit unpause fallback")
-                        streamExitUnpausePending = false
-                        pushEmulatorControls(pause = false, force = true)
-                    }
-                }
-            } else {
-                streamExitUnpausePending = false
-                pushEmulatorControls(pause = false, force = true)
+            pushEmulatorControls(pause = false, force = true)
+            viewModelScope.launch(Dispatchers.IO) {
+                delay(MENU_PAUSE_DEBOUNCE_MS + 150L)
+                commitStreamPrefsToSession("return to play")
             }
         } else {
             commitStreamPrefsToSession("return to play")
@@ -3609,9 +3591,6 @@ fun clearBackMenuChromeFocus() {
      * pause unless control editing is temporarily capturing a live frame.
      */
     fun onMenuDrawerOpened() {
-        streamExitUnpausePending = false
-        streamExitUnpauseJob?.cancel()
-        streamExitUnpauseJob = null
         menuDrawerOpen = true
         logControl("menuDrawerOpen=true (pads muted for UDP)")
         clearRemotedKeys()
@@ -3665,9 +3644,9 @@ fun clearBackMenuChromeFocus() {
         menuPauseJob = viewModelScope.launch(Dispatchers.IO) {
             delay(MENU_PAUSE_DEBOUNCE_MS)
             if (!_state.value.playing) return@launch
-            val hasFrames = session?.videoPlayer?.hasDecodedFrames() == true
-            val wantPaused = menuDrawerOpen && hasFrames && !_state.value.controls.overlayEditing
-            // Initial Closed while playing / drawer open before first frame: do not poke.
+            val hasVideo = session?.videoPlayer != null
+            val wantPaused = menuDrawerOpen && hasVideo && !_state.value.controls.overlayEditing
+            // Initial Closed while playing / drawer open before endpoint bind: do not poke.
             if (lastSentMenuPause == null && !wantPaused) return@launch
             if (lastSentMenuPause == wantPaused) return@launch
             pushEmulatorControls(
@@ -4859,13 +4838,6 @@ fun clearBackMenuChromeFocus() {
                             _state.update {
                                 it.copy(stream = it.stream.copy(mediaHint = "Video UDP :${promoted.port}"), session = it.session.copy(videoPlayer = promoted))
                             }
-                            if (streamExitUnpausePending && !menuDrawerOpen) {
-                                streamExitUnpausePending = false
-                                streamExitUnpauseJob?.cancel()
-                                streamExitUnpauseJob = null
-                                ClientFileLog.append("emuControl stream-exit unpause after MediaEndpoint")
-                                pushEmulatorControls(pause = false, force = true)
-                            }
                             // Staging Ready means frames exist; apply deferred drawer pause.
                             if (menuDrawerOpen) syncMenuPause()
                         }
@@ -4965,9 +4937,6 @@ fun clearBackMenuChromeFocus() {
     private fun endSession(sendLeave: Boolean = true) {
         menuDrawerOpen = false
         lastSentMenuPause = null
-        streamExitUnpausePending = false
-        streamExitUnpauseJob?.cancel()
-        streamExitUnpauseJob = null
         resetAvStallState()
         clearRemotedKeys()
         resetFastForwardSendState()
@@ -5081,8 +5050,6 @@ fun clearBackMenuChromeFocus() {
         private const val MENU_PAUSE_DEBOUNCE_MS = 250L
         /** Let a newly attached editor surface paint one live frame before pausing. */
         private const val OVERLAY_EDIT_PAUSE_DELAY_MS = 500L
-        /** Safety net if a stream-change endpoint is not echoed after leaving Stream. */
-        private const val STREAM_EXIT_UNPAUSE_FALLBACK_MS = 20_000L
         /** Hat axis magnitude that counts as a D-pad press while navigating menus. */
         private const val HAT_EDGE = 0.5f
         /** Ignore FF button bounce before rate-limit clock. */

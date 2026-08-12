@@ -1074,6 +1074,20 @@ bool GStreamerVideoFanout::reconfigure_shared(const VideoEncodeSettings& setting
         return false;
     }
 
+    bool already_configured = shared_pipeline_running();
+    for (const auto& destination : destinations_) {
+        if (destination.staging_active ||
+            pipeline_running(destination.dedicated) ||
+            destination.port != destination.base_port ||
+            destination.settings != settings) {
+            already_configured = false;
+            break;
+        }
+    }
+    if (already_configured) {
+        return true;
+    }
+
     for (auto& destination : destinations_) {
         if (destination.staging_active) {
             stop_pipeline(destination.staging);
@@ -1125,6 +1139,27 @@ bool GStreamerVideoFanout::apply_branch_layout(
     }
     if (source_kind_ == SourceKind::PipeWire && pipewire_target_.path.empty()) {
         return false;
+    }
+
+    bool already_configured = shared_pipeline_running();
+    for (const auto& destination : destinations_) {
+        auto expected = trunk;
+        for (const auto& [client_id, settings] : per_client) {
+            if (client_id == destination.client_id) {
+                expected = settings;
+                break;
+            }
+        }
+        if (destination.staging_active ||
+            pipeline_running(destination.dedicated) ||
+            destination.port != destination.base_port ||
+            destination.settings != expected) {
+            already_configured = false;
+            break;
+        }
+    }
+    if (already_configured) {
+        return true;
     }
 
     for (auto& destination : destinations_) {

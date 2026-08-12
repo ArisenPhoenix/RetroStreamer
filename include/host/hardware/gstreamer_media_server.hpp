@@ -46,7 +46,7 @@ public:
         const MediaStreamRequest& destination,
         const VideoEncodeSettings& settings = {});
 
-    /** Apply [settings] to every destination and restart the shared pipeline. */
+    /** Apply [settings] to every destination; no-ops when the shared pipeline already matches. */
     bool reconfigure_shared(const VideoEncodeSettings& settings);
     /**
      * Set each destination's encode settings and rebuild the capture → branch ladder.

@@ -809,13 +809,10 @@ private fun GamesSection(
     val configuration = LocalConfiguration.current
     val isTv = AndroidDeviceProfile.isTv(configuration)
     val cursorIndex = listRows.indexOfFirst { it.key == cursor?.key }
-    LaunchedEffect(cursorIndex) {
+    LaunchedEffect(cursorIndex, isTv) {
+        if (!isTv) return@LaunchedEffect
         if (cursorIndex >= 0) {
-            if (isTv) {
-                runCatching { listState.scrollToItem(cursorIndex) }
-            } else {
-                runCatching { listState.animateScrollToItem(cursorIndex) }
-            }
+            runCatching { listState.scrollToItem(cursorIndex) }
         }
     }
 

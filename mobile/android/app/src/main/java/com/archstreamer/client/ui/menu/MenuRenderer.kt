@@ -155,19 +155,17 @@ fun MenuOptionList(
     val options = section.options
     val listState = rememberLazyListState()
     val configuration = LocalConfiguration.current
-    val useLightweightTextRows = AndroidDeviceProfile.isTv(configuration)
+    val isTv = AndroidDeviceProfile.isTv(configuration)
+    val useLightweightTextRows = isTv
     // A row can only ask to be revealed once it exists, so wrapping to the far end of a
     // page — where the target was never composed — has to be scrolled by the list itself.
-    LaunchedEffect(section.id, focusedOptionId) {
+    LaunchedEffect(section.id, focusedOptionId, isTv) {
+        if (!isTv) return@LaunchedEffect
         val target = options.indexOfFirst { it.id == focusedOptionId }
         if (target < 0) return@LaunchedEffect
         val visible = listState.layoutInfo.visibleItemsInfo
         if (visible.isNotEmpty() && visible.none { it.index == target }) {
-            if (useLightweightTextRows) {
-                runCatching { listState.scrollToItem(target) }
-            } else {
-                runCatching { listState.animateScrollToItem(target) }
-            }
+            runCatching { listState.scrollToItem(target) }
         }
     }
     LazyColumn(
@@ -722,7 +720,7 @@ private fun NoteRow(option: MenuOption.Note) {
 private fun Modifier.revealWhenFocused(focused: Boolean): Modifier {
     val configuration = LocalConfiguration.current
     val isTv = AndroidDeviceProfile.isTv(configuration)
-    if (isTv) return this
+    if (!isTv) return this
     val requester = remember { BringIntoViewRequester() }
     LaunchedEffect(focused) {
         if (focused) runCatching { requester.bringIntoView() }
@@ -790,15 +788,12 @@ fun MenuDrawerSections(
     val listState = rememberLazyListState()
     val configuration = LocalConfiguration.current
     val isTv = AndroidDeviceProfile.isTv(configuration)
-    LaunchedEffect(focus.section, focus.inOptions, sections) {
+    LaunchedEffect(focus.section, focus.inOptions, sections, isTv) {
+        if (!isTv) return@LaunchedEffect
         if (focus.inOptions) return@LaunchedEffect
         val target = sections.indexOfFirst { it.id == focus.section }
         if (target < 0) return@LaunchedEffect
-        if (isTv) {
-            runCatching { listState.scrollToItem(target) }
-        } else {
-            runCatching { listState.animateScrollToItem(target) }
-        }
+        runCatching { listState.scrollToItem(target) }
     }
     LazyColumn(state = listState, modifier = modifier) {
         items(sections, key = { it.id }) { section ->

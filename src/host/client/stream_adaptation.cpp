@@ -401,28 +401,28 @@ std::vector<StreamClientMigration> migrations_for_stream(const StreamBranchGroup
     return migrations;
 }
 
+
+
 StreamFanoutPlan build_stream_fanout_plan(
     const SessionClientConnection& requesting_client,
     bool is_seated_player,
     bool session_video_configured,
     const VideoEncodeSettings& current_trunk,
     const VideoEncodeSettings& proposed_trunk,
-    MediaStreamSize proposed_size,
-    MediaQualityTier proposed_tier,
-    MediaStreamFeel proposed_feel,
-    MediaStreamBitrate proposed_bitrate,
-    MediaStreamFps proposed_fps,
+    SessionVideoCeiling ceilings,
     std::vector<StreamBranchCandidate> candidates,
     bool cutover_in_flight,
     bool within_reconfigure_cooldown) {
     StreamFanoutPlan plan;
     plan.current_trunk = current_trunk;
     plan.proposed_trunk = proposed_trunk;
-    plan.proposed_size = proposed_size;
-    plan.proposed_tier = proposed_tier;
-    plan.proposed_feel = proposed_feel;
-    plan.proposed_bitrate = proposed_bitrate;
-    plan.proposed_fps = proposed_fps;
+
+
+    plan.proposed_size = ceilings.size;
+    plan.proposed_tier = ceilings.tier;
+    plan.proposed_feel = ceilings.feel;
+    plan.proposed_bitrate = ceilings.bitrate;
+    plan.proposed_fps = ceilings.fps;
     plan.trunk_changes =
         !session_video_configured || proposed_trunk != current_trunk;
 

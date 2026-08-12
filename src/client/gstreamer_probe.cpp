@@ -3,8 +3,10 @@
 #include "common/platform/process_utils.hpp"
 
 #include <cstring>
-#include <string>
 #include <cstddef>
+#include <mutex>
+#include <string>
+#include <unordered_map>
 
 namespace archstreamer {
 namespace {
@@ -18,6 +20,35 @@ constexpr const char* kDevNull = "/dev/null";
 int run_quiet(const std::string& command) {
     // Windows GUI builds: std::system() opens a console per probe on Join.
     return run_command_exit_code(command.c_str());
+}
+
+struct GstInspectCacheEntry {
+    bool available = false;
+    std::string output;
+};
+
+bool gst_inspect_available_cached() {
+    static const bool available =
+        run_quiet(std::string("gst-inspect-1.0 --version >") + kDevNull + " 2>&1") == 0;
+    return available;
+}
+
+const GstInspectCacheEntry& gst_inspect_element_cached(const std::string& element) {
+    static std::mutex cache_mutex;
+    static std::unordered_map<std::string, GstInspectCacheEntry> cache;
+
+    std::lock_guard lock(cache_mutex);
+    if (const auto found = cache.find(element); found != cache.end()) {
+        return found->second;
+    }
+
+    auto entry = GstInspectCacheEntry{};
+    if (gst_inspect_available_cached()) {
+        entry.output = read_command_output(
+            (std::string("gst-inspect-1.0 ") + element + " 2>" + kDevNull).c_str());
+        entry.available = !entry.output.empty();
+    }
+    return cache.emplace(element, std::move(entry)).first->second;
 }
 
 GstVideoSinkKind kind_for_sink(const char* element) {
@@ -36,19 +67,14 @@ GstVideoSinkKind kind_for_sink(const char* element) {
 } // namespace
 
 bool gst_inspect_available() {
-#ifdef _WIN32
-    return run_quiet(std::string("gst-inspect-1.0 --version >") + kDevNull + " 2>&1") == 0;
-#else
-    return run_quiet(std::string("gst-inspect-1.0 --version >") + kDevNull + " 2>&1") == 0;
-#endif
+    return gst_inspect_available_cached();
 }
 
 bool gst_element_available(const char* element) {
     if (element == nullptr || element[0] == '\0') {
         return false;
     }
-    return run_quiet(
-               std::string("gst-inspect-1.0 ") + element + " >" + kDevNull + " 2>&1") == 0;
+    return gst_inspect_element_cached(element).available;
 }
 
 bool gst_element_property_available(const char* element, const char* property) {
@@ -56,9 +82,11 @@ bool gst_element_property_available(const char* element, const char* property) {
         property == nullptr || property[0] == '\0') {
         return false;
     }
-    const auto output = read_command_output(
-        (std::string("gst-inspect-1.0 ") + element + " 2>" + kDevNull).c_str());
-    return output.find(property) != std::string::npos;
+    const auto& probe = gst_inspect_element_cached(element);
+    if (!probe.available) {
+        return false;
+    }
+    return probe.output.find(property) != std::string::npos;
 }
 
 bool gst_video_sink_usable(const char* element) {

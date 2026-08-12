@@ -256,7 +256,7 @@ PlayerEncodeContribution player_encode_contribution(
     const MediaStreamFeel feel = use_override ? feel_override : client.stream_preferences.wanted_feel;
     const MediaStreamBitrate bitrate =
         use_override ? bitrate_override : client.stream_preferences.wanted_bitrate;
-    const MediaStreamFps fps = use_override ? fps_override : effective_fps_cap_for(client);
+    const MediaStreamFps fps = use_override ? fps_override : effective_fps_cap_for(client); 
     return PlayerEncodeContribution{
         video_encode_settings_for_client(
             client,
@@ -275,15 +275,20 @@ PlayerEncodeContribution player_encode_contribution(
     };
 }
 
-struct SessionVideoCeiling {
-    VideoEncodeSettings settings{};
-    MediaStreamSize size = MediaStreamSize::P720;
-    MediaQualityTier tier = MediaQualityTier::Medium;
-    MediaStreamFeel feel = MediaStreamFeel::LowLatency;
-    MediaStreamBitrate bitrate = MediaStreamBitrate::Auto;
-    MediaStreamFps fps = MediaStreamFps::Fps30;
-    bool any_player = false;
-};
+
+std::chrono::seconds reconnect_grace_for(const SessionClientConnection& client, std::chrono::seconds full) {
+    // Explicit ClientSessionLeave / admin Kick → end immediately (no reconnect hold).
+    // TCP close / heartbeat loss → full reconnect window for flaky links.
+    if (client.lifecycle.disconnect_reason == "left" || client.lifecycle.disconnect_reason == "kicked") {
+        return std::chrono::seconds(0);
+    }
+    return full;
+}
+
+} // namespace
+
+
+
 
 SessionVideoCeiling compute_session_video_ceiling(
     const SessionPlan& plan,
@@ -370,17 +375,6 @@ SessionVideoCeiling compute_session_video_ceiling(
         : media_stream_bitrate_for_settings(ceiling.settings);
     return ceiling;
 }
-
-std::chrono::seconds reconnect_grace_for(const SessionClientConnection& client, std::chrono::seconds full) {
-    // Explicit ClientSessionLeave / admin Kick → end immediately (no reconnect hold).
-    // TCP close / heartbeat loss → full reconnect window for flaky links.
-    if (client.lifecycle.disconnect_reason == "left" || client.lifecycle.disconnect_reason == "kicked") {
-        return std::chrono::seconds(0);
-    }
-    return full;
-}
-
-} // namespace
 
 SessionControlMonitor::SessionControlMonitor(
     SessionPlan& plan,
@@ -739,12 +733,14 @@ std::optional<std::string> SessionControlMonitor::poll() {
                             true,
                             true,
                             plan_.stream.video_settings,
+                            // ceiling,
                             ceiling.settings,
-                            ceiling.size,
-                            ceiling.tier,
-                            ceiling.feel,
-                            ceiling.bitrate,
-                            ceiling.fps,
+                            ceiling,
+                            // ceiling.size,
+                            // ceiling.tier,
+                            // ceiling.feel,
+                            // ceiling.bitrate,
+                            // ceiling.fps,
                             std::move(candidates),
                             false,
                             false);
@@ -1510,7 +1506,7 @@ void SessionControlMonitor::apply_video_encode(
     feel = resolution.request.feel;
     bitrate = resolution.request.bitrate;
     fps = resolution.request.fps;
-    const auto ceiling = compute_session_video_ceiling(
+    const auto ceilings = compute_session_video_ceiling(
         plan_,
         capture_width_,
         capture_height_,
@@ -1536,7 +1532,7 @@ void SessionControlMonitor::apply_video_encode(
         candidate.wants_video = true;
         if (!client_is_seated_player(other)) {
             // Viewers never raise the trunk; they ride it (or a later sample of it).
-            candidate.target_settings = ceiling.settings;
+            candidate.target_settings = ceilings.settings;
         } else if (other.info.client_id == client.info.client_id) {
             candidate.target_settings = player_encode_contribution(
                 other,
@@ -1586,19 +1582,15 @@ void SessionControlMonitor::apply_video_encode(
         client_is_seated_player(client),
         plan_.stream.video_configured,
         plan_.stream.video_settings,
-        ceiling.settings,
-        ceiling.size,
-        ceiling.tier,
-        ceiling.feel,
-        ceiling.bitrate,
-        ceiling.fps,
+        ceilings.settings,
+        ceilings,
         std::move(candidates),
         cutover_in_flight,
         within_reconfigure_cooldown);
     if (fanout.trunk_action == StreamPipelineAction::None) {
+        
         return;
     }
-
     // Wait for real decoded frames before raising/replacing/reshaping media.
     // Manual mid-session changes still apply once initial_video_settings_ready.
     if (!client.video_health.initial_video_settings_ready &&
@@ -1785,7 +1777,7 @@ void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& cl
 
     // Drop this seat's contribution; remaining players own the ceiling.
     if (plan_.stream.video_configured && client.hello.wants_video) {
-        const auto ceiling = compute_session_video_ceiling(
+        const auto ceilings = compute_session_video_ceiling(
             plan_,
             capture_width_,
             capture_height_,
@@ -1796,14 +1788,14 @@ void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& cl
             MediaStreamBitrate::Auto,
             MediaStreamFps::Fps30,
             false);
-        if (ceiling.settings != plan_.stream.video_settings) {
-            if (media_server_.reconfigure_shared_video(ceiling.settings)) {
-                plan_.stream.video_settings = ceiling.settings;
-                plan_.stream.video_size = ceiling.size;
-                plan_.stream.video_tier = ceiling.tier;
-                plan_.stream.video_feel = ceiling.feel;
-                plan_.stream.video_bitrate = ceiling.bitrate;
-                plan_.stream.video_fps = ceiling.fps;
+        if (ceilings.settings != plan_.stream.video_settings) {
+            if (media_server_.reconfigure_shared_video(ceilings.settings)) {
+                plan_.stream.video_settings = ceilings.settings;
+                plan_.stream.video_size = ceilings.size;
+                plan_.stream.video_tier = ceilings.tier;
+                plan_.stream.video_feel = ceilings.feel;
+                plan_.stream.video_bitrate = ceilings.bitrate;
+                plan_.stream.video_fps = ceilings.fps;
                 sync_all_applied_to_session(plan_);
                 const auto now = std::chrono::steady_clock::now();
                 for (auto& other : plan_.clients) {
@@ -1812,8 +1804,8 @@ void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& cl
                     }
                 }
                 std::cerr
-                    << "Session video -> " << media_stream_size_name(ceiling.size)
-                    << "/" << media_quality_tier_name(ceiling.tier)
+                    << "Session video -> " << media_stream_size_name(ceilings.size)
+                    << "/" << media_quality_tier_name(ceilings.tier)
                     << " after " << client_label(client) << " left\n";
             }
         }

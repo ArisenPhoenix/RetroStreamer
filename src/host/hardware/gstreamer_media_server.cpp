@@ -19,6 +19,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 
 #include <unistd.h>
@@ -150,21 +151,47 @@ std::vector<std::pair<std::string, std::uint16_t>> multiudp_clients_with_pace_te
     return clients;
 }
 
+struct GstInspectCacheEntry {
+    bool available = false;
+    std::string output;
+};
+
+const GstInspectCacheEntry& gst_inspect_element_cached(const std::string& element) {
+    static std::mutex cache_mutex;
+    static std::unordered_map<std::string, GstInspectCacheEntry> cache;
+
+    std::lock_guard lock(cache_mutex);
+    if (const auto found = cache.find(element); found != cache.end()) {
+        return found->second;
+    }
+
+    auto entry = GstInspectCacheEntry{};
+    static const bool inspect_available = command_available("gst-inspect-1.0");
+    if (inspect_available) {
+        entry.output = read_command_output(
+            (std::string("gst-inspect-1.0 ") + element + " 2>/dev/null").c_str());
+        entry.available = !entry.output.empty();
+    }
+    return cache.emplace(element, std::move(entry)).first->second;
+}
+
 bool gst_element_available(const char* element) {
-    if (!command_available("gst-inspect-1.0")) {
+    if (element == nullptr || element[0] == '\0') {
         return false;
     }
-    return std::system(
-               (std::string("gst-inspect-1.0 ") + element + " >/dev/null 2>&1").c_str()) == 0;
+    return gst_inspect_element_cached(element).available;
 }
 
 bool gst_element_has_writable_property(const char* element, const char* property) {
-    if (!command_available("gst-inspect-1.0")) {
+    if (element == nullptr || element[0] == '\0' ||
+        property == nullptr || property[0] == '\0') {
         return false;
     }
-    const auto output = read_command_output(
-        (std::string("gst-inspect-1.0 ") + element + " 2>/dev/null").c_str());
-    return output.find(std::string("\n  ") + property) != std::string::npos;
+    const auto& probe = gst_inspect_element_cached(element);
+    if (!probe.available) {
+        return false;
+    }
+    return probe.output.find(std::string("\n  ") + property) != std::string::npos;
 }
 
 enum class VideoPipelineMode {
@@ -1459,7 +1486,7 @@ void GStreamerVideoFanout::restart_pipeline() {
     // Crash leftovers (e.g. black ximagesrc) can keep publishing on the same RTP ports.
     for (const auto& destination : destinations_) {
         if (!pipeline_running(destination.dedicated)) {
-            terminate_gst_multiudpsink_on_port(destination.port);
+            terminate_gst_multiudpsink_on_port(destination.port); 
         }
     }
     log_restart_step("stale destination ports cleared");

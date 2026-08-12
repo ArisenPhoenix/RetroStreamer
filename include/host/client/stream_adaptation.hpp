@@ -189,6 +189,16 @@ std::vector<StreamBranchGroup> group_stream_branch_decisions(
 
 std::vector<StreamClientMigration> migrations_for_stream(const StreamBranchGroup& stream);
 
+struct SessionVideoCeiling {
+    VideoEncodeSettings settings{};
+    MediaStreamSize size = MediaStreamSize::P720;
+    MediaQualityTier tier = MediaQualityTier::Medium;
+    MediaStreamFeel feel = MediaStreamFeel::LowLatency;
+    MediaStreamBitrate bitrate = MediaStreamBitrate::Auto;
+    MediaStreamFps fps = MediaStreamFps::Fps30;
+    bool any_player = false;
+
+};
 /**
  * Plan against the proposed trunk: consolidate branches first, then choose trunk action.
  * SampleFromTrunk action here means "reshape branches only" (trunk encode unchanged).
@@ -199,11 +209,7 @@ StreamFanoutPlan build_stream_fanout_plan(
     bool session_video_configured,
     const VideoEncodeSettings& current_trunk,
     const VideoEncodeSettings& proposed_trunk,
-    MediaStreamSize proposed_size,
-    MediaQualityTier proposed_tier,
-    MediaStreamFeel proposed_feel,
-    MediaStreamBitrate proposed_bitrate,
-    MediaStreamFps proposed_fps,
+    SessionVideoCeiling ceilings,
     std::vector<StreamBranchCandidate> candidates,
     bool cutover_in_flight,
     bool within_reconfigure_cooldown);
@@ -227,5 +233,7 @@ std::optional<StreamAdaptationDecision> adapt_stream_for_heartbeat(
     std::chrono::seconds startup_grace,
     std::chrono::seconds post_reconfigure_grace,
     std::string_view client_label);
+
+
 
 } // namespace archstreamer

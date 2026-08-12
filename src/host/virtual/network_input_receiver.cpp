@@ -60,6 +60,9 @@ void NetworkInputReceiver::poll() {
         try {
             auto payload = deserialize_packet(*bytes);
             if (auto* input = std::get_if<ControllerInput>(&payload); input != nullptr) {
+                if (input->client_id == HostClientId) {
+                    continue;
+                }
                 if (!logged_first_receive_) {
                     logged_first_receive_ = true;
                     std::cout
@@ -97,12 +100,18 @@ void NetworkInputReceiver::poll() {
                         << " has no seat assignment; ignored\n";
                 }
             } else if (auto* keys = std::get_if<KeyboardInput>(&payload); keys != nullptr) {
+                if (keys->client_id == HostClientId) {
+                    continue;
+                }
                 if (auto* router = std::get_if<InputRouter*>(&target_); router != nullptr) {
                     (*router)->route(*keys);
                 } else if (auto* demux = std::get_if<InputRouterDemux*>(&target_); demux != nullptr) {
                     (*demux)->route(*keys);
                 }
             } else if (auto* touch = std::get_if<TouchInput>(&payload); touch != nullptr) {
+                if (touch->client_id == HostClientId) {
+                    continue;
+                }
                 if (auto* router = std::get_if<InputRouter*>(&target_); router != nullptr) {
                     (*router)->route(*touch);
                 } else if (auto* demux = std::get_if<InputRouterDemux*>(&target_); demux != nullptr) {

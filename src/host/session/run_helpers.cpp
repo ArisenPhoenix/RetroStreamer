@@ -265,8 +265,10 @@ std::unique_ptr<MelonDsCtrlClient> configure_session_input_router(
     InputRouter& input_router,
     VirtualKeyboard& keyboard,
     const HostLaunchPlan& launch_plan,
-    const SessionBackendState& backends) {
+    const SessionBackendState& backends,
+    const std::vector<ClientInfo>& clients) {
     input_router.set_seat_assignment(launch_plan.seats);
+    input_router.set_udp_session_tokens(clients);
     if (backends.switch_backend) {
         input_router.set_emulator_backend(EmulatorControlBackend::Ryujinx);
     } else if (backends.melonds_backend != nullptr) {

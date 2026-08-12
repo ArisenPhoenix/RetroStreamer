@@ -6,7 +6,8 @@
 
 namespace archstreamer {
 
-InputSender::InputSender(ClientId client_id) : client_id_(client_id) {
+InputSender::InputSender(ClientId client_id, std::uint64_t udp_session_token)
+    : client_id_(client_id), udp_session_token_(udp_session_token) {
 }
 
 ControllerInput InputSender::make_input(LocalPlayerIndex local_player, ControllerState state) const {
@@ -20,6 +21,7 @@ ControllerInput InputSender::make_input(LocalPlayerIndex local_player, Controlle
 
     return ControllerInput{
         client_id_,
+        udp_session_token_,
         local_player,
         state,
     };
@@ -36,6 +38,7 @@ KeyboardInput InputSender::make_keyboard(LocalPlayerIndex local_player, Keyboard
 
     return KeyboardInput{
         client_id_,
+        udp_session_token_,
         local_player,
         state,
     };
@@ -52,6 +55,7 @@ TouchInput InputSender::make_touch(
 
     return TouchInput{
         client_id_,
+        udp_session_token_,
         local_player,
         0,
         steady_timestamp_us(),

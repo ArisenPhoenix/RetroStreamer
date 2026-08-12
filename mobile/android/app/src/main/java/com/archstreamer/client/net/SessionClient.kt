@@ -317,6 +317,7 @@ data class JoinedPlaySession(
             )
             val packet = PacketCodec.controllerInput(
                 clientId = welcome.clientId,
+                udpSessionToken = welcome.udpSessionToken,
                 localPlayer = localPlayer,
                 state = stamped,
             )
@@ -329,6 +330,7 @@ data class JoinedPlaySession(
         keyboardSequence += 1
         val packet = PacketCodec.keyboardInput(
             clientId = welcome.clientId,
+            udpSessionToken = welcome.udpSessionToken,
             localPlayer = localPlayer,
             sequence = keyboardSequence,
             timestampUs = System.nanoTime() / 1_000L,
@@ -343,6 +345,7 @@ data class JoinedPlaySession(
         inputSequence += 1
         val packet = PacketCodec.touchInput(
             clientId = welcome.clientId,
+            udpSessionToken = welcome.udpSessionToken,
             localPlayer = localPlayer,
             sequence = inputSequence,
             timestampUs = System.nanoTime() / 1_000L,

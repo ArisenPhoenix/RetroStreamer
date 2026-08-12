@@ -209,11 +209,13 @@ object PacketCodec {
 
     fun controllerInput(
         clientId: Int,
+        udpSessionToken: Long,
         localPlayer: Int,
         state: ControllerState,
     ): ByteArray {
         val payload = WireWriter().apply {
             writeU8(clientId)
+            writeU64(udpSessionToken)
             writeU8(localPlayer)
             writeU32(state.sequence)
             writeU64(state.timestampUs)
@@ -382,6 +384,7 @@ object PacketCodec {
 
     fun keyboardInput(
         clientId: Int,
+        udpSessionToken: Long,
         localPlayer: Int,
         sequence: Long,
         timestampUs: Long,
@@ -389,6 +392,7 @@ object PacketCodec {
     ): ByteArray {
         val payload = WireWriter().apply {
             writeU8(clientId)
+            writeU64(udpSessionToken)
             writeU8(localPlayer)
             writeU32(sequence)
             writeU64(timestampUs)
@@ -399,6 +403,7 @@ object PacketCodec {
 
     fun touchInput(
         clientId: Int,
+        udpSessionToken: Long,
         localPlayer: Int,
         sequence: Long,
         timestampUs: Long,
@@ -408,6 +413,7 @@ object PacketCodec {
     ): ByteArray {
         val payload = WireWriter().apply {
             writeU8(clientId)
+            writeU64(udpSessionToken)
             writeU8(localPlayer)
             writeU32(sequence)
             writeU64(timestampUs)
@@ -462,6 +468,7 @@ object PacketCodec {
                     clientId = reader.readU8(),
                     maxPlayersForClient = reader.readU8(),
                     hostIsPlayer = reader.readBool(),
+                    udpSessionToken = reader.readU64(),
                 ),
             )
             PacketType.SeatAssignment -> {

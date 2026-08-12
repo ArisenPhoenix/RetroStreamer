@@ -4,6 +4,7 @@
 #include "host/host_launch_planner.hpp"
 #include "host/hardware/media_capture.hpp"
 #include "host/hardware/media_server.hpp"
+#include "host/client/client_info.hpp"
 #include "host/session/audio_channel.hpp"
 #include "host/session/runtime.hpp"
 #include "host/hardware/streaming_audio_sink.hpp"
@@ -74,7 +75,8 @@ std::unique_ptr<MelonDsCtrlClient> configure_session_input_router(
     InputRouter& input_router,
     VirtualKeyboard& keyboard,
     const HostLaunchPlan& launch_plan,
-    const SessionBackendState& backends);
+    const SessionBackendState& backends,
+    const std::vector<ClientInfo>& clients = {});
 
 enum class EmulatorStartFailDetail {
     Brief,

@@ -84,6 +84,7 @@ GameListRequest SessionClient::make_game_list_request(std::uint64_t client_catal
 
 void SessionClient::apply_welcome(const HostWelcome& welcome) {
     client_id_ = welcome.client_id;
+    udp_session_token_ = welcome.udp_session_token;
 }
 
 void SessionClient::apply_game_list(GameList game_list) {
@@ -96,6 +97,10 @@ void SessionClient::apply_seats(SeatAssignment seats) {
 
 std::optional<ClientId> SessionClient::client_id() const {
     return client_id_;
+}
+
+std::uint64_t SessionClient::udp_session_token() const {
+    return udp_session_token_;
 }
 
 const SeatAssignment& SessionClient::seats() const {

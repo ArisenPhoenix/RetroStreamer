@@ -209,6 +209,7 @@ ByteBuffer serialize_payload(const HostWelcome& payload) {
     writer.write_pod<ClientId>(payload.client_id);
     writer.write_pod<std::uint8_t>(payload.max_players_for_client);
     writer.write_bool(payload.host_is_player);
+    writer.write_pod<std::uint64_t>(payload.udp_session_token);
     return writer.take();
 }
 
@@ -243,6 +244,7 @@ ByteBuffer serialize_payload(const SeatAssignment& payload) {
 ByteBuffer serialize_payload(const ControllerInput& payload) {
     Writer writer;
     writer.write_pod<ClientId>(payload.client_id);
+    writer.write_pod<std::uint64_t>(payload.udp_session_token);
     writer.write_pod<LocalPlayerIndex>(payload.local_player);
     write_controller_state(writer, payload.state);
     return writer.take();
@@ -251,6 +253,7 @@ ByteBuffer serialize_payload(const ControllerInput& payload) {
 ByteBuffer serialize_payload(const KeyboardInput& payload) {
     Writer writer;
     writer.write_pod<ClientId>(payload.client_id);
+    writer.write_pod<std::uint64_t>(payload.udp_session_token);
     writer.write_pod<LocalPlayerIndex>(payload.local_player);
     writer.write_pod<std::uint32_t>(payload.state.sequence);
     writer.write_pod<std::uint64_t>(payload.state.timestamp_us);
@@ -261,6 +264,7 @@ ByteBuffer serialize_payload(const KeyboardInput& payload) {
 ByteBuffer serialize_payload(const TouchInput& payload) {
     Writer writer;
     writer.write_pod<ClientId>(payload.client_id);
+    writer.write_pod<std::uint64_t>(payload.udp_session_token);
     writer.write_pod<LocalPlayerIndex>(payload.local_player);
     writer.write_pod<std::uint32_t>(payload.sequence);
     writer.write_pod<std::uint64_t>(payload.timestamp_us);
@@ -907,6 +911,7 @@ HostWelcome read_host_welcome(Reader& reader) {
     payload.client_id = reader.read_pod<ClientId>();
     payload.max_players_for_client = reader.read_pod<std::uint8_t>();
     payload.host_is_player = reader.read_bool();
+    payload.udp_session_token = reader.read_pod<std::uint64_t>();
     return payload;
 }
 
@@ -940,6 +945,7 @@ SeatAssignment read_seat_assignment(Reader& reader) {
 ControllerInput read_controller_input(Reader& reader) {
     ControllerInput payload;
     payload.client_id = reader.read_pod<ClientId>();
+    payload.udp_session_token = reader.read_pod<std::uint64_t>();
     payload.local_player = reader.read_pod<LocalPlayerIndex>();
     payload.state = read_controller_state(reader);
     return payload;
@@ -948,6 +954,7 @@ ControllerInput read_controller_input(Reader& reader) {
 KeyboardInput read_keyboard_input(Reader& reader) {
     KeyboardInput payload;
     payload.client_id = reader.read_pod<ClientId>();
+    payload.udp_session_token = reader.read_pod<std::uint64_t>();
     payload.local_player = reader.read_pod<LocalPlayerIndex>();
     payload.state.sequence = reader.read_pod<std::uint32_t>();
     payload.state.timestamp_us = reader.read_pod<std::uint64_t>();
@@ -958,6 +965,7 @@ KeyboardInput read_keyboard_input(Reader& reader) {
 TouchInput read_touch_input(Reader& reader) {
     TouchInput payload;
     payload.client_id = reader.read_pod<ClientId>();
+    payload.udp_session_token = reader.read_pod<std::uint64_t>();
     payload.local_player = reader.read_pod<LocalPlayerIndex>();
     payload.sequence = reader.read_pod<std::uint32_t>();
     payload.timestamp_us = reader.read_pod<std::uint64_t>();

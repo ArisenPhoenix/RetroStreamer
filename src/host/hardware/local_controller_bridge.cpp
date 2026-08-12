@@ -126,6 +126,7 @@ void LocalControllerBridge::update(InputRouter& input_router) {
     if (!input_router.route(ControllerInput{
             HostClientId,
             0,
+            0,
             *state,
         })) {
         static bool logged_missing_seat = false;

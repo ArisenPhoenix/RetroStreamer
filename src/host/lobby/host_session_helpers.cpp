@@ -77,6 +77,7 @@ LiveSessionJoinTarget resolve_live_session_join_target(
     bool reconnect_requested) {
     LiveSessionJoinTarget target;
     target.client_id = next_session_client_id(plan);
+    target.udp_session_token = make_udp_session_token();
     if (reconnect_requested || hello.requested_players > 0) {
         target.reconnecting_client = disconnected_player_for_reconnect(plan, hello);
         if (target.reconnecting_client == nullptr && hello.requested_players > 0) {
@@ -84,6 +85,7 @@ LiveSessionJoinTarget resolve_live_session_join_target(
         }
         if (target.reconnecting_client != nullptr) {
             target.client_id = target.reconnecting_client->info.client_id;
+            target.udp_session_token = target.reconnecting_client->info.udp_session_token;
         }
     }
     return target;
@@ -94,6 +96,7 @@ MediaEndpoint send_live_session_join_handshake(const LiveSessionJoinHandshake& j
     welcome.client_id = join.client_id;
     welcome.max_players_for_client = MaxPlayersPerClient;
     welcome.host_is_player = join.plan.host_hello.has_value();
+    welcome.udp_session_token = join.udp_session_token;
     join.stream.send_packet(serialize_packet(welcome));
     join.stream.send_packet(serialize_packet(join.plan.seats));
     join.stream.send_packet(serialize_packet(SessionReady{
@@ -134,7 +137,9 @@ void reset_reconnected_session_client(
     const SessionPlan& plan,
     const MediaEndpoint& endpoint) {
     client.hello = hello;
+    const auto udp_session_token = client.info.udp_session_token;
     client.info = client_info_for(client.info.client_id, hello);
+    client.info.udp_session_token = udp_session_token;
     client.lifecycle.stream = std::move(stream);
     client.lifecycle.connection_state = SessionConnectionState::Connected;
     client.lifecycle.last_seen = std::chrono::steady_clock::now();
@@ -355,6 +360,7 @@ void poll_active_session_joins(
             *stream,
             authenticated_hello,
             join.client_id,
+            join.udp_session_token,
             plan,
             media_plan_config_for(config),
             media_index,
@@ -376,6 +382,7 @@ void poll_active_session_joins(
                 join.client_id,
                 authenticated_hello,
                 std::move(*stream)));
+            plan.clients.back().info.udp_session_token = join.udp_session_token;
             std::cout
                 << "Late viewer " << static_cast<int>(join.client_id)
                 << " joined username=" << authenticated_hello.username << ".\n";
@@ -502,8 +509,11 @@ std::optional<AcceptedControlHello> try_accept_control_hello(
                 presence->username,
                 presence->client_blocks_revision);
             AcceptedControlHello accepted;
+            auto info = ClientInfo{};
+            info.client_id = UnassignedClientId;
+            info.username = presence->username;
             accepted.presence = ControlClientConnection{
-                ClientInfo{UnassignedClientId, presence->username},
+                std::move(info),
                 std::move(*stream),
             };
             return accepted;

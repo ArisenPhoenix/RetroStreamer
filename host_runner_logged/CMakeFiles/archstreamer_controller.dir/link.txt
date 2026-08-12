@@ -1,0 +1,2 @@
+/usr/bin/ar qc libarchstreamer_controller.a CMakeFiles/archstreamer_controller.dir/src/client/sdl2_controller_backend.cpp.o
+/usr/bin/ranlib libarchstreamer_controller.a

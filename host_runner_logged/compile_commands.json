@@ -1,0 +1,518 @@
+[
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/addresses.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/addresses.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/addresses.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/addresses.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/art_transfer.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/art_transfer.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/art_transfer.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/art_transfer.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/catalog_presenter.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/catalog_presenter.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/catalog_presenter.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/catalog_presenter.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/cli_common.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/cli_common.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/cli_common.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/cli_common.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/client_debug_log.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/client_debug_log.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/client_debug_log.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/client_debug_log.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/client_logs.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/client_logs.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/client_logs.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/client_logs.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/controller_button_map.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/controller_button_map.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/controller_button_map.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/controller_button_map.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/controller_normalization.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/controller_normalization.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/controller_normalization.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/controller_normalization.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/controls_db_pack.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/controls_db_pack.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/controls_db_pack.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/controls_db_pack.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/discovery.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/discovery.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/discovery.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/discovery.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/dlc_paths.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/dlc_paths.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/dlc_paths.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/dlc_paths.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/game_assets.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/game_assets.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/game_assets.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/game_assets.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/game_identity.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/game_identity.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/game_identity.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/game_identity.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/m3m_playlist.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/m3m_playlist.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/m3m_playlist.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/m3m_playlist.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/pairing.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/pairing.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/pairing.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/pairing.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/steam_art_import.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/steam_art_import.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/steam_art_import.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/steam_art_import.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/participant_role.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/participant_role.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/participant_role.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/participant_role.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/protocol.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/protocol.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/protocol.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/protocol.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/serialization.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/serialization.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/serialization.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/serialization.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/sha256.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/sha256.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/sha256.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/sha256.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/time.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/time.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/time.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/time.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/platform/posix_discovery_net.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/platform/posix_discovery_net.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/platform/posix_discovery_net.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/platform/posix_discovery_net.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/platform/posix_paths.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/platform/posix_paths.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/platform/posix_paths.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/platform/posix_paths.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/platform/posix_process.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/platform/posix_process.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/platform/posix_process.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/platform/posix_process.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/platform/posix_process_utils.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/platform/posix_process_utils.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/platform/posix_process_utils.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/platform/posix_process_utils.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -std=c++20 -o CMakeFiles/archstreamer_core.dir/src/common/platform/posix_socket.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/platform/posix_socket.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/common/platform/posix_socket.cpp",
+  "output": "CMakeFiles/archstreamer_core.dir/src/common/platform/posix_socket.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -isystem /usr/include/SDL2 -std=c++20 -D_REENTRANT -o CMakeFiles/archstreamer_controller.dir/src/client/sdl2_controller_backend.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/sdl2_controller_backend.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/sdl2_controller_backend.cpp",
+  "output": "CMakeFiles/archstreamer_controller.dir/src/client/sdl2_controller_backend.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/catalog_cache.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/catalog_cache.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/catalog_cache.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/catalog_cache.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/catalog_blocks_cache.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/catalog_blocks_cache.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/catalog_blocks_cache.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/catalog_blocks_cache.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/client_app.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/client_app.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/client_app.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/client_app.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/client_media_playback.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/client_media_playback.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/client_media_playback.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/client_media_playback.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/controller_manager.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/controller_manager.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/controller_manager.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/controller_manager.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/controls_sync.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/controls_sync.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/controls_sync.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/controls_sync.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/game_filter.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/game_filter.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/game_filter.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/game_filter.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/gstreamer_probe.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/gstreamer_probe.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/gstreamer_probe.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/gstreamer_probe.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/audio_playback_device.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/audio_playback_device.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/audio_playback_device.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/audio_playback_device.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/gstreamer_media_pipeline.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/gstreamer_media_pipeline.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/gstreamer_media_pipeline.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/gstreamer_media_pipeline.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/gstreamer_media_receiver.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/gstreamer_media_receiver.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/gstreamer_media_receiver.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/gstreamer_media_receiver.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/gstreamer_overlay_video.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/gstreamer_overlay_video.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/gstreamer_overlay_video.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/gstreamer_overlay_video.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/gstreamer_synced_media_session.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/gstreamer_synced_media_session.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/gstreamer_synced_media_session.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/gstreamer_synced_media_session.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/input_sender.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/input_sender.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/input_sender.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/input_sender.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/keyboard_poller.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/keyboard_poller.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/keyboard_poller.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/keyboard_poller.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/remoted_keyboard_source.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/remoted_keyboard_source.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/remoted_keyboard_source.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/remoted_keyboard_source.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/session_client.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/session_client.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/session_client.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/session_client.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/session_service.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/session_service.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/session_service.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/session_service.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/posix_audio_playback_device.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/posix_audio_playback_device.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/posix_audio_playback_device.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/posix_audio_playback_device.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/posix_gstreamer_media_platform.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/posix_gstreamer_media_platform.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/posix_gstreamer_media_platform.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/posix_gstreamer_media_platform.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/posix_video_window_geometry.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/posix_video_window_geometry.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/posix_video_window_geometry.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/posix_video_window_geometry.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/evdev_remoted_keyboard_source.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/evdev_remoted_keyboard_source.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/evdev_remoted_keyboard_source.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/evdev_remoted_keyboard_source.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/archstreamer_client.dir/src/client/x11_keymap_remoted_keyboard_source.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/x11_keymap_remoted_keyboard_source.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/client/x11_keymap_remoted_keyboard_source.cpp",
+  "output": "CMakeFiles/archstreamer_client.dir/src/client/x11_keymap_remoted_keyboard_source.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -isystem /usr/include/SDL2 -std=c++20 -D_REENTRANT -o CMakeFiles/controller_probe.dir/src/tools/controller_probe.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/tools/controller_probe.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/tools/controller_probe.cpp",
+  "output": "CMakeFiles/controller_probe.dir/src/tools/controller_probe.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/session_client.dir/src/tools/cli_client.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/tools/cli_client.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/tools/cli_client.cpp",
+  "output": "CMakeFiles/session_client.dir/src/tools/cli_client.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/session_client.dir/src/tools/session_client_app.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/tools/session_client_app.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/tools/session_client_app.cpp",
+  "output": "CMakeFiles/session_client.dir/src/tools/session_client_app.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/session_client.dir/src/tools/session_client_main.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/tools/session_client_main.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/tools/session_client_main.cpp",
+  "output": "CMakeFiles/session_client.dir/src/tools/session_client_main.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -std=c++20 -pthread -D_REENTRANT -o CMakeFiles/client_catalog_probe.dir/src/tools/client_catalog_probe.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/tools/client_catalog_probe.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/tools/client_catalog_probe.cpp",
+  "output": "CMakeFiles/client_catalog_probe.dir/src/tools/client_catalog_probe.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/archstreamer_gui_autogen/mocs_compilation.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/mocs_compilation.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/mocs_compilation.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/archstreamer_gui_autogen/mocs_compilation.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/src/gui/game_picker_widget.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/game_picker_widget.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/game_picker_widget.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/src/gui/game_picker_widget.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/src/gui/game_selection_dialog.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/game_selection_dialog.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/game_selection_dialog.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/src/gui/game_selection_dialog.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/src/gui/host_picker_widget.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/host_picker_widget.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/host_picker_widget.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/src/gui/host_picker_widget.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/src/gui/host_search_dialog.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/host_search_dialog.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/host_search_dialog.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/src/gui/host_search_dialog.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/src/gui/pad_on_screen_keyboard.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/pad_on_screen_keyboard.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/pad_on_screen_keyboard.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/src/gui/pad_on_screen_keyboard.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/src/gui/archstreamer_video_surface.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/archstreamer_video_surface.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/archstreamer_video_surface.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/src/gui/archstreamer_video_surface.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/src/gui/client_video_controller.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/client_video_controller.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/client_video_controller.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/src/gui/client_video_controller.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/src/gui/gui_logging.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/gui_logging.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/gui_logging.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/src/gui/gui_logging.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/src/gui/gui_util.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/gui_util.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/gui_util.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/src/gui/gui_util.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/src/gui/main_window.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/main_window.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/main_window.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/src/gui/main_window.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/src/gui/main_window_client.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/main_window_client.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/main_window_client.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/src/gui/main_window_client.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/src/gui/main_window_paths.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/main_window_paths.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/main_window_paths.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/src/gui/main_window_paths.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/src/gui/main_window_remote.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/main_window_remote.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/main_window_remote.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/src/gui/main_window_remote.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/src/gui/main_window_settings.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/main_window_settings.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/main_window_settings.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/src/gui/main_window_settings.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/src/gui/main_window_game_options.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/main_window_game_options.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/main_window_game_options.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/src/gui/main_window_game_options.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/src/gui/main_window_update.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/main_window_update.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/main_window_update.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/src/gui/main_window_update.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/src/gui/paths_panel.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/paths_panel.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/paths_panel.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/src/gui/paths_panel.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/src/gui/remote_ssh.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/remote_ssh.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/remote_ssh.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/src/gui/remote_ssh.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/src/tools/archstreamer_gui.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/tools/archstreamer_gui.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/tools/archstreamer_gui.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/src/tools/archstreamer_gui.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/src/gui/paths_panel_client.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/paths_panel_client.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/paths_panel_client.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/src/gui/paths_panel_client.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/src/gui/profile_controls_client.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/profile_controls_client.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui/profile_controls_client.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/src/gui/profile_controls_client.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_CONTROLLER_BACKEND_SDL2 -DARCHSTREAMER_HAS_GST_LIBS=1 -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -DQT_CORE_LIB -DQT_GUI_LIB -DQT_NETWORK_LIB -DQT_NO_DEBUG -DQT_WIDGETS_LIB -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/gui -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -isystem /usr/include/gstreamer-1.0 -isystem /usr/include/glib-2.0 -isystem /usr/lib/x86_64-linux-gnu/glib-2.0/include -isystem /usr/include/orc-0.4 -isystem /usr/include/SDL2 -isystem /usr/include/x86_64-linux-gnu/qt6/QtWidgets -isystem /usr/include/x86_64-linux-gnu/qt6 -isystem /usr/include/x86_64-linux-gnu/qt6/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt6/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt6/QtGui -isystem /usr/include/x86_64-linux-gnu/qt6/QtNetwork -std=c++20 -pthread -D_REENTRANT -fPIC -o CMakeFiles/archstreamer_gui.dir/archstreamer_gui_autogen/TINENZEKVR/qrc_archstreamer.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/TINENZEKVR/qrc_archstreamer.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/archstreamer_gui_autogen/TINENZEKVR/qrc_archstreamer.cpp",
+  "output": "CMakeFiles/archstreamer_gui.dir/archstreamer_gui_autogen/TINENZEKVR/qrc_archstreamer.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged",
+  "command": "/usr/bin/c++   -std=c++20 -o CMakeFiles/archstreamer_ssh_askpass.dir/src/tools/archstreamer_ssh_askpass.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/tools/archstreamer_ssh_askpass.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/src/tools/archstreamer_ssh_askpass.cpp",
+  "output": "CMakeFiles/archstreamer_ssh_askpass.dir/src/tools/archstreamer_ssh_askpass.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/runtime_cadence",
+  "command": "/usr/bin/cc  -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src  -o CMakeFiles/archstreamer_sqlite3.dir/__/_dependencies/sqlite_amalgamation-src/sqlite3.c.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src/sqlite3.c",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/sqlite_amalgamation-src/sqlite3.c",
+  "output": "runtime_cadence/CMakeFiles/archstreamer_sqlite3.dir/__/_dependencies/sqlite_amalgamation-src/sqlite3.c.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/runtime_cadence",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -std=c++20 -o CMakeFiles/archstreamer_cadence_file.dir/src/types.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/src/types.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/src/types.cpp",
+  "output": "runtime_cadence/CMakeFiles/archstreamer_cadence_file.dir/src/types.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/runtime_cadence",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -std=c++20 -o CMakeFiles/archstreamer_cadence_file.dir/src/protocol.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/src/protocol.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/src/protocol.cpp",
+  "output": "runtime_cadence/CMakeFiles/archstreamer_cadence_file.dir/src/protocol.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/runtime_cadence",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -std=c++20 -o CMakeFiles/archstreamer_cadence_file.dir/src/make_store.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/src/make_store.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/src/make_store.cpp",
+  "output": "runtime_cadence/CMakeFiles/archstreamer_cadence_file.dir/src/make_store.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/runtime_cadence",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -std=c++20 -o CMakeFiles/archstreamer_cadence_file.dir/src/user_auth.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/src/user_auth.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/src/user_auth.cpp",
+  "output": "runtime_cadence/CMakeFiles/archstreamer_cadence_file.dir/src/user_auth.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/runtime_cadence",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -std=c++20 -o CMakeFiles/archstreamer_cadence_file.dir/src/instance_ops.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/src/instance_ops.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/src/instance_ops.cpp",
+  "output": "runtime_cadence/CMakeFiles/archstreamer_cadence_file.dir/src/instance_ops.cpp.o"
+},
+{
+  "directory": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/host_runner_logged/runtime_cadence",
+  "command": "/usr/bin/c++ -DARCHSTREAMER_RUNTIME_CADENCE_FILE=1 -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/include -I/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/_dependencies/nlohmann_json-src/include -std=c++20 -o CMakeFiles/archstreamer_cadence_file.dir/src/file_store.cpp.o -c /mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/src/file_store.cpp",
+  "file": "/mnt/Internal_SSD/Programming/Mixed/ArchStreamer/runtime_cadence/src/file_store.cpp",
+  "output": "runtime_cadence/CMakeFiles/archstreamer_cadence_file.dir/src/file_store.cpp.o"
+}
+]

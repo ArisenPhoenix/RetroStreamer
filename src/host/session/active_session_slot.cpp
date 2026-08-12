@@ -495,10 +495,13 @@ void ActiveSessionSlot::publish_connected_presence(
     ClientId client_id,
     const ClientHello& hello,
     const SessionPlan& plan) const {
+    auto info = ClientInfo{};
+    info.client_id = client_id;
+    info.username = hello.username;
     publish_connected_client(
         config_.host_config.save_root,
         make_connected_client_presence(
-            client_info_for(client_id, hello),
+            std::move(info),
             config_.slot_index,
             plan.game.selected_game_id,
             "session",
@@ -507,6 +510,7 @@ void ActiveSessionSlot::publish_connected_presence(
 
 SessionClientConnection* ActiveSessionSlot::attach_pending_join(
     ClientId client_id,
+    std::uint64_t udp_session_token,
     const MediaEndpoint& endpoint,
     SessionClientConnection* reconnecting_client,
     PendingSessionJoin& pending,
@@ -535,6 +539,7 @@ SessionClientConnection* ActiveSessionSlot::attach_pending_join(
             client_id,
             pending.request.hello,
             std::move(pending.request.stream)));
+        plan.clients.back().info.udp_session_token = udp_session_token;
         std::cout
             << "session slot " << config_.slot_index << ": late viewer "
             << static_cast<int>(client_id)
@@ -580,6 +585,7 @@ void ActiveSessionSlot::drain_pending_joins() {
                 pending.request.stream,
                 pending.request.hello,
                 join.client_id,
+                join.udp_session_token,
                 plan,
                 media_plan_config_for(slot_config_),
                 media_index_,
@@ -588,11 +594,20 @@ void ActiveSessionSlot::drain_pending_joins() {
             auto* joined_client =
                 attach_pending_join(
                     join.client_id,
+                    join.udp_session_token,
                     endpoint,
                     join.reconnecting_client,
                     pending,
                     plan);
 
+            if (input_router_ != nullptr) {
+                std::vector<ClientInfo> clients;
+                clients.reserve(plan.clients.size());
+                for (const auto& client : plan.clients) {
+                    clients.push_back(client.info);
+                }
+                input_router_->set_udp_session_tokens(std::move(clients));
+            }
             if (config_.input_demux != nullptr && input_router_ != nullptr) {
                 config_.input_demux->register_router(join.client_id, input_router_.get());
             }
@@ -993,7 +1008,15 @@ void ActiveSessionSlot::run_session() {
         *input_router_,
         *keyboard_,
         launch_plan,
-        backends);
+        backends,
+        [&] {
+            std::vector<ClientInfo> clients;
+            clients.reserve(plan.clients.size());
+            for (const auto& client : plan.clients) {
+                clients.push_back(client.info);
+            }
+            return clients;
+        }());
     // Register demux before emulator start so early UDP from a phone client is not
     // dropped during the multi-second launch window.
     register_input_clients();

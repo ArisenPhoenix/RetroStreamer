@@ -38,11 +38,13 @@ public:
     void apply_seats(SeatAssignment seats);
 
     std::optional<ClientId> client_id() const;
+    std::uint64_t udp_session_token() const;
     const SeatAssignment& seats() const;
     const GameList& game_list() const;
 
 private:
     std::optional<ClientId> client_id_;
+    std::uint64_t udp_session_token_ = 0;
     GameList game_list_;
     SeatAssignment seats_;
 };

@@ -15,7 +15,7 @@
 namespace archstreamer {
 
 constexpr std::uint32_t ProtocolMagic = 0x41525354; // "ARST"
-constexpr std::uint16_t ProtocolVersion = 29;
+constexpr std::uint16_t ProtocolVersion = 30;
 constexpr std::uint8_t MaxRemoteClients = 2;
 constexpr std::uint8_t MaxPlayersPerClient = 2;
 constexpr std::uint8_t MaxRetroArchPorts = 5; // Ports 0-3 plus a host player if desired.
@@ -275,6 +275,7 @@ struct HostWelcome {
     ClientId client_id = 0;
     std::uint8_t max_players_for_client = MaxPlayersPerClient;
     bool host_is_player = false;
+    std::uint64_t udp_session_token = 0;
 };
 
 struct ClientConfig {
@@ -323,12 +324,14 @@ struct ClientSessionLeave {
 
 struct ControllerInput {
     ClientId client_id = 0;
+    std::uint64_t udp_session_token = 0;
     LocalPlayerIndex local_player = 0;
     ControllerState state;
 };
 
 struct KeyboardInput {
     ClientId client_id = 0;
+    std::uint64_t udp_session_token = 0;
     LocalPlayerIndex local_player = 0;
     KeyboardState state;
 };
@@ -339,6 +342,7 @@ struct KeyboardInput {
  *  framebuffer is always that size, so no host window rect is required. */
 struct TouchInput {
     ClientId client_id = 0;
+    std::uint64_t udp_session_token = 0;
     LocalPlayerIndex local_player = 0;
     std::uint32_t sequence = 0;
     std::uint64_t timestamp_us = 0;

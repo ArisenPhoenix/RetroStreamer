@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/archstreamer_ssh_askpass.dir/src/tools/archstreamer_ssh_askpass.cpp.o -o archstreamer_ssh_askpass 

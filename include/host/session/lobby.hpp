@@ -164,6 +164,7 @@ struct SessionPlan {
 };
 
 ClientInfo client_info_for(ClientId client_id, const ClientHello& hello);
+std::uint64_t make_udp_session_token();
 SessionClientConnection make_session_client(ClientId client_id, ClientHello hello, TcpStream stream);
 const char* session_mode_name(GameSessionMode mode);
 PacketPayload receive_control_payload(TcpStream& stream);

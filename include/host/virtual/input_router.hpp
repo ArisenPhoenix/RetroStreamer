@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/protocol.hpp"
+#include "host/client/client_info.hpp"
 #include "host/virtual/emulator_control_plane.hpp"
 #include "host/virtual/seat_manager.hpp"
 #include "host/virtual/virtual_gamepad.hpp"
@@ -10,6 +11,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <vector>
 
 namespace archstreamer {
 
@@ -20,6 +22,7 @@ public:
     InputRouter(VirtualGamepadBus& gamepads, VirtualKeyboard* keyboard = nullptr);
 
     void set_seat_assignment(SeatAssignment assignment);
+    void set_udp_session_tokens(std::vector<ClientInfo> clients);
     /** Optional melonDS (etc.) stylus sink; cleared automatically when null. */
     void set_touch_handler(TouchHandler handler);
     /** Which backend applies EmulatorControl intents (also sets Switch-style hotkeys). */
@@ -39,12 +42,14 @@ private:
     };
 
     bool client_has_seat(ClientId client_id) const;
+    bool input_token_valid(ClientId client_id, std::uint64_t token) const;
 
     VirtualGamepadBus& gamepads_;
     VirtualKeyboard* keyboard_ = nullptr;
     EmulatorControlPlane control_plane_;
     TouchHandler touch_handler_;
     SeatAssignment assignment_;
+    std::map<ClientId, std::uint64_t> udp_session_tokens_;
     std::map<PlayerKey, std::uint64_t> last_input_timestamp_by_player_;
     std::map<ClientId, std::uint64_t> last_keyboard_timestamp_by_client_;
     std::map<PlayerKey, std::uint64_t> last_touch_timestamp_by_player_;

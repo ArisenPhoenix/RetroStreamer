@@ -14,6 +14,7 @@ inline bool assigned_remote_client_id(ClientId client_id) {
 
 struct ClientInfo {
     ClientId client_id = UnassignedClientId;
+    std::uint64_t udp_session_token = 0;
     std::string username;
 };
 

@@ -117,6 +117,7 @@ private:
         const SessionPlan& plan) const;
     SessionClientConnection* attach_pending_join(
         ClientId client_id,
+        std::uint64_t udp_session_token,
         const MediaEndpoint& endpoint,
         SessionClientConnection* reconnecting_client,
         PendingSessionJoin& pending,

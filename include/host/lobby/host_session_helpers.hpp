@@ -16,6 +16,7 @@ ClientId next_session_client_id(const SessionPlan& plan);
 SessionClientConnection* disconnected_player_for_reconnect(SessionPlan& plan, const ClientHello& hello);
 struct LiveSessionJoinTarget {
     ClientId client_id = 0;
+    std::uint64_t udp_session_token = 0;
     SessionClientConnection* reconnecting_client = nullptr;
 };
 
@@ -23,6 +24,7 @@ struct LiveSessionJoinHandshake {
     TcpStream& stream;
     const ClientHello& hello;
     ClientId client_id = 0;
+    std::uint64_t udp_session_token = 0;
     SessionPlan& plan;
     const HostMediaPlanConfig& media_config;
     std::size_t& media_index;

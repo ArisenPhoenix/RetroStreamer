@@ -18,6 +18,16 @@ void InputRouter::set_seat_assignment(SeatAssignment assignment) {
     last_touch_timestamp_by_player_.clear();
 }
 
+void InputRouter::set_udp_session_tokens(std::vector<ClientInfo> clients) {
+    std::lock_guard lock(mutex_);
+    udp_session_tokens_.clear();
+    for (const auto& client : clients) {
+        if (client.client_id != HostClientId && client.udp_session_token != 0) {
+            udp_session_tokens_[client.client_id] = client.udp_session_token;
+        }
+    }
+}
+
 void InputRouter::set_touch_handler(TouchHandler handler) {
     std::lock_guard lock(mutex_);
     touch_handler_ = std::move(handler);
@@ -37,8 +47,19 @@ bool InputRouter::client_has_seat(ClientId client_id) const {
     return false;
 }
 
+bool InputRouter::input_token_valid(ClientId client_id, std::uint64_t token) const {
+    if (client_id == HostClientId || udp_session_tokens_.empty()) {
+        return true;
+    }
+    const auto it = udp_session_tokens_.find(client_id);
+    return it != udp_session_tokens_.end() && it->second == token;
+}
+
 bool InputRouter::route(const ControllerInput& input) {
     std::lock_guard lock(mutex_);
+    if (!input_token_valid(input.client_id, input.udp_session_token)) {
+        return false;
+    }
     const auto port = find_retroarch_port(assignment_, input.client_id, input.local_player);
     if (!port.has_value()) {
         return false;
@@ -83,6 +104,9 @@ bool InputRouter::route(const KeyboardInput& input) {
     if (keyboard_ == nullptr) {
         return false;
     }
+    if (!input_token_valid(input.client_id, input.udp_session_token)) {
+        return false;
+    }
     // Fast-forward / pause / menu are session-wide. Viewers have no pad seat, so do
     // not require client_has_seat() — that made remoted keyboard a no-op for Viewer
     // joins (and any client briefly without a seat map).
@@ -117,6 +141,9 @@ bool InputRouter::route(const TouchInput& input) {
     {
         std::lock_guard lock(mutex_);
         if (!touch_handler_) {
+            return false;
+        }
+        if (!input_token_valid(input.client_id, input.udp_session_token)) {
             return false;
         }
         const auto port = find_retroarch_port(assignment_, input.client_id, input.local_player);

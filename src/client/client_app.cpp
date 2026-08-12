@@ -493,7 +493,7 @@ ClientRunResult ClientApp::join_session(
             controller_backend.emplace();
             controller_backend->open_selected(controller_device_ids);
         }
-        input_sender.emplace(*result.client_id);
+        input_sender.emplace(*result.client_id, session.udp_session_token());
         input_socket.emplace();
         // Build the poller on the session worker thread so status lands in the GUI log
         // (the input thread must not touch Qt widgets).

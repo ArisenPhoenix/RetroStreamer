@@ -16,6 +16,13 @@
 
 namespace archstreamer {
 
+class SharedVideoPipelineRunner {
+public:
+    virtual ~SharedVideoPipelineRunner() = default;
+    virtual void stop() = 0;
+    [[nodiscard]] virtual bool running() const = 0;
+};
+
 // Encode ladder: one capture → one shared H.264 encode → multiudpsink fanout.
 // Mid-session quality changes may stage a dedicated encode for the player before
 // promoting it, leaving the old shared encode alive for viewers during warm-up.
@@ -85,6 +92,8 @@ private:
     Destination* find_destination(ClientId client_id);
     const Destination* find_destination(ClientId client_id) const;
     void restart_pipeline();
+    void stop_shared_pipeline();
+    bool shared_pipeline_running() const;
     std::vector<std::string> build_single_encode_args(
         const VideoEncodeSettings& settings,
         const std::string& host,
@@ -103,7 +112,7 @@ private:
     // nvidia-smi index for nvenc via CUDA_VISIBLE_DEVICES; -1 = leave unset.
     int nvenc_cuda_device_id_ = -1;
     std::vector<Destination> destinations_;
-    ChildProcess process_;
+    std::unique_ptr<SharedVideoPipelineRunner> shared_pipeline_;
 };
 
 // One pulsesrc/opus encode shared by Watch-local + all remotes (multiudpsink).

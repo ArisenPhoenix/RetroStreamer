@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <iostream>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -28,8 +29,19 @@
 
 namespace archstreamer {
 
+std::uint64_t make_udp_session_token() {
+    std::random_device random;
+    std::uint64_t value = 0;
+    do {
+        value =
+            (static_cast<std::uint64_t>(random()) << 32) ^
+            static_cast<std::uint64_t>(random());
+    } while (value == 0);
+    return value;
+}
+
 ClientInfo client_info_for(ClientId client_id, const ClientHello& hello) {
-    return ClientInfo{client_id, hello.username};
+    return ClientInfo{client_id, make_udp_session_token(), hello.username};
 }
 
 SessionClientConnection make_session_client(ClientId client_id, ClientHello hello, TcpStream stream) {
@@ -449,6 +461,7 @@ void assign_seats_welcome_and_save_username(SessionPlan& plan) {
         welcome.client_id = client.info.client_id;
         welcome.max_players_for_client = MaxPlayersPerClient;
         welcome.host_is_player = plan.host_hello.has_value();
+        welcome.udp_session_token = client.info.udp_session_token;
         client.lifecycle.stream.send_packet(serialize_packet(welcome));
         client.lifecycle.stream.send_packet(serialize_packet(plan.seats));
     }

@@ -158,10 +158,14 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 sshPort = prefs.getString(KEY_REMOTE_SSH_PORT, "22").orEmpty().ifBlank { "22" },
                 directory = prefs.getString(KEY_REMOTE_DIRECTORY, "").orEmpty(),
                 romRoot = prefs.getString(KEY_REMOTE_ROM_ROOT, "").orEmpty(),
-                binary = prefs.getString(KEY_REMOTE_BINARY, "./host_runner").orEmpty()
-                    .ifBlank { "./host_runner" },
+                hostConfig = normalizeRemoteHostConfig(
+                    prefs.getString(KEY_REMOTE_HOST_CONFIG, "").orEmpty(),
+                ),
+                binary = prefs.getString(KEY_REMOTE_BINARY, "host_runner").orEmpty()
+                    .ifBlank { "host_runner" },
                 startScript = prefs.getString(KEY_REMOTE_START_SCRIPT, "").orEmpty(),
                 gpu = prefs.getString(KEY_REMOTE_GPU, "").orEmpty(),
+                extraArgs = prefs.getString(KEY_REMOTE_EXTRA_ARGS, "").orEmpty(),
                 baseControlPort = prefs.getString(
                     KEY_REMOTE_BASE_CONTROL,
                     Protocol.DEFAULT_CONTROL_PORT.toString(),
@@ -2382,6 +2386,11 @@ fun clearBackMenuChromeFocus() {
         prefs.edit().putString(KEY_REMOTE_ROM_ROOT, value.trim()).apply()
     }
 
+    fun onRemoteHostConfigChange(value: String) {
+        updateRemote { copy(hostConfig = value) }
+        prefs.edit().putString(KEY_REMOTE_HOST_CONFIG, normalizeRemoteHostConfig(value)).apply()
+    }
+
     fun onRemoteBinaryChange(value: String) {
         updateRemote { copy(binary = value) }
         prefs.edit().putString(KEY_REMOTE_BINARY, value.trim()).apply()
@@ -2395,6 +2404,11 @@ fun clearBackMenuChromeFocus() {
     fun onRemoteGpuChange(value: String) {
         updateRemote { copy(gpu = value) }
         prefs.edit().putString(KEY_REMOTE_GPU, value.trim()).apply()
+    }
+
+    fun onRemoteExtraArgsChange(value: String) {
+        updateRemote { copy(extraArgs = value) }
+        prefs.edit().putString(KEY_REMOTE_EXTRA_ARGS, value.trim()).apply()
     }
 
     fun onRemoteBaseControlPortChange(value: String) {
@@ -2416,6 +2430,27 @@ fun clearBackMenuChromeFocus() {
         }
     }
 
+    private fun startupSelectedGpu(output: String): String =
+        output.lineSequence()
+            .map { it.trim() }
+            .firstNotNullOfOrNull { line ->
+                if (!line.contains("[archstreamer-startup]") ||
+                    !line.contains("gpu-role=encode") ||
+                    line.contains("gpu-match=none")
+                ) {
+                    return@firstNotNullOfOrNull null
+                }
+                val marker = " selected="
+                val start = line.indexOf(marker)
+                if (start < 0) {
+                    return@firstNotNullOfOrNull null
+                }
+                line.substring(start + marker.length)
+                    .substringBefore(' ')
+                    .trim()
+                    .ifEmpty { null }
+            }.orEmpty()
+
     fun ensureRemoteHost() {
         val snap = _state.value
         if (snap.remote.busy) return
@@ -2423,10 +2458,11 @@ fun clearBackMenuChromeFocus() {
         val user = snap.remote.sshUser.trim()
         val password = snap.remote.sshPassword
         val directory = snap.remote.directory.trim()
-        val romRoot = snap.remote.romRoot.trim()
-        val binary = snap.remote.binary.trim().ifBlank { "./host_runner" }
-        val startScript = snap.remote.startScript.trim()
+        val storedHostConfig = normalizeRemoteHostConfig(snap.remote.hostConfig)
+        val hostConfig = storedHostConfig.ifBlank { defaultRemoteGuiSettingsPath(user) }
+        val binary = snap.remote.binary.trim().ifBlank { "host_runner" }
         val wantGpu = snap.remote.gpu.trim()
+        val extraArgs = snap.remote.extraArgs.trim()
         val sshPort = snap.remote.sshPort.trim().toIntOrNull() ?: RemoteHost.DEFAULT_SSH_PORT
         val baseControl = snap.remote.baseControlPort.trim().toIntOrNull()
             ?: Protocol.DEFAULT_CONTROL_PORT
@@ -2439,23 +2475,16 @@ fun clearBackMenuChromeFocus() {
             .putString(KEY_REMOTE_SSH_USER, user)
             .putString(KEY_REMOTE_SSH_PORT, snap.remote.sshPort.trim().ifBlank { "22" })
             .putString(KEY_REMOTE_DIRECTORY, directory)
-            .putString(KEY_REMOTE_ROM_ROOT, romRoot)
+            .putString(KEY_REMOTE_HOST_CONFIG, storedHostConfig)
             .putString(KEY_REMOTE_BINARY, binary)
-            .putString(KEY_REMOTE_START_SCRIPT, startScript)
             .putString(KEY_REMOTE_GPU, wantGpu)
+            .putString(KEY_REMOTE_EXTRA_ARGS, extraArgs)
             .putString(KEY_REMOTE_BASE_CONTROL, baseControl.toString())
             .putString(KEY_REMOTE_BASE_INPUT, baseInput.toString())
             .apply()
 
-        if (host.isEmpty() || user.isEmpty() || directory.isEmpty()) {
-            setRemoteStatus("SSH host, user, and remote directory are required.")
-            return
-        }
-        if (startScript.isEmpty() && romRoot.isEmpty()) {
-            setRemoteStatus(
-                "Remote ROM root is required unless a start script is set " +
-                    "(Path B: the script owns ROM root / host_runner).",
-            )
+        if (host.isEmpty() || user.isEmpty()) {
+            setRemoteStatus("SSH host and user are required.")
             return
         }
         if (password.isEmpty()) {
@@ -2488,37 +2517,14 @@ fun clearBackMenuChromeFocus() {
                 setRemoteStatus(status, busy = false)
             }
 
-            val resolvedBinary = RemoteHost.resolveBinary(directory, binary)
             ClientFileLog.append(
-                "[remote] ensure host=$host user=$user dir=$directory rom=$romRoot " +
-                    "binary=$resolvedBinary ports=$baseControl/$baseInput gpu=${wantGpu.ifEmpty { "(default)" }}",
+                "[remote] ensure host=$host user=$user executable=$binary " +
+                    "config=${hostConfig.ifEmpty { "(default)" }} ports=$baseControl/$baseInput " +
+                    "gpu=${wantGpu.ifEmpty { "(default)" }}",
             )
 
-            var gpuOptions = emptyList<RemoteHost.GpuOption>()
-            var resolvedGpuId = ""
-            var resolvedGpuLabel = ""
-
-            if (wantGpu.isNotEmpty()) {
-                setRemoteStatus("Listing remote GPUs (host_runner --list-gpus)…")
-                val listCmd = RemoteHost.listGpusShell(directory, binary)
-                ClientFileLog.append("[remote] ssh list-gpus cmd: $listCmd")
-                val listed = RemoteHost.runSshCommand(host, sshPort, user, password, listCmd)
-                if (!listed.ok) {
-                    fail("Remote GPU list failed: ${listed.error}")
-                    return@launch
-                }
-                gpuOptions = RemoteHost.parseListGpusOutput(listed.output)
-                val matched = RemoteHost.matchGpuOption(gpuOptions, wantGpu)
-                if (matched == null) {
-                    val available = gpuOptions.joinToString(", ") { "${it.name} [${it.id}]" }
-                        .ifEmpty { "(none)" }
-                    fail("No remote GPU matched “$wantGpu”. Available: $available")
-                    return@launch
-                }
-                resolvedGpuId = matched.id
-                resolvedGpuLabel = "${matched.name} [${matched.id}]"
-                setRemoteStatus("Matched remote GPU $resolvedGpuLabel — probing lobbies…")
-            }
+            val resolvedGpuId = wantGpu
+            val resolvedGpuLabel = wantGpu
 
             suspend fun queryProcessGpu(controlPort: Int): String {
                 if (resolvedGpuId.isEmpty()) return ""
@@ -2530,24 +2536,26 @@ fun clearBackMenuChromeFocus() {
 
             suspend fun startInstance(instanceIndex: Int, ports: RemoteHostPortBlock): Boolean {
                 val cmd = RemoteHost.startShell(
-                    directory,
                     binary,
-                    romRoot,
+                    hostConfig,
                     ports,
                     encodeGpu = resolvedGpuId,
-                    startScript = startScript,
+                    extraArgs = extraArgs,
                 )
-                var msg = if (startScript.isEmpty()) {
-                    "SSH-starting host instance $instanceIndex on port ${ports.controlPort}"
-                } else {
-                    "SSH-starting via script (instance $instanceIndex, port ${ports.controlPort})"
-                }
+                var msg = "SSH-starting remote executable (instance $instanceIndex, port ${ports.controlPort})"
                 if (resolvedGpuLabel.isNotEmpty()) {
                     msg += " ($resolvedGpuLabel)"
                 }
                 msg += "…"
                 setRemoteStatus(msg)
-                ClientFileLog.append("[remote] ssh start cmd: $cmd")
+                var commandSummary =
+                    "[remote] ssh start: executable=$binary config=${hostConfig.ifEmpty { "(none)" }} " +
+                        "ports=${ports.controlPort}/${ports.inputPort}/${ports.videoPort}/${ports.audioPort} " +
+                        "display=:${ports.virtualDisplay} gpu=${wantGpu.ifEmpty { "(default)" }}"
+                if (extraArgs.isNotEmpty()) {
+                    commandSummary += " args=$extraArgs"
+                }
+                ClientFileLog.append(commandSummary)
                 val ssh = RemoteHost.runSshCommand(host, sshPort, user, password, cmd)
                 if (!ssh.ok) {
                     fail("SSH start failed: ${ssh.error}")
@@ -2555,6 +2563,12 @@ fun clearBackMenuChromeFocus() {
                 }
                 if (ssh.output.isNotBlank()) {
                     ClientFileLog.append("[remote] ssh stdout: ${ssh.output}")
+                    val selectedGpu = startupSelectedGpu(ssh.output)
+                    if (wantGpu.isNotEmpty() && selectedGpu.isNotEmpty() && selectedGpu != wantGpu) {
+                        prefs.edit().putString(KEY_REMOTE_GPU, selectedGpu).apply()
+                        updateRemote { copy(gpu = selectedGpu) }
+                        ClientFileLog.append("[remote] updated GPU override to $selectedGpu from startup match")
+                    }
                 }
                 repeat(20) {
                     delay(500)
@@ -2574,10 +2588,10 @@ fun clearBackMenuChromeFocus() {
 
             for (n in 0..8) {
                 val ports = RemoteHost.portBlock(n, baseControl, baseInput)
-                val info = RemoteHost.probeActiveSession(host, ports.controlPort)
-                if (info != null) {
-                    val processGpu = queryProcessGpu(ports.controlPort)
-                    if (RemoteHost.lobbyUsableForGpu(info, resolvedGpuId, processGpu, gpuOptions)) {
+                    val info = RemoteHost.probeActiveSession(host, ports.controlPort)
+                    if (info != null) {
+                        val processGpu = queryProcessGpu(ports.controlPort)
+                    if (RemoteHost.lobbyUsableForGpu(info, resolvedGpuId, processGpu, emptyList())) {
                         val slotText = if (info.activeSlots != null && info.maxSlots != null) {
                             " (slots ${info.activeSlots}/${info.maxSlots})"
                         } else {
@@ -2617,8 +2631,6 @@ fun clearBackMenuChromeFocus() {
         val host = snap.remote.sshHost.trim()
         val user = snap.remote.sshUser.trim()
         val password = snap.remote.sshPassword
-        val directory = snap.remote.directory.trim()
-        val binary = snap.remote.binary.trim().ifBlank { "./host_runner" }
         val wantGpu = snap.remote.gpu.trim()
         val sshPort = snap.remote.sshPort.trim().toIntOrNull() ?: RemoteHost.DEFAULT_SSH_PORT
         val baseControl = snap.remote.baseControlPort.trim().toIntOrNull()
@@ -2640,7 +2652,7 @@ fun clearBackMenuChromeFocus() {
             return
         }
 
-        if (wantGpu.isEmpty()) {
+        if (snap.remote.trackedControlPort > 0 || wantGpu.isEmpty()) {
             setRemoteStatus("Stopping remote host on control port $control…", busy = true)
         } else {
             setRemoteStatus("Finding remote host for GPU “$wantGpu” to stop…", busy = true)
@@ -2648,20 +2660,8 @@ fun clearBackMenuChromeFocus() {
 
         viewModelScope.launch(Dispatchers.IO) {
             var resolvedLabel = ""
-            if (wantGpu.isNotEmpty()) {
-                val listCmd = RemoteHost.listGpusShell(directory, binary)
-                val listed = RemoteHost.runSshCommand(host, sshPort, user, password, listCmd)
-                if (!listed.ok) {
-                    setRemoteStatus("Remote GPU list failed: ${listed.error}", busy = false)
-                    return@launch
-                }
-                val gpuOptions = RemoteHost.parseListGpusOutput(listed.output)
-                val matched = RemoteHost.matchGpuOption(gpuOptions, wantGpu)
-                if (matched == null) {
-                    setRemoteStatus("No remote GPU matched “$wantGpu”.", busy = false)
-                    return@launch
-                }
-                resolvedLabel = "${matched.name} [${matched.id}]"
+            if (snap.remote.trackedControlPort <= 0 && wantGpu.isNotEmpty()) {
+                resolvedLabel = wantGpu
                 var foundPort: Int? = null
                 for (n in 0 until 8) {
                     val ports = RemoteHost.portBlock(n, baseControl, baseInput)
@@ -2675,12 +2675,7 @@ fun clearBackMenuChromeFocus() {
                     )
                     if (!gpuSsh.ok) continue
                     val processGpu = gpuSsh.output.trim()
-                    if (processGpu.isEmpty() && n == 0 && matched.id == gpuOptions.firstOrNull()?.id) {
-                        foundPort = ports.controlPort
-                        break
-                    }
-                    val processMatch = RemoteHost.matchGpuOption(gpuOptions, processGpu)
-                    if (processMatch?.id == matched.id) {
+                    if (RemoteHost.gpuPreferenceMatches(wantGpu, processGpu)) {
                         foundPort = ports.controlPort
                         break
                     }
@@ -2693,7 +2688,7 @@ fun clearBackMenuChromeFocus() {
                 setRemoteStatus("Stopping $resolvedLabel on control port $control…")
             }
 
-            val cmd = RemoteHost.stopShell(control, directory)
+            val cmd = RemoteHost.stopShell(control)
             ClientFileLog.append("[remote] ssh stop cmd: $cmd")
             val ssh = RemoteHost.runSshCommand(host, sshPort, user, password, cmd)
             if (ssh.ok) {
@@ -3488,9 +3483,11 @@ fun clearBackMenuChromeFocus() {
             remoteSshPort = snap.remote.sshPort,
             remoteDirectory = snap.remote.directory,
             remoteRomRoot = snap.remote.romRoot,
+            remoteHostConfig = snap.remote.hostConfig,
             remoteBinary = snap.remote.binary,
             remoteStartScript = snap.remote.startScript,
             remoteGpu = snap.remote.gpu,
+            remoteExtraArgs = snap.remote.extraArgs,
             remoteBaseControlPort = snap.remote.baseControlPort,
             remoteBaseInputPort = snap.remote.baseInputPort,
         )
@@ -3505,7 +3502,7 @@ fun clearBackMenuChromeFocus() {
             .ifBlank { Protocol.DEFAULT_INPUT_PORT.toString() }
         val username = profile.username.trim()
         val remoteSshPort = profile.remoteSshPort.trim().ifBlank { "22" }
-        val remoteBinary = profile.remoteBinary.trim().ifBlank { "./host_runner" }
+        val remoteBinary = profile.remoteBinary.trim().ifBlank { "host_runner" }
         val remoteBaseControl = profile.remoteBaseControlPort.trim()
             .ifBlank { Protocol.DEFAULT_CONTROL_PORT.toString() }
         val remoteBaseInput = profile.remoteBaseInputPort.trim()
@@ -3534,9 +3531,11 @@ fun clearBackMenuChromeFocus() {
             .putString(KEY_REMOTE_SSH_PORT, remoteSshPort)
             .putString(KEY_REMOTE_DIRECTORY, profile.remoteDirectory.trim())
             .putString(KEY_REMOTE_ROM_ROOT, profile.remoteRomRoot.trim())
+            .putString(KEY_REMOTE_HOST_CONFIG, profile.remoteHostConfig.trim())
             .putString(KEY_REMOTE_BINARY, remoteBinary)
             .putString(KEY_REMOTE_START_SCRIPT, profile.remoteStartScript.trim())
             .putString(KEY_REMOTE_GPU, profile.remoteGpu.trim())
+            .putString(KEY_REMOTE_EXTRA_ARGS, profile.remoteExtraArgs.trim())
             .putString(KEY_REMOTE_BASE_CONTROL, remoteBaseControl)
             .putString(KEY_REMOTE_BASE_INPUT, remoteBaseInput)
             .apply()
@@ -3557,9 +3556,11 @@ fun clearBackMenuChromeFocus() {
                     sshPort = remoteSshPort,
                     directory = profile.remoteDirectory.trim(),
                     romRoot = profile.remoteRomRoot.trim(),
+                    hostConfig = profile.remoteHostConfig.trim(),
                     binary = remoteBinary,
                     startScript = profile.remoteStartScript.trim(),
                     gpu = profile.remoteGpu.trim(),
+                    extraArgs = profile.remoteExtraArgs.trim(),
                     baseControlPort = remoteBaseControl,
                     baseInputPort = remoteBaseInput,
                     status = "Imported paired Remote form.",
@@ -5034,9 +5035,11 @@ fun clearBackMenuChromeFocus() {
         private const val KEY_REMOTE_SSH_PORT = "remote_ssh_port"
         private const val KEY_REMOTE_DIRECTORY = "remote_directory"
         private const val KEY_REMOTE_ROM_ROOT = "remote_rom_root"
+        private const val KEY_REMOTE_HOST_CONFIG = "remote_host_config"
         private const val KEY_REMOTE_BINARY = "remote_binary"
         private const val KEY_REMOTE_START_SCRIPT = "remote_start_script"
         private const val KEY_REMOTE_GPU = "remote_gpu"
+        private const val KEY_REMOTE_EXTRA_ARGS = "remote_extra_args"
         private const val KEY_REMOTE_BASE_CONTROL = "remote_base_control"
         private const val KEY_REMOTE_BASE_INPUT = "remote_base_input"
         private const val KEY_REMOTE_TRACKED_CONTROL = "remote_tracked_control"
@@ -5062,6 +5065,16 @@ fun clearBackMenuChromeFocus() {
         private const val AV_RESYNC_MIN_INTERVAL_MS = 15_000L
         /** Desktop: ≥3 consecutive zero-frame heartbeats arms audio realign. */
         private const val AV_STALL_ZERO_FRAME_HEARTBEATS = 3
+
+        private fun normalizeRemoteHostConfig(value: String): String {
+            val trimmed = value.trim()
+            return if (trimmed.contains("/.cache/archstreamer/ArchStreamer.conf")) "" else trimmed
+        }
+
+        private fun defaultRemoteGuiSettingsPath(sshUser: String): String {
+            val trimmed = sshUser.trim()
+            return if (trimmed.isEmpty()) "" else "/home/$trimmed/.config/ArchStreamer/ArchStreamer.conf"
+        }
     }
 
     private fun recentKeyPart(raw: String): String =

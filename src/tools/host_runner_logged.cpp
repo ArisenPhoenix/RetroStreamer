@@ -48,7 +48,24 @@ std::uint16_t parse_control_port(int argc, char** argv) {
     return kDefault;
 }
 
-std::filesystem::path log_directory() {
+std::filesystem::path parse_log_root(int argc, char** argv) {
+    const std::string flag = "--log-root";
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i] != nullptr ? argv[i] : "";
+        if (arg == flag && i + 1 < argc && argv[i + 1] != nullptr) {
+            return argv[i + 1];
+        }
+        if (arg.rfind(flag + "=", 0) == 0) {
+            return arg.substr(flag.size() + 1);
+        }
+    }
+    return {};
+}
+
+std::filesystem::path log_directory(int argc, char** argv) {
+    if (auto configured = parse_log_root(argc, argv); !configured.empty()) {
+        return configured;
+    }
     if (const char* configured = std::getenv("ARCHSTREAMER_HOST_LOG_DIR");
         configured != nullptr && configured[0] != '\0') {
         return configured;
@@ -95,11 +112,16 @@ bool redirect_to_log(const std::filesystem::path& log_path) {
 
 int main(int argc, char** argv) {
     const auto runner = sibling_host_runner(argc > 0 ? argv[0] : nullptr);
+    std::vector<std::string> injected_args;
 
     // Keep discovery commands usable when this wrapper is supplied as the host binary.
     if (!has_arg(argc, argv, "--list-gpus")) {
         const auto control_port = parse_control_port(argc, argv);
-        const auto dir = log_directory();
+        const auto dir = log_directory(argc, argv);
+        if (parse_log_root(argc, argv).empty()) {
+            injected_args.push_back("--log-root");
+            injected_args.push_back(dir.string());
+        }
         std::error_code ec;
         std::filesystem::create_directories(dir, ec);
         if (ec) {
@@ -125,11 +147,14 @@ int main(int argc, char** argv) {
     }
 
     std::vector<char*> child_argv;
-    child_argv.reserve(static_cast<std::size_t>(argc) + 1);
+    child_argv.reserve(static_cast<std::size_t>(argc) + injected_args.size() + 1);
     auto runner_string = runner.string();
     child_argv.push_back(runner_string.data());
     for (int i = 1; i < argc; ++i) {
         child_argv.push_back(argv[i]);
+    }
+    for (auto& arg : injected_args) {
+        child_argv.push_back(arg.data());
     }
     child_argv.push_back(nullptr);
 

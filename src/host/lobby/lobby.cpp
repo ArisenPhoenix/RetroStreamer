@@ -80,6 +80,10 @@ void Lobby::prepare_runtime() {
     }
 
     std::cout
+        << "[archstreamer-startup] lobby-ready control-port="
+        << *config_.host_config.control_port
+        << " input-port=" << *config_.host_config.input_port
+        << " max-slots=" << static_cast<int>(slots) << '\n'
         << "Lobby on TCP " << *config_.host_config.control_port
         << " (max slots " << static_cast<int>(slots)
         << ", UDP input " << *config_.host_config.input_port << ").\n"

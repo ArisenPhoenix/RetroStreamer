@@ -36,11 +36,13 @@ data class RemoteState(
     val sshPort: String = "22",
     val directory: String = "",
     val romRoot: String = "",
-    val binary: String = "./host_runner",
+    val hostConfig: String = "",
+    val binary: String = "host_runner",
     /** Optional remote start script (Path B); blank = start host_runner (Path A). */
     val startScript: String = "",
     /** Optional GPU preference for Ensure Host (fuzzy match); blank = host default. */
     val gpu: String = "",
+    val extraArgs: String = "",
     val baseControlPort: String = Protocol.DEFAULT_CONTROL_PORT.toString(),
     val baseInputPort: String = Protocol.DEFAULT_INPUT_PORT.toString(),
     val status: String =

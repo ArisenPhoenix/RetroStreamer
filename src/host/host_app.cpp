@@ -20,6 +20,7 @@
 #include "host/hardware/local_controller_bridge.hpp"
 #include "host/virtual/network_input_receiver.hpp"
 #include "host/hardware/default_host_platform.hpp"
+#include "host/hardware/gpu_select.hpp"
 #include "host/session/launch_assemble.hpp"
 #include "host/session/launch_types.hpp"
 #include "host/session/run_helpers.hpp"
@@ -30,10 +31,75 @@
 #include <iostream>
 #include <optional>
 #include <sstream>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace archstreamer {
+namespace {
+
+std::string startup_quote(std::string value) {
+    std::string out;
+    out.reserve(value.size() + 2);
+    out.push_back('"');
+    for (char ch : value) {
+        if (ch == '\\' || ch == '"') {
+            out.push_back('\\');
+        }
+        out.push_back(ch);
+    }
+    out.push_back('"');
+    return out;
+}
+
+const char* gpu_match_kind_name(GpuSelectionMatchKind kind) {
+    switch (kind) {
+    case GpuSelectionMatchKind::Auto:
+        return "auto";
+    case GpuSelectionMatchKind::Exact:
+        return "exact";
+    case GpuSelectionMatchKind::Fuzzy:
+        return "fuzzy";
+    case GpuSelectionMatchKind::None:
+    default:
+        return "none";
+    }
+}
+
+void log_startup_available_gpus(const std::vector<GpuDevice>& devices) {
+    std::cout << "[archstreamer-startup] available-gpus=";
+    for (std::size_t i = 0; i < devices.size(); ++i) {
+        if (i > 0) {
+            std::cout << ';';
+        }
+        std::cout << devices[i].id << ' ' << startup_quote(devices[i].name);
+    }
+    std::cout << '\n';
+}
+
+void log_startup_gpu_match(
+    std::string_view role,
+    const std::string& requested,
+    const GpuSelectionResult& result) {
+    std::cout
+        << "[archstreamer-startup] gpu-role=" << role
+        << " gpu-request=" << startup_quote(requested.empty() ? "auto" : requested)
+        << " gpu-match=" << gpu_match_kind_name(result.match_kind);
+    if (result.device.has_value()) {
+        std::cout
+            << " selected=" << result.device->id
+            << " name=" << startup_quote(result.device->name);
+        if (result.device->nvidia_index >= 0) {
+            std::cout << " nvidia-index=" << result.device->nvidia_index;
+        }
+        if (result.device->vulkan_index >= 0) {
+            std::cout << " vulkan-index=" << result.device->vulkan_index;
+        }
+    }
+    std::cout << '\n';
+}
+
+} // namespace
 
 HostApp::HostApp(HostAppConfig config)
     : config_(std::move(config)) {
@@ -381,6 +447,34 @@ int HostApp::run(const std::function<bool()>& should_stop) {
     try {
         std::cout << std::unitbuf;
         std::cerr << std::unitbuf;
+        std::cout
+            << "[archstreamer-startup] config-state"
+            << " control-port=" << (config_.control_port.has_value()
+                ? std::to_string(*config_.control_port)
+                : std::string("none"))
+            << " input-port=" << (config_.input_port.has_value()
+                ? std::to_string(*config_.input_port)
+                : std::string("none"))
+            << " video-port=" << config_.video_port
+            << " audio-port=" << config_.audio_port
+            << " virtual-display=" << startup_quote(config_.virtual_display)
+            << " gpu=" << startup_quote(config_.encode_gpu)
+            << " render-gpu=" << startup_quote(effective_render_gpu_selection(config_))
+            << " log-root=" << startup_quote(config_.log_root.string())
+            << '\n';
+        {
+            const auto devices = list_render_gpus();
+            log_startup_available_gpus(devices);
+            log_startup_gpu_match(
+                "encode",
+                config_.encode_gpu,
+                resolve_render_gpu_with_match_from(devices, config_.encode_gpu));
+            const auto render_request = effective_render_gpu_selection(config_);
+            log_startup_gpu_match(
+                "render",
+                render_request,
+                resolve_render_gpu_with_match_from(devices, render_request));
+        }
 
         // Last resort only: SessionRuntime RAII owns kill for live sessions.
         // This reaps leftovers from a prior host that never got to run destructors.

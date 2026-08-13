@@ -1,6 +1,7 @@
 #include "paths_panel.hpp"
 
 #include "common/catalog_paths.hpp"
+#include "common/platform/paths.hpp"
 #include "host/console/game_catalog_scanner.hpp"
 #include "host/console/libretro_core_registry.hpp"
 #include "host/console/save_profile.hpp"
@@ -8,8 +9,10 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QSettings>
 #include <QWidget>
 
+#include <cstdlib>
 #include <utility>
 
 namespace archstreamer::gui {
@@ -24,6 +27,14 @@ PathRootDefaults default_path_roots() {
     defaults.rom_root = QString::fromUtf8(DefaultRomRoot);
     defaults.meta_root = QString::fromUtf8(DefaultMetaRoot);
     defaults.save_root = QString::fromStdString(default_save_profile_root().string());
+    if (const char* configured = std::getenv("ARCHSTREAMER_HOST_CONFIG");
+        configured != nullptr && configured[0] != '\0') {
+        defaults.host_config = QString::fromUtf8(configured);
+    } else {
+        defaults.host_config =
+            QSettings(QStringLiteral("ArchStreamer"), QStringLiteral("ArchStreamer")).fileName();
+    }
+    defaults.log_root = QString::fromStdString(archstreamer_cache_directory());
     return defaults;
 }
 
@@ -48,6 +59,19 @@ void create_host_path_rows(PathsPanel& panel, QWidget* parent) {
     panel.save_root_status = new QLabel(parent);
     panel.save_root_status->setWordWrap(true);
     panel.save_root_status->setStyleSheet(QStringLiteral("color: #a33;"));
+
+    panel.host_config = new QLineEdit(default_path_roots().host_config, parent);
+    panel.host_config->setToolTip(
+        "Default config passed to host_runner --config for remote starts.\n"
+        "By default this reuses the GUI settings file shown above.");
+
+    panel.log_root = new QLineEdit(default_path_roots().log_root, parent);
+    panel.log_root->setToolTip(
+        "Directory where host_runner writes durable host_<control-port>.log files.\n"
+        "Leave blank to use the default ArchStreamer cache directory.");
+    panel.log_root_browse = new QPushButton("Browse…", parent);
+    panel.log_root_create = new QPushButton("Create", parent);
+    panel.log_root_create->setToolTip("Create this log directory if it is missing.");
 
     panel.native_host_runner = new QLineEdit(parent);
     panel.native_host_runner->setPlaceholderText(

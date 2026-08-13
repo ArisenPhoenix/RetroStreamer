@@ -21,6 +21,18 @@ struct GpuDevice {
     int score = 0;
 };
 
+enum class GpuSelectionMatchKind {
+    Auto,
+    Exact,
+    Fuzzy,
+    None,
+};
+
+struct GpuSelectionResult {
+    std::optional<GpuDevice> device;
+    GpuSelectionMatchKind match_kind = GpuSelectionMatchKind::None;
+};
+
 // Enumerate GPUs usable for RetroArch on the host (NVIDIA via nvidia-smi + PRIME,
 // plus Mesa AMD/Intel including iGPUs when present).
 std::vector<GpuDevice> list_render_gpus();
@@ -36,6 +48,10 @@ std::optional<GpuDevice> resolve_render_gpu(const std::string& selection);
 
 /** Resolve against an already-fetched device list (Remote Ensure Host over SSH). */
 std::optional<GpuDevice> resolve_render_gpu_from(
+    const std::vector<GpuDevice>& devices,
+    const std::string& selection);
+
+GpuSelectionResult resolve_render_gpu_with_match_from(
     const std::vector<GpuDevice>& devices,
     const std::string& selection);
 

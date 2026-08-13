@@ -152,8 +152,7 @@ object RemoteSpec : SectionSpec {
             body(
                 "remote-blurb",
                 "Ensure Host probes the base control port, reuses a free lobby, or " +
-                    "SSH-starts host_runner (or an optional start script with ports + GPU). " +
-                    "Optional GPU fuzzy-matches remote GPUs (host_runner --list-gpus). " +
+                    "SSH-starts the configured executable with optional overrides. " +
                     "Successful ensure writes IP/ports onto the Client tab.",
             ),
         )
@@ -191,41 +190,22 @@ object RemoteSpec : SectionSpec {
         )
         add(
             MenuOption.TextInput(
-                id = "remote-directory",
-                title = "Remote directory",
-                value = state.remote.directory,
-                onChange = vm::onRemoteDirectoryChange,
-                placeholder = "/home/user/ArchStreamer/build",
-            ),
-        )
-        add(
-            MenuOption.TextInput(
-                id = "remote-rom-root",
-                title = "Remote ROM root",
-                value = state.remote.romRoot,
-                onChange = vm::onRemoteRomRootChange,
+                id = "remote-host-config",
+                title = "Host config",
+                value = state.remote.hostConfig,
+                onChange = vm::onRemoteHostConfigChange,
+                placeholder = "/home/user/.config/ArchStreamer/ArchStreamer.conf",
+                supporting = "Optional remote GUI settings or host_runner config. Blank uses the SSH user's GUI settings.",
             ),
         )
         add(
             MenuOption.TextInput(
                 id = "remote-binary",
-                title = "host_runner path",
+                title = "Executable path",
                 value = state.remote.binary,
                 onChange = vm::onRemoteBinaryChange,
-                placeholder = "./host_runner or …/build/host_runner",
-                supporting = "Path A, or GPU listing. If you paste the build directory, " +
-                    "/host_runner is appended. With a start script, only used for --list-gpus.",
-            ),
-        )
-        add(
-            MenuOption.TextInput(
-                id = "remote-start-script",
-                title = "Start script (optional)",
-                value = state.remote.startScript,
-                onChange = vm::onRemoteStartScriptChange,
-                placeholder = "/home/user/bin/archstreamer-start",
-                supporting = "Path B: blank = start host_runner with full args. Set = run this " +
-                    "script with ports + GPU only (script owns ROM root / host_runner).",
+                placeholder = "host_runner or /path/to/script",
+                supporting = "Remote executable or personal script. It decides which overrides are required.",
             ),
         )
         add(
@@ -235,7 +215,17 @@ object RemoteSpec : SectionSpec {
                 value = state.remote.gpu,
                 onChange = vm::onRemoteGpuChange,
                 placeholder = "e.g. 3060, amd, nvidia:1",
-                supporting = "Blank = host default. Set to reuse/start on a matched remote GPU.",
+                supporting = "Optional --gpu override passed to the remote executable.",
+            ),
+        )
+        add(
+            MenuOption.TextInput(
+                id = "remote-extra-args",
+                title = "Args (optional)",
+                value = state.remote.extraArgs,
+                onChange = vm::onRemoteExtraArgsChange,
+                placeholder = "--flag value -x y",
+                supporting = "Raw arguments appended after ArchStreamer overrides.",
             ),
         )
         add(

@@ -23,9 +23,11 @@ data class PairProfile(
     val remoteSshPort: String = "22",
     val remoteDirectory: String = "",
     val remoteRomRoot: String = "",
-    val remoteBinary: String = "./host_runner",
+    val remoteHostConfig: String = "",
+    val remoteBinary: String = "host_runner",
     val remoteStartScript: String = "",
     val remoteGpu: String = "",
+    val remoteExtraArgs: String = "",
     val remoteBaseControlPort: String = "",
     val remoteBaseInputPort: String = "",
 ) {
@@ -65,11 +67,15 @@ data class PairProfile(
         append(',')
         appendJsonField("remoteRomRoot", remoteRomRoot)
         append(',')
+        appendJsonField("remoteHostConfig", remoteHostConfig)
+        append(',')
         appendJsonField("remoteBinary", remoteBinary)
         append(',')
         appendJsonField("remoteStartScript", remoteStartScript)
         append(',')
         appendJsonField("remoteGpu", remoteGpu)
+        append(',')
+        appendJsonField("remoteExtraArgs", remoteExtraArgs)
         append(',')
         appendJsonField("remoteBaseControlPort", remoteBaseControlPort)
         append(',')
@@ -101,9 +107,11 @@ data class PairProfile(
                 remoteSshPort = map["remoteSshPort"].orEmpty().ifBlank { "22" },
                 remoteDirectory = map["remoteDirectory"].orEmpty(),
                 remoteRomRoot = map["remoteRomRoot"].orEmpty(),
-                remoteBinary = map["remoteBinary"].orEmpty().ifBlank { "./host_runner" },
+                remoteHostConfig = map["remoteHostConfig"].orEmpty(),
+                remoteBinary = map["remoteBinary"].orEmpty().ifBlank { "host_runner" },
                 remoteStartScript = map["remoteStartScript"].orEmpty(),
                 remoteGpu = map["remoteGpu"].orEmpty(),
+                remoteExtraArgs = map["remoteExtraArgs"].orEmpty(),
                 remoteBaseControlPort = map["remoteBaseControlPort"].orEmpty(),
                 remoteBaseInputPort = map["remoteBaseInputPort"].orEmpty(),
             )

@@ -47,6 +47,14 @@
 
 namespace archstreamer::gui {
 
+namespace {
+
+bool is_stale_cached_gui_settings_path(const QString& path) {
+    return path.contains(QStringLiteral("/.cache/archstreamer/ArchStreamer.conf"));
+}
+
+} // namespace
+
 #ifdef ARCHSTREAMER_HAS_HOST
 
 void MainWindow::populate_gpu_combo(QComboBox* combo, const QString& previous) {
@@ -387,9 +395,17 @@ void MainWindow::load_persisted_settings() {
     if (remote_rom_root_ != nullptr) {
         remote_rom_root_->setText(settings.value("remote/romRoot").toString());
     }
+    if (remote_host_config_ != nullptr) {
+        auto host_config = settings.value("remote/hostConfig").toString().trimmed();
+        if (is_stale_cached_gui_settings_path(host_config)) {
+            settings.remove(QStringLiteral("remote/hostConfig"));
+            host_config.clear();
+        }
+        remote_host_config_->setText(host_config);
+    }
     if (remote_binary_ != nullptr) {
-        const auto binary = settings.value("remote/binary", "./host_runner").toString();
-        remote_binary_->setText(binary.isEmpty() ? QStringLiteral("./host_runner") : binary);
+        const auto binary = settings.value("remote/binary", "host_runner").toString();
+        remote_binary_->setText(binary.isEmpty() ? QStringLiteral("host_runner") : binary);
     }
     if (remote_start_script_ != nullptr) {
         remote_start_script_->setText(settings.value("remote/startScript").toString());
@@ -404,6 +420,9 @@ void MainWindow::load_persisted_settings() {
     }
     if (remote_gpu_ != nullptr) {
         remote_gpu_->setText(settings.value("remote/gpu").toString());
+    }
+    if (remote_extra_args_ != nullptr) {
+        remote_extra_args_->setText(settings.value("remote/extraArgs").toString());
     }
     remote_tracked_control_port_ =
         qBound(settings.value("remote/trackedControlPort", 0).toInt(), 0, 65535);
@@ -673,6 +692,9 @@ void MainWindow::save_persisted_settings() {
     if (remote_rom_root_ != nullptr) {
         settings.setValue("remote/romRoot", remote_rom_root_->text().trimmed());
     }
+    if (remote_host_config_ != nullptr) {
+        settings.setValue("remote/hostConfig", remote_host_config_->text().trimmed());
+    }
     if (remote_binary_ != nullptr) {
         settings.setValue("remote/binary", remote_binary_->text().trimmed());
     }
@@ -687,6 +709,9 @@ void MainWindow::save_persisted_settings() {
     }
     if (remote_gpu_ != nullptr) {
         settings.setValue("remote/gpu", remote_gpu_->text().trimmed());
+    }
+    if (remote_extra_args_ != nullptr) {
+        settings.setValue("remote/extraArgs", remote_extra_args_->text().trimmed());
     }
     settings.setValue("remote/trackedControlPort", remote_tracked_control_port_);
     if (settings_update_repo_ != nullptr) {

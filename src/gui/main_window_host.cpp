@@ -41,6 +41,7 @@
 
 #include <chrono>
 #include <exception>
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <thread>
@@ -630,6 +631,87 @@ bool MainWindow::host_running() const {
         (host_process_ != nullptr && host_process_->state() != QProcess::NotRunning);
 }
 
+void MainWindow::consume_host_process_text(const QString& text) {
+    const auto trimmed = text.trimmed();
+    if (trimmed.isEmpty()) {
+        return;
+    }
+    for (const auto& line : trimmed.split('\n')) {
+        append_host_process_log(host_log_, line);
+    }
+}
+
+void MainWindow::start_host_file_log_tail(const std::filesystem::path& path) {
+    active_host_file_log_ = path;
+    active_host_file_log_offset_ = 0;
+    host_file_log_tail_buffer_.clear();
+    if (host_file_log_tail_timer_ == nullptr) {
+        host_file_log_tail_timer_ = new QTimer(this);
+        connect(host_file_log_tail_timer_, &QTimer::timeout, this, [this] {
+            poll_host_file_log();
+        });
+    }
+    host_file_log_tail_timer_->start(250);
+}
+
+void MainWindow::stop_host_file_log_tail() {
+    if (host_file_log_tail_timer_ != nullptr) {
+        host_file_log_tail_timer_->stop();
+    }
+    active_host_file_log_.clear();
+    active_host_file_log_offset_ = 0;
+    if (!host_file_log_tail_buffer_.trimmed().isEmpty()) {
+        consume_host_process_text(host_file_log_tail_buffer_);
+    }
+    host_file_log_tail_buffer_.clear();
+}
+
+void MainWindow::poll_host_file_log() {
+    if (active_host_file_log_.empty()) {
+        return;
+    }
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(active_host_file_log_, ec);
+    if (ec) {
+        return;
+    }
+    if (size < active_host_file_log_offset_) {
+        active_host_file_log_offset_ = 0;
+    }
+    if (size == active_host_file_log_offset_) {
+        return;
+    }
+
+    std::ifstream file(active_host_file_log_, std::ios::binary);
+    if (!file) {
+        return;
+    }
+    file.seekg(static_cast<std::streamoff>(active_host_file_log_offset_));
+    std::string chunk(
+        static_cast<std::size_t>(size - active_host_file_log_offset_),
+        '\0');
+    file.read(chunk.data(), static_cast<std::streamsize>(chunk.size()));
+    const auto read = file.gcount();
+    if (read <= 0) {
+        return;
+    }
+    active_host_file_log_offset_ += static_cast<std::uintmax_t>(read);
+    chunk.resize(static_cast<std::size_t>(read));
+    host_file_log_tail_buffer_ +=
+        QString::fromLocal8Bit(chunk.data(), static_cast<int>(chunk.size()));
+    const bool has_complete_tail =
+        host_file_log_tail_buffer_.endsWith('\n') || host_file_log_tail_buffer_.endsWith('\r');
+    auto lines = host_file_log_tail_buffer_.split('\n');
+    if (!has_complete_tail && !lines.isEmpty()) {
+        host_file_log_tail_buffer_ = lines.takeLast();
+    } else {
+        host_file_log_tail_buffer_.clear();
+    }
+    for (const auto& line : lines) {
+        consume_host_process_text(line);
+    }
+}
+
 void MainWindow::start_host() {
     if (host_running()) {
         append_log(host_log_, "Host is already running.");
@@ -649,35 +731,21 @@ void MainWindow::start_host() {
         host_process_ = new QProcess(this);
         bind_host_process_lifetime(host_process_);
         connect(host_process_, &QProcess::readyReadStandardOutput, this, [this] {
-            const auto text = QString::fromLocal8Bit(host_process_->readAllStandardOutput()).trimmed();
-            if (!text.isEmpty()) {
-                for (const auto& line : text.split('\n')) {
-                    append_host_process_log(host_log_, line);
-                }
-            }
+            consume_host_process_text(QString::fromLocal8Bit(host_process_->readAllStandardOutput()));
         });
         connect(host_process_, &QProcess::readyReadStandardError, this, [this] {
-            const auto text = QString::fromLocal8Bit(host_process_->readAllStandardError()).trimmed();
-            if (!text.isEmpty()) {
-                for (const auto& line : text.split('\n')) {
-                    append_host_process_log(host_log_, line);
-                }
-            }
+            consume_host_process_text(QString::fromLocal8Bit(host_process_->readAllStandardError()));
         });
         connect(host_process_, &QProcess::finished, this, [this](int code, QProcess::ExitStatus status) {
             // Drain buffered output that often arrives only as the process dies
             // (flatpak-spawn / distrobox wrappers).
             const auto flush_text = [this](const QByteArray& bytes) {
-                const auto text = QString::fromLocal8Bit(bytes).trimmed();
-                if (text.isEmpty()) {
-                    return;
-                }
-                for (const auto& line : text.split('\n')) {
-                    append_host_process_log(host_log_, line);
-                }
+                consume_host_process_text(QString::fromLocal8Bit(bytes));
             };
             flush_text(host_process_->readAllStandardOutput());
             flush_text(host_process_->readAllStandardError());
+            poll_host_file_log();
+            stop_host_file_log_tail();
             stop_host_local_media();
             sync_host_advertise(false);
             host_status_->setText("Host stopped");
@@ -734,6 +802,7 @@ void MainWindow::start_host() {
         host_cfg.meta_root = meta_root_path();
         host_cfg.art_root = art_root_path();
         host_cfg.save_root = save_root;
+        host_cfg.log_root = log_root_path();
         host_cfg.host_name = profile_host_name();
         host_cfg.control_port = static_cast<std::uint16_t>(host_control_port_->value());
         host_cfg.input_port = static_cast<std::uint16_t>(host_input_port_->value());
@@ -825,6 +894,13 @@ void MainWindow::start_host() {
     }
     host_status_->setText("Host starting");
     host_log_->appendPlainText("Starting " + program + " " + launch_args.join(' '));
+    const auto host_file_log =
+        log_root_path() / ("host_" + std::to_string(host_control_port_->value()) + ".log");
+    append_log(
+        host_log_,
+        QString("Host file log: %1")
+            .arg(QString::fromStdString(host_file_log.string())));
+    start_host_file_log_tail(host_file_log);
     if (bridge_index >= 0) {
         append_log(
             host_log_,
@@ -844,6 +920,7 @@ void MainWindow::start_host() {
     }
     host_process_->start(program, launch_args);
     if (!host_process_->waitForStarted(3000)) {
+        stop_host_file_log_tail();
         host_status_->setText("Host failed to start");
         host_log_->appendPlainText("Failed to start host_runner: " + host_process_->errorString());
         return;
@@ -877,6 +954,7 @@ void MainWindow::stop_host() {
         host_status_->setText("Host stopped");
     }
     if (host_process_ == nullptr || host_process_->state() == QProcess::NotRunning) {
+        stop_host_file_log_tail();
         return;
     }
     // Keep waits short — long waitForFinished on Ctrl+C freezes the desktop.
@@ -885,6 +963,8 @@ void MainWindow::stop_host() {
         host_process_->kill();
         host_process_->waitForFinished(400);
     }
+    poll_host_file_log();
+    stop_host_file_log_tail();
 }
 
 void MainWindow::stop_host_local_media() {

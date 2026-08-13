@@ -175,7 +175,7 @@ object RemoteHost {
 
     /**
      * Whether a free lobby may be reused for [wantResolvedId].
-     * Blank want → any free lobby. Process without --gpu → host default (first list entry).
+     * Blank want → any free lobby. Non-blank want compares against the process --gpu value.
      */
     fun lobbyUsableForGpu(
         info: ActiveSessionInfo,
@@ -185,11 +185,18 @@ object RemoteHost {
     ): Boolean {
         if (lobbyFull(info)) return false
         if (wantResolvedId.isEmpty()) return true
-        if (processGpuArg.isBlank() || processGpuArg.equals("auto", ignoreCase = true)) {
-            return gpuOptions.isNotEmpty() && gpuOptions.first().id == wantResolvedId
-        }
-        val processMatch = matchGpuOption(gpuOptions, processGpuArg) ?: return false
-        return processMatch.id == wantResolvedId
+        return gpuPreferenceMatches(wantResolvedId, processGpuArg)
+    }
+
+    fun gpuPreferenceMatches(want: String, reported: String): Boolean {
+        if (want.isBlank()) return true
+        if (reported.isBlank() || reported.equals("auto", ignoreCase = true)) return false
+        fun normalize(value: String): String =
+            value.lowercase()
+                .filterNot { it == ' ' || it == '\t' || it == '_' || it == '-' || it == ':' }
+        val needle = normalize(want)
+        val hay = normalize(reported)
+        return hay == needle || hay.contains(needle) || needle.contains(hay)
     }
 
     /**
@@ -205,23 +212,26 @@ object RemoteHost {
     }
 
     /**
-     * Path A ([startScript] blank): nohup host_runner with rom-root, ports, clients, GPU.
-     * Path B ([startScript] set): nohup that script with ports + GPU only.
+     * Start a remote executable without assuming its install directory.
      */
     fun startShell(
-        directory: String,
-        binary: String,
-        romRoot: String,
+        executable: String,
+        hostConfig: String,
         ports: RemoteHostPortBlock,
         encodeGpu: String = "",
-        startScript: String = "",
+        extraArgs: String = "",
     ): String {
-        val dir = directory.trim().trimEnd('/', '\\').ifEmpty { "." }
-        val qdir = shellSingleQuote(dir)
-        val qlog = shellSingleQuote(logPath(directory, ports.controlPort))
-        val qpid = shellSingleQuote(pidPath(directory, ports.controlPort))
+        val launchTarget = executable.trim().ifBlank { "host_runner" }
+        val qlaunch = shellSingleQuote(launchTarget)
+        val qlog = shellSingleQuote("/tmp/archstreamer_host_${ports.controlPort}.bootstrap.log")
+        val qpid = shellSingleQuote("/tmp/.archstreamer_remote_${ports.controlPort}.pid")
         val gpuArgs = if (encodeGpu.isNotBlank()) {
             " --gpu ${shellSingleQuote(encodeGpu.trim())}"
+        } else {
+            ""
+        }
+        val configArgs = if (hostConfig.isNotBlank()) {
+            " --config ${shellSingleQuote(hostConfig.trim())}"
         } else {
             ""
         }
@@ -229,33 +239,46 @@ object RemoteHost {
             " --control-port ${ports.controlPort}" +
                 " --input-port ${ports.inputPort}" +
                 " --video-port ${ports.videoPort}" +
-                " --audio-port ${ports.audioPort}" +
+            " --audio-port ${ports.audioPort}" +
                 " --virtual-display :${ports.virtualDisplay}"
-        val resolvedScript = resolveStartScript(directory, startScript)
-        val useScript = resolvedScript.isNotEmpty()
-        val launchTarget = if (useScript) resolvedScript else resolveBinary(directory, binary)
-        val qlaunch = shellSingleQuote(launchTarget)
-        val missingLabel = if (useScript) "start script" else "host_runner"
-        val exitLabel = missingLabel
-        val launchArgs = if (useScript) {
-            portArgs + gpuArgs
+        var launchArgs = configArgs + portArgs + gpuArgs
+        if (extraArgs.isNotBlank()) {
+            launchArgs += " ${extraArgs.trim()}"
+        }
+        val qconfig = shellSingleQuote(hostConfig.trim())
+        val executableCheck = if ('/' in launchTarget) {
+            "[ -x $qlaunch ]"
         } else {
-            " --rom-root ${shellSingleQuote(romRoot)}" +
-                portArgs +
-                " --clients 2 --allow-new-users" +
-                gpuArgs
+            "command -v $qlaunch >/dev/null 2>&1"
         }
         return "set -e; " +
-            "mkdir -p $qdir; " +
-            "if [ ! -x $qlaunch ]; then echo \"$missingLabel not found or not executable: \" $qlaunch >&2; exit 127; fi; " +
+            "if ! $executableCheck; then echo \"remote executable not found or not executable: \" $qlaunch >&2; exit 127; fi; " +
             "nohup $qlaunch" +
             launchArgs +
             " > $qlog 2>&1 & " +
             "pid=\$!; echo \"\$pid\" > $qpid; " +
-            "sleep 0.7; " +
+            "host_log=\"\"; " +
+            "if [ -n $qconfig ] && [ -r $qconfig ]; then " +
+            "log_root=\$(awk -F '[:=]' '{k=\$1; v=\"\"; gsub(/[ \\t_-]/,\"\",k); for(i=2;i<=NF;i++){v=(i==2?\$i:v FS \$i)} gsub(/^[ \\t]+|[ \\t]+$/,\"\",v); if(tolower(k)==\"logroot\"){print v; exit}}' $qconfig); " +
+            "if [ -n \"\$log_root\" ]; then host_log=\"\$log_root/host_${ports.controlPort}.log\"; fi; fi; " +
+            "for i in \$(seq 1 24); do " +
             "if ! kill -0 \"\$pid\" 2>/dev/null; then " +
-            "echo \"$exitLabel exited immediately (pid \$pid). Log:\" >&2; " +
-            "cat $qlog >&2 || true; rm -f $qpid; exit 1; fi"
+            "echo \"remote executable exited immediately (pid \$pid). Log:\" >&2; " +
+            "cat $qlog >&2 || true; " +
+            "if [ -n \"\$host_log\" ]; then cat \"\$host_log\" >&2 || true; fi; " +
+            "rm -f $qpid; exit 1; fi; " +
+            "if grep -q '\\[archstreamer-startup\\] lobby-ready' $qlog 2>/dev/null || { [ -n \"\$host_log\" ] && grep -q '\\[archstreamer-startup\\] lobby-ready' \"\$host_log\" 2>/dev/null; }; then " +
+            "grep '\\[archstreamer-startup\\]' $qlog 2>/dev/null || true; " +
+            "if [ -n \"\$host_log\" ]; then grep '\\[archstreamer-startup\\]' \"\$host_log\" 2>/dev/null || true; fi; " +
+            "exit 0; fi; " +
+            "sleep 0.5; done; " +
+            "echo \"remote executable did not report lobby-ready before timeout. Log:\" >&2; " +
+            "grep '\\[archstreamer-startup\\]' $qlog 1>&2 2>/dev/null || true; " +
+            "if [ -n \"\$host_log\" ]; then grep '\\[archstreamer-startup\\]' \"\$host_log\" 1>&2 2>/dev/null || true; fi; " +
+            "kill \"\$pid\" 2>/dev/null || true; " +
+            "sleep 1; " +
+            "kill -0 \"\$pid\" 2>/dev/null && kill -9 \"\$pid\" 2>/dev/null || true; " +
+            "rm -f $qpid; exit 1"
     }
 
     /**
@@ -265,6 +288,14 @@ object RemoteHost {
         val parts = mutableListOf<String>()
         if (directory.isNotBlank()) {
             val qpid = shellSingleQuote(pidPath(directory, controlPort))
+            parts += "if [ -f $qpid ]; then" +
+                " pid=\$(cat $qpid);" +
+                " kill \"\$pid\" 2>/dev/null;" +
+                " sleep 1;" +
+                " kill -0 \"\$pid\" 2>/dev/null && kill -9 \"\$pid\" 2>/dev/null;" +
+                " rm -f $qpid; fi"
+        } else {
+            val qpid = shellSingleQuote("/tmp/.archstreamer_remote_$controlPort.pid")
             parts += "if [ -f $qpid ]; then" +
                 " pid=\$(cat $qpid);" +
                 " kill \"\$pid\" 2>/dev/null;" +

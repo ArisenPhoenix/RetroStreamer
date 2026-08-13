@@ -336,20 +336,36 @@ bool gpu_selection_matches_device(const std::string& selection, const GpuDevice&
 std::optional<GpuDevice> resolve_render_gpu_from(
     const std::vector<GpuDevice>& devices,
     const std::string& selection) {
+    return resolve_render_gpu_with_match_from(devices, selection).device;
+}
+
+GpuSelectionResult resolve_render_gpu_with_match_from(
+    const std::vector<GpuDevice>& devices,
+    const std::string& selection) {
+    GpuSelectionResult result;
     if (selection.empty() || selection == "auto") {
-        return preferred_render_gpu(devices);
+        result.device = preferred_render_gpu(devices);
+        result.match_kind = result.device.has_value()
+            ? GpuSelectionMatchKind::Auto
+            : GpuSelectionMatchKind::None;
+        return result;
     }
     for (const auto& device : devices) {
         if (device.id == selection) {
-            return device;
+            result.device = device;
+            result.match_kind = GpuSelectionMatchKind::Exact;
+            return result;
         }
     }
     for (const auto& device : devices) {
         if (gpu_selection_matches_device(selection, device)) {
-            return device;
+            result.device = device;
+            result.match_kind = GpuSelectionMatchKind::Fuzzy;
+            return result;
         }
     }
-    return std::nullopt;
+    result.match_kind = GpuSelectionMatchKind::None;
+    return result;
 }
 
 std::optional<GpuDevice> resolve_render_gpu(const std::string& selection) {

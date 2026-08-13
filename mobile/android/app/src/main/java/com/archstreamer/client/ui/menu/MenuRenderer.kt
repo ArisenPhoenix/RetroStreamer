@@ -223,7 +223,11 @@ private fun MenuOptionRow(
                 fieldFocus = fieldFocus,
                 onFieldFocusChanged = onFieldFocusChanged,
             )
-            LaunchedEffect(option.id) { fieldFocus.request(option.id) }
+            LaunchedEffect(option.id, editing, useLightweightTextRows) {
+                if (useLightweightTextRows && editing) {
+                    fieldFocus.request(option.id)
+                }
+            }
             if (useLightweightTextRows && editing) {
                 TvHardwareTextField(
                     optionId = option.id,
@@ -292,7 +296,11 @@ private fun MenuOptionRow(
                 // and the IME does not learn what was typed.
                 keyboardType = KeyboardType.Password,
             )
-            LaunchedEffect(option.id) { fieldFocus.request(option.id) }
+            LaunchedEffect(option.id, editing, useLightweightTextRows) {
+                if (useLightweightTextRows && editing) {
+                    fieldFocus.request(option.id)
+                }
+            }
             if (useLightweightTextRows && editing) {
                 TvHardwareTextField(
                     optionId = option.id,

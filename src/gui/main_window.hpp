@@ -69,6 +69,7 @@ public:
     std::filesystem::path rom_root_path() const;
     std::filesystem::path meta_root_path() const;
     std::filesystem::path save_root_path() const;
+    std::filesystem::path log_root_path() const;
     std::filesystem::path dlc_root_path() const;
 
 private:
@@ -173,9 +174,16 @@ private:
     void save_path_settings(QSettings& settings);
     /** Flatpak override for the host_runner binary; empty means auto-detect. */
     QString native_host_runner_override() const;
+    std::filesystem::path host_config_path() const;
     void update_save_root_status();
     void browse_save_root();
+    void browse_log_root();
     void create_save_root();
+    void create_log_root();
+    void consume_host_process_text(const QString& text);
+    void start_host_file_log_tail(const std::filesystem::path& path);
+    void stop_host_file_log_tail();
+    void poll_host_file_log();
     void sync_save_root_field_to_path(const std::filesystem::path& path);
     void persist_valid_save_root(const std::filesystem::path& path);
 
@@ -263,6 +271,10 @@ private:
     std::thread ps2_prewarm_thread_;
 #ifdef ARCHSTREAMER_HAS_HOST
     QProcess* host_process_ = nullptr;
+    QTimer* host_file_log_tail_timer_ = nullptr;
+    std::filesystem::path active_host_file_log_;
+    std::uintmax_t active_host_file_log_offset_ = 0;
+    QString host_file_log_tail_buffer_;
     int adopted_host_runner_pid_ = 0;
     QStringList host_debug_args_;
     std::unique_ptr<HostDiscoveryAnnouncer> host_announcer_;
@@ -289,9 +301,11 @@ private:
     QSpinBox* remote_ssh_port_ = nullptr;
     QLineEdit* remote_directory_ = nullptr;
     QLineEdit* remote_rom_root_ = nullptr;
+    QLineEdit* remote_host_config_ = nullptr;
     QLineEdit* remote_binary_ = nullptr;
     /** Optional remote wrapper; when set, Ensure Host uses Path B (ports+GPU only). */
     QLineEdit* remote_start_script_ = nullptr;
+    QLineEdit* remote_extra_args_ = nullptr;
     QSpinBox* remote_base_control_port_ = nullptr;
     QSpinBox* remote_base_input_port_ = nullptr;
     QLineEdit* remote_gpu_ = nullptr;

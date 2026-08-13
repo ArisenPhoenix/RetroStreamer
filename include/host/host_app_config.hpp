@@ -60,6 +60,7 @@ struct HostAppConfig {
     std::optional<std::string> ignore_controller;
     std::string retroarch_joypad_driver = kDefaultRetroArchJoypadDriver;
     std::filesystem::path save_root;
+    std::filesystem::path log_root;
     std::filesystem::path art_root;
     std::string username;
     std::string host_name;

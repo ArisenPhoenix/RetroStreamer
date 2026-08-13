@@ -23,6 +23,67 @@ namespace {
 constexpr const char* kSteamInputIgnoreDevices =
     "0x28de/0x11ff,0x28de/0x1205,0x28de/0x1201";
 
+std::string startup_quote(std::string value) {
+    std::string out;
+    out.reserve(value.size() + 2);
+    out.push_back('"');
+    for (char ch : value) {
+        if (ch == '\\' || ch == '"') {
+            out.push_back('\\');
+        }
+        out.push_back(ch);
+    }
+    out.push_back('"');
+    return out;
+}
+
+const char* gpu_match_kind_name(GpuSelectionMatchKind kind) {
+    switch (kind) {
+    case GpuSelectionMatchKind::Auto:
+        return "auto";
+    case GpuSelectionMatchKind::Exact:
+        return "exact";
+    case GpuSelectionMatchKind::Fuzzy:
+        return "fuzzy";
+    case GpuSelectionMatchKind::None:
+    default:
+        return "none";
+    }
+}
+
+void log_startup_available_gpus(const std::vector<GpuDevice>& devices) {
+    std::cout << "[archstreamer-startup] available-gpus=";
+    for (std::size_t i = 0; i < devices.size(); ++i) {
+        if (i > 0) {
+            std::cout << ';';
+        }
+        std::cout << devices[i].id << ' ' << startup_quote(devices[i].name);
+    }
+    std::cout << '\n';
+}
+
+void log_startup_gpu_match(
+    std::string_view role,
+    const std::string& requested,
+    const GpuSelectionResult& result) {
+    std::cout
+        << "[archstreamer-startup] gpu-role=" << role
+        << " gpu-request=" << startup_quote(requested.empty() ? "auto" : requested)
+        << " gpu-match=" << gpu_match_kind_name(result.match_kind);
+    if (result.device.has_value()) {
+        std::cout
+            << " selected=" << result.device->id
+            << " name=" << startup_quote(result.device->name);
+        if (result.device->nvidia_index >= 0) {
+            std::cout << " nvidia-index=" << result.device->nvidia_index;
+        }
+        if (result.device->vulkan_index >= 0) {
+            std::cout << " vulkan-index=" << result.device->vulkan_index;
+        }
+    }
+    std::cout << '\n';
+}
+
 void append_ignore_devices(HostAppConfig& config, const std::string& devices) {
     if (devices.empty()) {
         return;
@@ -395,8 +456,15 @@ SessionGpuSelection resolve_session_gpu_selection(
     std::string_view log_prefix,
     bool detailed_logging) {
     SessionGpuSelection selection;
-    selection.resolved_encode = resolve_render_gpu(config.encode_gpu);
-    selection.resolved_gpu = resolve_render_gpu(effective_render_gpu_selection(config));
+    const auto devices = list_render_gpus();
+    const auto encode_result = resolve_render_gpu_with_match_from(devices, config.encode_gpu);
+    const auto render_request = effective_render_gpu_selection(config);
+    const auto render_result = resolve_render_gpu_with_match_from(devices, render_request);
+    log_startup_available_gpus(devices);
+    log_startup_gpu_match("encode", config.encode_gpu, encode_result);
+    log_startup_gpu_match("render", render_request, render_result);
+    selection.resolved_encode = encode_result.device;
+    selection.resolved_gpu = render_result.device;
     if (selection.resolved_encode.has_value() && selection.resolved_encode->nvidia_index >= 0) {
         selection.nvenc_cuda_device_id = selection.resolved_encode->nvidia_index;
     }

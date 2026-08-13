@@ -543,9 +543,11 @@ QString MainWindow::current_pair_profile_json() const {
     root["remoteSshPort"] = remote_ssh_port_ != nullptr ? QString::number(remote_ssh_port_->value()) : QStringLiteral("22");
     root["remoteDirectory"] = remote_directory_ != nullptr ? remote_directory_->text().trimmed() : QString();
     root["remoteRomRoot"] = remote_rom_root_ != nullptr ? remote_rom_root_->text().trimmed() : QString();
-    root["remoteBinary"] = remote_binary_ != nullptr ? remote_binary_->text().trimmed() : QStringLiteral("./host_runner");
+    root["remoteHostConfig"] = remote_host_config_ != nullptr ? remote_host_config_->text().trimmed() : QString();
+    root["remoteBinary"] = remote_binary_ != nullptr ? remote_binary_->text().trimmed() : QStringLiteral("host_runner");
     root["remoteStartScript"] = remote_start_script_ != nullptr ? remote_start_script_->text().trimmed() : QString();
     root["remoteGpu"] = remote_gpu_ != nullptr ? remote_gpu_->text().trimmed() : QString();
+    root["remoteExtraArgs"] = remote_extra_args_ != nullptr ? remote_extra_args_->text().trimmed() : QString();
     root["remoteBaseControlPort"] = remote_base_control_port_ != nullptr ? QString::number(remote_base_control_port_->value()) : QString();
     root["remoteBaseInputPort"] = remote_base_input_port_ != nullptr ? QString::number(remote_base_input_port_->value()) : QString();
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
@@ -572,9 +574,11 @@ void MainWindow::apply_pair_profile_json(const QString& json) {
     if (remote_ssh_port_ != nullptr) remote_ssh_port_->setValue(qBound(json_string(root, "remoteSshPort", "22").toInt(), 1, 65535));
     if (remote_directory_ != nullptr) remote_directory_->setText(json_string(root, "remoteDirectory"));
     if (remote_rom_root_ != nullptr) remote_rom_root_->setText(json_string(root, "remoteRomRoot"));
-    if (remote_binary_ != nullptr) remote_binary_->setText(json_string(root, "remoteBinary", "./host_runner"));
+    if (remote_host_config_ != nullptr) remote_host_config_->setText(json_string(root, "remoteHostConfig"));
+    if (remote_binary_ != nullptr) remote_binary_->setText(json_string(root, "remoteBinary", "host_runner"));
     if (remote_start_script_ != nullptr) remote_start_script_->setText(json_string(root, "remoteStartScript"));
     if (remote_gpu_ != nullptr) remote_gpu_->setText(json_string(root, "remoteGpu"));
+    if (remote_extra_args_ != nullptr) remote_extra_args_->setText(json_string(root, "remoteExtraArgs"));
     if (remote_base_control_port_ != nullptr) remote_base_control_port_->setValue(qBound(json_string(root, "remoteBaseControlPort", "45555").toInt(), 1, 65535));
     if (remote_base_input_port_ != nullptr) remote_base_input_port_->setValue(qBound(json_string(root, "remoteBaseInputPort", QString::number(DefaultInputPort)).toInt(), 1, 65535));
     client_session_host_.clear();

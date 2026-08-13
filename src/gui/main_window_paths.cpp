@@ -40,6 +40,10 @@ void add_optional_row(QFormLayout* form, const QString& label, QWidget* field) {
     }
 }
 
+bool is_legacy_host_runner_config_default(const QString& path) {
+    return path.trimmed() == QStringLiteral("/home/merk/Scripts/archstreamer-host.conf");
+}
+
 } // namespace
 
 QWidget* MainWindow::build_paths_tab() {
@@ -49,12 +53,20 @@ QWidget* MainWindow::build_paths_tab() {
     auto* form_box = new QGroupBox("Roots", page);
     auto* form = new QFormLayout(form_box);
 
+    paths_.gui_settings_file = new QLineEdit(
+        QSettings(QStringLiteral("ArchStreamer"), QStringLiteral("ArchStreamer")).fileName(),
+        form_box);
+    paths_.gui_settings_file->setReadOnly(true);
+    paths_.gui_settings_file->setToolTip(
+        "Qt settings file where this GUI persists its form values.");
+
     paths_.art_root = new QLineEdit(form_box);
     paths_.art_root->setPlaceholderText(QStringLiteral("…/ROMS/Art  (under your Gaming root)"));
     paths_.art_root->setToolTip(
         "Box art and thumbnails used by the game pickers and the Steam art import.");
     create_host_path_rows(paths_, form_box);
 
+    add_optional_row(form, "GUI settings file", paths_.gui_settings_file);
     add_optional_row(form, "Art root", paths_.art_root);
     add_optional_row(form, "ROM root", paths_.rom_root);
     add_optional_row(form, "Meta root", paths_.meta_root);
@@ -67,6 +79,16 @@ QWidget* MainWindow::build_paths_tab() {
         save_root_layout->addWidget(paths_.save_root_create);
         form->addRow("Game Saves Root", save_root_row);
         add_optional_row(form, "", paths_.save_root_status);
+    }
+    add_optional_row(form, "host_runner config", paths_.host_config);
+    if (paths_.log_root != nullptr) {
+        auto* log_root_row = new QWidget(form_box);
+        auto* log_root_layout = new QHBoxLayout(log_root_row);
+        log_root_layout->setContentsMargins(0, 0, 0, 0);
+        log_root_layout->addWidget(paths_.log_root, 1);
+        log_root_layout->addWidget(paths_.log_root_browse);
+        log_root_layout->addWidget(paths_.log_root_create);
+        form->addRow("Logs root", log_root_row);
     }
     add_optional_row(form, "Native host_runner", paths_.native_host_runner);
 
@@ -138,6 +160,26 @@ void MainWindow::connect_path_fields() {
             create_save_root();
         });
     }
+    if (paths_.log_root != nullptr) {
+        connect(paths_.log_root, &QLineEdit::editingFinished, this, [this] {
+            persist_settings_if_idle();
+        });
+    }
+    if (paths_.host_config != nullptr) {
+        connect(paths_.host_config, &QLineEdit::editingFinished, this, [this] {
+            persist_settings_if_idle();
+        });
+    }
+    if (paths_.log_root_browse != nullptr) {
+        connect(paths_.log_root_browse, &QPushButton::clicked, this, [this] {
+            browse_log_root();
+        });
+    }
+    if (paths_.log_root_create != nullptr) {
+        connect(paths_.log_root_create, &QPushButton::clicked, this, [this] {
+            create_log_root();
+        });
+    }
     if (paths_.native_host_runner != nullptr) {
         connect(paths_.native_host_runner, &QLineEdit::editingFinished, this, [this] {
             persist_settings_if_idle();
@@ -171,6 +213,20 @@ std::filesystem::path MainWindow::save_root_path() const {
         return path;
     }
     return std::filesystem::path{default_path_roots().save_root.toStdString()};
+}
+
+std::filesystem::path MainWindow::log_root_path() const {
+    if (auto path = path_field_value(paths_.log_root); !path.empty()) {
+        return path;
+    }
+    return std::filesystem::path{default_path_roots().log_root.toStdString()};
+}
+
+std::filesystem::path MainWindow::host_config_path() const {
+    if (auto path = path_field_value(paths_.host_config); !path.empty()) {
+        return path;
+    }
+    return std::filesystem::path{default_path_roots().host_config.toStdString()};
 }
 
 std::filesystem::path MainWindow::dlc_root_path() const {
@@ -266,6 +322,24 @@ void MainWindow::browse_save_root() {
     persist_valid_save_root(save_root_path());
 }
 
+void MainWindow::browse_log_root() {
+    if (paths_.log_root == nullptr) {
+        return;
+    }
+    const auto current = QString::fromStdString(log_root_path().string());
+    const QString start =
+        QFileInfo(current).isDir() ? current : QFileInfo(current).absolutePath();
+    const QString chosen = QFileDialog::getExistingDirectory(
+        this,
+        QStringLiteral("Logs Root"),
+        start.isEmpty() ? QDir::homePath() : start);
+    if (chosen.isEmpty()) {
+        return;
+    }
+    paths_.log_root->setText(chosen);
+    persist_settings_if_idle();
+}
+
 void MainWindow::create_save_root() {
     if (paths_.save_root == nullptr) {
         return;
@@ -299,6 +373,34 @@ void MainWindow::create_save_root() {
     persist_valid_save_root(path);
 }
 
+void MainWindow::create_log_root() {
+    if (paths_.log_root == nullptr) {
+        return;
+    }
+    const auto path = log_root_path();
+    const QString qpath = QString::fromStdString(path.string());
+    if (QFileInfo(qpath).isDir()) {
+        persist_settings_if_idle();
+        return;
+    }
+    if (QFileInfo(qpath).exists()) {
+        append_log(
+            settings_log_,
+            QStringLiteral("Logs root exists but is not a directory: %1").arg(qpath),
+            GuiLogLevel::Quiet);
+        return;
+    }
+    if (!QDir().mkpath(qpath)) {
+        append_log(
+            settings_log_,
+            QStringLiteral("Could not create logs root: %1").arg(qpath),
+            GuiLogLevel::Quiet);
+        return;
+    }
+    append_log(settings_log_, QStringLiteral("Created logs root: %1").arg(qpath));
+    persist_settings_if_idle();
+}
+
 void MainWindow::load_path_settings(QSettings& settings) {
     const auto defaults = default_path_roots();
     if (paths_.art_root != nullptr) {
@@ -319,6 +421,20 @@ void MainWindow::load_path_settings(QSettings& settings) {
         // Missing or blank → show the live default, not an empty field.
         paths_.save_root->setText(stored.isEmpty() ? defaults.save_root : stored);
         update_save_root_status();
+    }
+    if (paths_.log_root != nullptr) {
+        const QSignalBlocker blocker(paths_.log_root);
+        const auto stored = settings.value(QStringLiteral("host/logRoot")).toString().trimmed();
+        paths_.log_root->setText(stored.isEmpty() ? defaults.log_root : stored);
+    }
+    if (paths_.host_config != nullptr) {
+        const QSignalBlocker blocker(paths_.host_config);
+        auto stored = settings.value(QStringLiteral("host/configPath")).toString().trimmed();
+        if (is_legacy_host_runner_config_default(stored)) {
+            settings.remove(QStringLiteral("host/configPath"));
+            stored.clear();
+        }
+        paths_.host_config->setText(stored.isEmpty() ? defaults.host_config : stored);
     }
     if (paths_.native_host_runner != nullptr) {
         const QSignalBlocker blocker(paths_.native_host_runner);
@@ -344,6 +460,22 @@ void MainWindow::save_path_settings(QSettings& settings) {
             paths_.save_root->setText(resolved);
         }
         settings.setValue(QStringLiteral("host/saveRoot"), resolved);
+    }
+    if (paths_.log_root != nullptr) {
+        const QString resolved = QString::fromStdString(log_root_path().string());
+        if (paths_.log_root->text().trimmed().isEmpty()) {
+            const QSignalBlocker blocker(paths_.log_root);
+            paths_.log_root->setText(resolved);
+        }
+        settings.setValue(QStringLiteral("host/logRoot"), resolved);
+    }
+    if (paths_.host_config != nullptr) {
+        const QString resolved = QString::fromStdString(host_config_path().string());
+        if (paths_.host_config->text().trimmed().isEmpty()) {
+            const QSignalBlocker blocker(paths_.host_config);
+            paths_.host_config->setText(resolved);
+        }
+        settings.setValue(QStringLiteral("host/configPath"), resolved);
     }
     if (paths_.native_host_runner != nullptr) {
         settings.setValue(

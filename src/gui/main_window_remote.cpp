@@ -49,24 +49,40 @@ bool try_probe_session(
 
 bool lobby_usable_for_request(
     const ActiveSessionInfo& info,
-    const std::string& want_resolved_id,
-    const std::string& process_gpu_arg,
-    const std::vector<std::pair<std::string, std::string>>& gpu_options) {
+    const std::string& want_gpu,
+    const std::string& process_gpu_arg) {
     if (remote_host_lobby_full(info.active_slots, info.max_slots)) {
         return false;
     }
-    if (want_resolved_id.empty()) {
+    if (want_gpu.empty()) {
         return true;
     }
-    // No --gpu / auto on the process → host default = first --list-gpus entry (score order).
-    if (process_gpu_arg.empty() || process_gpu_arg == "auto") {
-        return !gpu_options.empty() && gpu_options.front().first == want_resolved_id;
+    return remote_host_gpu_preference_matches(want_gpu, process_gpu_arg);
+}
+
+QString startup_selected_gpu(const QString& output) {
+    for (const auto& raw_line : output.split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+        const auto line = raw_line.trimmed();
+        if (!line.contains(QStringLiteral("[archstreamer-startup]")) ||
+            !line.contains(QStringLiteral("gpu-role=encode"))) {
+            continue;
+        }
+        if (line.contains(QStringLiteral("gpu-match=none"))) {
+            return {};
+        }
+        const auto marker = QStringLiteral(" selected=");
+        const auto start = line.indexOf(marker);
+        if (start < 0) {
+            continue;
+        }
+        auto value = line.mid(start + marker.size());
+        const auto end = value.indexOf(QLatin1Char(' '));
+        if (end >= 0) {
+            value = value.left(end);
+        }
+        return value.trimmed();
     }
-    const auto process_match = remote_host_match_gpu_option(gpu_options, process_gpu_arg);
-    if (!process_match.has_value()) {
-        return false;
-    }
-    return process_match->first == want_resolved_id;
+    return {};
 }
 
 } // namespace
@@ -89,25 +105,19 @@ QWidget* MainWindow::build_remote_tab() {
     remote_ssh_port_ = new QSpinBox(form_box);
     remote_ssh_port_->setRange(1, 65535);
     remote_ssh_port_->setValue(22);
-    remote_directory_ = new QLineEdit(form_box);
-    remote_directory_->setPlaceholderText("e.g. /home/user/ArchStreamer/build");
-    remote_rom_root_ = new QLineEdit(form_box);
-    remote_rom_root_->setPlaceholderText("absolute ROM root on the remote machine");
+    remote_host_config_ = new QLineEdit(form_box);
+    remote_host_config_->setPlaceholderText(
+        QStringLiteral("optional — e.g. /home/user/archstreamer-host.conf"));
+    remote_host_config_->setToolTip(
+        "Optional config on the remote machine.\n"
+        "This can be the remote GUI settings file; ports, display, GPU, and extra args override it.\n"
+        "Blank uses the default from the Paths tab.");
     remote_binary_ = new QLineEdit(form_box);
-    remote_binary_->setText(QStringLiteral("./host_runner"));
-    remote_binary_->setPlaceholderText(QStringLiteral("./host_runner or …/build/host_runner"));
+    remote_binary_->setText(QStringLiteral("host_runner"));
+    remote_binary_->setPlaceholderText(QStringLiteral("host_runner or /path/to/script"));
     remote_binary_->setToolTip(
-        "Path to host_runner on the remote machine (Path A, or GPU listing).\n"
-        "If you paste a build directory, /host_runner is appended automatically.\n"
-        "When a start script is set (Path B), this is only used for --list-gpus.");
-    remote_start_script_ = new QLineEdit(form_box);
-    remote_start_script_->setPlaceholderText(
-        QStringLiteral("optional — e.g. /home/alina/bin/archstreamer-start"));
-    remote_start_script_->setToolTip(
-        "Optional remote start script (Path B).\n"
-        "Empty: Ensure Host starts host_runner with full args (Path A).\n"
-        "Set: Ensure Host runs this script with ports + GPU only; the script\n"
-        "owns ROM root / host_runner path / setup. Absolute path preferred.");
+        "Remote executable to start. This can be host_runner or a personal wrapper script.\n"
+        "The Remote tab only appends optional overrides; the executable decides what is required.");
     remote_base_control_port_ = new QSpinBox(form_box);
     remote_base_control_port_->setRange(1, 65535);
     remote_base_control_port_->setValue(static_cast<int>(RemoteDefaultControlPort));
@@ -117,23 +127,24 @@ QWidget* MainWindow::build_remote_tab() {
     remote_gpu_ = new QLineEdit(form_box);
     remote_gpu_->setPlaceholderText("optional — e.g. 3060, amd, nvidia:1");
     remote_gpu_->setToolTip(
-        "Optional GPU for Ensure Host (not broadcast on the control protocol).\n"
-        "Empty: use the host default (auto) and reuse any free lobby.\n"
-        "Set: SSH-lists GPUs via host_runner --list-gpus (same list as Settings),\n"
-        "fuzzy-matches your text (3060, amd, …), reuses a free lobby on that GPU,\n"
-        "or starts a new instance with --gpu <resolved-id>.");
+        "Optional --gpu override passed to the remote executable.\n"
+        "Blank leaves GPU choice to the remote config or script.");
+    remote_extra_args_ = new QLineEdit(form_box);
+    remote_extra_args_->setPlaceholderText(QStringLiteral("optional — e.g. --flag value -x y"));
+    remote_extra_args_->setToolTip(
+        "Optional raw arguments appended after ArchStreamer overrides.\n"
+        "Intended for custom scripts that accept extra flags.");
 
     form->addRow("SSH host", remote_ssh_host_);
     form->addRow("SSH user", remote_ssh_user_);
     form->addRow("SSH password", remote_ssh_password_);
     form->addRow("SSH port", remote_ssh_port_);
-    form->addRow("Remote directory", remote_directory_);
-    form->addRow("Remote ROM root", remote_rom_root_);
-    form->addRow("host_runner path", remote_binary_);
-    form->addRow("Start script (optional)", remote_start_script_);
+    form->addRow("Host config (optional)", remote_host_config_);
+    form->addRow("Executable path", remote_binary_);
     form->addRow("Base control port", remote_base_control_port_);
     form->addRow("Base input port", remote_base_input_port_);
     form->addRow("GPU (optional)", remote_gpu_);
+    form->addRow("Args (optional)", remote_extra_args_);
 
     auto* buttons = new QHBoxLayout();
     auto* ensure = new QPushButton("Ensure Host", page);
@@ -144,7 +155,7 @@ QWidget* MainWindow::build_remote_tab() {
 
     remote_status_ = new QLabel(
         "Ensure Host probes port blocks, reuses a free matching lobby, or SSH-starts "
-        "host_runner (or an optional start script with ports + GPU). "
+        "the configured remote executable with optional overrides. "
         "Remote users lists Connected/Active from cadence SQL on the host; Kick writes the "
         "same markers as the Users tab. Stop Host uses the tracked port, or the GPU field "
         "to find and stop that instance.",
@@ -178,11 +189,10 @@ QWidget* MainWindow::build_remote_tab() {
     for (auto* edit :
          {remote_ssh_host_,
           remote_ssh_user_,
-          remote_directory_,
-          remote_rom_root_,
+          remote_host_config_,
           remote_binary_,
-          remote_start_script_,
-          remote_gpu_}) {
+          remote_gpu_,
+          remote_extra_args_}) {
         connect(edit, &QLineEdit::editingFinished, this, [this] { persist_settings_if_idle(); });
     }
     connect(remote_ssh_port_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
@@ -218,36 +228,27 @@ void MainWindow::ensure_remote_host() {
     const auto ssh_host = remote_ssh_host_->text().trimmed();
     const auto ssh_user = remote_ssh_user_->text().trimmed();
     const auto password = remote_ssh_password_->text();
-    const auto directory = remote_directory_->text().trimmed();
-    const auto rom_root = remote_rom_root_->text().trimmed();
+    const auto host_config =
+        remote_host_config_ != nullptr ? remote_host_config_->text().trimmed() : QString();
+    const auto effective_host_config = host_config.isEmpty()
+        ? QString::fromStdString(host_config_path().string())
+        : host_config;
     const auto binary = remote_binary_->text().trimmed().isEmpty()
-        ? QStringLiteral("./host_runner")
+        ? QStringLiteral("host_runner")
         : remote_binary_->text().trimmed();
-    const auto start_script =
-        remote_start_script_ != nullptr ? remote_start_script_->text().trimmed() : QString();
     const auto want_gpu = remote_gpu_ != nullptr ? remote_gpu_->text().trimmed() : QString();
+    const auto extra_args =
+        remote_extra_args_ != nullptr ? remote_extra_args_->text().trimmed() : QString();
     const int ssh_port = remote_ssh_port_->value();
     const auto base_control =
         static_cast<std::uint16_t>(remote_base_control_port_->value());
     const auto base_input =
         static_cast<std::uint16_t>(remote_base_input_port_->value());
-    const auto player_reconnect_timeout =
-        static_cast<std::uint16_t>(player_reconnect_timeout_seconds());
-
-    if (ssh_host.isEmpty() || ssh_user.isEmpty() || directory.isEmpty()) {
+    if (ssh_host.isEmpty() || ssh_user.isEmpty()) {
         QMessageBox::warning(
             this,
             QStringLiteral("Remote host"),
-            QStringLiteral("SSH host, user, and remote directory are required."));
-        return;
-    }
-    if (start_script.isEmpty() && rom_root.isEmpty()) {
-        QMessageBox::warning(
-            this,
-            QStringLiteral("Remote host"),
-            QStringLiteral(
-                "Remote ROM root is required unless a start script is set "
-                "(Path B: the script owns ROM root / host_runner)."));
+            QStringLiteral("SSH host and user are required."));
         return;
     }
     if (password.isEmpty()) {
@@ -274,15 +275,13 @@ void MainWindow::ensure_remote_host() {
                  ssh_host,
                  ssh_user,
                  password,
-                 directory,
-                 rom_root,
+                 effective_host_config,
                  binary,
-                 start_script,
                  want_gpu,
+                 extra_args,
                  ssh_port,
                  base_control,
-                 base_input,
-                 player_reconnect_timeout] {
+                 base_input] {
         auto finish = [this](const QString& status, bool apply, const QString& host,
                              int control, int input, int tracked_control) {
             QMetaObject::invokeMethod(
@@ -301,79 +300,8 @@ void MainWindow::ensure_remote_host() {
         };
 
         const auto host_std = ssh_host.toStdString();
-        std::vector<std::pair<std::string, std::string>> gpu_options;
-        std::string resolved_gpu_id;
-        QString resolved_gpu_label;
-
-        if (!want_gpu.isEmpty()) {
-            const auto list_cmd = QString::fromStdString(remote_host_list_gpus_shell(
-                directory.toStdString(), binary.toStdString()));
-            QMetaObject::invokeMethod(
-                this,
-                [this] {
-                    set_remote_status(QStringLiteral("Listing remote GPUs (host_runner --list-gpus)…"));
-                },
-                Qt::QueuedConnection);
-            const auto listed = run_remote_ssh_command(
-                ssh_host, ssh_port, ssh_user, password, list_cmd);
-            if (!listed.ok) {
-                finish(
-                    QStringLiteral("Remote GPU list failed: %1%2")
-                        .arg(listed.error)
-                        .arg(listed.stderr_text.isEmpty()
-                            ? QString()
-                            : QStringLiteral("\n%1").arg(listed.stderr_text)),
-                    false,
-                    {},
-                    0,
-                    0,
-                    0);
-                return;
-            }
-            const auto lines = listed.stdout_text.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
-            for (const auto& line : lines) {
-                const auto tab = line.indexOf(QLatin1Char('\t'));
-                if (tab <= 0) {
-                    continue;
-                }
-                gpu_options.emplace_back(
-                    line.left(tab).trimmed().toStdString(),
-                    line.mid(tab + 1).trimmed().toStdString());
-            }
-            const auto matched =
-                remote_host_match_gpu_option(gpu_options, want_gpu.toStdString());
-            if (!matched.has_value()) {
-                QString available;
-                for (const auto& [id, name] : gpu_options) {
-                    if (!available.isEmpty()) {
-                        available += QStringLiteral(", ");
-                    }
-                    available += QString::fromStdString(name + " [" + id + "]");
-                }
-                finish(
-                    QStringLiteral("No remote GPU matched “%1”. Available: %2")
-                        .arg(want_gpu)
-                        .arg(available.isEmpty() ? QStringLiteral("(none)") : available),
-                    false,
-                    {},
-                    0,
-                    0,
-                    0);
-                return;
-            }
-            resolved_gpu_id = matched->first;
-            resolved_gpu_label = QStringLiteral("%1 [%2]")
-                .arg(QString::fromStdString(matched->second))
-                .arg(QString::fromStdString(matched->first));
-            QMetaObject::invokeMethod(
-                this,
-                [this, resolved_gpu_label] {
-                    set_remote_status(
-                        QStringLiteral("Matched remote GPU %1 — probing lobbies…")
-                            .arg(resolved_gpu_label));
-                },
-                Qt::QueuedConnection);
-        }
+        const std::string resolved_gpu_id = want_gpu.toStdString();
+        const QString resolved_gpu_label = want_gpu;
 
         auto query_process_gpu = [&](std::uint16_t control_port) -> std::string {
             if (resolved_gpu_id.empty()) {
@@ -391,29 +319,36 @@ void MainWindow::ensure_remote_host() {
 
         auto start_instance = [&](int instance_index, const RemoteHostPortBlock& ports) -> bool {
             const auto cmd = QString::fromStdString(remote_host_start_shell(
-                directory.toStdString(),
                 binary.toStdString(),
-                rom_root.toStdString(),
+                effective_host_config.toStdString(),
                 ports,
                 resolved_gpu_id,
-                start_script.toStdString(),
-                player_reconnect_timeout));
+                extra_args.toStdString()));
+            QString command_summary = QStringLiteral(
+                "ssh start: executable=%1 config=%2 ports=%3/%4/%5/%6 display=:%7 gpu=%8")
+                .arg(binary)
+                .arg(effective_host_config.isEmpty() ? QStringLiteral("(none)") : effective_host_config)
+                .arg(ports.control_port)
+                .arg(ports.input_port)
+                .arg(ports.video_port)
+                .arg(ports.audio_port)
+                .arg(ports.virtual_display)
+                .arg(want_gpu.isEmpty() ? QStringLiteral("(default)") : want_gpu);
+            if (!extra_args.isEmpty()) {
+                command_summary += QStringLiteral(" args=%1").arg(extra_args);
+            }
             QMetaObject::invokeMethod(
                 this,
-                [this, instance_index, ports, resolved_gpu_label, start_script, cmd] {
-                    QString msg = start_script.isEmpty()
-                        ? QStringLiteral("SSH-starting host instance %1 on port %2")
-                              .arg(instance_index)
-                              .arg(ports.control_port)
-                        : QStringLiteral("SSH-starting via script (instance %1, port %2)")
-                              .arg(instance_index)
-                              .arg(ports.control_port);
+                [this, instance_index, ports, resolved_gpu_label, command_summary] {
+                    QString msg = QStringLiteral("SSH-starting remote executable (instance %1, port %2)")
+                        .arg(instance_index)
+                        .arg(ports.control_port);
                     if (!resolved_gpu_label.isEmpty()) {
                         msg += QStringLiteral(" (%1)").arg(resolved_gpu_label);
                     }
                     msg += QStringLiteral("…");
                     set_remote_status(msg);
-                    append_log(remote_log_, QStringLiteral("ssh cmd: %1").arg(cmd));
+                    append_log(remote_log_, command_summary);
                 },
                 Qt::QueuedConnection);
             const auto ssh = run_remote_ssh_command(
@@ -431,6 +366,24 @@ void MainWindow::ensure_remote_host() {
                     0,
                     0);
                 return false;
+            }
+            if (!ssh.stdout_text.trimmed().isEmpty()) {
+                const auto startup_output = ssh.stdout_text.trimmed();
+                const auto selected_gpu = startup_selected_gpu(startup_output);
+                QMetaObject::invokeMethod(
+                    this,
+                    [this, startup_output, selected_gpu, want_gpu] {
+                        append_log(remote_log_, startup_output);
+                        if (!want_gpu.isEmpty() && !selected_gpu.isEmpty()
+                            && selected_gpu != want_gpu && remote_gpu_ != nullptr) {
+                            remote_gpu_->setText(selected_gpu);
+                            append_log(
+                                remote_log_,
+                                QStringLiteral("Updated GPU override to %1 from startup match.")
+                                    .arg(selected_gpu));
+                        }
+                    },
+                    Qt::QueuedConnection);
             }
             for (int attempt = 0; attempt < 20; ++attempt) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -473,7 +426,7 @@ void MainWindow::ensure_remote_host() {
             QString probe_error;
             if (try_probe_session(client_app_, host_std, ports.control_port, &info, &probe_error)) {
                 const auto process_gpu = query_process_gpu(ports.control_port);
-                if (lobby_usable_for_request(info, resolved_gpu_id, process_gpu, gpu_options)) {
+                if (lobby_usable_for_request(info, resolved_gpu_id, process_gpu)) {
                     const QString slot_text = (info.active_slots && info.max_slots)
                         ? QStringLiteral(" (slots %1/%2)")
                             .arg(*info.active_slots)
@@ -534,10 +487,6 @@ void MainWindow::stop_remote_host() {
     const auto ssh_host = remote_ssh_host_->text().trimmed();
     const auto ssh_user = remote_ssh_user_->text().trimmed();
     const auto password = remote_ssh_password_->text();
-    const auto directory = remote_directory_->text().trimmed();
-    const auto binary = remote_binary_->text().trimmed().isEmpty()
-        ? QStringLiteral("./host_runner")
-        : remote_binary_->text().trimmed();
     const auto want_gpu = remote_gpu_ != nullptr ? remote_gpu_->text().trimmed() : QString();
     const int ssh_port = remote_ssh_port_->value();
     const auto base_control =
@@ -563,7 +512,7 @@ void MainWindow::stop_remote_host() {
 
     persist_settings_if_idle();
     remote_busy_ = true;
-    if (want_gpu.isEmpty()) {
+    if (tracked > 0 || want_gpu.isEmpty()) {
         const int control = tracked > 0 ? tracked : static_cast<int>(base_control);
         set_remote_status(QStringLiteral("Stopping remote host on control port %1…").arg(control));
     } else {
@@ -575,64 +524,14 @@ void MainWindow::stop_remote_host() {
                  ssh_host,
                  ssh_user,
                  password,
-                 directory,
-                 binary,
                  want_gpu,
                  ssh_port,
                  base_control,
                  base_input,
                  tracked] {
         int control = tracked > 0 ? tracked : static_cast<int>(base_control);
-        QString resolved_label;
 
-        if (!want_gpu.isEmpty()) {
-            const auto list_cmd = QString::fromStdString(remote_host_list_gpus_shell(
-                directory.toStdString(),
-                binary.toStdString()));
-            const auto listed = run_remote_ssh_command(
-                ssh_host, ssh_port, ssh_user, password, list_cmd);
-            if (!listed.ok) {
-                QMetaObject::invokeMethod(
-                    this,
-                    [this, listed] {
-                        remote_busy_ = false;
-                        set_remote_status(
-                            QStringLiteral("Remote GPU list failed: %1%2")
-                                .arg(listed.error)
-                                .arg(listed.stderr_text.isEmpty()
-                                    ? QString()
-                                    : QStringLiteral("\n%1").arg(listed.stderr_text)));
-                    },
-                    Qt::QueuedConnection);
-                return;
-            }
-            std::vector<std::pair<std::string, std::string>> gpu_options;
-            for (const auto& line : listed.stdout_text.split('\n', Qt::SkipEmptyParts)) {
-                const auto tab = line.indexOf('\t');
-                if (tab <= 0) {
-                    continue;
-                }
-                gpu_options.emplace_back(
-                    line.left(tab).trimmed().toStdString(),
-                    line.mid(tab + 1).trimmed().toStdString());
-            }
-            const auto matched =
-                remote_host_match_gpu_option(gpu_options, want_gpu.toStdString());
-            if (!matched.has_value()) {
-                QMetaObject::invokeMethod(
-                    this,
-                    [this, want_gpu] {
-                        remote_busy_ = false;
-                        set_remote_status(
-                            QStringLiteral("No remote GPU matched “%1”.").arg(want_gpu));
-                    },
-                    Qt::QueuedConnection);
-                return;
-            }
-            const auto& resolved_id = matched->first;
-            resolved_label = QStringLiteral("%1 [%2]")
-                .arg(QString::fromStdString(matched->second), QString::fromStdString(resolved_id));
-
+        if (tracked <= 0 && !want_gpu.isEmpty()) {
             int found_port = -1;
             for (int n = 0; n < 8; ++n) {
                 const auto ports = remote_host_port_block(n, base_control, base_input);
@@ -644,13 +543,7 @@ void MainWindow::stop_remote_host() {
                     continue;
                 }
                 const auto process_gpu = gpu_ssh.stdout_text.trimmed().toStdString();
-                if (process_gpu.empty() && n == 0 && resolved_id == gpu_options.front().first) {
-                    found_port = static_cast<int>(ports.control_port);
-                    break;
-                }
-                const auto process_match =
-                    remote_host_match_gpu_option(gpu_options, process_gpu);
-                if (process_match.has_value() && process_match->first == resolved_id) {
+                if (remote_host_gpu_preference_matches(want_gpu.toStdString(), process_gpu)) {
                     found_port = static_cast<int>(ports.control_port);
                     break;
                 }
@@ -658,11 +551,11 @@ void MainWindow::stop_remote_host() {
             if (found_port < 0) {
                 QMetaObject::invokeMethod(
                     this,
-                    [this, resolved_label] {
+                    [this, want_gpu] {
                         remote_busy_ = false;
                         set_remote_status(
-                            QStringLiteral("No running host_runner found for %1.")
-                                .arg(resolved_label));
+                            QStringLiteral("No running host_runner found for GPU “%1”.")
+                                .arg(want_gpu));
                     },
                     Qt::QueuedConnection);
                 return;
@@ -670,23 +563,22 @@ void MainWindow::stop_remote_host() {
             control = found_port;
             QMetaObject::invokeMethod(
                 this,
-                [this, control, resolved_label] {
+                [this, control, want_gpu] {
                     set_remote_status(
-                        QStringLiteral("Stopping %1 on control port %2…")
-                            .arg(resolved_label)
+                        QStringLiteral("Stopping GPU “%1” on control port %2…")
+                            .arg(want_gpu)
                             .arg(control));
                 },
                 Qt::QueuedConnection);
         }
 
         const auto cmd = QString::fromStdString(remote_host_stop_shell(
-            static_cast<std::uint16_t>(control),
-            directory.toStdString()));
+            static_cast<std::uint16_t>(control)));
         const auto ssh = run_remote_ssh_command(
             ssh_host, ssh_port, ssh_user, password, cmd);
         QMetaObject::invokeMethod(
             this,
-            [this, ssh, control, resolved_label] {
+            [this, ssh, control, want_gpu] {
                 remote_busy_ = false;
                 if (!ssh.ok) {
                     set_remote_status(
@@ -698,8 +590,8 @@ void MainWindow::stop_remote_host() {
                 } else {
                     QString msg = QStringLiteral("Stopped remote host on control port %1.")
                         .arg(control);
-                    if (!resolved_label.isEmpty()) {
-                        msg += QStringLiteral(" (%1)").arg(resolved_label);
+                    if (!want_gpu.isEmpty()) {
+                        msg += QStringLiteral(" (GPU %1)").arg(want_gpu);
                     }
                     set_remote_status(msg);
                     remote_tracked_control_port_ = 0;

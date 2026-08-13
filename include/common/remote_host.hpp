@@ -179,34 +179,29 @@ inline std::string remote_host_resolve_start_script(
 }
 
 /**
- * Start host without cd — log/PID use absolute paths under directory.
- * directory/binary/rom_root/start_script are unquoted filesystem paths.
- *
- * Path A (start_script empty): nohup host_runner with rom-root, ports, clients, GPU.
- * Path B (start_script set): nohup that script with ports + GPU only; the script owns
- * ROM root / host_runner location / setup. Verifies the launched process is still alive
- * shortly after spawn so spawn failures surface as SSH errors.
+ * Start a remote executable without assuming its install directory.
+ * executable and host_config are unquoted remote paths/commands; extra_args is passed
+ * through as caller-provided shell syntax for custom scripts.
  */
 inline std::string remote_host_start_shell(
-    const std::string& directory,
-    const std::string& binary,
-    const std::string& rom_root,
+    const std::string& executable,
+    const std::string& host_config,
     const RemoteHostPortBlock& ports,
     const std::string& encode_gpu = {},
-    const std::string& start_script = {},
-    std::uint16_t player_reconnect_timeout_seconds = 60) {
-    const auto qdir = remote_shell_single_quote([&] {
-        auto d = directory;
-        while (!d.empty() && (d.back() == '/' || d.back() == '\\')) {
-            d.pop_back();
-        }
-        return d.empty() ? std::string(".") : d;
-    }());
-    const auto qlog = remote_shell_single_quote(remote_host_log_path(directory, ports.control_port));
-    const auto qpid = remote_shell_single_quote(remote_host_pid_path(directory, ports.control_port));
+    const std::string& extra_args = {}) {
+    const auto launch_target = executable.empty() ? std::string("host_runner") : executable;
+    const auto qlaunch = remote_shell_single_quote(launch_target);
+    const auto qlog = remote_shell_single_quote(
+        "/tmp/archstreamer_host_" + std::to_string(ports.control_port) + ".bootstrap.log");
+    const auto qpid = remote_shell_single_quote(
+        "/tmp/.archstreamer_remote_" + std::to_string(ports.control_port) + ".pid");
     std::string gpu_args;
     if (!encode_gpu.empty()) {
         gpu_args = " --gpu " + remote_shell_single_quote(encode_gpu);
+    }
+    std::string config_args;
+    if (!host_config.empty()) {
+        config_args = " --config " + remote_shell_single_quote(host_config);
     }
     const auto port_args = std::string(" --control-port ")
         + std::to_string(ports.control_port)
@@ -218,37 +213,21 @@ inline std::string remote_host_start_shell(
         + std::to_string(ports.audio_port)
         + " --virtual-display :"
         + std::to_string(ports.virtual_display);
-
-    const auto resolved_script = remote_host_resolve_start_script(directory, start_script);
-    const bool use_script = !resolved_script.empty();
-    const std::string launch_target = use_script
-        ? resolved_script
-        : remote_host_resolve_binary(directory, binary);
-    const auto qlaunch = remote_shell_single_quote(launch_target);
-    const char* missing_label = use_script ? "start script" : "host_runner";
-    const char* exit_label = use_script ? "start script" : "host_runner";
-
-    std::string launch_args = port_args + gpu_args;
-    if (!use_script) {
-        launch_args = std::string(" --rom-root ")
-            + remote_shell_single_quote(rom_root)
-            + port_args
-            + " --clients 2 --allow-new-users"
-            + " --player-reconnect-timeout "
-            + std::to_string(player_reconnect_timeout_seconds)
-            + gpu_args;
+    std::string launch_args = config_args + port_args + gpu_args;
+    if (!extra_args.empty()) {
+        launch_args += " ";
+        launch_args += extra_args;
     }
+    const auto qconfig = remote_shell_single_quote(host_config);
 
+    const auto executable_check = launch_target.find('/') == std::string::npos
+        ? std::string("command -v ") + qlaunch + " >/dev/null 2>&1"
+        : std::string("[ -x ") + qlaunch + " ]";
     return std::string("set -e; ")
-        + "mkdir -p "
-        + qdir
-        + "; "
-        + "if [ ! -x "
-        + qlaunch
-        + " ]; then "
-        + "echo \""
-        + missing_label
-        + " not found or not executable: \" "
+        + "if ! "
+        + executable_check
+        + "; then "
+        + "echo \"remote executable not found or not executable: \" "
         + qlaunch
         + " >&2; exit 127; fi; "
         + "nohup "
@@ -261,17 +240,52 @@ inline std::string remote_host_start_shell(
         + "echo \"$pid\" > "
         + qpid
         + "; "
-        + "sleep 0.7; "
+        + "host_log=\"\"; "
+        + "if [ -n "
+        + qconfig
+        + " ] && [ -r "
+        + qconfig
+        + " ]; then "
+        + "log_root=$(awk -F '[:=]' '"
+          "{k=$1; v=\"\"; gsub(/[ \\t_-]/,\"\",k); for(i=2;i<=NF;i++){v=(i==2?$i:v FS $i)} "
+          "gsub(/^[ \\t]+|[ \\t]+$/,\"\",v); if(tolower(k)==\"logroot\"){print v; exit}}' "
+        + qconfig
+        + "); "
+        + "if [ -n \"$log_root\" ]; then host_log=\"$log_root/host_"
+        + std::to_string(ports.control_port)
+        + ".log\"; fi; "
+        + "fi; "
+        + "for i in $(seq 1 24); do "
         + "if ! kill -0 \"$pid\" 2>/dev/null; then "
-        + "echo \""
-        + exit_label
-        + " exited immediately (pid $pid). Log:\" >&2; "
+        + "echo \"remote executable exited immediately (pid $pid). Log:\" >&2; "
         + "cat "
         + qlog
         + " >&2 || true; "
+        + "if [ -n \"$host_log\" ]; then cat \"$host_log\" >&2 || true; fi; "
         + "rm -f "
         + qpid
-        + "; exit 1; fi";
+        + "; exit 1; fi; "
+        + "if grep -q '\\[archstreamer-startup\\] lobby-ready' "
+        + qlog
+        + " 2>/dev/null || { [ -n \"$host_log\" ] && grep -q '\\[archstreamer-startup\\] lobby-ready' \"$host_log\" 2>/dev/null; }; then "
+        + "grep '\\[archstreamer-startup\\]' "
+        + qlog
+        + " 2>/dev/null || true; "
+        + "if [ -n \"$host_log\" ]; then grep '\\[archstreamer-startup\\]' \"$host_log\" 2>/dev/null || true; fi; "
+        + "exit 0; fi; "
+        + "sleep 0.5; "
+        + "done; "
+        + "echo \"remote executable did not report lobby-ready before timeout. Log:\" >&2; "
+        + "grep '\\[archstreamer-startup\\]' "
+        + qlog
+        + " 1>&2 2>/dev/null || true; "
+        + "if [ -n \"$host_log\" ]; then grep '\\[archstreamer-startup\\]' \"$host_log\" 1>&2 2>/dev/null || true; fi; "
+        + "kill \"$pid\" 2>/dev/null || true; "
+        + "sleep 1; "
+        + "kill -0 \"$pid\" 2>/dev/null && kill -9 \"$pid\" 2>/dev/null || true; "
+        + "rm -f "
+        + qpid
+        + "; exit 1";
 }
 
 /**
@@ -284,6 +298,21 @@ inline std::string remote_host_stop_shell(
     std::string cmd;
     if (!directory.empty()) {
         const auto qpid = remote_shell_single_quote(remote_host_pid_path(directory, control_port));
+        cmd += "if [ -f "
+            + qpid
+            + " ]; then"
+            + " pid=$(cat "
+            + qpid
+            + ");"
+            + " kill \"$pid\" 2>/dev/null;"
+            + " sleep 1;"
+            + " kill -0 \"$pid\" 2>/dev/null && kill -9 \"$pid\" 2>/dev/null;"
+            + " rm -f "
+            + qpid
+            + "; fi; ";
+    } else {
+        const auto qpid = remote_shell_single_quote(
+            "/tmp/.archstreamer_remote_" + std::to_string(control_port) + ".pid");
         cmd += "if [ -f "
             + qpid
             + " ]; then"

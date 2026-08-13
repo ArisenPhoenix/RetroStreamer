@@ -1,0 +1,785 @@
+[2026-08-13 11:44:41] [host] host_runner: log ~/Scripts/host_runner_logged/host_45545.log
+[2026-08-13 11:44:41] [host] host_runner: logging to ~/Scripts/host_runner_logged/host_45545.log
+[2026-08-13 11:44:41] [host] cadence(db): 
+[2026-08-13 11:44:41] [host] host_started
+[2026-08-13 11:44:41] [host]  
+[2026-08-13 11:44:41] [host] host_runner
+[2026-08-13 11:44:41] [host] 
+[2026-08-13 11:44:42] [host] game_meta: catalog_offerings rebuilt (
+[2026-08-13 11:44:42] [host] 53
+[2026-08-13 11:44:42] [host]  game(s), rev 
+[2026-08-13 11:44:42] [host] 11019947237688368015
+[2026-08-13 11:44:42] [host] )
+[2026-08-13 11:44:42] [host] Audio capture: per-slot null sinks (archstreamer-0…); 
+[2026-08-13 11:44:42] [host] host speakers stay quiet unless Watch stream locally
+[2026-08-13 11:44:42] [host] Lobby on TCP 
+[2026-08-13 11:44:42] [host] 45545
+[2026-08-13 11:44:42] [host]  (max slots 
+[2026-08-13 11:44:42] [host] 2
+[2026-08-13 11:44:42] [host] , UDP input 
+[2026-08-13 11:44:42] [host] 45444
+[2026-08-13 11:44:42] [host] ).
+[2026-08-13 11:44:42] [host] Buckets: connected / multiplayer / sessions via SessionManager.
+[2026-08-13 11:44:42] [host] Links owned by Lobby (HostSessionHub); sessions tracked by session_id.
+[2026-08-13 11:44:42] [host] Receiving UDP controller input on port 
+[2026-08-13 11:44:42] [host] 45444
+[2026-08-13 11:44:42] [host]  (demux)
+[2026-08-13 11:44:55] [host] Accepted control connection.
+[2026-08-13 11:44:55] [host] Lobby connected 
+[2026-08-13 11:44:55] [host] 1
+[2026-08-13 11:44:55] [host]  username=
+[2026-08-13 11:44:55] [host] merk
+[2026-08-13 11:44:55] [host]  (catalog)
+[2026-08-13 11:44:55] [host] Accepted control connection.
+[2026-08-13 11:44:55] [host] Lobby connected 
+[2026-08-13 11:44:55] [host] 1
+[2026-08-13 11:44:55] [host]  (
+[2026-08-13 11:44:55] [host] merk
+[2026-08-13 11:44:55] [host] ) disconnected.
+[2026-08-13 11:48:33] [host] Accepted control connection.
+[2026-08-13 11:48:33] [host] Client 
+[2026-08-13 11:48:33] [host] 2
+[2026-08-13 11:48:33] [host]  username=
+[2026-08-13 11:48:33] [host] merk
+[2026-08-13 11:48:33] [host]  display="
+[2026-08-13 11:48:33] [host] merk
+[2026-08-13 11:48:33] [host] "
+[2026-08-13 11:48:33] [host]  mode=
+[2026-08-13 11:48:33] [host] singleplayer
+[2026-08-13 11:48:33] [host]  players=
+[2026-08-13 11:48:33] [host] 1
+[2026-08-13 11:48:33] [host]  game="
+[2026-08-13 11:48:33] [host] sha256:b64e4b516f51f7cd0677e615852134e683387b7edc71ce557e544369250e2c55
+[2026-08-13 11:48:33] [host] "
+[2026-08-13 11:48:33] [host]  device=
+[2026-08-13 11:48:33] [host] desktop
+[2026-08-13 11:48:33] [host]  perf=
+[2026-08-13 11:48:33] [host] unknown
+[2026-08-13 11:48:33] [host]  threads=
+[2026-08-13 11:48:33] [host] 0
+[2026-08-13 11:48:33] [host]  screen=
+[2026-08-13 11:48:33] [host] 0
+[2026-08-13 11:48:33] [host] x
+[2026-08-13 11:48:33] [host] 0
+[2026-08-13 11:48:33] [host]  platform=
+[2026-08-13 11:48:33] [host] 0
+[2026-08-13 11:48:33] [host] 
+[2026-08-13 11:48:33] [host] Starting session 
+[2026-08-13 11:48:33] [host] sess-607323508760403-1
+[2026-08-13 11:48:33] [host]  slot=
+[2026-08-13 11:48:33] [host] 0
+[2026-08-13 11:48:33] [host]  mode=
+[2026-08-13 11:48:33] [host] singleplayer
+[2026-08-13 11:48:33] [host]  game=
+[2026-08-13 11:48:33] [host] sha256:b64e4b516f51f7cd0677e615852134e683387b7edc71ce557e544369250e2c55
+[2026-08-13 11:48:33] [host]  save_user=
+[2026-08-13 11:48:33] [host] merk
+[2026-08-13 11:48:33] [host] 
+[2026-08-13 11:48:33] [host] session slot 
+[2026-08-13 11:48:33] [host] 0
+[2026-08-13 11:48:33] [host] : audio capture 
+[2026-08-13 11:48:33] [host] archstreamer-0.monitor
+[2026-08-13 11:48:33] [host]  (id 
+[2026-08-13 11:48:33] [host] archstreamer-slot-0
+[2026-08-13 11:48:33] [host] )
+[2026-08-13 11:48:33] [host] cadence(db): 
+[2026-08-13 11:48:33] [host] resource_claimed
+[2026-08-13 11:48:33] [host]  user=
+[2026-08-13 11:48:33] [host] merk
+[2026-08-13 11:48:33] [host]  
+[2026-08-13 11:48:33] [host] slot_lock=slot-0
+[2026-08-13 11:48:33] [host] 
+[2026-08-13 11:48:33] [host] cadence(db): 
+[2026-08-13 11:48:33] [host] resource_claimed
+[2026-08-13 11:48:33] [host]  user=
+[2026-08-13 11:48:33] [host] merk
+[2026-08-13 11:48:33] [host]  
+[2026-08-13 11:48:33] [host] display=:99
+[2026-08-13 11:48:33] [host] 
+[2026-08-13 11:48:33] [host] cadence(db): 
+[2026-08-13 11:48:33] [host] resource_claimed
+[2026-08-13 11:48:33] [host]  user=
+[2026-08-13 11:48:33] [host] merk
+[2026-08-13 11:48:33] [host]  
+[2026-08-13 11:48:33] [host] video_port=5005
+[2026-08-13 11:48:33] [host] 
+[2026-08-13 11:48:33] [host] cadence(db): 
+[2026-08-13 11:48:33] [host] resource_claimed
+[2026-08-13 11:48:33] [host]  user=
+[2026-08-13 11:48:33] [host] merk
+[2026-08-13 11:48:33] [host]  
+[2026-08-13 11:48:33] [host] audio_port=6005
+[2026-08-13 11:48:33] [host] 
+[2026-08-13 11:48:33] [host] cadence(db): 
+[2026-08-13 11:48:33] [host] resource_claimed
+[2026-08-13 11:48:33] [host]  user=
+[2026-08-13 11:48:33] [host] merk
+[2026-08-13 11:48:33] [host]  
+[2026-08-13 11:48:33] [host] netcmd_port=55355
+[2026-08-13 11:48:33] [host] 
+[2026-08-13 11:48:33] [host] cadence(db): 
+[2026-08-13 11:48:33] [host] resource_claimed
+[2026-08-13 11:48:33] [host]  user=
+[2026-08-13 11:48:33] [host] merk
+[2026-08-13 11:48:33] [host]  
+[2026-08-13 11:48:33] [host] pulse_sink=archstreamer-0
+[2026-08-13 11:48:33] [host] 
+[2026-08-13 11:48:33] [host] cadence(db): 
+[2026-08-13 11:48:33] [host] resource_claimed
+[2026-08-13 11:48:33] [host]  user=
+[2026-08-13 11:48:33] [host] merk
+[2026-08-13 11:48:33] [host]  
+[2026-08-13 11:48:33] [host] pulse_app_id=archstreamer-slot-0
+[2026-08-13 11:48:33] [host] 
+[2026-08-13 11:48:33] [host] cadence(db): 
+[2026-08-13 11:48:33] [host] resource_claimed
+[2026-08-13 11:48:33] [host]  user=
+[2026-08-13 11:48:33] [host] merk
+[2026-08-13 11:48:33] [host]  
+[2026-08-13 11:48:33] [host] pad_product_base=0xa517
+[2026-08-13 11:48:33] [host] 
+[2026-08-13 11:48:34] [host] session slot 
+[2026-08-13 11:48:34] [host] 0
+[2026-08-13 11:48:34] [host] : session 
+[2026-08-13 11:48:34] [host] sess-607323508760403-1
+[2026-08-13 11:48:34] [host]  XTest lease 
+[2026-08-13 11:48:34] [host] :20
+[2026-08-13 11:48:34] [host] 
+[2026-08-13 11:48:35] [host] session slot 0: GPU 
+[2026-08-13 11:48:35] [host] NVIDIA GeForce RTX 3060
+[2026-08-13 11:48:35] [host]  [
+[2026-08-13 11:48:35] [host] nvidia:1
+[2026-08-13 11:48:35] [host] ] (encode+render)
+[2026-08-13 11:48:35] [host] 
+[2026-08-13 11:48:35] [host] Initial stream policy: 
+[2026-08-13 11:48:35] [host] default
+[2026-08-13 11:48:35] [host]  -> 
+[2026-08-13 11:48:35] [host] 720p
+[2026-08-13 11:48:35] [host] /
+[2026-08-13 11:48:35] [host] medium
+[2026-08-13 11:48:35] [host] /
+[2026-08-13 11:48:35] [host] auto
+[2026-08-13 11:48:35] [host] /
+[2026-08-13 11:48:35] [host] low-latency
+[2026-08-13 11:48:35] [host] /
+[2026-08-13 11:48:35] [host] 30fps
+[2026-08-13 11:48:35] [host]  @
+[2026-08-13 11:48:35] [host] 3500
+[2026-08-13 11:48:35] [host] kbps/
+[2026-08-13 11:48:35] [host] 30
+[2026-08-13 11:48:35] [host] fps/
+[2026-08-13 11:48:35] [host] 1280
+[2026-08-13 11:48:35] [host] x
+[2026-08-13 11:48:35] [host] 720
+[2026-08-13 11:48:35] [host] 
+[2026-08-13 11:48:35] [host] session slot 
+[2026-08-13 11:48:35] [host] 0
+[2026-08-13 11:48:35] [host] : selected game 
+[2026-08-13 11:48:35] [host] sha256:b64e4b516f51f7cd0677e615852134e683387b7edc71ce557e544369250e2c55
+[2026-08-13 11:48:35] [host] 
+[2026-08-13 11:48:35] [host] RetroArch: 
+[2026-08-13 11:48:35] [host] "/usr/bin/retroarch"
+[2026-08-13 11:48:35] [host] 
+[2026-08-13 11:48:35] [host] Core:      
+[2026-08-13 11:48:35] [host] "/home/merk/.local/share/archstreamer/ryujinx/Ryujinx.AppImage"
+[2026-08-13 11:48:35] [host] 
+[2026-08-13 11:48:35] [host] Content:   
+[2026-08-13 11:48:35] [host] "/mnt/Internal_SSD/Gaming/ROMS/Games/Switch/Pokemon Shield.xci"
+[2026-08-13 11:48:35] [host] 
+[2026-08-13 11:48:35] [host] Mode:      
+[2026-08-13 11:48:35] [host] singleplayer
+[2026-08-13 11:48:35] [host] 
+[2026-08-13 11:48:35] [host] Players:   
+[2026-08-13 11:48:35] [host] 1
+[2026-08-13 11:48:35] [host] 
+[2026-08-13 11:48:35] [host] HostRole:  
+[2026-08-13 11:48:35] [host] viewer
+[2026-08-13 11:48:35] [host] 
+[2026-08-13 11:48:35] [host] Joypad:    
+[2026-08-13 11:48:35] [host] udev
+[2026-08-13 11:48:35] [host] 
+[2026-08-13 11:48:35] [host] User:      
+[2026-08-13 11:48:35] [host] merk
+[2026-08-13 11:48:35] [host] 
+[2026-08-13 11:48:36] [host] LDN net: firejail slot 
+[2026-08-13 11:48:36] [host] 0
+[2026-08-13 11:48:36] [host]  → 
+[2026-08-13 11:48:36] [host] 172.31.200.10
+[2026-08-13 11:48:36] [host]  on 
+[2026-08-13 11:48:36] [host] asldnbr0
+[2026-08-13 11:48:36] [host] 
+[2026-08-13 11:48:36] [host] Ryujinx catalog DLC: game_id "
+[2026-08-13 11:48:36] [host] sha256:b64e4b516f51f7cd0677e615852134e683387b7edc71ce557e544369250e2c55
+[2026-08-13 11:48:36] [host] " → 
+[2026-08-13 11:48:36] [host] "/mnt/Internal_SSD/Gaming/ROMS/DLC/Switch/sha256_b64e4b516f51f7cd0677e615852134e683387b7edc71ce557e544369250e2c55/registered"
+[2026-08-13 11:48:36] [host]  (
+[2026-08-13 11:48:36] [host] 0
+[2026-08-13 11:48:36] [host]  NSP(s), 
+[2026-08-13 11:48:36] [host] 0
+[2026-08-13 11:48:36] [host]  extracted)
+[2026-08-13 11:48:36] [host] Ryujinx Profiles: Open user "
+[2026-08-13 11:48:36] [host] Merk
+[2026-08-13 11:48:36] [host] "
+[2026-08-13 11:48:36] [host] Ryujinx Controls: bound 
+[2026-08-13 11:48:36] [host] 1
+[2026-08-13 11:48:36] [host]  ArchStreamer pad(s) via GamepadSDL2 (+ SDL_GAMECONTROLLERCONFIG), sdl index 
+[2026-08-13 11:48:36] [host] 0
+[2026-08-13 11:48:36] [host]  (keep 0x1209/0xa517)
+[2026-08-13 11:48:36] [host] 
+[2026-08-13 11:48:36] [host] switch save share: pre-launch BIS rescue "
+[2026-08-13 11:48:36] [host] Pokemon Shield
+[2026-08-13 11:48:36] [host] " → 
+[2026-08-13 11:48:36] [host] "/home/merk/.local/share/archstreamer/saves/merk/switch/saves/.prelaunch/Pokemon Shield/.bis-rescue"
+[2026-08-13 11:48:36] [host]  (
+[2026-08-13 11:48:36] [host] 3
+[2026-08-13 11:48:36] [host]  file(s))
+[2026-08-13 11:48:36] [host] switch save share: launch "
+[2026-08-13 11:48:36] [host] Pokemon Shield
+[2026-08-13 11:48:36] [host] " → BIS title 
+[2026-08-13 11:48:36] [host] 01008db008c2c000
+[2026-08-13 11:48:36] [host]  (
+[2026-08-13 11:48:36] [host] 1
+[2026-08-13 11:48:36] [host]  account save(s) replaced)
+[2026-08-13 11:48:36] [host] session slot 
+[2026-08-13 11:48:36] [host] 0
+[2026-08-13 11:48:36] [host] : 
+[2026-08-13 11:48:36] [host] PadPlan mode=
+[2026-08-13 11:48:36] [host] exclusive
+[2026-08-13 11:48:36] [host]  pads=
+[2026-08-13 11:48:36] [host] 1
+[2026-08-13 11:48:36] [host]  keep=
+[2026-08-13 11:48:36] [host] 0x1209/0xa517
+[2026-08-13 11:48:36] [host]  ignore=
+[2026-08-13 11:48:36] [host] 0x054c/0x09cc,0x054c/0x09cc,0x28de/0x11ff,0x28de/0x1205,0x28de/0x1201,0x1209/0xa518,0x1209/0xa519,0x1209/0xa51a,0x1209/0xa51b,0x1209/0xa51c,0x1209/0xa51d,0x1209/0xa51e,0x1209/0xa51f,0x1209/0xa520,0x1209/0xa521,0x1209/0xa522,0x1209/0xa523,0x1209/0xa524,0x1209/0xa525,0x1209/0xa526,0x1209/0xa527,0x1209/0xa528,0x1209/0xa529,0x1209/0xa52a,0x1209/0xa52b,0x1209/0xa52c,0x1209/0xa52d,0x1209/0xa52e,0x1209/0xa52f,0x1209/0xa530,0x1209/0xa531,0x1209/0xa532,0x1209/0xa533,0x1209/0xa534,0x1209/0xa535,0x1209/0xa536
+[2026-08-13 11:48:36] [host]  [
+[2026-08-13 11:48:36] [host] 0
+[2026-08-13 11:48:36] [host] ]=sdl:
+[2026-08-13 11:48:36] [host] 0
+[2026-08-13 11:48:36] [host]  guid:
+[2026-08-13 11:48:36] [host] 03000000
+[2026-08-13 11:48:36] [host] …
+[2026-08-13 11:48:36] [host] 
+[2026-08-13 11:48:36] [host] session slot 
+[2026-08-13 11:48:36] [host] 0
+[2026-08-13 11:48:36] [host] : Ryujinx (ldn_mitm)
+[2026-08-13 11:48:36] [host]  config=
+[2026-08-13 11:48:36] [host] "/home/merk/.local/share/archstreamer/saves/merk/ryujinx/xdg-config/Ryujinx"
+[2026-08-13 11:48:36] [host]  shared_saves=
+[2026-08-13 11:48:36] [host] 1
+[2026-08-13 11:48:36] [host] 
+[2026-08-13 11:48:36] [host] Yuzu: gamescope headless via 
+[2026-08-13 11:48:36] [host] /home/merk/.local/share/archstreamer/gamescope/archstreamer-gamescope
+[2026-08-13 11:48:36] [host]  (
+[2026-08-13 11:48:36] [host] 1920
+[2026-08-13 11:48:36] [host] x
+[2026-08-13 11:48:36] [host] 1080
+[2026-08-13 11:48:36] [host] , prefer-vk-device 
+[2026-08-13 11:48:36] [host] 10de:2504
+[2026-08-13 11:48:36] [host] , Gamescope WSI enabled)
+[2026-08-13 11:48:36] [host] Gamescope WSI layer path: 
+[2026-08-13 11:48:36] [host] /home/merk/.local/share/archstreamer/gamescope/share/vulkan/implicit_layer.d
+[2026-08-13 11:48:36] [host] 
+[2026-08-13 11:48:36] [host] Warning: no Pulse sink-input for slot 
+[2026-08-13 11:48:36] [host] 0
+[2026-08-13 11:48:36] [host]  (id="
+[2026-08-13 11:48:36] [host] archstreamer-slot-0
+[2026-08-13 11:48:36] [host] "
+[2026-08-13 11:48:36] [host] ) — remotes may hear silence while speakers get the game
+[2026-08-13 11:48:36] [host] session slot 
+[2026-08-13 11:48:36] [host] 0
+[2026-08-13 11:48:36] [host] : input demux ← client 
+[2026-08-13 11:48:36] [host] 2
+[2026-08-13 11:48:36] [host]  local P
+[2026-08-13 11:48:36] [host] 1
+[2026-08-13 11:48:36] [host]  → RA P
+[2026-08-13 11:48:36] [host] 1
+[2026-08-13 11:48:36] [host] 
+[2026-08-13 11:48:37] [host] Audio capture (shared): 
+[2026-08-13 11:48:37] [host] 1
+[2026-08-13 11:48:37] [host]  destination(s) from 
+[2026-08-13 11:48:37] [host] archstreamer-0.monitor
+[2026-08-13 11:48:37] [host] 
+[2026-08-13 11:48:37] [host] Initial stream policy: 
+[2026-08-13 11:48:37] [host] default
+[2026-08-13 11:48:37] [host]  -> 
+[2026-08-13 11:48:37] [host] 720p
+[2026-08-13 11:48:37] [host] /
+[2026-08-13 11:48:37] [host] medium
+[2026-08-13 11:48:37] [host] /
+[2026-08-13 11:48:37] [host] auto
+[2026-08-13 11:48:37] [host] /
+[2026-08-13 11:48:37] [host] low-latency
+[2026-08-13 11:48:37] [host] /
+[2026-08-13 11:48:37] [host] 30fps
+[2026-08-13 11:48:37] [host]  @
+[2026-08-13 11:48:37] [host] 3500
+[2026-08-13 11:48:37] [host] kbps/
+[2026-08-13 11:48:37] [host] 30
+[2026-08-13 11:48:37] [host] fps/
+[2026-08-13 11:48:37] [host] 1280
+[2026-08-13 11:48:37] [host] x
+[2026-08-13 11:48:37] [host] 720
+[2026-08-13 11:48:37] [host] 
+[2026-08-13 11:48:37] [host] session slot 
+[2026-08-13 11:48:37] [host] 0
+[2026-08-13 11:48:37] [host] : launching 
+[2026-08-13 11:48:37] [host] Single
+[2026-08-13 11:48:37] [host] 
+[2026-08-13 11:48:37] [host] emulator/gamescope stdio → 
+[2026-08-13 11:48:37] [host] /tmp/archstreamer-emu-9o4xKs
+[2026-08-13 11:48:37] [host] 
+[2026-08-13 11:48:37] [host] Waiting for gamescope PipeWire video node
+[2026-08-13 11:48:37] [host]  (owner pid 3101904)
+[2026-08-13 11:48:37] [host] ...
+[2026-08-13 11:48:38] [host] First controller UDP packet received from client 
+[2026-08-13 11:48:38] [host] 2
+[2026-08-13 11:48:38] [host]  (local P
+[2026-08-13 11:48:38] [host] 1
+[2026-08-13 11:48:38] [host] , buttons=0x
+[2026-08-13 11:48:38] [host] 0
+[2026-08-13 11:48:38] [host] )
+[2026-08-13 11:48:38] [host] First controller input applied: client 
+[2026-08-13 11:48:38] [host] 2
+[2026-08-13 11:48:38] [host]  local P
+[2026-08-13 11:48:38] [host] 1
+[2026-08-13 11:48:38] [host]  -> RetroArch P
+[2026-08-13 11:48:38] [host] 1
+[2026-08-13 11:48:38] [host]  buttons=0x
+[2026-08-13 11:48:38] [host] 0
+[2026-08-13 11:48:38] [host] 
+[2026-08-13 11:48:38] [host] First keyboard input applied: client 
+[2026-08-13 11:48:38] [host] 2
+[2026-08-13 11:48:38] [host]  keys=0x
+[2026-08-13 11:48:38] [host] 0
+[2026-08-13 11:48:38] [host] 
+[2026-08-13 11:48:39] [host] Gamescope PipeWire target: path=
+[2026-08-13 11:48:39] [host] 115
+[2026-08-13 11:48:39] [host]  target-object=
+[2026-08-13 11:48:39] [host] 456926
+[2026-08-13 11:48:39] [host] 
+[2026-08-13 11:48:39] [host] Video pipeline restart +
+[2026-08-13 11:48:39] [host] 8
+[2026-08-13 11:48:39] [host] ms: 
+[2026-08-13 11:48:39] [host] stale destination ports cleared
+[2026-08-13 11:48:39] [host] 
+[2026-08-13 11:48:39] [host] Video pipeline restart +
+[2026-08-13 11:48:39] [host] 8
+[2026-08-13 11:48:39] [host] ms: 
+[2026-08-13 11:48:39] [host] multiudpsink available
+[2026-08-13 11:48:39] [host] 
+[2026-08-13 11:48:39] [host] Video pipeline restart +
+[2026-08-13 11:48:39] [host] 18
+[2026-08-13 11:48:39] [host] ms: 
+[2026-08-13 11:48:39] [host] pipewiresrc available
+[2026-08-13 11:48:39] [host] 
+[2026-08-13 11:48:39] [host] Managed GStreamer PipeWire runtime: XDG_RUNTIME_DIR=
+[2026-08-13 11:48:39] [host] /run/user/1000
+[2026-08-13 11:48:39] [host]  PIPEWIRE_RUNTIME_DIR=
+[2026-08-13 11:48:39] [host] <unset>
+[2026-08-13 11:48:39] [host] 
+[2026-08-13 11:48:39] [host] Video pipeline restart +
+[2026-08-13 11:48:39] [host] 19
+[2026-08-13 11:48:39] [host] ms: 
+[2026-08-13 11:48:39] [host] pipewire environment configured
+[2026-08-13 11:48:39] [host] 
+[2026-08-13 11:48:42] [host] Video pipeline restart +
+[2026-08-13 11:48:42] [host] 3345
+[2026-08-13 11:48:42] [host] ms: 
+[2026-08-13 11:48:42] [host] legacy nvenc probe complete
+[2026-08-13 11:48:42] [host] 
+[2026-08-13 11:48:45] [host] Video pipeline restart +
+[2026-08-13 11:48:45] [host] 6374
+[2026-08-13 11:48:45] [host] ms: 
+[2026-08-13 11:48:45] [host] managed nvenc probe complete
+[2026-08-13 11:48:45] [host] 
+[2026-08-13 11:48:45] [host] Video pipeline runner (
+[2026-08-13 11:48:45] [host] shared
+[2026-08-13 11:48:45] [host] ): in-process GStreamer
+[2026-08-13 11:48:45] [host]  (forced)
+[2026-08-13 11:48:45] [host] 
+[2026-08-13 11:48:45] [host] Managed GStreamer video pipeline: 
+[2026-08-13 11:48:45] [host] source=pipewire path=115 encoder=nvautogpuh264enc cuda=1 branches=1 [3500kbps/30fps/1280x720 queue=1 -> 192.168.100.4:5005]
+[2026-08-13 11:48:45] [host] 
+[2026-08-13 11:48:49] [host] Video ladder (
+[2026-08-13 11:48:49] [host] pipewire
+[2026-08-13 11:48:49] [host] , nvenc
+[2026-08-13 11:48:49] [host] , 
+[2026-08-13 11:48:49] [host] in-process
+[2026-08-13 11:48:49] [host]  path=
+[2026-08-13 11:48:49] [host] 115
+[2026-08-13 11:48:49] [host]  target-object=
+[2026-08-13 11:48:49] [host] 456926
+[2026-08-13 11:48:49] [host]  cuda=
+[2026-08-13 11:48:49] [host] 1
+[2026-08-13 11:48:49] [host] ):
+[2026-08-13 11:48:49] [host]  
+[2026-08-13 11:48:49] [host] 1
+[2026-08-13 11:48:49] [host] @
+[2026-08-13 11:48:49] [host] 3500
+[2026-08-13 11:48:49] [host] kbps/
+[2026-08-13 11:48:49] [host] 30
+[2026-08-13 11:48:49] [host] fps
+[2026-08-13 11:48:49] [host] /
+[2026-08-13 11:48:49] [host] 1280
+[2026-08-13 11:48:49] [host] x
+[2026-08-13 11:48:49] [host] 720
+[2026-08-13 11:48:49] [host] 
+[2026-08-13 11:48:49] [host] Virtual keyboard ready on 
+[2026-08-13 11:48:49] [host] :20
+[2026-08-13 11:48:49] [host]  (Ryujinx FF→F1 VSync Custom@200%, P→F5 pause; arrows/Enter/Esc→XTest)
+[2026-08-13 11:48:49] [host] Warning: no Pulse sink-input for slot 
+[2026-08-13 11:48:49] [host] 0
+[2026-08-13 11:48:49] [host]  (id="
+[2026-08-13 11:48:49] [host] archstreamer-slot-0
+[2026-08-13 11:48:49] [host] "
+[2026-08-13 11:48:49] [host] , owner pid 
+[2026-08-13 11:48:49] [host] 3101904
+[2026-08-13 11:48:49] [host] , tree 
+[2026-08-13 11:48:49] [host] 7
+[2026-08-13 11:48:49] [host] ) — remotes may hear silence while speakers get the game
+[2026-08-13 11:48:49] [host] cadence(db): 
+[2026-08-13 11:48:49] [host] session_started
+[2026-08-13 11:48:49] [host]  user=
+[2026-08-13 11:48:49] [host] merk
+[2026-08-13 11:48:49] [host]  
+[2026-08-13 11:48:49] [host] singleplayer system=switch
+[2026-08-13 11:48:49] [host] 
+[2026-08-13 11:48:49] [host] cadence(db): 
+[2026-08-13 11:48:49] [host] resource_claimed
+[2026-08-13 11:48:49] [host]  
+[2026-08-13 11:48:49] [host] emulator_pid=3101904
+[2026-08-13 11:48:49] [host] 
+[2026-08-13 11:48:49] [host] cadence(db): 
+[2026-08-13 11:48:49] [host] client_joined
+[2026-08-13 11:48:49] [host]  user=
+[2026-08-13 11:48:49] [host] merk
+[2026-08-13 11:48:49] [host]  
+[2026-08-13 11:48:49] [host] player
+[2026-08-13 11:48:49] [host] 
+[2026-08-13 11:48:49] [host] Deferring stream change until video is stable for 
+[2026-08-13 11:48:49] [host] client 2 (merk)
+[2026-08-13 11:48:49] [host]  [
+[2026-08-13 11:48:49] [host] replace-trunk
+[2026-08-13 11:48:49] [host] ]
+[2026-08-13 11:48:49] [host] Initial video ready for 
+[2026-08-13 11:48:49] [host] client 2 (merk)
+[2026-08-13 11:48:49] [host]  (
+[2026-08-13 11:48:49] [host] 1
+[2026-08-13 11:48:49] [host]  positive frame heartbeat(s)); stream settings may apply
+[2026-08-13 11:48:49] [host] Stream fanout plan [
+[2026-08-13 11:48:49] [host] replace-trunk
+[2026-08-13 11:48:49] [host] ]
+[2026-08-13 11:48:49] [host]  trunk_changes=
+[2026-08-13 11:48:49] [host] yes
+[2026-08-13 11:48:49] [host]  streams=
+[2026-08-13 11:48:49] [host] 1
+[2026-08-13 11:48:49] [host]  branches=
+[2026-08-13 11:48:49] [host] 1
+[2026-08-13 11:48:49] [host]  reason=
+[2026-08-13 11:48:49] [host] client requested size/quality
+[2026-08-13 11:48:49] [host] 
+[2026-08-13 11:48:49] [host]   stream 
+[2026-08-13 11:48:49] [host] trunk
+[2026-08-13 11:48:49] [host]  owner=
+[2026-08-13 11:48:49] [host] 0
+[2026-08-13 11:48:49] [host]  members=
+[2026-08-13 11:48:49] [host] 1
+[2026-08-13 11:48:49] [host]  @
+[2026-08-13 11:48:49] [host] 25000
+[2026-08-13 11:48:49] [host] kbps/
+[2026-08-13 11:48:49] [host] 30
+[2026-08-13 11:48:49] [host] fps
+[2026-08-13 11:48:49] [host] /
+[2026-08-13 11:48:49] [host] 1920
+[2026-08-13 11:48:49] [host] x
+[2026-08-13 11:48:49] [host] 1080
+[2026-08-13 11:48:49] [host] 
+[2026-08-13 11:48:49] [host]     client 
+[2026-08-13 11:48:49] [host] 2
+[2026-08-13 11:48:49] [host]  -> 
+[2026-08-13 11:48:49] [host] take-trunk
+[2026-08-13 11:48:49] [host] 
+[2026-08-13 11:48:49] [host] Video pipeline runner (
+[2026-08-13 11:48:49] [host] staging
+[2026-08-13 11:48:49] [host] ): in-process GStreamer
+[2026-08-13 11:48:49] [host]  (forced)
+[2026-08-13 11:48:49] [host] 
+[2026-08-13 11:48:49] [host] Managed GStreamer video pipeline: 
+[2026-08-13 11:48:49] [host] source=pipewire path=115 encoder=nvautogpuh264enc cuda=1 branches=1 [25000kbps/30fps/1920x1080 queue=1 -> 192.168.100.4:5133]
+[2026-08-13 11:48:49] [host] 
+[2026-08-13 11:48:50] [host] Video ladder (
+[2026-08-13 11:48:50] [host] pipewire
+[2026-08-13 11:48:50] [host] , nvenc
+[2026-08-13 11:48:50] [host] , 
+[2026-08-13 11:48:50] [host] in-process
+[2026-08-13 11:48:50] [host]  path=
+[2026-08-13 11:48:50] [host] 115
+[2026-08-13 11:48:50] [host]  target-object=
+[2026-08-13 11:48:50] [host] 456926
+[2026-08-13 11:48:50] [host]  cuda=
+[2026-08-13 11:48:50] [host] 1
+[2026-08-13 11:48:50] [host] ):
+[2026-08-13 11:48:50] [host]  
+[2026-08-13 11:48:50] [host] 1
+[2026-08-13 11:48:50] [host] @
+[2026-08-13 11:48:50] [host] 25000
+[2026-08-13 11:48:50] [host] kbps/
+[2026-08-13 11:48:50] [host] 30
+[2026-08-13 11:48:50] [host] fps
+[2026-08-13 11:48:50] [host] /
+[2026-08-13 11:48:50] [host] 1920
+[2026-08-13 11:48:50] [host] x
+[2026-08-13 11:48:50] [host] 1080
+[2026-08-13 11:48:50] [host] 
+[2026-08-13 11:48:50] [host] Video staging started for client 
+[2026-08-13 11:48:50] [host] 2
+[2026-08-13 11:48:50] [host]  -> 
+[2026-08-13 11:48:50] [host] 192.168.100.4
+[2026-08-13 11:48:50] [host] :
+[2026-08-13 11:48:50] [host] 5133
+[2026-08-13 11:48:50] [host] 
+[2026-08-13 11:48:50] [host] Trunk replace warm-up for 
+[2026-08-13 11:48:50] [host] client 2 (merk)
+[2026-08-13 11:48:50] [host]  uri=
+[2026-08-13 11:48:50] [host] rtp+h264://192.168.100.4:5133
+[2026-08-13 11:48:50] [host]  target=
+[2026-08-13 11:48:50] [host] 25000
+[2026-08-13 11:48:50] [host] kbps/
+[2026-08-13 11:48:50] [host] 30
+[2026-08-13 11:48:50] [host] fps
+[2026-08-13 11:48:50] [host] /
+[2026-08-13 11:48:50] [host] 1920
+[2026-08-13 11:48:50] [host] x
+[2026-08-13 11:48:50] [host] 1080
+[2026-08-13 11:48:50] [host]  streams=
+[2026-08-13 11:48:50] [host] 1
+[2026-08-13 11:48:50] [host]  [
+[2026-08-13 11:48:50] [host] replace-trunk
+[2026-08-13 11:48:50] [host] ]
+[2026-08-13 11:49:01] [host] Video cutover aborted for client 
+[2026-08-13 11:49:01] [host] 2
+[2026-08-13 11:49:01] [host] 
+[2026-08-13 11:49:01] [host] Clearing stale video pending for 
+[2026-08-13 11:49:01] [host] client 2 (merk)
+[2026-08-13 11:49:01] [host]  after 
+[2026-08-13 11:49:01] [host] 12000
+[2026-08-13 11:49:01] [host] ms
+[2026-08-13 11:49:01] [host]  uri="
+[2026-08-13 11:49:01] [host] rtp+h264://192.168.100.4:5133
+[2026-08-13 11:49:01] [host] "
+[2026-08-13 11:49:01] [host]  (staging warm-up timed out)
+[2026-08-13 11:49:02] [host] Stream fanout plan [
+[2026-08-13 11:49:02] [host] replace-trunk
+[2026-08-13 11:49:02] [host] ]
+[2026-08-13 11:49:02] [host]  trunk_changes=
+[2026-08-13 11:49:02] [host] yes
+[2026-08-13 11:49:02] [host]  streams=
+[2026-08-13 11:49:02] [host] 1
+[2026-08-13 11:49:02] [host]  branches=
+[2026-08-13 11:49:02] [host] 1
+[2026-08-13 11:49:02] [host]  reason=
+[2026-08-13 11:49:02] [host] client requested size/quality
+[2026-08-13 11:49:02] [host] 
+[2026-08-13 11:49:02] [host]   stream 
+[2026-08-13 11:49:02] [host] trunk
+[2026-08-13 11:49:02] [host]  owner=
+[2026-08-13 11:49:02] [host] 0
+[2026-08-13 11:49:02] [host]  members=
+[2026-08-13 11:49:02] [host] 1
+[2026-08-13 11:49:02] [host]  @
+[2026-08-13 11:49:02] [host] 25000
+[2026-08-13 11:49:02] [host] kbps/
+[2026-08-13 11:49:02] [host] 30
+[2026-08-13 11:49:02] [host] fps
+[2026-08-13 11:49:02] [host] /
+[2026-08-13 11:49:02] [host] 1920
+[2026-08-13 11:49:02] [host] x
+[2026-08-13 11:49:02] [host] 1080
+[2026-08-13 11:49:02] [host] 
+[2026-08-13 11:49:02] [host]     client 
+[2026-08-13 11:49:02] [host] 2
+[2026-08-13 11:49:02] [host]  -> 
+[2026-08-13 11:49:02] [host] take-trunk
+[2026-08-13 11:49:02] [host] 
+[2026-08-13 11:49:02] [host] Video pipeline runner (
+[2026-08-13 11:49:02] [host] staging
+[2026-08-13 11:49:02] [host] ): in-process GStreamer
+[2026-08-13 11:49:02] [host]  (forced)
+[2026-08-13 11:49:02] [host] 
+[2026-08-13 11:49:02] [host] Managed GStreamer video pipeline: 
+[2026-08-13 11:49:02] [host] source=pipewire path=115 encoder=nvautogpuh264enc cuda=1 branches=1 [25000kbps/30fps/1920x1080 queue=1 -> 192.168.100.4:5133]
+[2026-08-13 11:49:02] [host] 
+[2026-08-13 11:49:03] [host] Video ladder (
+[2026-08-13 11:49:03] [host] pipewire
+[2026-08-13 11:49:03] [host] , nvenc
+[2026-08-13 11:49:03] [host] , 
+[2026-08-13 11:49:03] [host] in-process
+[2026-08-13 11:49:03] [host]  path=
+[2026-08-13 11:49:03] [host] 115
+[2026-08-13 11:49:03] [host]  target-object=
+[2026-08-13 11:49:03] [host] 456926
+[2026-08-13 11:49:03] [host]  cuda=
+[2026-08-13 11:49:03] [host] 1
+[2026-08-13 11:49:03] [host] ):
+[2026-08-13 11:49:03] [host]  
+[2026-08-13 11:49:03] [host] 1
+[2026-08-13 11:49:03] [host] @
+[2026-08-13 11:49:03] [host] 25000
+[2026-08-13 11:49:03] [host] kbps/
+[2026-08-13 11:49:03] [host] 30
+[2026-08-13 11:49:03] [host] fps
+[2026-08-13 11:49:03] [host] /
+[2026-08-13 11:49:03] [host] 1920
+[2026-08-13 11:49:03] [host] x
+[2026-08-13 11:49:03] [host] 1080
+[2026-08-13 11:49:03] [host] 
+[2026-08-13 11:49:03] [host] Video staging started for client 
+[2026-08-13 11:49:03] [host] 2
+[2026-08-13 11:49:03] [host]  -> 
+[2026-08-13 11:49:03] [host] 192.168.100.4
+[2026-08-13 11:49:03] [host] :
+[2026-08-13 11:49:03] [host] 5133
+[2026-08-13 11:49:03] [host] 
+[2026-08-13 11:49:03] [host] Trunk replace warm-up for 
+[2026-08-13 11:49:03] [host] client 2 (merk)
+[2026-08-13 11:49:03] [host]  uri=
+[2026-08-13 11:49:03] [host] rtp+h264://192.168.100.4:5133
+[2026-08-13 11:49:03] [host]  target=
+[2026-08-13 11:49:03] [host] 25000
+[2026-08-13 11:49:03] [host] kbps/
+[2026-08-13 11:49:03] [host] 30
+[2026-08-13 11:49:03] [host] fps
+[2026-08-13 11:49:03] [host] /
+[2026-08-13 11:49:03] [host] 1920
+[2026-08-13 11:49:03] [host] x
+[2026-08-13 11:49:03] [host] 1080
+[2026-08-13 11:49:03] [host]  streams=
+[2026-08-13 11:49:03] [host] 1
+[2026-08-13 11:49:03] [host]  [
+[2026-08-13 11:49:03] [host] replace-trunk
+[2026-08-13 11:49:03] [host] ]
+[2026-08-13 11:49:05] [host] First non-zero controller UDP from client 
+[2026-08-13 11:49:05] [host] 2
+[2026-08-13 11:49:05] [host]  buttons=0x
+[2026-08-13 11:49:05] [host] 4000
+[2026-08-13 11:49:05] [host] 
+[2026-08-13 11:49:05] [host] First non-zero controller state applied: client 
+[2026-08-13 11:49:05] [host] 2
+[2026-08-13 11:49:05] [host]  buttons=0x
+[2026-08-13 11:49:05] [host] 4000
+[2026-08-13 11:49:05] [host]  triggers=
+[2026-08-13 11:49:05] [host] 0
+[2026-08-13 11:49:05] [host] /
+[2026-08-13 11:49:05] [host] 0
+[2026-08-13 11:49:05] [host] 
+[2026-08-13 11:49:05] [host] Stream fanout plan [
+[2026-08-13 11:49:05] [host] replace-trunk
+[2026-08-13 11:49:05] [host] ]
+[2026-08-13 11:49:05] [host]  trunk_changes=
+[2026-08-13 11:49:05] [host] yes
+[2026-08-13 11:49:05] [host]  streams=
+[2026-08-13 11:49:05] [host] 1
+[2026-08-13 11:49:05] [host]  branches=
+[2026-08-13 11:49:05] [host] 1
+[2026-08-13 11:49:05] [host]  reason=
+[2026-08-13 11:49:05] [host] trunk replace commit
+[2026-08-13 11:49:05] [host] 
+[2026-08-13 11:49:05] [host]   stream 
+[2026-08-13 11:49:05] [host] trunk
+[2026-08-13 11:49:05] [host]  owner=
+[2026-08-13 11:49:05] [host] 0
+[2026-08-13 11:49:05] [host]  members=
+[2026-08-13 11:49:05] [host] 1
+[2026-08-13 11:49:05] [host]  @
+[2026-08-13 11:49:05] [host] 25000
+[2026-08-13 11:49:05] [host] kbps/
+[2026-08-13 11:49:05] [host] 30
+[2026-08-13 11:49:05] [host] fps
+[2026-08-13 11:49:05] [host] /
+[2026-08-13 11:49:05] [host] 1920
+[2026-08-13 11:49:05] [host] x
+[2026-08-13 11:49:05] [host] 1080
+[2026-08-13 11:49:05] [host] 
+[2026-08-13 11:49:05] [host]     client 
+[2026-08-13 11:49:05] [host] 2
+[2026-08-13 11:49:05] [host]  -> 
+[2026-08-13 11:49:05] [host] take-trunk
+[2026-08-13 11:49:05] [host] 
+[2026-08-13 11:49:05] [host] Video staging promoted for client 
+[2026-08-13 11:49:05] [host] 2
+[2026-08-13 11:49:05] [host]  on port 
+[2026-08-13 11:49:05] [host] 5133
+[2026-08-13 11:49:05] [host] 
+[2026-08-13 11:49:05] [host] Trunk replace promoted warm encode for 
+[2026-08-13 11:49:05] [host] client 2 (merk)
+[2026-08-13 11:49:05] [host]  after 
+[2026-08-13 11:49:05] [host] 2495
+[2026-08-13 11:49:05] [host] ms
+[2026-08-13 11:49:05] [host]  -> 
+[2026-08-13 11:49:05] [host] rtp+h264://192.168.100.4:5133
+[2026-08-13 11:49:05] [host] 
+[2026-08-13 11:49:22] [host] ClientSessionLeave from 
+[2026-08-13 11:49:22] [host] client 2 (merk)
+[2026-08-13 11:49:22] [host]  reason="
+[2026-08-13 11:49:22] [host] client stopped
+[2026-08-13 11:49:22] [host] "
+[2026-08-13 11:49:23] [host] Player 
+[2026-08-13 11:49:23] [host] 2
+[2026-08-13 11:49:23] [host]  (
+[2026-08-13 11:49:23] [host] merk
+[2026-08-13 11:49:23] [host] ) disconnected: 
+[2026-08-13 11:49:23] [host] left
+[2026-08-13 11:49:23] [host] ; ending seat immediately (client left)
+[2026-08-13 11:49:23] [host] cadence(db): 
+[2026-08-13 11:49:23] [host] client_left
+[2026-08-13 11:49:23] [host]  user=
+[2026-08-13 11:49:23] [host] merk
+[2026-08-13 11:49:23] [host]  
+[2026-08-13 11:49:23] [host] left
+[2026-08-13 11:49:23] [host] 
+[2026-08-13 11:49:23] [host] session slot 
+[2026-08-13 11:49:23] [host] 0
+[2026-08-13 11:49:23] [host] : stopping: 
+[2026-08-13 11:49:23] [host] client 2 (merk) left; ending session for a new lobby
+[2026-08-13 11:49:23] [host] 
+[2026-08-13 11:49:23] [host] session slot 
+[2026-08-13 11:49:23] [host] 0
+[2026-08-13 11:49:23] [host] : ending: 
+[2026-08-13 11:49:23] [host] client 2 (merk) left; ending session for a new lobby
+[2026-08-13 11:49:23] [host] 
+[2026-08-13 11:49:24] [host] emulator/gamescope stdio saved to 
+[2026-08-13 11:49:24] [host] /home/merk/.cache/archstreamer/last-emu-stdio.log
+[2026-08-13 11:49:24] [host] 
+[2026-08-13 11:49:24] [host] session slot 
+[2026-08-13 11:49:24] [host] 0
+[2026-08-13 11:49:24] [host] : post-exit Switch save sync (
+[2026-08-13 11:49:24] [host] 1
+[2026-08-13 11:49:24] [host]  leaf(s))
+[2026-08-13 11:49:24] [host] cadence(db): 
+[2026-08-13 11:49:24] [host] session_ended
+[2026-08-13 11:49:24] [host]  user=
+[2026-08-13 11:49:24] [host] merk
+[2026-08-13 11:49:24] [host]  
+[2026-08-13 11:49:24] [host] client 2 (merk) left; ending session for a new lobby
+[2026-08-13 11:49:24] [host] 
+[2026-08-13 11:49:24] [host] cadence(db): 
+[2026-08-13 11:49:24] [host] resources_released
+[2026-08-13 11:49:24] [host]  
+[2026-08-13 11:49:24] [host] client 2 (merk) left; ending session for a new lobby
+[2026-08-13 11:49:24] [host] 
+[2026-08-13 11:49:24] [host] Removed 
+[2026-08-13 11:49:24] [host] 1
+[2026-08-13 11:49:24] [host]  stale '
+[2026-08-13 11:49:24] [host] archstreamer-0
+[2026-08-13 11:49:24] [host] ' null sink(s).
+[2026-08-13 11:49:24] [host] Session 
+[2026-08-13 11:49:24] [host] sess-607323508760403-1
+[2026-08-13 11:49:24] [host]  slot=
+[2026-08-13 11:49:24] [host] 0
+[2026-08-13 11:49:24] [host]  finished; host lobby still accepting clients (Stop Host to shut down).
+[2026-08-13 11:49:52] [host] Host stopped.
+[2026-08-13 11:49:52] [host] cadence(db): 
+[2026-08-13 11:49:52] [host] host_stopped
+[2026-08-13 11:49:52] [host]  
+[2026-08-13 11:49:52] [host] host stopped
+[2026-08-13 11:49:52] [host] 

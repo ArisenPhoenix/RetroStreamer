@@ -7,7 +7,8 @@
 #     --control-port 45555 --input-port 45454 --video-port 5004 --audio-port 6004 \
 #     --virtual-display :99 [--gpu 'nvidia:0']
 #
-# The script owns ROM root, host_runner location, and any sanitize/setup.
+# The script owns host_runner location and any sanitize/setup. The config file owns
+# stable host_runner defaults such as ROM/save/log paths.
 # Use `exec` so the PID ArchStreamer tracks is host_runner (Stop Host / pkill work).
 #
 # Permissions (e.g. user alina):
@@ -20,7 +21,7 @@ set -euo pipefail
 
 # --- edit these for the remote machine ---
 HOST_RUNNER="${HOST_RUNNER:-/home/alina/ArchStreamer/build/host_runner}"
-ROM_ROOT="${ROM_ROOT:-/home/alina/roms}"
+default_host_config="${ARCHSTREAMER_HOST_CONFIG:-$HOME/archstreamer-host.conf}"
 # -----------------------------------------
 
 control_port=""
@@ -29,6 +30,8 @@ video_port=""
 audio_port=""
 virtual_display=""
 gpu=""
+host_config="$default_host_config"
+extra_args=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -38,9 +41,11 @@ while [[ $# -gt 0 ]]; do
     --audio-port) audio_port="${2:-}"; shift 2 ;;
     --virtual-display) virtual_display="${2:-}"; shift 2 ;;
     --gpu) gpu="${2:-}"; shift 2 ;;
+    --config) host_config="${2:-}"; shift 2 ;;
+    --) shift; extra_args+=("$@"); break ;;
     *)
-      echo "unknown arg: $1" >&2
-      exit 2
+      extra_args+=("$1")
+      shift
       ;;
   esac
 done
@@ -54,22 +59,25 @@ if [[ ! -x "$HOST_RUNNER" ]]; then
   echo "host_runner not executable: $HOST_RUNNER" >&2
   exit 127
 fi
+if [[ ! -r "$host_config" ]]; then
+  echo "host config missing or unreadable: $host_config" >&2
+  exit 1
+fi
 
 # Optional: sanitize environment, fix PATH, claim GPU, etc. before exec.
 # Example: export PATH="/usr/local/bin:$PATH"
 
 args=(
-  --rom-root "$ROM_ROOT"
+  --config "$host_config"
   --control-port "$control_port"
   --input-port "$input_port"
   --video-port "$video_port"
   --audio-port "$audio_port"
   --virtual-display "$virtual_display"
-  --clients 2
-  --allow-new-users
 )
 if [[ -n "$gpu" ]]; then
   args+=(--gpu "$gpu")
 fi
+args+=("${extra_args[@]}")
 
 exec "$HOST_RUNNER" "${args[@]}"

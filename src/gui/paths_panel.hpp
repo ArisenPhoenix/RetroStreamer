@@ -26,6 +26,7 @@ bool host_runtime_available();
  * build, so readers null-check a pointer instead of guarding on the build macro.
  */
 struct PathsPanel {
+    QLineEdit* gui_settings_file = nullptr;
     QLineEdit* art_root = nullptr;
     QLineEdit* rom_root = nullptr;
     QLineEdit* meta_root = nullptr;
@@ -33,6 +34,10 @@ struct PathsPanel {
     QPushButton* save_root_browse = nullptr;
     QPushButton* save_root_create = nullptr;
     QLabel* save_root_status = nullptr;
+    QLineEdit* host_config = nullptr;
+    QLineEdit* log_root = nullptr;
+    QPushButton* log_root_browse = nullptr;
+    QPushButton* log_root_create = nullptr;
     QLineEdit* native_host_runner = nullptr;
 };
 
@@ -45,6 +50,8 @@ struct PathRootDefaults {
     QString rom_root;
     QString meta_root;
     QString save_root;
+    QString host_config;
+    QString log_root;
 };
 
 PathRootDefaults default_path_roots();

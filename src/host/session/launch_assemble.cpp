@@ -32,12 +32,13 @@ void sync_and_log_post_exit_switch_saves(
     std::optional<int> slot_index,
     const SwitchBackend* backend,
     std::string_view content_stem,
-    std::string_view title_id) {
+    std::string_view title_id,
+    bool uses_m3m_map) {
     const auto synced = backend != nullptr
-        ? backend->post_exit_sync(profile, content_stem, title_id)
+        ? backend->post_exit_sync(profile, content_stem, title_id, uses_m3m_map)
         : (!content_stem.empty()
             ? std::vector<std::string>{sync_catalog_switch_save_after_exit(
-                  profile, content_stem, title_id)}
+                  profile, content_stem, title_id, uses_m3m_map)}
             : sync_switch_shared_saves_for_profile(profile));
     if (synced.empty() || (synced.size() == 1 && synced.front().empty())) {
         return;

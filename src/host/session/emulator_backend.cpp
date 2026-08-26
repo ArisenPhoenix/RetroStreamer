@@ -62,6 +62,7 @@ public:
                 game.launch_plan.game_id,
                 switch_content.content_stem,
                 switch_content.title_id,
+                switch_content.uses_m3m_map,
             });
         devices.input.resolved_pads = std::move(switch_prep.resolved_pads);
         backends.switch_backend->assign_launch_env_profile(launch_env_request, switch_prep);
@@ -74,6 +75,7 @@ public:
             options.slot_index);
         backends.switch_launch_content_stem = switch_content.content_stem;
         backends.switch_launch_title_id = switch_content.title_id;
+        backends.switch_launch_uses_m3m_map = switch_content.uses_m3m_map;
         if (backends.switch_backend->enable_soft_keyboard()) {
             if (!devices.keyboard.standalone_soft_keyboard) {
                 result.soft_keyboard = std::make_shared<SoftKeyboardHostBridge>();

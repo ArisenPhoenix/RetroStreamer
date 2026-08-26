@@ -13,6 +13,8 @@
 namespace archstreamer {
 
 ClientId next_session_client_id(const SessionPlan& plan);
+// Prefer a Disconnected seat; otherwise take over a still-Connected seat for the
+// same username (app swipe-kill / Leave crash leaves CLOSE-WAIT on the host).
 SessionClientConnection* disconnected_player_for_reconnect(SessionPlan& plan, const ClientHello& hello);
 struct LiveSessionJoinTarget {
     ClientId client_id = 0;

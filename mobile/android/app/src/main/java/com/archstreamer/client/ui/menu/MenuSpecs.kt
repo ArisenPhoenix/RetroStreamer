@@ -38,8 +38,8 @@ object ClientSpec : SectionSpec {
         add(
             body(
                 "client-blurb",
-                "Searches Wi‑Fi and VPN for a running host. If your saved IP is down, " +
-                    "a live one is selected automatically.",
+                "Searches Wi‑Fi and VPN for running hosts. Pick one under Found hosts to " +
+                    "apply its IP and ports. Control/Input ports are on Settings.",
             ),
         )
         add(
@@ -80,12 +80,16 @@ object ClientSpec : SectionSpec {
                     id = "client-found-hosts",
                     title = "Found hosts",
                     choices = state.client.discoveredHosts.map { host ->
-                        MenuOption.Pill.Choice("${host.username} @ ${host.address}") {
+                        MenuOption.Pill.Choice(
+                            "${host.username} @ ${host.address}:${host.controlPort}",
+                        ) {
                             vm.selectDiscoveredHost(host)
                         }
                     },
                     selectedIndex = state.client.discoveredHosts.indexOfFirst {
-                        it.address == state.client.host
+                        it.address == state.client.host &&
+                            it.controlPort.toString() == state.settings.controlPort &&
+                            it.inputPort.toString() == state.settings.inputPort
                     },
                 ),
             )
@@ -859,8 +863,8 @@ object SettingsSpec : SectionSpec {
         add(
             small(
                 "settings-ports-blurb",
-                "Host IP and Alt IP are on the Client tab. Ports match the desktop host " +
-                    "defaults (45555 / 45454).",
+                "Host IP and Alt IP are on the Client tab. Discovery lists hosts; " +
+                    "it does not overwrite these ports. Found hosts applies them.",
             ),
         )
         add(MenuOption.Divider("settings-diagnostics-divider"))

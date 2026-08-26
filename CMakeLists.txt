@@ -322,6 +322,7 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/console/switch/yuzu_controls.cpp
         src/host/console/switch/yuzu_launch_env.cpp
         src/host/console/switch/ryujinx_user_profile.cpp
+        src/host/console/switch/ryujinx_game_cache.cpp
         src/host/console/switch/ryujinx_controls.cpp
         src/host/console/switch/ryujinx_launch_env.cpp
         src/host/console/switch/switch_backend.cpp
@@ -342,6 +343,7 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/client/stream_adaptation.cpp
         src/host/db/cadence_session_events.cpp
         src/host/db/cadence_session_tracker.cpp
+        src/host/db/cadence_resource_lease.cpp
         src/host/session/emulator_backend.cpp
         src/host/session/launch_assemble.cpp
         src/host/session/run_helpers.cpp

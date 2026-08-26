@@ -337,12 +337,41 @@ SwitchLaunchContent resolve_switch_launch_content(
     switch_content.content_stem = !content.catalog_content_path.empty()
         ? content.catalog_content_path.stem().string()
         : launch_config.content_path.stem().string();
-    switch_content.title_id = content.m3m_title_id;
-    if (switch_content.title_id.empty()) {
+    const auto catalog_m3m = switch_m3m_map_for_title(content.catalog_content_path);
+    const auto launch_m3m = switch_m3m_map_for_title(launch_config.content_path);
+    switch_content.uses_m3m_map =
+        !content.m3m_title_id.empty() || !catalog_m3m.empty() || !launch_m3m.empty();
+    const auto& map_path = !catalog_m3m.empty() ? catalog_m3m : launch_m3m;
+
+    if (switch_content.uses_m3m_map) {
+        switch_content.title_id = content.m3m_title_id;
+        if (switch_content.title_id.empty()) {
+            switch_content.title_id = resolve_switch_title_id_for_catalog(
+                save_profile,
+                switch_content.content_stem,
+                map_path,
+                true);
+        }
+        std::cout
+            << "switch save share: \"" << switch_content.content_stem
+            << "\" using .m3m map"
+            << (switch_content.title_id.empty() ? "" : " TITLE_ID=" + switch_content.title_id)
+            << '\n';
+    } else {
         switch_content.title_id = resolve_switch_title_id_for_catalog(
             save_profile,
             switch_content.content_stem,
-            launch_config.content_path);
+            content.catalog_content_path.empty()
+                ? launch_config.content_path
+                : content.catalog_content_path,
+            false);
+        std::cout
+            << "switch save share: \"" << switch_content.content_stem
+            << "\" has no .m3m; catalog stem is identity"
+            << (switch_content.title_id.empty()
+                    ? ""
+                    : " (cached title " + switch_content.title_id + ")")
+            << '\n';
     }
     return switch_content;
 }

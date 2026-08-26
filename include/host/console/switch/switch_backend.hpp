@@ -41,6 +41,8 @@ struct SwitchBackendPrepContext {
     std::string content_stem;
     /** Nintendo application title id when known (0100…). */
     std::string title_id;
+    /** True when this catalog title has a .m3m (version/policy map). */
+    bool uses_m3m_map = false;
 };
 
 struct SwitchBackendPrepResult {
@@ -89,7 +91,8 @@ public:
     virtual std::vector<std::string> post_exit_sync(
         const SaveProfile& profile,
         std::string_view content_stem = {},
-        std::string_view title_id = {}) const;
+        std::string_view title_id = {},
+        bool uses_m3m_map = false) const;
 
 protected:
     /** Shared pad discovery, graphics-API forcing, and quiet_stdio. */

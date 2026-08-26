@@ -211,19 +211,16 @@ inline std::uint8_t clamp_max_session_slots(std::uint8_t clients) {
     if (clients < 2) {
         return 2;
     }
-    if (clients > 4) {
-        return 4;
+    if (clients > MaxConcurrentSessionSlots) {
+        return MaxConcurrentSessionSlots;
     }
     return clients;
 }
 
-/** Apply per-slot display / media / netcmd offsets onto a config copy. */
-HostAppConfig slot_adjusted_config(HostAppConfig config, int slot_index);
-
 /** Display number out of a `:N` string; 99 when unparseable. */
 int parse_virtual_display_number(const std::string& virtual_display);
 
-/** Offset virtual pad product ids so concurrent slots do not collide. */
-void apply_slot_product_id_offset(std::vector<VirtualGamepadIdentity>& identities, int slot_index);
+/** Set virtual pad product ids from a cadence-claimed base. */
+void apply_product_id_base(std::vector<VirtualGamepadIdentity>& identities, std::uint16_t base);
 
 } // namespace archstreamer

@@ -4,6 +4,7 @@ import android.media.MediaCodec
 import android.media.MediaFormat
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Looper
 import android.util.Log
 import android.view.Surface
 import com.archstreamer.client.BuildConfig
@@ -13,6 +14,8 @@ import java.net.DatagramSocket
 import java.net.InetSocketAddress
 import java.util.ArrayDeque
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -265,13 +268,47 @@ class RtpVideoPlayer(
         queuedInputs.clear()
     }
 
+    /**
+     * MediaCodec stop/release must run on the decode thread. Doing it from Leave's
+     * IO/main thread aborts the process (the app "just closes") before
+     * ClientSessionLeave is useful to the host.
+     */
+    private fun releaseCodecOnDecodeThread() {
+        val handler = decodeHandler
+        val thread = decodeThread
+        if (handler == null || thread == null || !thread.isAlive) {
+            detachSurface()
+            return
+        }
+        if (Looper.myLooper() == thread.looper) {
+            detachSurface()
+            return
+        }
+        val done = CountDownLatch(1)
+        val posted = handler.post {
+            try {
+                detachSurface()
+            } finally {
+                done.countDown()
+            }
+        }
+        if (!posted) {
+            detachSurface()
+            return
+        }
+        if (!done.await(750, TimeUnit.MILLISECONDS)) {
+            Log.w(TAG, "codec release timed out on decode thread port=$listenPort")
+            detachSurface()
+        }
+    }
+
     override fun close() {
         running.set(false)
         runCatching { socket?.close() }
         socket = null
-        receiveThread?.join(1500)
+        receiveThread?.join(400)
         receiveThread = null
-        detachSurface()
+        releaseCodecOnDecodeThread()
         decodeThread?.quitSafely()
         decodeThread = null
         decodeHandler = null

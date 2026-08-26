@@ -91,7 +91,22 @@ bool ldn_firejail_available() {
     return true;
 }
 
+bool ldn_bridge_present() {
+    // Bridge may show NO-CARRIER until the first firejail veth attaches; that is OK.
+    std::string link_out;
+    return run_capture(std::string("ip -br link show ") + kBridgeName + " 2>/dev/null", &link_out) ==
+            0 &&
+        !link_out.empty();
+}
+
 bool ensure_ldn_bridge() {
+    // libvirtd --timeout 120 exits when idle; leftover dnsmasq often keeps asldnbr0
+    // up. virsh net-info/net-start then waits ~2 min waking a dead daemon. Skip
+    // virsh entirely when the bridge is already there.
+    if (ldn_bridge_present()) {
+        return true;
+    }
+
     if (!command_on_path("virsh")) {
         std::cerr << "LDN net: virsh not found; cannot ensure " << kLibvirtNet << " bridge\n";
         return false;
@@ -119,11 +134,7 @@ bool ensure_ldn_bridge() {
 
     (void)run_capture(std::string("virsh net-start ") + kLibvirtNet + " >/dev/null 2>&1");
 
-    // Bridge may show NO-CARRIER until the first firejail veth attaches; that is OK.
-    std::string link_out;
-    if (run_capture(std::string("ip -br link show ") + kBridgeName + " 2>/dev/null", &link_out) !=
-            0 ||
-        link_out.empty()) {
+    if (!ldn_bridge_present()) {
         std::cerr << "LDN net: bridge " << kBridgeName << " not present after virsh net-start\n";
         return false;
     }

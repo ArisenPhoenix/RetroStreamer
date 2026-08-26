@@ -144,6 +144,7 @@ inline constexpr std::string_view kSlotLock = "slot_lock";
 inline constexpr std::string_view kPulseSink = "pulse_sink";
 inline constexpr std::string_view kPulseAppId = "pulse_app_id";
 inline constexpr std::string_view kDisplay = "display";
+inline constexpr std::string_view kXtestDisplay = "xtest_display";
 inline constexpr std::string_view kVideoPort = "video_port";
 inline constexpr std::string_view kAudioPort = "audio_port";
 inline constexpr std::string_view kNetcmdPort = "netcmd_port";

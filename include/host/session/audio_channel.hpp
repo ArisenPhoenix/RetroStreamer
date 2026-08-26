@@ -17,6 +17,7 @@ namespace archstreamer {
 class SessionAudioChannel {
 public:
     explicit SessionAudioChannel(int slot_index);
+    SessionAudioChannel(int slot_index, std::string sink_name, std::string application_id);
     ~SessionAudioChannel();
 
     SessionAudioChannel(const SessionAudioChannel&) = delete;

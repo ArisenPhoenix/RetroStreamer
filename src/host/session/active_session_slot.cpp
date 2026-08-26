@@ -3,6 +3,7 @@
 #include "common/cli_common.hpp"
 #include "common/participant_role.hpp"
 #include "common/serialization.hpp"
+#include "host/db/cadence_resource_lease.hpp"
 #include "host/db/cadence_session_events.hpp"
 #include "host/db/cadence_session_tracker.hpp"
 #include "host/hardware/capture_platform.hpp"
@@ -90,18 +91,13 @@ int parse_virtual_display_number(const std::string& virtual_display) {
     }
 }
 
-HostAppConfig slot_adjusted_config(HostAppConfig config, int slot_index) {
-    const int display_num = parse_virtual_display_number(config.virtual_display);
-    config.virtual_display = ":" + std::to_string(display_num + slot_index);
-    config.video_port = static_cast<std::uint16_t>(config.video_port + slot_index * 32);
-    config.audio_port = static_cast<std::uint16_t>(config.audio_port + slot_index * 32);
-    return config;
-}
-
-void apply_slot_product_id_offset(std::vector<VirtualGamepadIdentity>& identities, int slot_index) {
-    const auto offset = static_cast<std::uint16_t>(slot_index * 8);
+void apply_product_id_base(std::vector<VirtualGamepadIdentity>& identities, std::uint16_t base) {
+    constexpr std::uint16_t kDefault = 0xa517;
     for (auto& identity : identities) {
-        identity.product_id = static_cast<std::uint16_t>(identity.product_id + offset);
+        const auto extra = identity.product_id >= kDefault
+            ? static_cast<std::uint16_t>(identity.product_id - kDefault)
+            : std::uint16_t{0};
+        identity.product_id = static_cast<std::uint16_t>(base + extra);
     }
 }
 
@@ -126,7 +122,8 @@ SlotLaunchEnvironment prepare_slot_launch_environment(
     RetroArchLaunchConfig& launch_config,
     int slot,
     bool host_plays_locally,
-    const SessionId& session_id) {
+    const SessionId& session_id,
+    CadenceResourceLease& lease) {
     SlotLaunchEnvironment env;
     env.session.capture = resolve_capture_plan(config, launch_config);
     env.session.request.stream_media = config.audio || config.video;
@@ -139,7 +136,7 @@ SlotLaunchEnvironment prepare_slot_launch_environment(
     env.session.request.virtualgl_capture = env.session.capture.virtualgl_capture;
     env.session.request.capture_display = env.session.capture.capture_display;
     env.xtest_display = env.session.capture.gamescope_capture
-        ? gamescope_xtest_display_for_slot(slot)
+        ? lease.claim_next(cadence::resource::kXtestDisplay)
         : env.session.capture.capture_display;
     if (env.session.capture.gamescope_capture) {
         env.session.request.xtest_display = env.xtest_display;
@@ -165,7 +162,7 @@ SlotLaunchEnvironment prepare_slot_launch_environment(
 
 ActiveSessionSlot::ActiveSessionSlot(ActiveSessionSlotConfig config)
     : config_(std::move(config))
-    , slot_config_(slot_adjusted_config(config_.host_config, config_.slot_index)) {
+    , slot_config_(config_.host_config) {
 }
 
 ActiveSessionSlot::~ActiveSessionSlot() {
@@ -525,7 +522,8 @@ SessionClientConnection* ActiveSessionSlot::attach_pending_join(
         std::cout
             << "session slot " << config_.slot_index << ": player "
             << static_cast<int>(client_id)
-            << " reconnected username=" << pending.request.hello.username << ".\n";
+            << " reconnected username=" << pending.request.hello.username
+            << " (replaced prior control socket).\n";
         record_client_joined(
             config_.slot_index,
             pending.request.hello.username,
@@ -740,7 +738,8 @@ void ActiveSessionSlot::cleanup(
             slot,
             backends.switch_backend.get(),
             backends.switch_launch_content_stem,
-            backends.switch_launch_title_id);
+            backends.switch_launch_title_id,
+            backends.switch_launch_uses_m3m_map);
     }
     if (backends.melonds_backend) {
         (void)backends.melonds_backend->post_exit_sync(save_profile_);
@@ -769,26 +768,6 @@ void ActiveSessionSlot::run_session() {
     auto& plan = config_.plan;
     SessionBackendState backends;
 
-    // Concurrent slots each own a SessionAudioChannel (archstreamer-N + app id).
-    if (config.audio && should_use_slot_streaming_sink(config.audio_source)) {
-        try {
-            audio_channel_ = std::make_unique<SessionAudioChannel>(slot);
-            config.audio_source = audio_channel_->monitor_source();
-            std::cout
-                << "session slot " << slot << ": audio capture "
-                << config.audio_source
-                << " (id " << audio_channel_->application_id() << ")\n";
-        } catch (const std::exception& error) {
-            audio_channel_.reset();
-            std::cerr
-                << "session slot " << slot << ": warning: per-slot audio sink failed: "
-                << error.what() << '\n';
-        }
-    }
-
-    plan.control.retroarch_netcmd_port =
-        static_cast<std::uint16_t>(DefaultRetroArchNetcmdPort + slot);
-
     if (launch_plan.save_username.empty()) {
         launch_plan.save_username = default_cli_username();
     }
@@ -800,28 +779,42 @@ void ActiveSessionSlot::run_session() {
         plan.game.save_username = launch_plan.save_username;
     }
 
-    {
-        const std::uint16_t product_id_base = static_cast<std::uint16_t>(0xa517 + slot * 8);
-        const std::string pulse_sink = audio_channel_
-            ? StreamingAudioSink::slot_sink_name(slot)
-            : std::string{};
+    cadence_tracker_.begin(
+        slot,
+        plan.game.save_username,
+        plan.game.selected_game_id,
+        plan.game.system_key,
+        session_mode_name(plan.game.session_mode));
+    if (!cadence_tracker_.active()) {
+        throw std::runtime_error("cadence unavailable; cannot allocate session resources");
+    }
 
-        const std::string pulse_app = audio_channel_
-            ? StreamingAudioSink::slot_application_id(slot)
-            : std::string{};
-        cadence_tracker_.begin(
-            slot,
-            plan.game.save_username,
-            plan.game.selected_game_id,
-            plan.game.system_key,
-            session_mode_name(plan.game.session_mode),
-            config.virtual_display,
-            config.video_port,
-            config.audio_port,
-            plan.control.retroarch_netcmd_port,
-            pulse_sink,
-            pulse_app,
-            product_id_base);
+    auto lease = cadence_tracker_.leases();
+    lease.set_pools(cadence_resource_pools_from(config));
+    const bool want_pulse = config.audio && should_use_slot_streaming_sink(config.audio_source);
+    const auto grant = allocate_session_resources(
+        lease,
+        SessionResourceNeed{
+            .pulse = want_pulse,
+        });
+    apply_session_resource_grant(config, grant);
+    plan.control.retroarch_netcmd_port = grant.netcmd_port;
+
+    if (want_pulse) {
+        try {
+            audio_channel_ = std::make_unique<SessionAudioChannel>(
+                slot, grant.pulse_sink, grant.pulse_app_id);
+            config.audio_source = audio_channel_->monitor_source();
+            std::cout
+                << "session slot " << slot << ": audio capture "
+                << config.audio_source
+                << " (id " << audio_channel_->application_id() << ")\n";
+        } catch (const std::exception& error) {
+            audio_channel_.reset();
+            std::cerr
+                << "session slot " << slot << ": warning: per-slot audio sink failed: "
+                << error.what() << '\n';
+        }
     }
 
     if (launch_plan.virtual_identities.size() < launch_plan.players) {
@@ -916,7 +909,8 @@ void ActiveSessionSlot::run_session() {
         launch_config,
         slot,
         host_plays_locally,
-        config_.session_id);
+        config_.session_id,
+        lease);
     use_virtual_capture_ = launch_env.session.capture.use_virtual_capture;
     gamescope_capture_ = launch_env.session.capture.gamescope_capture;
 
@@ -936,10 +930,11 @@ void ActiveSessionSlot::run_session() {
         }
         send_session_starting_to_clients(plan);
         send_session_ended_to_clients(plan, "dry run complete");
+        cadence_tracker_.end("dry run complete");
         return;
     }
 
-    apply_slot_product_id_offset(launch_plan.virtual_identities, slot);
+    apply_product_id_base(launch_plan.virtual_identities, grant.pad_product_base);
     gamepads_ = std::make_unique<HostVirtualGamepadBus>(launch_plan.virtual_identities);
     plug_session_gamepads(*gamepads_, launch_plan.players);
 
@@ -953,7 +948,7 @@ void ActiveSessionSlot::run_session() {
         config,
         launch_plan,
         SessionPadPlanKind::RetroArchSlot,
-        static_cast<std::uint16_t>(0xa517 + slot * 8));
+        grant.pad_product_base);
     apply_capture_to_session_device_plan(
         devices,
         config,
@@ -1097,6 +1092,21 @@ void ActiveSessionSlot::run_session() {
         launch_env.xtest_display,
         slot_prefix,
         audio_channel_.get());
+
+    if (gamescope_capture_ && keyboard_ != nullptr && keyboard_->plugged()) {
+        const auto actual = keyboard_->capture_display();
+        if (!actual.empty() && actual != launch_env.xtest_display) {
+            if (lease.replace(cadence::resource::kXtestDisplay, actual)) {
+                launch_env.xtest_display = actual;
+                launch_env.session.request.xtest_display = actual;
+                if (!config_.session_id.empty()) {
+                    register_session_xtest_display(config_.session_id, actual);
+                }
+                std::cout
+                    << "session slot " << slot << ": XTest re-pin " << actual << '\n';
+            }
+        }
+    }
 
     {
         print_session_data(slot, plan);

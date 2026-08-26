@@ -849,12 +849,15 @@ bool SidecarDb::claim_resource(const ResourceClaim& claim) {
     }
     stored.released_at = 0;
     sqlite3_stmt* stmt = nullptr;
+    // Do not steal a name another session still holds. Same session may refresh.
+    // Leftover released_at!=0 rows (pre-delete releases) can be taken.
     const char* sql =
         "INSERT INTO resource_claims(resource_type, resource_name, session_id, host_id, slot, "
         "claimed_at, released_at, detail) VALUES(?,?,?,?,?,?,0,?) "
         "ON CONFLICT(resource_type, resource_name) DO UPDATE SET "
         "session_id=excluded.session_id, host_id=excluded.host_id, slot=excluded.slot, "
-        "claimed_at=excluded.claimed_at, released_at=0, detail=excluded.detail;";
+        "claimed_at=excluded.claimed_at, released_at=0, detail=excluded.detail "
+        "WHERE resource_claims.released_at!=0 OR resource_claims.session_id=excluded.session_id;";
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
         return false;
     }
@@ -867,7 +870,7 @@ bool SidecarDb::claim_resource(const ResourceClaim& claim) {
     sqlite3_bind_text(stmt, 7, stored.detail.c_str(), -1, SQLITE_TRANSIENT);
     const int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
-    return rc == SQLITE_DONE;
+    return rc == SQLITE_DONE && sqlite3_changes(db_) > 0;
 }
 
 bool SidecarDb::release_resource(
@@ -880,15 +883,14 @@ bool SidecarDb::release_resource(
     std::lock_guard lock(mutex_);
     sqlite3_stmt* stmt = nullptr;
     const char* sql =
-        "UPDATE resource_claims SET released_at=? "
-        "WHERE resource_type=? AND resource_name=? AND session_id=? AND released_at=0;";
+        "DELETE FROM resource_claims "
+        "WHERE resource_type=? AND resource_name=? AND session_id=?;";
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
         return false;
     }
-    sqlite3_bind_int64(stmt, 1, now_epoch_seconds());
-    sqlite3_bind_text(stmt, 2, resource_type.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 3, resource_name.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 4, session_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 1, resource_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, resource_name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, session_id.c_str(), -1, SQLITE_TRANSIENT);
     const int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
     return rc == SQLITE_DONE;
@@ -900,13 +902,11 @@ bool SidecarDb::release_session_resources(const std::string& session_id) {
     }
     std::lock_guard lock(mutex_);
     sqlite3_stmt* stmt = nullptr;
-    const char* sql =
-        "UPDATE resource_claims SET released_at=? WHERE session_id=? AND released_at=0;";
+    const char* sql = "DELETE FROM resource_claims WHERE session_id=?;";
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
         return false;
     }
-    sqlite3_bind_int64(stmt, 1, now_epoch_seconds());
-    sqlite3_bind_text(stmt, 2, session_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 1, session_id.c_str(), -1, SQLITE_TRANSIENT);
     const int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
     return rc == SQLITE_DONE;

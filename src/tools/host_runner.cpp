@@ -220,6 +220,9 @@ bool redirect_host_log(
 
 int archstreamer::run_host_runner(int argc, char** argv) {
     try {
+        // Before GStreamer/CUDA init so in-process nvautogpuh264enc cuda-device-id
+        // matches nvidia-smi (the gst-launch child path already sets this).
+        pin_nvenc_cuda_device_order();
         const HostRunnerCli cli(std::cout, std::cerr);
         auto config = cli.parse(argc, argv);
 

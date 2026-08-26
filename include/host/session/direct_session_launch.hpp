@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/protocol.hpp"
+#include "host/db/cadence_resource_lease.hpp"
 #include "host/db/cadence_session_tracker.hpp"
 #include "host/console/game_catalog.hpp"
 #include "host/host_app_config.hpp"
@@ -44,9 +45,19 @@ void log_direct_emulator_command(
 
 void print_input_seats(const SeatAssignment& seats);
 
-CadenceSessionTracker begin_direct_cadence_session(
+struct DirectCadenceSession {
+    CadenceSessionTracker tracker;
+    SessionResourceGrant grant;
+};
+
+/** Begin the cadence session and allocate names before the emulator starts. */
+DirectCadenceSession open_direct_cadence_session(
     const HostLaunchPlan& launch_plan,
-    const HostAppConfig& config,
+    HostAppConfig& config);
+
+void attach_direct_cadence_emulator(
+    CadenceSessionTracker& cadence_tracker,
+    const HostLaunchPlan& launch_plan,
     const SessionRuntime& session_runtime);
 
 void end_direct_cadence_session(
@@ -57,10 +68,12 @@ void end_direct_cadence_session(
 SessionLaunchEnvironment prepare_direct_launch_environment(
     HostAppConfig& config,
     RetroArchLaunchConfig& launch_config,
-    bool host_plays_locally);
+    bool host_plays_locally,
+    CadenceResourceLease& lease);
 
 void prepare_direct_backend(
     SessionBackendPrepareContext& backend,
-    VirtualKeyboard& keyboard);
+    VirtualKeyboard& keyboard,
+    std::uint16_t netcmd_port);
 
 } // namespace archstreamer

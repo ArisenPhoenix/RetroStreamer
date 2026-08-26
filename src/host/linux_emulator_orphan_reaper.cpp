@@ -394,6 +394,12 @@ int reap_orphaned_emulator_processes() {
         if (is_owner_process(entry)) {
             continue;
         }
+        // Cadence sidecar --db lives under the data root; it is not an emulator.
+        const auto helper = strip_deleted_suffix(entry.exe_name);
+        if (helper == "archstreamer_cadence" ||
+            entry.cmdline.find("archstreamer_cadence") != std::string::npos) {
+            continue;
+        }
         // Managed gamescope / Ryujinx / Yuzu / RetroArch all reference the
         // ArchStreamer data root on their command line.
         if (entry.cmdline.find(data_root) == std::string::npos) {

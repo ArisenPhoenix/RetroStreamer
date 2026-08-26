@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <system_error>
+#include <vector>
 
 namespace archstreamer {
 namespace {
@@ -56,6 +57,50 @@ std::filesystem::path resolve_leaf_under(
         }
     }
     return preferred;
+}
+
+void merge_move_path(const std::filesystem::path& src, const std::filesystem::path& dest) {
+    std::error_code ec;
+    if (!std::filesystem::exists(src, ec) || ec) {
+        return;
+    }
+    if (std::filesystem::is_directory(src, ec) && !ec) {
+        std::filesystem::create_directories(dest, ec);
+        std::vector<std::filesystem::path> children;
+        for (const auto& entry : std::filesystem::directory_iterator(src, ec)) {
+            children.push_back(entry.path());
+        }
+        for (const auto& child : children) {
+            merge_move_path(child, dest / child.filename());
+        }
+        std::filesystem::remove(src, ec);
+        return;
+    }
+    if (src.filename() == "manifest.json" && std::filesystem::exists(dest, ec) && !ec) {
+        std::filesystem::remove(src, ec);
+        return;
+    }
+    if (std::filesystem::exists(dest, ec) && !ec) {
+        if (std::filesystem::is_regular_file(src, ec) &&
+            std::filesystem::is_regular_file(dest, ec) &&
+            std::filesystem::file_size(src, ec) == std::filesystem::file_size(dest, ec)) {
+            std::filesystem::remove(src, ec);
+        }
+        return;
+    }
+    std::filesystem::create_directories(dest.parent_path(), ec);
+    std::filesystem::rename(src, dest, ec);
+    if (!ec) {
+        return;
+    }
+    ec.clear();
+    if (std::filesystem::is_regular_file(src, ec)) {
+        std::filesystem::copy_file(
+            src, dest, std::filesystem::copy_options::skip_existing, ec);
+        if (!ec) {
+            std::filesystem::remove(src, ec);
+        }
+    }
 }
 
 } // namespace
@@ -182,6 +227,29 @@ std::filesystem::path catalog_dlc_legacy_stem_directory(
     }
     return resolve_leaf_under(
         dlc_root / dlc_system_folder_name(system_key), content_stem);
+}
+
+bool migrate_catalog_dlc_stem_into_game_id(
+    const std::filesystem::path& dlc_root,
+    std::string_view system_key,
+    std::string_view content_stem,
+    std::string_view game_id) {
+    const auto legacy = catalog_dlc_legacy_stem_directory(dlc_root, system_key, content_stem);
+    const auto modern = catalog_dlc_game_directory(dlc_root, system_key, game_id);
+    if (legacy.empty() || modern.empty() || legacy == modern) {
+        return false;
+    }
+    std::error_code ec;
+    if (!std::filesystem::is_directory(legacy, ec) || ec) {
+        return false;
+    }
+    if (!std::filesystem::exists(modern, ec) || ec) {
+        std::filesystem::create_directories(modern.parent_path(), ec);
+        std::filesystem::rename(legacy, modern, ec);
+        return !ec;
+    }
+    merge_move_path(legacy, modern);
+    return true;
 }
 
 std::filesystem::path legacy_switch_updates_directory() {

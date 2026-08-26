@@ -8,9 +8,11 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <regex>
 #include <string>
 #include <vector>
@@ -134,6 +136,169 @@ bool filename_is_upd_or_dlc(std::string_view filename_lower) {
         filename_lower.find("dlc]") != std::string::npos;
 }
 
+bool filename_is_update(std::string_view filename_lower) {
+    return filename_lower.find("[upd]") != std::string::npos ||
+        filename_lower.find("upd]") != std::string::npos;
+}
+
+bool filename_is_dlc(std::string_view filename_lower) {
+    return filename_lower.find("[dlc]") != std::string::npos ||
+        filename_lower.find("dlc]") != std::string::npos;
+}
+
+std::optional<std::string> title_id_in_nsp_filename(std::string_view filename) {
+    static const std::regex bracket_id(R"(\[([0-9A-Fa-f]{16})\])");
+    const std::string text(filename);
+    std::smatch match;
+    if (!std::regex_search(text, match, bracket_id)) {
+        return std::nullopt;
+    }
+    return normalize_switch_title_id(match[1].str());
+}
+
+std::string application_title_id(std::string_view title_id) {
+    const auto normalized = normalize_switch_title_id(title_id);
+    if (!looks_like_switch_title_id(normalized)) {
+        return {};
+    }
+    std::uint64_t value = 0;
+    try {
+        value = std::stoull(normalized, nullptr, 16);
+    } catch (...) {
+        return {};
+    }
+    value &= ~0x1FFFull;
+    char buf[17];
+    std::snprintf(buf, sizeof(buf), "%016llx", static_cast<unsigned long long>(value));
+    return buf;
+}
+
+std::vector<std::string> list_pfs0_filenames(const std::filesystem::path& nsp_path) {
+    std::vector<std::string> names;
+    std::ifstream in(nsp_path, std::ios::binary);
+    if (!in) {
+        return names;
+    }
+    std::uint8_t header[16];
+    in.read(reinterpret_cast<char*>(header), 16);
+    if (!in || std::memcmp(header, "PFS0", 4) != 0) {
+        return names;
+    }
+    const auto file_count = read_le_u32(header + 4);
+    const auto string_table_size = read_le_u32(header + 8);
+    if (file_count == 0 || file_count > 512) {
+        return names;
+    }
+    std::vector<std::uint8_t> entries(static_cast<std::size_t>(file_count) * 24);
+    in.read(reinterpret_cast<char*>(entries.data()), static_cast<std::streamsize>(entries.size()));
+    if (!in) {
+        return names;
+    }
+    std::vector<char> string_table(string_table_size);
+    if (string_table_size > 0) {
+        in.read(string_table.data(), static_cast<std::streamsize>(string_table_size));
+        if (!in) {
+            return names;
+        }
+    }
+    for (std::uint32_t i = 0; i < file_count; ++i) {
+        const auto* entry = entries.data() + static_cast<std::size_t>(i) * 24;
+        const auto name_offset = read_le_u32(entry + 16);
+        if (name_offset >= string_table_size) {
+            continue;
+        }
+        std::string name(string_table.data() + name_offset);
+        if (!name.empty()) {
+            names.push_back(std::move(name));
+        }
+    }
+    return names;
+}
+
+void write_ryujinx_game_addon_json(
+    const std::filesystem::path& ryujinx_data_root,
+    std::string_view title_id,
+    const std::vector<std::filesystem::path>& nsps) {
+    std::string app_id = application_title_id(title_id);
+    std::vector<std::filesystem::path> updates;
+    nlohmann::json dlc = nlohmann::json::array();
+
+    for (const auto& nsp : nsps) {
+        const auto filename = nsp.filename().string();
+        const auto lower = to_lower_copy(filename);
+        const auto nsp_tid = title_id_in_nsp_filename(filename);
+        if (app_id.empty() && nsp_tid) {
+            app_id = application_title_id(*nsp_tid);
+        }
+        if (filename_is_update(lower)) {
+            updates.push_back(nsp);
+            continue;
+        }
+        if (!filename_is_dlc(lower)) {
+            continue;
+        }
+        nlohmann::json nca_list = nlohmann::json::array();
+        for (const auto& name : list_pfs0_filenames(nsp)) {
+            const auto name_lower = to_lower_copy(name);
+            if (name_lower.find(".nca") == std::string::npos ||
+                name_lower.find(".cnmt") != std::string::npos) {
+                continue;
+            }
+            nlohmann::json nca;
+            nca["path"] = "/" + name;
+            if (nsp_tid && looks_like_switch_title_id(*nsp_tid)) {
+                try {
+                    nca["title_id"] = std::stoull(*nsp_tid, nullptr, 16);
+                } catch (...) {
+                    continue;
+                }
+            } else {
+                continue;
+            }
+            nca["is_enabled"] = true;
+            nca_list.push_back(std::move(nca));
+        }
+        if (nca_list.empty()) {
+            continue;
+        }
+        nlohmann::json container;
+        container["path"] = nsp.string();
+        container["dlc_nca_list"] = std::move(nca_list);
+        dlc.push_back(std::move(container));
+    }
+
+    if (app_id.empty()) {
+        return;
+    }
+
+    const auto games_dir = ryujinx_data_root / "games" / app_id;
+    std::error_code ec;
+    std::filesystem::create_directories(games_dir, ec);
+
+    if (!updates.empty()) {
+        nlohmann::json update_doc;
+        update_doc["selected"] = updates.front().string();
+        nlohmann::json paths = nlohmann::json::array();
+        for (const auto& path : updates) {
+            paths.push_back(path.string());
+        }
+        update_doc["paths"] = std::move(paths);
+        std::ofstream out(games_dir / "updates.json", std::ios::trunc);
+        out << update_doc.dump(2) << '\n';
+    }
+
+    if (!dlc.empty()) {
+        std::ofstream out(games_dir / "dlc.json", std::ios::trunc);
+        out << dlc.dump(2) << '\n';
+    }
+
+    if (!updates.empty() || !dlc.empty()) {
+        std::cout
+            << "Ryujinx title addons: " << app_id << " update=" << updates.size()
+            << " dlc=" << dlc.size() << '\n';
+    }
+}
+
 bool directory_has_nca_payload(const std::filesystem::path& registered) {
     std::error_code ec;
     if (!std::filesystem::is_directory(registered, ec)) {
@@ -181,6 +346,20 @@ std::vector<std::string> list_nsp_basenames_in_dir(
     return names;
 }
 
+bool manifest_lists_nsps(const std::filesystem::path& manifest_path) {
+    std::ifstream in(manifest_path);
+    if (!in) {
+        return false;
+    }
+    nlohmann::json doc;
+    try {
+        in >> doc;
+    } catch (...) {
+        return false;
+    }
+    return doc.contains("nsps") && doc["nsps"].is_array() && !doc["nsps"].empty();
+}
+
 std::vector<std::string> seed_nsp_names_for_stem(
     const std::filesystem::path& addon_dir,
     std::string_view content_stem) {
@@ -192,14 +371,13 @@ std::vector<std::string> seed_nsp_names_for_stem(
     if (!names.empty()) {
         return names;
     }
-    // Fall back to legacy flat SwitchUpdates pack folder.
     return list_nsp_basenames_in_dir(legacy_switch_updates_directory(), base);
 }
 
 void migrate_nsps_into_addon_dir(
     const std::filesystem::path& addon_dir,
     const std::vector<std::string>& nsp_names) {
-    const auto legacy = legacy_switch_updates_directory();
+    const auto updates = legacy_switch_updates_directory();
     std::error_code ec;
     std::filesystem::create_directories(addon_dir, ec);
     for (const auto& name : nsp_names) {
@@ -207,7 +385,7 @@ void migrate_nsps_into_addon_dir(
         if (std::filesystem::is_regular_file(dest, ec)) {
             continue;
         }
-        const auto src = legacy / name;
+        const auto src = updates / name;
         if (!std::filesystem::is_regular_file(src, ec)) {
             continue;
         }
@@ -286,9 +464,6 @@ void migrate_registered_from_legacy_user_addons(
         }
     }
 
-    // Global DLC/Switch/<stem>/registered siblings.
-    scan_addons_root(switch_title_updates_directory());
-
     if (candidates.empty()) {
         return;
     }
@@ -348,7 +523,7 @@ void ensure_manifest(
     std::string_view content_stem) {
     const auto manifest_path = addon_dir / "manifest.json";
     std::error_code ec;
-    if (std::filesystem::is_regular_file(manifest_path, ec)) {
+    if (std::filesystem::is_regular_file(manifest_path, ec) && manifest_lists_nsps(manifest_path)) {
         return;
     }
     const auto match_key = !content_stem.empty() ? content_stem : game_id;
@@ -377,26 +552,15 @@ void ensure_manifest(
 
 void migrate_legacy_stem_folder_into_game_id(
     std::string_view content_stem,
-    const std::filesystem::path& addon_dir) {
-    if (content_stem.empty() || addon_dir.empty()) {
+    std::string_view game_id) {
+    if (content_stem.empty() || game_id.empty()) {
         return;
     }
-    const auto legacy = catalog_dlc_legacy_stem_directory(resolve_dlc_root(), "switch", content_stem);
-    if (legacy.empty() || legacy == addon_dir) {
-        return;
-    }
-    std::error_code ec;
-    if (!std::filesystem::is_directory(legacy, ec) || ec) {
-        return;
-    }
-    if (std::filesystem::exists(addon_dir, ec) && !ec) {
-        // Prefer merging registered/NSPs via existing registered migrate + manifest seed.
-        return;
-    }
-    std::filesystem::create_directories(addon_dir.parent_path(), ec);
-    std::filesystem::rename(legacy, addon_dir, ec);
-    if (!ec) {
-        std::cout << "switch DLC: migrated stem folder " << legacy << " → " << addon_dir << '\n';
+    if (migrate_catalog_dlc_stem_into_game_id(
+            resolve_dlc_root(), "switch", content_stem, game_id)) {
+        std::cout
+            << "switch DLC: normalized \"" << content_stem << "\" → "
+            << switch_dlc_game_directory(game_id) << '\n';
     }
 }
 
@@ -412,7 +576,6 @@ std::vector<std::filesystem::path> nsp_paths_from_manifest(const std::filesystem
     } catch (...) {
         return {};
     }
-    const auto legacy = legacy_switch_updates_directory();
     std::vector<std::filesystem::path> paths;
     if (!doc.contains("nsps") || !doc["nsps"].is_array()) {
         return paths;
@@ -425,22 +588,11 @@ std::vector<std::filesystem::path> nsp_paths_from_manifest(const std::filesystem
         if (name.empty()) {
             continue;
         }
-        std::filesystem::path candidate(name);
-        if (!candidate.is_absolute()) {
-            candidate = addon_dir / name;
-            if (!std::filesystem::is_regular_file(candidate)) {
-                candidate = legacy / name;
-            }
+        auto candidate = addon_dir / std::filesystem::path(name).filename();
+        if (!std::filesystem::is_regular_file(candidate)) {
+            migrate_nsps_into_addon_dir(addon_dir, {name});
         }
         if (std::filesystem::is_regular_file(candidate)) {
-            // Keep packs nested with the game when resolved from legacy.
-            if (candidate.parent_path() != addon_dir) {
-                migrate_nsps_into_addon_dir(addon_dir, {name});
-                const auto nested = addon_dir / name;
-                if (std::filesystem::is_regular_file(nested)) {
-                    candidate = nested;
-                }
-            }
             paths.push_back(candidate);
         } else {
             std::cerr << "switch DLC: missing NSP " << name << " under " << addon_dir << '\n';
@@ -520,7 +672,6 @@ void ensure_ryujinx_catalog_addons(
     std::string_view game_id,
     std::string_view content_stem,
     std::string_view title_id) {
-    (void)title_id;
     if (game_id.empty()) {
         return;
     }
@@ -528,7 +679,7 @@ void ensure_ryujinx_catalog_addons(
     if (addon_dir.empty()) {
         return;
     }
-    migrate_legacy_stem_folder_into_game_id(content_stem, addon_dir);
+    migrate_legacy_stem_folder_into_game_id(content_stem, game_id);
     const auto registered = addon_dir / "registered";
     ensure_manifest(addon_dir, game_id, content_stem);
     if (!content_stem.empty()) {
@@ -543,6 +694,7 @@ void ensure_ryujinx_catalog_addons(
             ++unpacked;
         }
     }
+    write_ryujinx_game_addon_json(ryujinx_data_root, title_id, nsps);
 
     const auto ryu_registered = ryujinx_data_root / "bis" / "user" / "Contents" / "registered";
     if (replace_registered_with_symlink(ryu_registered, registered)) {

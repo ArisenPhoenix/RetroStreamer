@@ -156,17 +156,8 @@ void migrate_legacy_stem_dlc_to_game_id(
     if (legacy.empty() || modern.empty() || legacy == modern) {
         return;
     }
-    std::error_code ec;
-    if (!std::filesystem::is_directory(legacy, ec) || ec) {
-        return;
-    }
-    if (std::filesystem::exists(modern, ec) && !ec) {
-        effects.push_back(
-            "skip DLC stem migrate (target exists): " + legacy.string() + " → " + modern.string());
-        return;
-    }
-    if (rename_path_best_effort(legacy, modern, effects)) {
-        effects.push_back("migrated legacy DLC stem folder → game_id leaf");
+    if (migrate_catalog_dlc_stem_into_game_id(dlc_root, system_key, content_stem, game_id)) {
+        effects.push_back("migrated DLC stem folder → game_id leaf");
     }
 }
 

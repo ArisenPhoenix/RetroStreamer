@@ -520,12 +520,19 @@ bool FileRuntimeStore::claim_resource(const ResourceClaim& claim) {
         return false;
     }
     auto root = load_object_file(claims_path());
+    const auto key = claim_key(claim.resource_type, claim.resource_name);
+    if (root.contains(key)) {
+        const auto existing = claim_from_json(root.at(key));
+        if (existing.released_at == 0 && existing.session_id != claim.session_id) {
+            return false;
+        }
+    }
     ResourceClaim stored = claim;
     if (stored.claimed_at <= 0) {
         stored.claimed_at = now_epoch_seconds();
     }
     stored.released_at = 0;
-    root[claim_key(stored.resource_type, stored.resource_name)] = claim_to_json(stored);
+    root[key] = claim_to_json(stored);
     return save_object_file(claims_path(), root);
 }
 
@@ -549,12 +556,8 @@ bool FileRuntimeStore::release_resource(
     if (claim.session_id != session_id) {
         return false;
     }
-    if (claim.released_at == 0) {
-        claim.released_at = now_epoch_seconds();
-        root[key] = claim_to_json(claim);
-        return save_object_file(claims_path(), root);
-    }
-    return true;
+    root.erase(key);
+    return save_object_file(claims_path(), root);
 }
 
 bool FileRuntimeStore::release_session_resources(const std::string& session_id) {
@@ -566,16 +569,15 @@ bool FileRuntimeStore::release_session_resources(const std::string& session_id) 
         return false;
     }
     auto root = load_object_file(claims_path());
-    const auto now = now_epoch_seconds();
     bool changed = false;
-    for (auto it = root.begin(); it != root.end(); ++it) {
-        auto claim = claim_from_json(it.value());
-        if (claim.session_id != session_id || claim.released_at != 0) {
+    for (auto it = root.begin(); it != root.end();) {
+        const auto claim = claim_from_json(it.value());
+        if (claim.session_id == session_id) {
+            it = root.erase(it);
+            changed = true;
             continue;
         }
-        claim.released_at = now;
-        it.value() = claim_to_json(claim);
-        changed = true;
+        ++it;
     }
     if (!changed) {
         return true;

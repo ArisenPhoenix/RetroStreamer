@@ -116,8 +116,8 @@ QWidget* MainWindow::build_host_tab() {
     host_audio_port_->setRange(1, 65535);
     host_audio_port_->setValue(DefaultAudioPort);
     host_clients_ = new QSpinBox(form_box);
-    host_clients_->setRange(2, 4);
-    host_clients_->setValue(2);
+    host_clients_->setRange(2, static_cast<int>(MaxConcurrentSessionSlots));
+    host_clients_->setValue(static_cast<int>(MaxConcurrentSessionSlots));
     host_clients_->setToolTip(
         "Max concurrent singleplayer sessions (each client gets its own emulator/stream). "
         "Also the Multiplayer lobby size when using Multiplayer mode.");

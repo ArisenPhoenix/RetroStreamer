@@ -347,7 +347,9 @@ void HostRunnerCli::print_usage() const {
         << "  --control-port <port>\n"
         << "                      Wait for TCP session clients before launch.\n"
         << "  --input-port <port> Receive UDP ControllerInput packets on this port.\n"
-        << "  --clients <count>   Maximum session clients to wait for. Default: 1\n"
+        << "  --clients <count>   Max concurrent singleplayer sessions (also MP lobby size).\n"
+        << "                      1–" << static_cast<int>(MaxConcurrentSessionSlots)
+        << ". Omitted defaults to " << static_cast<int>(MaxConcurrentSessionSlots) << ".\n"
         << "  --session-timeout <seconds>\n"
         << "                      Maximum time to wait for enough players. Default: 30\n"
         << "  --client-timeout <seconds>\n"
@@ -618,8 +620,10 @@ HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
         }
     }
 
-    if (args.clients == 0 || args.clients > MaxRemoteClients) {
-        throw std::runtime_error("--clients must be between 1 and MaxRemoteClients");
+    if (args.clients == 0 || args.clients > MaxConcurrentSessionSlots) {
+        throw std::runtime_error(
+            "--clients must be between 1 and "
+            + std::to_string(static_cast<int>(MaxConcurrentSessionSlots)));
     }
 
     if (args.save_root.empty()) {

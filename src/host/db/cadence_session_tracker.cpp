@@ -3,7 +3,6 @@
 #include "archstreamer/runtime_cadence/cadence.hpp"
 #include "host/db/cadence_session_events.hpp"
 
-#include <iomanip>
 #include <sstream>
 
 namespace archstreamer {
@@ -28,14 +27,7 @@ void CadenceSessionTracker::begin(
     std::string_view username,
     std::string_view game_key,
     std::string_view system_key,
-    std::string_view mode,
-    std::string_view display,
-    std::uint16_t video_port,
-    std::uint16_t audio_port,
-    std::uint16_t netcmd_port,
-    std::string_view pulse_sink,
-    std::string_view pulse_app_id,
-    std::uint16_t pad_product_base) {
+    std::string_view mode) {
     host_id_ = cadence_host_id();
     slot_ = slot;
     const auto started = cadence::now_epoch_seconds();
@@ -59,47 +51,10 @@ void CadenceSessionTracker::begin(
     session.mode = std::string(mode);
     session.started_at = started;
     (void)store->upsert_session(session);
+}
 
-    const auto claim_one = [&](std::string_view type, std::string_view name, std::string_view detail) {
-        if (name.empty()) {
-            return;
-        }
-        cadence::ResourceClaim claim;
-        claim.session_id = session_id_;
-        claim.resource_type = std::string(type);
-        claim.resource_name = std::string(name);
-        claim.host_id = host_id_;
-        claim.slot = slot_;
-        claim.claimed_at = started;
-        claim.detail = std::string(detail);
-        (void)store->claim_resource(claim);
-
-        cadence::RuntimeEvent event;
-        event.kind = "resource_claimed";
-        event.host_id = host_id_;
-        event.slot = slot_;
-        event.username = std::string(username);
-        event.game_key = std::string(game_key);
-        event.session_id = session_id_;
-        event.detail = std::string(type) + "=" + std::string(name);
-        if (!detail.empty()) {
-            event.detail += " " + std::string(detail);
-        }
-        (void)store->record_event(event);
-    };
-
-    claim_one(cadence::resource::kSlotLock, "slot-" + std::to_string(slot), {});
-    claim_one(cadence::resource::kDisplay, display, {});
-    claim_one(cadence::resource::kVideoPort, std::to_string(video_port), {});
-    claim_one(cadence::resource::kAudioPort, std::to_string(audio_port), {});
-    claim_one(cadence::resource::kNetcmdPort, std::to_string(netcmd_port), {});
-    claim_one(cadence::resource::kPulseSink, pulse_sink, {});
-    claim_one(cadence::resource::kPulseAppId, pulse_app_id, {});
-    if (pad_product_base != 0) {
-        std::ostringstream hex;
-        hex << "0x" << std::hex << pad_product_base;
-        claim_one(cadence::resource::kPadProductBase, hex.str(), {});
-    }
+CadenceResourceLease CadenceSessionTracker::leases() const {
+    return CadenceResourceLease(session_id_, host_id_, slot_);
 }
 
 void CadenceSessionTracker::claim(
@@ -128,6 +83,9 @@ void CadenceSessionTracker::claim(
     event.slot = slot_;
     event.session_id = session_id_;
     event.detail = std::string(resource_type) + "=" + std::string(resource_name);
+    if (!detail.empty()) {
+        event.detail += " " + std::string(detail);
+    }
     (void)store->record_event(event);
 }
 

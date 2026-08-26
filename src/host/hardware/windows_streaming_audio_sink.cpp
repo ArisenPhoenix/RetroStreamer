@@ -25,6 +25,7 @@
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace archstreamer {
@@ -336,9 +337,19 @@ std::string StreamingAudioSink::default_monitor_source() {
 }
 
 SessionAudioChannel::SessionAudioChannel(int slot_index)
+    : SessionAudioChannel(
+          slot_index,
+          StreamingAudioSink::slot_sink_name(slot_index < 0 ? 0 : slot_index),
+          StreamingAudioSink::slot_application_id(slot_index < 0 ? 0 : slot_index)) {
+}
+
+SessionAudioChannel::SessionAudioChannel(
+    int slot_index,
+    std::string sink_name,
+    std::string application_id)
     : slot_index_(slot_index < 0 ? 0 : slot_index)
-    , sink_name_(StreamingAudioSink::slot_sink_name(slot_index_))
-    , application_id_(StreamingAudioSink::slot_application_id(slot_index_))
+    , sink_name_(std::move(sink_name))
+    , application_id_(std::move(application_id))
     , sink_owned_(false) {}
 
 SessionAudioChannel::~SessionAudioChannel() {

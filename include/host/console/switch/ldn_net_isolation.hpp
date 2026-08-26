@@ -16,7 +16,7 @@ namespace archstreamer {
  */
 bool ldn_firejail_available();
 
-/** Ensure libvirt network archstreamer-ldn is defined/started. */
+/** Use asldnbr0 if it already exists; otherwise define/start archstreamer-ldn. */
 bool ensure_ldn_bridge();
 
 /**

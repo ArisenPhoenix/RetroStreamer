@@ -114,11 +114,10 @@ std::unique_ptr<VirtualDisplay> make_virtual_display(VirtualDisplayBackend backe
 [[nodiscard]] std::vector<std::pair<std::string, std::string>> gamescope_launch_environment();
 
 /**
- * Nested XTest DISPLAY for gamescope session slot N (`:20+N`).
- * Pin only (ARCHSTREAMER_XTEST_DISPLAY); match sessions via ARCHSTREAMER_SESSION_ID
- * and the host lease map. The gamescope wrapper reserves lower numbers with
- * abstract bind-without-listen (per firejail netns) plus X lock files so nested
- * Xwayland lands here. Do not listen() on those sockets — that hangs gamescope.
+ * Historical `:20+N` pin formula. Do not use this to allocate — CadenceResourceLease
+ * picks the first free nest display (and skips live X sockets). The gamescope
+ * wrapper still reserves ARCHSTREAMER_XTEST_DISPLAY with abstract bind-without-listen
+ * so nested Xwayland lands on the claimed name. Do not listen() on those sockets.
  */
 [[nodiscard]] std::string gamescope_xtest_display_for_slot(std::size_t slot_index);
 inline constexpr const char* kArchstreamerXTestDisplayEnv = "ARCHSTREAMER_XTEST_DISPLAY";

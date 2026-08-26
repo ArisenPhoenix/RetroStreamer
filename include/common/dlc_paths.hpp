@@ -60,6 +60,17 @@ std::filesystem::path catalog_dlc_legacy_stem_directory(
     std::string_view system_key,
     std::string_view content_stem);
 
+/**
+ * Move DLC/<System>/<content_stem>/ into DLC/<System>/<game_id_leaf>/.
+ * If the game_id directory already exists, merge files (keep dest on conflict)
+ * and remove the leftover stem folder when empty.
+ */
+bool migrate_catalog_dlc_stem_into_game_id(
+    const std::filesystem::path& dlc_root,
+    std::string_view system_key,
+    std::string_view content_stem,
+    std::string_view game_id);
+
 /** Legacy flat Switch UPD/DLC NSP folder (ROMS/SwitchUpdates), if present. */
 std::filesystem::path legacy_switch_updates_directory();
 

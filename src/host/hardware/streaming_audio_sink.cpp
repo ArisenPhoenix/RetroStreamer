@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <unordered_set>
 #include <vector>
 
@@ -651,9 +652,19 @@ void StreamingAudioSink::untrack_emulator_process(int slot_index) {
 }
 
 SessionAudioChannel::SessionAudioChannel(int slot_index)
+    : SessionAudioChannel(
+          slot_index,
+          StreamingAudioSink::slot_sink_name(slot_index < 0 ? 0 : slot_index),
+          StreamingAudioSink::slot_application_id(slot_index < 0 ? 0 : slot_index)) {
+}
+
+SessionAudioChannel::SessionAudioChannel(
+    int slot_index,
+    std::string sink_name,
+    std::string application_id)
     : slot_index_(slot_index < 0 ? 0 : slot_index)
-    , sink_name_(StreamingAudioSink::slot_sink_name(slot_index_))
-    , application_id_(StreamingAudioSink::slot_application_id(slot_index_)) {
+    , sink_name_(std::move(sink_name))
+    , application_id_(std::move(application_id)) {
     const auto description = "ArchStreamer slot " + std::to_string(slot_index_);
     ensure_named_null_sink(sink_name_.c_str(), description.c_str());
     // Do not steal the session default onto the silent capture sink.

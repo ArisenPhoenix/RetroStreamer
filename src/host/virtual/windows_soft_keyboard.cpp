@@ -450,6 +450,10 @@ bool display_belongs_to_process_tree(const std::string&, int) {
     return false;
 }
 
+bool display_leased_by_other_session(const std::string&, int) {
+    return false;
+}
+
 void register_session_xtest_display(const std::string&, const std::string&) {}
 
 void register_session_xtest_display_for_owner(int, const std::string&) {}

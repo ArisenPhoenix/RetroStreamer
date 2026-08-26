@@ -1,11 +1,13 @@
 #include "host/console/switch/switch_backend.hpp"
 
 #include "host/virtual/pad_plan.hpp"
+#include "host/console/switch/ryujinx_game_cache.hpp"
 #include "host/console/switch_save_share.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <iostream>
+#include <string>
 #include <string_view>
 
 namespace archstreamer {
@@ -24,9 +26,21 @@ bool name_looks_like_ryujinx(std::string_view name) {
 std::vector<std::string> SwitchBackend::post_exit_sync(
     const SaveProfile& profile,
     std::string_view content_stem,
-    std::string_view title_id) const {
+    std::string_view title_id,
+    bool uses_m3m_map) const {
     if (!content_stem.empty()) {
-        const auto leaf = sync_catalog_switch_save_after_exit(profile, content_stem, title_id);
+        const auto leaf =
+            sync_catalog_switch_save_after_exit(profile, content_stem, title_id, uses_m3m_map);
+        auto tid = std::string(title_id);
+        if (tid.empty()) {
+            tid = resolve_switch_title_id_for_catalog(
+                profile, content_stem, {}, uses_m3m_map);
+        }
+        if (!tid.empty()) {
+            merge_ryujinx_game_cache_to_shared(
+                profile.user_directory / "ryujinx" / "xdg-config" / "Ryujinx",
+                tid);
+        }
         if (!leaf.empty()) {
             return {leaf};
         }
@@ -69,19 +83,22 @@ void SwitchBackend::apply_common_prep(
 void SwitchBackend::finish_prep_save_sync(
     const SwitchBackendPrepContext& ctx,
     SwitchBackendPrepResult& result) const {
+    std::string tid{ctx.title_id};
     if (!ctx.content_stem.empty()) {
-        auto tid = ctx.title_id;
         if (tid.empty()) {
             tid = resolve_switch_title_id_for_catalog(
-                ctx.save_profile, ctx.content_stem, {});
+                ctx.save_profile, ctx.content_stem, {}, ctx.uses_m3m_map);
         }
-        const auto leaf =
-            sync_catalog_switch_save_for_launch(ctx.save_profile, ctx.content_stem, tid);
+        const auto leaf = sync_catalog_switch_save_for_launch(
+            ctx.save_profile, ctx.content_stem, tid, ctx.uses_m3m_map);
         result.synced_title_count = leaf.empty() ? 0 : 1;
-        return;
+    } else {
+        const auto synced = sync_switch_shared_saves_for_profile(ctx.save_profile);
+        result.synced_title_count = synced.size();
     }
-    const auto synced = sync_switch_shared_saves_for_profile(ctx.save_profile);
-    result.synced_title_count = synced.size();
+    if (result.ryujinx_profile.has_value() && !tid.empty()) {
+        seed_ryujinx_game_cache_from_shared(result.ryujinx_profile->data_root, tid);
+    }
 }
 
 std::unique_ptr<SwitchBackend> make_switch_backend(

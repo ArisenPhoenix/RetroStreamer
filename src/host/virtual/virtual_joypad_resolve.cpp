@@ -87,7 +87,7 @@ std::string sdl_archstreamer_sibling_ignore_list(
     std::size_t players,
     std::uint16_t product_id_base,
     const std::string& physical_ignore) {
-    // Concurrent slots use product_id_base = 0xa517 + slot*8 (see apply_slot_product_id_offset).
+    // Concurrent slots use a cadence-claimed product_id_base (8-wide bands).
     // Reserve the full band so stale pads from older crashes are also hidden.
     constexpr int kSlotStride = 8;
     constexpr int kMaxSlots = 4; // matches clamp_max_session_slots upper bound

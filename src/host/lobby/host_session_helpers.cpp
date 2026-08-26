@@ -52,10 +52,8 @@ ClientId next_session_client_id(const SessionPlan& plan) {
 }
 
 SessionClientConnection* disconnected_player_for_reconnect(SessionPlan& plan, const ClientHello& hello) {
+    SessionClientConnection* live = nullptr;
     for (auto& client : plan.clients) {
-        if (client.lifecycle.connection_state != SessionConnectionState::Disconnected) {
-            continue;
-        }
         if (client.hello.requested_players == 0) {
             continue;
         }
@@ -65,10 +63,14 @@ SessionClientConnection* disconnected_player_for_reconnect(SessionPlan& plan, co
         if (client.hello.requested_players != hello.requested_players) {
             continue;
         }
-        return &client;
+        if (client.lifecycle.connection_state == SessionConnectionState::Disconnected) {
+            return &client;
+        }
+        if (client.lifecycle.connection_state == SessionConnectionState::Connected) {
+            live = &client;
+        }
     }
-
-    return nullptr;
+    return live;
 }
 
 LiveSessionJoinTarget resolve_live_session_join_target(

@@ -54,8 +54,8 @@ public:
     virtual std::vector<ConnectionRecord> list_connections(bool live_only) = 0;
 
     /**
-     * Take (or steal) a resource for a session. Clears any prior held claim
-     * on the same (type, name) so inventory stays unique.
+     * Take a resource for a session. Fails if another session already holds
+     * the same (type, name). Same session may refresh its own claim.
      */
     virtual bool claim_resource(const ResourceClaim& claim) = 0;
     virtual bool release_resource(

@@ -176,6 +176,9 @@ std::vector<std::string> soft_keyboard_display_candidates(
  */
 bool display_belongs_to_process_tree(const std::string& display, int owner_pid);
 
+/** True when another live session already leased this nested DISPLAY. */
+bool display_leased_by_other_session(const std::string& display, int owner_pid);
+
 /** Lease a nested XTest DISPLAY for a Lobby/SessionManager session id. */
 void register_session_xtest_display(const std::string& session_id, const std::string& display);
 void unregister_session_xtest_display(const std::string& session_id);

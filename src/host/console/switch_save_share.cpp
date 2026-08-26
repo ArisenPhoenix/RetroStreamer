@@ -1,9 +1,11 @@
 #include "host/console/switch_save_share.hpp"
 
 #include "common/dlc_paths.hpp"
+#include "common/m3m_playlist.hpp"
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -21,6 +23,7 @@ namespace {
 constexpr const char* kClaimedFromTitleId = ".claimed_from_title_id";
 constexpr const char* kClaimedByStem = ".claimed_by_stem";
 constexpr const char* kTitleIdSidecar = ".title_id";
+constexpr const char* kLaunchStamp = ".launch_stamp";
 
 bool looks_like_title_id(std::string_view value) {
     if (value.size() != 16) {
@@ -686,6 +689,27 @@ bool looks_like_switch_title_id(std::string_view value) {
     return looks_like_title_id(normalize_switch_title_id(value));
 }
 
+std::filesystem::path switch_m3m_map_for_title(const std::filesystem::path& content_path) {
+    if (content_path.empty()) {
+        return {};
+    }
+    std::error_code ec;
+    const auto ext = to_lower_copy(content_path.extension().string());
+    if (ext == ".m3m" && std::filesystem::is_regular_file(content_path, ec) && !ec) {
+        return content_path;
+    }
+    const auto sibling =
+        content_path.parent_path() / (content_path.stem().string() + ".m3m");
+    if (std::filesystem::is_regular_file(sibling, ec) && !ec) {
+        return sibling;
+    }
+    return {};
+}
+
+bool switch_title_has_m3m_map(const std::filesystem::path& content_path) {
+    return !switch_m3m_map_for_title(content_path).empty();
+}
+
 std::filesystem::path canonical_catalog_switch_save_directory(
     const SaveProfile& profile,
     std::string_view content_stem) {
@@ -733,12 +757,31 @@ std::filesystem::path ensure_catalog_switch_save(
 std::string resolve_switch_title_id_for_catalog(
     const SaveProfile& profile,
     std::string_view content_stem,
-    const std::filesystem::path& content_path) {
-    (void)content_path;
+    const std::filesystem::path& content_path,
+    bool uses_m3m_map) {
     if (content_stem.empty()) {
         return {};
     }
     const auto stem_dir = canonical_catalog_switch_save_directory(profile, content_stem);
+    const auto m3m_path = switch_m3m_map_for_title(content_path);
+    const bool m3m = uses_m3m_map || !m3m_path.empty();
+
+    if (!m3m) {
+        // Bare catalog title: the stem is identity. Nintendo id is only a
+        // cache from a previous session of this same stem — never leftover BIS.
+        return read_title_id_sidecar(stem_dir);
+    }
+
+    if (!m3m_path.empty()) {
+        if (const auto parsed = parse_m3m_playlist(m3m_path); parsed.has_value()) {
+            const auto tid = normalize_switch_title_id(parsed->title_id);
+            if (looks_like_title_id(tid)) {
+                write_title_id_sidecar(stem_dir, tid);
+                return tid;
+            }
+        }
+    }
+
     if (auto tid = read_title_id_sidecar(stem_dir); !tid.empty()) {
         return tid;
     }
@@ -902,34 +945,183 @@ int backup_ryujinx_bis_prelaunch_if_stem_empty(
     return files;
 }
 
+namespace {
+
+struct LaunchStamp {
+    std::string stem;
+    std::string title_id;
+    std::uint64_t time = 0;
+};
+
+std::string trim_copy(std::string value) {
+    while (!value.empty() && (value.back() == '\n' || value.back() == '\r' || value.back() == ' ')) {
+        value.pop_back();
+    }
+    return value;
+}
+
+LaunchStamp read_launch_stamp(const std::filesystem::path& stem_dir) {
+    LaunchStamp stamp;
+    std::ifstream in(stem_dir / kLaunchStamp);
+    if (!in) {
+        return stamp;
+    }
+    std::string time_line;
+    std::getline(in, stamp.stem);
+    std::getline(in, stamp.title_id);
+    std::getline(in, time_line);
+    stamp.stem = trim_copy(std::move(stamp.stem));
+    stamp.title_id = normalize_switch_title_id(trim_copy(std::move(stamp.title_id)));
+    try {
+        stamp.time = static_cast<std::uint64_t>(std::stoull(trim_copy(std::move(time_line))));
+    } catch (...) {
+        stamp.time = 0;
+    }
+    return stamp;
+}
+
+void write_launch_stamp(
+    const std::filesystem::path& stem_dir,
+    std::string_view content_stem,
+    std::string_view title_id) {
+    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+                         std::chrono::system_clock::now().time_since_epoch())
+                         .count();
+    std::ostringstream out;
+    out << content_stem << '\n'
+        << normalize_switch_title_id(title_id) << '\n'
+        << static_cast<unsigned long long>(now) << '\n';
+    write_text_file(stem_dir / kLaunchStamp, out.str());
+}
+
+std::string last_stamped_stem_for_title(
+    const SaveProfile& profile,
+    std::string_view title_id) {
+    const auto tid = normalize_switch_title_id(title_id);
+    if (tid.empty()) {
+        return {};
+    }
+    const auto saves_root = profile.user_directory / "switch" / "saves";
+    std::error_code ec;
+    if (!std::filesystem::is_directory(saves_root, ec)) {
+        return {};
+    }
+    std::string best;
+    std::uint64_t best_time = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(saves_root, ec)) {
+        if (ec || !entry.is_directory()) {
+            continue;
+        }
+        const auto leaf = entry.path().filename().string();
+        if (leaf.empty() || leaf.front() == '.') {
+            continue;
+        }
+        const auto stamp = read_launch_stamp(entry.path());
+        if (stamp.time == 0 || stamp.title_id != tid || stamp.stem != leaf) {
+            continue;
+        }
+        if (stamp.time > best_time) {
+            best_time = stamp.time;
+            best = leaf;
+        }
+    }
+    return best;
+}
+
+bool directory_payload_newer_than(
+    const std::filesystem::path& src,
+    const std::filesystem::path& dst) {
+    if (!directory_has_save_payload(src)) {
+        return false;
+    }
+    if (!directory_has_save_payload(dst)) {
+        return true;
+    }
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(src, ec)) {
+        if (ec || !entry.is_regular_file()) {
+            continue;
+        }
+        const auto name = entry.path().filename().string();
+        if (name.empty() || name.front() == '.') {
+            continue;
+        }
+        if (source_should_replace_dest(entry.path(), dst / name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool live_bis_newer_than_stem(
+    const std::filesystem::path& ryujinx_bis,
+    std::string_view title_id,
+    const std::filesystem::path& stem) {
+    return for_each_ryujinx_title_account_save(
+               ryujinx_bis,
+               title_id,
+               stem,
+               [](const std::filesystem::path&,
+                  const std::filesystem::path& slot0,
+                  const std::filesystem::path& slot1,
+                  const std::filesystem::path& dest) {
+                   return directory_payload_newer_than(slot0, dest)
+                       || directory_payload_newer_than(slot1, dest);
+               })
+        > 0;
+}
+
+} // namespace
+
 std::string sync_catalog_switch_save_for_launch(
     const SaveProfile& profile,
     std::string_view content_stem,
-    std::string_view title_id) {
+    std::string_view title_id,
+    bool uses_m3m_map) {
     if (content_stem.empty()) {
         return {};
     }
     auto tid = normalize_switch_title_id(title_id);
     if (tid.empty()) {
-        tid = resolve_switch_title_id_for_catalog(profile, content_stem);
+        tid = resolve_switch_title_id_for_catalog(profile, content_stem, {}, uses_m3m_map);
     }
     const auto canon = ensure_catalog_switch_save(profile, content_stem, tid);
     if (canon.empty()) {
         return {};
     }
-    // Always snapshot user stem (and empty-stem BIS) before launch mutates banks.
+    const auto ryujinx_bis =
+        profile.user_directory / "ryujinx" / "xdg-config" / "Ryujinx" / "bis" / "user" / "save";
+    if (!tid.empty()) {
+        auto owner = last_stamped_stem_for_title(profile, tid);
+        if (owner.empty() && directory_has_save_payload(canon)) {
+            owner = std::string(content_stem);
+        }
+        if (!owner.empty()) {
+            const auto owner_dir = canonical_catalog_switch_save_directory(profile, owner);
+            if (live_bis_newer_than_stem(ryujinx_bis, tid, owner_dir)) {
+                const int mirrored = mirror_ryujinx_to_canon_path(ryujinx_bis, owner_dir, tid);
+                std::cout
+                    << "switch save share: live BIS newer than \"" << owner
+                    << "\"; copied back (" << mirrored << " account(s))\n";
+            }
+        }
+    }
     (void)backup_catalog_switch_save_prelaunch(profile, content_stem, canon);
     if (!tid.empty()) {
-        // Stem is source of truth: never absorb leftover yuzu/BIS bytes into it.
         link_yuzu_to_canon(profile, tid, canon, /*absorb_existing_into_target=*/false);
-        const auto ryujinx_bis =
-            profile.user_directory / "ryujinx" / "xdg-config" / "Ryujinx" / "bis" / "user" / "save";
         (void)backup_ryujinx_bis_prelaunch_if_stem_empty(
             profile, content_stem, canon, ryujinx_bis, tid);
         const int replaced = replace_ryujinx_bis_with_canon(ryujinx_bis, canon, tid);
         std::cout
             << "switch save share: launch \"" << content_stem << "\" → BIS title "
             << tid << " (" << replaced << " account save(s) replaced)\n";
+        if (replaced > 0) {
+            write_launch_stamp(canon, content_stem, tid);
+        }
+    } else if (!uses_m3m_map) {
+        std::cout
+            << "switch save share: launch \"" << content_stem
+            << "\" direct (no .m3m); skipping BIS replace until title id is known\n";
     }
     return std::string(content_stem);
 }
@@ -937,13 +1129,14 @@ std::string sync_catalog_switch_save_for_launch(
 std::string sync_catalog_switch_save_after_exit(
     const SaveProfile& profile,
     std::string_view content_stem,
-    std::string_view title_id) {
+    std::string_view title_id,
+    bool uses_m3m_map) {
     if (content_stem.empty()) {
         return {};
     }
     auto tid = normalize_switch_title_id(title_id);
     if (tid.empty()) {
-        tid = resolve_switch_title_id_for_catalog(profile, content_stem);
+        tid = resolve_switch_title_id_for_catalog(profile, content_stem, {}, uses_m3m_map);
     }
     const auto canon = ensure_catalog_switch_save(profile, content_stem, tid);
     if (canon.empty()) {

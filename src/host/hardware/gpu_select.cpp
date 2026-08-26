@@ -4,7 +4,12 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <iostream>
 #include <sstream>
+
+#if defined(_WIN32)
+#include <stdlib.h>
+#endif
 
 namespace archstreamer {
 namespace {
@@ -370,6 +375,21 @@ GpuSelectionResult resolve_render_gpu_with_match_from(
 
 std::optional<GpuDevice> resolve_render_gpu(const std::string& selection) {
     return resolve_render_gpu_from(list_render_gpus(), selection);
+}
+
+void pin_nvenc_cuda_device_order() {
+#if defined(_WIN32)
+    _putenv_s("CUDA_DEVICE_ORDER", "PCI_BUS_ID");
+#else
+    ::setenv("CUDA_DEVICE_ORDER", "PCI_BUS_ID", 1);
+#endif
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        std::cout
+            << "[archstreamer-startup] cuda-device-order=PCI_BUS_ID "
+               "(nvidia-smi index == nvenc cuda-device-id)\n";
+    }
 }
 
 std::vector<std::pair<std::string, std::string>> render_gpu_environment(const GpuDevice& gpu) {

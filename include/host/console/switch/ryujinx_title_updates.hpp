@@ -16,12 +16,13 @@ namespace archstreamer {
 std::filesystem::path switch_title_updates_directory();
 
 /**
- * Ensure global catalog DLC for a Switch title and point Ryujinx at it:
- * - <DLC>/Switch/<game_id_leaf>/manifest.json (+ NSPs nested in that folder)
- * - unpacks listed NSPs into …/registered/
- * - replaces bis/user/Contents/registered with a symlink to that directory
- * - migrates once from legacy DLC/Switch/<content_stem>/, per-user
- *   switch/addons/<stem>, and flat SwitchUpdates (NSP match uses content_stem)
+ * Ensure global catalog DLC for a Switch title and point Ryujinx at it.
+ * Canonical layout is only <DLC>/Switch/<game_id_leaf>/ (NSPs, registered/,
+ * manifest.json). Stem folders and flat SwitchUpdates are ingested into that
+ * leaf once; launch never reads them as a second path.
+ * Then: unpack listed NSPs into …/registered/, write
+ * games/<title_id>/{updates.json,dlc.json} so CLI XCI launch applies the
+ * selected patch/DLC, and symlink bis/user/Contents/registered there.
  */
 void ensure_ryujinx_catalog_addons(
     const SaveProfile& save_profile,

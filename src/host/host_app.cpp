@@ -5,6 +5,7 @@
 #include "host/console/game_catalog.hpp"
 #include "archstreamer/runtime_cadence/cadence.hpp"
 #include "host/session/active_session_slot.hpp"
+#include "host/db/cadence_resource_lease.hpp"
 #include "host/db/cadence_session_events.hpp"
 #include "host/session/direct_session_launch.hpp"
 #include "host/console/game_catalog_scanner.hpp"
@@ -220,10 +221,14 @@ int HostApp::run_direct_session(
     // Host Player keeps the real DISPLAY (and speakers). Streamed RetroArch needs a
     // virtual capture surface. Switch standalone defaults to headless gamescope on Linux;
     // Windows captures the desktop/HWND via d3d11screencapturesrc (no gamescope).
+    auto cadence = open_direct_cadence_session(launch_plan, config);
+    auto lease = cadence.tracker.leases();
+    lease.set_pools(cadence_resource_pools_from(config));
     auto launch_env = prepare_direct_launch_environment(
         config,
         assets.launch_config,
-        host_plays_locally);
+        host_plays_locally,
+        lease);
     register_session_xtest_display(launch_env.request.session_id, launch_env.request.xtest_display);
 
     auto media = build_session_media_plan(
@@ -240,9 +245,11 @@ int HostApp::run_direct_session(
         launch_env.capture.capture_display);
 
     if (config.dry_run) {
+        cadence.tracker.end("dry run");
         return 0;
     }
 
+    apply_product_id_base(launch_plan.virtual_identities, cadence.grant.pad_product_base);
     HostVirtualGamepadBus gamepads(launch_plan.virtual_identities);
     plug_session_gamepads(gamepads, launch_plan.players);
     // Virtual keyboard targets ARCHSTREAMER_XTEST_DISPLAY for gamescope, else Xvfb capture.
@@ -253,7 +260,7 @@ int HostApp::run_direct_session(
         config,
         launch_plan,
         SessionPadPlanKind::Direct,
-        /*product_id_base=*/0);
+        cadence.grant.pad_product_base);
     apply_capture_to_session_device_plan(devices, config, launch_env.capture);
     devices.capture.resolved_gpu = launch_env.gpu.resolved_gpu;
 
@@ -266,7 +273,7 @@ int HostApp::run_direct_session(
         launch_env.capture,
         launch_env.request,
         resolve_direct_session_participants(assets.save_profile.username));
-    prepare_direct_backend(backend_context, keyboard);
+    prepare_direct_backend(backend_context, keyboard, cadence.grant.netcmd_port);
 
     apply_capture_and_launch_environment(
         assets.launch_config,
@@ -345,10 +352,16 @@ int HostApp::run_direct_session(
         launch_env.capture.gamescope_capture,
         launch_env.request.xtest_display);
 
-    auto cadence_tracker = begin_direct_cadence_session(
-        launch_plan,
-        config,
-        *session_runtime);
+    if (launch_env.capture.gamescope_capture && keyboard.plugged()) {
+        const auto actual = keyboard.capture_display();
+        if (!actual.empty() && actual != launch_env.request.xtest_display) {
+            if (lease.replace(cadence::resource::kXtestDisplay, actual)) {
+                launch_env.request.xtest_display = actual;
+                register_session_xtest_display(launch_env.request.session_id, actual);
+            }
+        }
+    }
+    attach_direct_cadence_emulator(cadence.tracker, launch_plan, *session_runtime);
 
     if (devices.keyboard.arm_soft_keyboard && devices.keyboard.standalone_soft_keyboard) {
         std::string display = launch_env.request.xtest_display;
@@ -424,7 +437,8 @@ int HostApp::run_direct_session(
             std::nullopt,
             backends.switch_backend.get(),
             backends.switch_launch_content_stem,
-            backends.switch_launch_title_id);
+            backends.switch_launch_title_id,
+            backends.switch_launch_uses_m3m_map);
     }
     if (backends.melonds_backend) {
         (void)backends.melonds_backend->post_exit_sync(assets.save_profile);
@@ -433,7 +447,7 @@ int HostApp::run_direct_session(
         ? "host stopped"
         : session_end_reason.value_or("session ended");
 
-    end_direct_cadence_session(cadence_tracker, launch_plan, end_reason);
+    end_direct_cadence_session(cadence.tracker, launch_plan, end_reason);
     stop_session_media(media_server);
     if (config.audio) {
         streaming_audio.restore_default_sink();

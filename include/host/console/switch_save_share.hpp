@@ -18,6 +18,14 @@ std::string normalize_switch_title_id(std::string_view title_id);
 bool looks_like_switch_title_id(std::string_view value);
 
 /**
+ * .m3m sitting on this catalog/ROM path (the file itself, or a same-stem sibling).
+ * Empty when this title is a plain ROM — identity is the catalog stem.
+ */
+std::filesystem::path switch_m3m_map_for_title(const std::filesystem::path& content_path);
+
+bool switch_title_has_m3m_map(const std::filesystem::path& content_path);
+
+/**
  * Canonical catalog-keyed save leaf:
  *   <user>/switch/saves/<content_stem>/{main,backup,...}
  * content_stem is the ROM filename stem as chosen in the catalog.
@@ -49,25 +57,31 @@ std::filesystem::path ensure_catalog_switch_save(
     std::string_view title_id);
 
 /**
- * Resolve Nintendo application title id for a catalog stem when possible
- * (sidecar, claim marker, meta JSON, update NSP names, existing ExtraData).
+ * Resolve Nintendo application title id for a catalog stem.
+ *
+ * When uses_m3m_map is true (or content_path is/has a .m3m), this is the
+ * versioned map path: TITLE_ID from the .m3m, then sidecar / NSP names /
+ * leftover BIS. When the title has no .m3m, only this stem's sidecar is
+ * used — the catalog name is already the identity.
  */
 std::string resolve_switch_title_id_for_catalog(
     const SaveProfile& profile,
     std::string_view content_stem,
-    const std::filesystem::path& content_path = {});
+    const std::filesystem::path& content_path = {},
+    bool uses_m3m_map = false);
 
 /**
- * Pre-launch: snapshot stem (and empty-stem BIS rescue) under
- *   <user>/switch/saves/.prelaunch/<content_stem>/,
- * then replace Ryujinx BIS / Yuzu link for title_id with this stem only
- * (empty stem clears the title banks — no leftover merge).
+ * Pre-launch: if this user's live Ryujinx bank for title_id is newer than the
+ * last stamped stem, copy it back there. Then snapshot the launched stem,
+ * replace Ryujinx BIS / Yuzu from that stem, and stamp the stem after a
+ * successful replace. Stamp + replace is one step; the stamp is the owner mark.
  * Returns a short status token (stem) for logging.
  */
 std::string sync_catalog_switch_save_for_launch(
     const SaveProfile& profile,
     std::string_view content_stem,
-    std::string_view title_id);
+    std::string_view title_id,
+    bool uses_m3m_map = false);
 
 /**
  * Post-exit: mirror Ryujinx/Yuzu account saves for title_id back into the stem only.
@@ -75,7 +89,8 @@ std::string sync_catalog_switch_save_for_launch(
 std::string sync_catalog_switch_save_after_exit(
     const SaveProfile& profile,
     std::string_view content_stem,
-    std::string_view title_id);
+    std::string_view title_id,
+    bool uses_m3m_map = false);
 
 /**
  * Profile-wide discovery only (no BIS remirror of every title into one leaf).

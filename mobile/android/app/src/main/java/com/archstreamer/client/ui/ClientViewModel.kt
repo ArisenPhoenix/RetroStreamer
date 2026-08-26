@@ -76,7 +76,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -383,8 +382,6 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     /** Live session system key — used to resolve Auto layout and apply live edits. */
     private var sessionSystemKey: String? = null
     private var sessionFamily: OverlaySystemFamily = OverlaySystemFamily.Standard
-    /** Skip auto-apply briefly after the user edits the Host IP field. */
-    private var hostEditSuppressUntilMs: Long = 0L
     private var discoveryAttempts: Int = 0
 
     init {
@@ -2160,7 +2157,6 @@ fun clearBackMenuChromeFocus() {
 
     fun onHostChange(value: String) {
         val host = value.trim()
-        hostEditSuppressUntilMs = System.currentTimeMillis() + HOST_EDIT_SUPPRESS_MS
         prefs.edit().putString(KEY_HOST, host).apply()
         _state.update {
             it.copy(client = it.client.copy(host = host), games = it.games.copy(recentGameIds = loadRecentGameIds(host, it.settings.controlPort)))
@@ -2177,7 +2173,6 @@ fun clearBackMenuChromeFocus() {
     }
 
     fun selectDiscoveredHost(host: DiscoveredHost) {
-        hostEditSuppressUntilMs = System.currentTimeMillis() + HOST_EDIT_SUPPRESS_MS
         applyDiscoveredHost(host, userSelected = true)
     }
 
@@ -2301,45 +2296,26 @@ fun clearBackMenuChromeFocus() {
             updateClient { copy(discoveredHosts = live) }
         }
         if (_state.value.playing || _state.value.busy) return
-        if (System.currentTimeMillis() < hostEditSuppressUntilMs) return
 
-        val saved = _state.value.client.host.trim()
-        val savedLive = live.firstOrNull { it.address == saved }
-        if (savedLive != null) {
-            // Keep saved address; refresh ports from announce if they drifted.
-            if (savedLive.controlPort.toString() != _state.value.settings.controlPort ||
-                savedLive.inputPort.toString() != _state.value.settings.inputPort
-            ) {
-                prefs.edit()
-                    .putString(KEY_CONTROL_PORT, savedLive.controlPort.toString())
-                    .putString(KEY_INPUT_PORT, savedLive.inputPort.toString())
-                    .apply()
-                _state.update {
-                    it.copy(client = it.client.copy(discoveryStatus = "Using ${savedLive.username} @ ${savedLive.address}"), settings = it.settings.copy(controlPort = savedLive.controlPort.toString(), inputPort = savedLive.inputPort.toString()))
-                }
-            } else {
-                updateClient { copy(discoveryStatus = "Using ${savedLive.username} @ ${savedLive.address}") }
-            }
-            discoveryAttempts = 0
-            return
-        }
-
-        // Saved missing or empty — pick a live host (same-/24 preferred).
-        val preferred = HostDiscovery.preferDiscoveredHost(live)
-        if (preferred != null && preferred.address != saved) {
-            applyDiscoveredHost(preferred, userSelected = false)
-            discoveryAttempts = 0
-            return
-        }
-
-        discoveryAttempts++
-        if (live.isEmpty()) {
-            val looking = if (discoveryAttempts <= 8) {
+        // Discovery only lists hosts. IP/ports stay as typed until Found hosts is used.
+        val nextStatus = if (live.isEmpty()) {
+            discoveryAttempts++
+            if (discoveryAttempts <= 8) {
                 "Looking for a host…"
             } else {
                 "No host found yet — check Wi‑Fi/VPN or enter an IP."
             }
-            updateClient { copy(discoveryStatus = looking) }
+        } else {
+            discoveryAttempts = 0
+            val current = _state.value.client.discoveryStatus
+            if (current.startsWith("Looking") || current.startsWith("No host found")) {
+                if (live.size == 1) "1 host found." else "${live.size} hosts found."
+            } else {
+                current
+            }
+        }
+        if (_state.value.client.discoveryStatus != nextStatus) {
+            updateClient { copy(discoveryStatus = nextStatus) }
         }
     }
 
@@ -4459,6 +4435,7 @@ fun clearBackMenuChromeFocus() {
     }
 
     fun leavePlay() {
+        ClientFileLog.conn("leavePlay")
         menuDrawerOpen = false
         lastSentMenuPause = null
         resetAvStallState()
@@ -4916,13 +4893,8 @@ fun clearBackMenuChromeFocus() {
         val held = lobbyPresence
         lobbyPresence = null
         if (held != null) {
-            // Same pitfall as ClientSessionLeave: closing the TCP socket on the
-            // main thread can throw NetworkOnMainThreadException, so the host
-            // never sees FIN and Users stays "Connected".
-            runBlocking {
-                withContext(Dispatchers.IO) {
-                    runCatching { held.close() }
-                }
+            runOffMain {
+                runCatching { held.close() }
             }
         }
         refreshControlsSyncReady()
@@ -4934,8 +4906,12 @@ fun clearBackMenuChromeFocus() {
      * [sendLeave] true (Leave button): send ClientSessionLeave on IO so the host
      * ends the seat immediately. false (TCP already dead / SessionEnded): skip
      * leave so a network drop keeps the configured reconnect hold.
+     *
+     * [waitMs] > 0 waits for teardown (ViewModel onCleared). Leave/UI paths must
+     * not block the main thread — runBlocking + MediaCodec.release used to kill
+     * the process, so the host never saw ClientSessionLeave.
      */
-    private fun endSession(sendLeave: Boolean = true) {
+    private fun endSession(sendLeave: Boolean = true, waitMs: Long = 0L) {
         menuDrawerOpen = false
         lastSentMenuPause = null
         resetAvStallState()
@@ -4954,29 +4930,46 @@ fun clearBackMenuChromeFocus() {
             refreshControlsSyncReady()
             return
         }
-        // Leave must not run on the main thread (NetworkOnMainThreadException
-        // was aborting ClientSessionLeave with a null message, so the host only
-        // saw TCP close and held the seat for reconnect).
-        runBlocking {
-            withContext(Dispatchers.IO) {
-                if (sendLeave) {
-                    val ok = runCatching { active.leave() }
-                        .onFailure {
-                            ClientFileLog.append(
-                                "ClientSessionLeave failed: ${it.javaClass.simpleName}: ${it.message}",
-                            )
-                        }
-                        .getOrDefault(false)
-                    if (ok) {
-                        // Let the leave frame flush before FIN so the host reads it.
-                        delay(120)
-                    }
-                }
-                runCatching { active.closeAfterLeave() }
-            }
+        val work = {
+            teardownSessionIo(active, sendLeave)
+        }
+        if (waitMs > 0L) {
+            val thread = Thread(work, "as-session-leave")
+            thread.isDaemon = true
+            thread.start()
+            thread.join(waitMs)
+        } else {
+            runOffMain(work)
         }
         latestPad = ControllerState()
         refreshControlsSyncReady()
+    }
+
+    private fun teardownSessionIo(active: JoinedPlaySession, sendLeave: Boolean) {
+        if (sendLeave) {
+            val ok = runCatching { active.leave() }
+                .onFailure {
+                    ClientFileLog.append(
+                        "ClientSessionLeave failed: ${it.javaClass.simpleName}: ${it.message}",
+                    )
+                }
+                .getOrDefault(false)
+            if (ok) {
+                try {
+                    Thread.sleep(120)
+                } catch (_: InterruptedException) {
+                }
+            }
+        }
+        runCatching { active.closeAfterLeave() }
+    }
+
+    private fun runOffMain(block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            viewModelScope.launch(Dispatchers.IO) { block() }
+        } else {
+            block()
+        }
     }
 
     private fun endSessionLocked() {
@@ -4991,7 +4984,7 @@ fun clearBackMenuChromeFocus() {
         artJob = null
         pairListenSession?.close()
         pairListenSession = null
-        endSession(sendLeave = true)
+        endSession(sendLeave = true, waitMs = 700)
         SessionKeepAliveService.stop(getApplication())
         super.onCleared()
     }
@@ -5048,7 +5041,6 @@ fun clearBackMenuChromeFocus() {
         private const val KEY_RECENT_LEGACY_PREFIX = "recent_games_"
         private const val MAX_DISCOVERY_SEEDS = 6
         private const val MAX_RECENT_GAMES = 8
-        private const val HOST_EDIT_SUPPRESS_MS = 4_000L
         /** Wait for drawer settle; coalesce flash Open→Closed before poking the host. */
         private const val MENU_PAUSE_DEBOUNCE_MS = 250L
         /** Let a newly attached editor surface paint one live frame before pausing. */

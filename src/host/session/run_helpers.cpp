@@ -173,7 +173,10 @@ bool plug_gamescope_virtual_keyboard_after_start(
         if (is_host_desktop_display(keyboard.capture_display())
             || (emulator_pid.has_value()
                 && !display_belongs_to_process_tree(
-                        keyboard.capture_display(), *emulator_pid))) {
+                        keyboard.capture_display(), *emulator_pid))
+            || (emulator_pid.has_value()
+                && display_leased_by_other_session(
+                       keyboard.capture_display(), *emulator_pid))) {
             keyboard.unplug();
         } else {
             if (emulator_pid.has_value()) {
@@ -186,6 +189,9 @@ bool plug_gamescope_virtual_keyboard_after_start(
     for (int attempt = 0; attempt < 50; ++attempt) {
         const auto candidates = gamescope_xtest_candidates(preferred_display, emulator_pid);
         for (const auto& name : candidates) {
+            if (emulator_pid.has_value() && display_leased_by_other_session(name, *emulator_pid)) {
+                continue;
+            }
             if (emulator_pid.has_value()
                 && !display_belongs_to_process_tree(name, *emulator_pid)
                 && name != preferred_display) {
@@ -200,6 +206,18 @@ bool plug_gamescope_virtual_keyboard_after_start(
                 }
                 keyboard.plug();
                 if (is_host_desktop_display(keyboard.capture_display())) {
+                    keyboard.unplug();
+                    continue;
+                }
+                if (emulator_pid.has_value()
+                    && display_leased_by_other_session(
+                           keyboard.capture_display(), *emulator_pid)) {
+                    std::cerr
+                        << with_prefix(
+                               log_prefix,
+                               "skipping XTest ")
+                        << keyboard.capture_display()
+                        << " — already leased by another session\n";
                     keyboard.unplug();
                     continue;
                 }

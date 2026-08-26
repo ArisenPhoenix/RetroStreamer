@@ -55,6 +55,11 @@ GpuSelectionResult resolve_render_gpu_with_match_from(
     const std::vector<GpuDevice>& devices,
     const std::string& selection);
 
+// nvautogpuh264enc cuda-device-id uses CUDA ordinals. Default CUDA order puts the
+// fastest/display GPU first, which is not nvidia-smi index (nvidia:0 / nvidia:1).
+// Pin PCI_BUS_ID so --gpu nvidia:N and Settings ids match the encoder device.
+void pin_nvenc_cuda_device_order();
+
 // Environment entries for RetroArch child (PRIME offload when NVIDIA).
 std::vector<std::pair<std::string, std::string>> render_gpu_environment(const GpuDevice& gpu);
 

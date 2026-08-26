@@ -560,7 +560,9 @@ void MainWindow::load_persisted_settings() {
             QString::fromStdString(archstreamer::HostAppConfig{}.video_resolution)).toString());
     }
     if (host_clients_ != nullptr) {
-        host_clients_->setValue(qBound(settings.value("host/maxClients", 2).toInt(), 2, 4));
+        const int max_slots = static_cast<int>(archstreamer::MaxConcurrentSessionSlots);
+        host_clients_->setValue(
+            qBound(settings.value("host/maxClients", max_slots).toInt(), 2, max_slots));
     }
     if (host_player_reconnect_timeout_ != nullptr) {
         host_player_reconnect_timeout_->setValue(qBound(player_reconnect_timeout, 1, 3600));

@@ -1,6 +1,7 @@
 #include "common/addresses.hpp"
 #include "common/platform/paths.hpp"
 #include "common/platform/process_utils.hpp"
+#include "host/hardware/gpu_select.hpp"
 #include "host/hardware/gstreamer_media_server.hpp"
 #include "host/host_launch_planner.hpp"
 #include "host/rtp_frame_pace_debug.hpp"
@@ -631,6 +632,7 @@ public:
         const SharedVideoSource& source,
         const std::vector<SharedVideoBranch>& branches,
         const H264BranchOptions& options) {
+        pin_nvenc_cuda_device_order();
         stop();
         constexpr int PipeWireStartupAttempts = 8;
         constexpr auto PipeWireStartupRetryDelay = std::chrono::milliseconds(250);

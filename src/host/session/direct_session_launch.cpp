@@ -3,6 +3,7 @@
 #include "common/catalog_presenter.hpp"
 #include "common/cli_common.hpp"
 #include "common/participant_role.hpp"
+#include "host/db/cadence_resource_lease.hpp"
 #include "host/db/cadence_session_events.hpp"
 #include "host/lobby/host_session_helpers.hpp"
 #include "host/virtual/input_router.hpp"
@@ -19,7 +20,6 @@
 #include "host/virtual/virtual_joypad_resolve.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -190,37 +190,43 @@ void print_input_seats(const SeatAssignment& seats) {
     }
 }
 
-CadenceSessionTracker begin_direct_cadence_session(
+DirectCadenceSession open_direct_cadence_session(
     const HostLaunchPlan& launch_plan,
-    const HostAppConfig& config,
-    const SessionRuntime& session_runtime) {
-    CadenceSessionTracker cadence_tracker;
+    HostAppConfig& config) {
+    DirectCadenceSession opened;
     std::ostringstream detail;
     detail << session_mode_name(launch_plan.session_mode) << " direct";
-    const std::string sink = StreamingAudioSink::kName;
-    cadence_tracker.begin(
+    opened.tracker.begin(
         0,
         launch_plan.save_username,
         launch_plan.game_id,
         {},
-        detail.str(),
-        config.virtual_display,
-        config.video_port,
-        config.audio_port,
-        DefaultRetroArchNetcmdPort,
-        sink,
-        sink,
-        0xa517);
+        detail.str());
+    if (!opened.tracker.active()) {
+        throw std::runtime_error("cadence unavailable; cannot allocate session resources");
+    }
+    auto lease = opened.tracker.leases();
+    lease.set_pools(cadence_resource_pools_from(config));
+    opened.grant = allocate_session_resources(lease, SessionResourceNeed{});
+    apply_session_resource_grant(config, opened.grant);
+    return opened;
+}
+
+void attach_direct_cadence_emulator(
+    CadenceSessionTracker& cadence_tracker,
+    const HostLaunchPlan& launch_plan,
+    const SessionRuntime& session_runtime) {
     if (const auto pid = session_runtime.emulator().process_id(); pid.has_value()) {
         cadence_tracker.claim_emulator_pid(*pid);
     }
+    std::ostringstream detail;
+    detail << session_mode_name(launch_plan.session_mode) << " direct";
     record_session_started(
         0,
         launch_plan.save_username,
         launch_plan.game_id,
         detail.str(),
         cadence_tracker.session_id());
-    return cadence_tracker;
 }
 
 void end_direct_cadence_session(
@@ -239,7 +245,8 @@ void end_direct_cadence_session(
 EmulatorLaunchEnvRequest build_launch_env_request(
     const HostAppConfig& config,
     const CapturePlan& capture,
-    bool host_plays_locally) {
+    bool host_plays_locally,
+    CadenceResourceLease& lease) {
     EmulatorLaunchEnvRequest launch_env_request;
     launch_env_request.host_plays_locally = host_plays_locally;
     launch_env_request.stream_media = config.audio || config.video;
@@ -251,12 +258,9 @@ EmulatorLaunchEnvRequest build_launch_env_request(
     launch_env_request.virtualgl_capture = capture.virtualgl_capture;
     launch_env_request.capture_display = capture.capture_display;
     launch_env_request.xtest_display = launch_env_request.gamescope_capture
-        ? gamescope_xtest_display_for_slot(0)
+        ? lease.claim_next(cadence::resource::kXtestDisplay)
         : launch_env_request.capture_display;
-    // Direct CLI path has no Lobby session id — mint one for the XTest lease map.
-    const std::string session_id = "direct-" + std::to_string(
-        std::chrono::steady_clock::now().time_since_epoch().count());
-    launch_env_request.session_id = session_id;
+    launch_env_request.session_id = lease.session_id();
     return launch_env_request;
 }
 
@@ -277,9 +281,10 @@ SessionGpuSelection prepare_direct_gpu(
 SessionLaunchEnvironment prepare_direct_launch_environment(
     HostAppConfig& config,
     RetroArchLaunchConfig& launch_config,
-    bool host_plays_locally) {
+    bool host_plays_locally,
+    CadenceResourceLease& lease) {
     auto capture = resolve_capture_plan(config, launch_config);
-    auto request = build_launch_env_request(config, capture, host_plays_locally);
+    auto request = build_launch_env_request(config, capture, host_plays_locally, lease);
     auto gpu = prepare_direct_gpu(config, request, capture);
     return SessionLaunchEnvironment{
         std::move(capture),
@@ -290,7 +295,8 @@ SessionLaunchEnvironment prepare_direct_launch_environment(
 
 void prepare_direct_backend(
     SessionBackendPrepareContext& backend,
-    VirtualKeyboard& keyboard) {
+    VirtualKeyboard& keyboard,
+    std::uint16_t netcmd_port) {
     const auto result = prepare_session_emulator_backend(
         backend,
         SessionBackendPrepareOptions{
@@ -299,7 +305,7 @@ void prepare_direct_backend(
             backend.video.capture.gamescope_capture,
             true,
             false,
-            DefaultRetroArchNetcmdPort,
+            netcmd_port,
             &keyboard,
         });
     if (result.soft_keyboard) {

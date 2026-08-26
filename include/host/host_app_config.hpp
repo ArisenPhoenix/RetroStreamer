@@ -16,6 +16,12 @@
 
 namespace archstreamer {
 
+/**
+ * Upper bound for --clients / Host tab Max clients.
+ * Matches clamp_max_session_slots; independent of MaxRemoteClients (protocol).
+ */
+constexpr std::uint8_t MaxConcurrentSessionSlots = 4;
+
 /** Internal-resolution multipliers for Switch standalone and RetroArch cores. */
 struct ResolutionSettings {
     // Switch standalone IR (Yuzu qt-config + Ryujinx res_scale). Clamp 1–6 at write;
@@ -38,7 +44,8 @@ struct HostAppConfig {
     bool verbose = false;
     std::optional<std::uint16_t> control_port;
     std::optional<std::uint16_t> input_port;
-    std::uint8_t clients = 1;
+    /** Max concurrent singleplayer sessions (also multiplayer lobby size). */
+    std::uint8_t clients = MaxConcurrentSessionSlots;
     std::uint16_t session_timeout_seconds = 30;
     std::uint16_t client_timeout_seconds = 20;
     std::uint16_t player_reconnect_timeout_seconds = 60;

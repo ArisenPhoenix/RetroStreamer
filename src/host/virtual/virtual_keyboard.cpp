@@ -1848,8 +1848,30 @@ void register_session_xtest_display(const std::string& session_id, const std::st
     g_xtest_session_displays[session_id] = display;
 }
 
+bool display_leased_by_other_session(const std::string& display, int owner_pid) {
+    if (display.empty()) {
+        return false;
+    }
+    const auto self = owner_pid > 0 ? session_id_from_process_tree(owner_pid) : std::nullopt;
+    const auto want = normalize_display_name(display);
+    std::lock_guard lock(g_xtest_session_mu);
+    for (const auto& [session_id, leased] : g_xtest_session_displays) {
+        if (normalize_display_name(leased) != want) {
+            continue;
+        }
+        if (self && *self == session_id) {
+            continue;
+        }
+        return true;
+    }
+    return false;
+}
+
 void register_session_xtest_display_for_owner(int owner_pid, const std::string& display) {
     if (owner_pid <= 0 || display.empty()) {
+        return;
+    }
+    if (display_leased_by_other_session(display, owner_pid)) {
         return;
     }
     if (const auto session_id = session_id_from_process_tree(owner_pid); session_id) {
@@ -1885,15 +1907,11 @@ bool display_belongs_to_process_tree(const std::string& display, int owner_pid) 
     if (!display_num.has_value()) {
         return false;
     }
-    // Socket ownership is ground truth. The session lease is only a pin hint —
-    // if reservation missed and Xwayland landed elsewhere, trust the fds.
+    // Socket ownership is ground truth. Do not treat "we leased this name" as
+    // ownership — a sibling session may already be serving that DISPLAY, and
+    // XOpenDisplay from host_runner always hits the host filesystem socket.
     if (process_tree_holds_display(owner_pid, *display_num)) {
         return true;
-    }
-    if (const auto session_id = session_id_from_process_tree(owner_pid); session_id) {
-        if (const auto leased = lookup_session_xtest_display(*session_id); leased) {
-            return normalize_display_name(*leased) == normalize_display_name(display);
-        }
     }
     return false;
 }

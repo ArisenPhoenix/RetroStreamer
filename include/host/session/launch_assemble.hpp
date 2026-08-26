@@ -43,7 +43,8 @@ void sync_and_log_post_exit_switch_saves(
     std::optional<int> slot_index = std::nullopt,
     const SwitchBackend* backend = nullptr,
     std::string_view content_stem = {},
-    std::string_view title_id = {});
+    std::string_view title_id = {},
+    bool uses_m3m_map = false);
 
 /** Replace an existing RetroArch -c path, or append -c <path> if missing. */
 void rewrite_retroarch_config_arg(

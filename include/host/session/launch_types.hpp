@@ -74,6 +74,8 @@ struct SessionLaunchContext {
 struct SwitchLaunchContent {
     std::string content_stem;
     std::string title_id;
+    /** True when this catalog title has a .m3m (version/policy map). */
+    bool uses_m3m_map = false;
 };
 
 struct SessionParticipantContext {
@@ -92,6 +94,7 @@ struct SessionBackendState {
     std::unique_ptr<MelonDsBackend> melonds_backend;
     std::string switch_launch_content_stem;
     std::string switch_launch_title_id;
+    bool switch_launch_uses_m3m_map = false;
     std::string system_key;
 };
 

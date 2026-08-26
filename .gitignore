@@ -19,3 +19,4 @@ mobile/android/**/build/
 mobile/android/local.properties
 mobile/android/.idea/
 __pycache__
+.idea

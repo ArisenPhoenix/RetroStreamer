@@ -20,3 +20,4 @@ mobile/android/local.properties
 mobile/android/.idea/
 __pycache__
 .idea
+host_runner_logged

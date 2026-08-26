@@ -1,2 +1,0 @@
-/usr/bin/ar qc libarchstreamer_sqlite3.a "CMakeFiles/archstreamer_sqlite3.dir/__/_dependencies/sqlite_amalgamation-src/sqlite3.c.o"
-/usr/bin/ranlib libarchstreamer_sqlite3.a

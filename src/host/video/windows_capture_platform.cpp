@@ -1,7 +1,6 @@
 #include "host/video/capture_platform.hpp"
 
 #include <iostream>
-#include "host/hardware/gpu_select.hpp"
 
 namespace archstreamer {
 
@@ -40,7 +39,7 @@ void apply_standalone_capture_prefix(
 void apply_retroarch_vgl_prefix(
     std::vector<std::string>& /*command_prefix*/,
     const PresentTarget& /*present*/,
-    const std::optional<GpuDevice>& /*resolved_gpu*/) {
+    const std::optional<GpuTarget>& /*resolved_gpu*/) {
     // VirtualGL is Linux-only.
 }
 

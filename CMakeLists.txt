@@ -280,11 +280,14 @@ if(ARCHSTREAMER_BUILD_HOST)
     set(ARCHSTREAMER_HOST_SOURCES
         src/host/console/game_catalog.cpp
         src/host/console/game_catalog_scanner.cpp
+        src/host/console/launch_content.cpp
         src/host/hardware/gpu_select.cpp
+        src/host/hardware/gpu_selection.cpp
         src/host/host_app.cpp
         src/host/host_app_config.cpp
         src/host/lobby/host_concurrent_lobby.cpp
         src/host/session/direct_session_launch.cpp
+        src/host/session/backend_state.cpp
         src/host/session/launch_types.cpp
         src/host/lobby/lobby.cpp
         src/host/session/manager.cpp
@@ -350,6 +353,7 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/host/session/lobby.cpp
         src/host/session/runtime.cpp
         src/host/session/slot_lease.cpp
+        src/host/virtual/device_plan.cpp
         src/host/virtual/pad_plan.cpp
         src/host/virtual/virtual_joypad_resolve.cpp
     )

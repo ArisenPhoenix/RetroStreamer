@@ -1,7 +1,6 @@
 #pragma once
 
 #include "common/protocol.hpp"
-#include "host/hardware/gpu_select.hpp"
 #include "host/contracts/media.hpp"
 #include "host/console/retroarch_process.hpp"
 #include "host/console/save_profile.hpp"

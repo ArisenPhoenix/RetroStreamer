@@ -11,12 +11,12 @@
 #include "host/pair_form_relay.hpp"
 #include "host/session/lobby.hpp"
 #include "host/user/user_credentials.hpp"
+#include "host/virtual/virtual_gamepad.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <functional>
-#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -175,14 +175,6 @@ void reset_reconnected_session_client(
     }
 }
 
-std::string hex_vid_pid(std::uint16_t vendor_id, std::uint16_t product_id) {
-    std::ostringstream out;
-    out
-        << "0x" << std::hex << std::setw(4) << std::setfill('0') << vendor_id
-        << "/0x" << std::hex << std::setw(4) << std::setfill('0') << product_id;
-    return out.str();
-}
-
 HostPlayerControllerIdentity host_player_controller_identity(const ControllerDevice& device) {
     return HostPlayerControllerIdentity{
         device.name,
@@ -247,8 +239,8 @@ void poll_active_session_joins(
         if (std::holds_alternative<ActiveSessionInfoRequest>(first_payload)) {
             stream->send_packet(serialize_packet(active_session_info_for(
                 plan,
-                config.video.enabled,
-                config.audio.enabled)));
+                config.media.video.enabled,
+                config.media.audio.enabled)));
             return;
         }
         if (const auto* log_bundle = std::get_if<ClientLogBundle>(&first_payload);
@@ -286,9 +278,9 @@ void poll_active_session_joins(
             }
             return;
         }
-        const auto art_root = config.art_root.empty()
-            ? (config.rom_root.parent_path() / "Art")
-            : config.art_root;
+        const auto art_root = config.game.art_root.empty()
+            ? (config.game.rom_root.parent_path() / "Art")
+            : config.game.art_root;
         if (const auto* art_request = std::get_if<ArtAssetRequest>(&first_payload); art_request != nullptr) {
             stream->send_packet(serialize_packet(load_art_asset_response(
                 art_root,

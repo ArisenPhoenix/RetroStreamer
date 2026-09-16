@@ -1,13 +1,12 @@
 #pragma once
 
 #include "common/protocol.hpp"
-#include "host/video/capture_platform.hpp"
-#include "host/host_app_config.hpp"
-#include "host/contracts/launch.hpp"
+#include "host/console/retroarch_config_writer.hpp"
 #include "host/console/retroarch_process.hpp"
 #include "host/console/save_profile.hpp"
-#include "host/console/switch/switch_backend.hpp"
-#include "host/virtual/virtual_gamepad.hpp"
+#include "host/contracts/gpu.hpp"
+#include "host/contracts/launch.hpp"
+#include "host/contracts/present.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -18,7 +17,7 @@
 
 namespace archstreamer {
 
-struct GpuDevice;
+class SwitchBackend;
 
 /**
  * Apply capture command prefix (standalone Gamescope/VGL or RetroArch VGL),
@@ -28,9 +27,9 @@ struct GpuDevice;
 void apply_capture_and_launch_environment(
     RetroArchLaunchConfig& launch_config,
     const PresentTarget& present,
-    const HostAppConfig& config,
+    const std::string& video_resolution,
     const std::string& gamescope_vk_device,
-    const std::optional<GpuDevice>& resolved_gpu,
+    const std::optional<GpuTarget>& resolved_gpu,
     const EmulatorLaunchEnvRequest& env_request);
 
 /**
@@ -55,25 +54,6 @@ void rewrite_retroarch_config_arg(
 void apply_launch_env_to_config(
     RetroArchLaunchConfig& launch_config,
     const EmulatorLaunchEnvRequest& request);
-
-/** Packed args for write_retroarch_input_override across launch / relaunch paths. */
-struct RetroArchOverrideParams {
-    std::size_t first_virtual_joypad_index = 0;
-    const std::vector<VirtualGamepadIdentity>* identities = nullptr;
-    std::string joypad_driver;
-    RetroArchPort players = 1;
-    const SaveProfile* save_profile = nullptr;
-    bool realtime_pacing = false;
-    bool capture_fullscreen = false;
-    std::string capture_resolution;
-    int vulkan_gpu_index = -1;
-    std::string system_key;
-    std::filesystem::path core_path;
-    int resolution_scale = 1;
-    int slot_index = 0;
-    std::uint16_t network_cmd_port = 55355;
-    DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto;
-};
 
 /** Prefer Portrait if any video client asks for it; else first explicit preference; else Auto. */
 DisplayLayoutPreference resolve_display_layout_preference(

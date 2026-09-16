@@ -171,7 +171,7 @@ int MainWindow::selected_switch_resolution_scale() const {
 
 QString MainWindow::selected_host_capture_resolution() const {
     const auto fallback =
-        QString::fromStdString(archstreamer::HostAppConfig{}.video.resolution);
+        QString::fromStdString(archstreamer::HostAppConfig{}.media.video.resolution);
     if (host_capture_resolution_ == nullptr) {
         return fallback;
     }
@@ -557,7 +557,7 @@ void MainWindow::load_persisted_settings() {
         const QSignalBlocker blocker(host_capture_resolution_);
         host_capture_resolution_->setCurrentText(settings.value(
             "host/captureResolution",
-            QString::fromStdString(archstreamer::HostAppConfig{}.video.resolution)).toString());
+            QString::fromStdString(archstreamer::HostAppConfig{}.media.video.resolution)).toString());
     }
     if (host_clients_ != nullptr) {
         const int max_slots = static_cast<int>(archstreamer::MaxConcurrentSessionSlots);

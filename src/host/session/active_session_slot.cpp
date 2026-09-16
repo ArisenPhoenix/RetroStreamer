@@ -19,6 +19,7 @@
 #include "host/console/retroarch_resolve.hpp"
 #include "host/db/save_active_sessions.hpp"
 #include "host/db/game_meta_store.hpp"
+#include "host/session/backend_state.hpp"
 #include "host/session/emulator_backend.hpp"
 #include "host/session/lobby.hpp"
 #include "host/session/launch_assemble.hpp"
@@ -126,10 +127,10 @@ SlotLaunchEnvironment prepare_slot_launch_environment(
     CadenceResourceLease& lease) {
     SlotLaunchEnvironment env;
     env.session.present = resolve_session_present_target(config, launch_config);
-    env.session.request.stream_media = config.audio.enabled || config.video.enabled;
-    env.session.request.stream_audio = config.audio.enabled;
+    env.session.request.stream_media = config.media.audio.enabled || config.media.video.enabled;
+    env.session.request.stream_audio = config.media.audio.enabled;
     env.session.request.host_plays_locally = host_plays_locally;
-    env.session.request.ignore_devices = *config.ignore_controller;
+    env.session.request.ignore_devices = *config.pads.ignore_controller;
     env.xtest_display = env.session.present.uses_pipewire()
         ? lease.claim_next(cadence::resource::kXtestDisplay)
         : env.session.present.display;
@@ -145,7 +146,7 @@ SlotLaunchEnvironment prepare_slot_launch_environment(
     }
 
     const auto gpu = resolve_session_gpu_selection(
-        config,
+        config.gpu,
         env.session.present,
         "session slot " + std::to_string(slot) + ": ");
     env.session.gpu = std::move(gpu);
@@ -240,10 +241,10 @@ RetroArchOverrideParams ActiveSessionSlot::make_relaunch_override_params(
     RetroArchOverrideParams override_params;
     override_params.first_virtual_joypad_index = virtual_joypad_index_;
     override_params.identities = &config_.launch_plan.virtual_identities;
-    override_params.joypad_driver = slot_config_.retroarch_joypad_driver;
+    override_params.joypad_driver = slot_config_.pads.retroarch_joypad_driver;
     override_params.players = players;
     override_params.save_profile = &save_profile_;
-    override_params.realtime_pacing = slot_config_.audio.enabled || slot_config_.video.enabled;
+    override_params.realtime_pacing = slot_config_.media.audio.enabled || slot_config_.media.video.enabled;
     override_params.capture_fullscreen = ctx.capture.present.captures();
     override_params.capture_resolution = ctx.capture.video_resolution;
     const bool have_gpu = ctx.capture.resolved_gpu.has_value();
@@ -253,7 +254,7 @@ RetroArchOverrideParams ActiveSessionSlot::make_relaunch_override_params(
             : -1;
     override_params.system_key = system_key_;
     override_params.core_path = core_path;
-    override_params.resolution_scale = slot_config_.resolution.retroarch_scale;
+    override_params.resolution_scale = slot_config_.emulator.resolution.retroarch_scale;
     override_params.slot_index = config_.slot_index;
     override_params.network_cmd_port = config_.plan.control.retroarch_netcmd_port;
     override_params.display_layout =
@@ -664,7 +665,7 @@ void print_session_info(
         << "\nMode:      " << session_mode_name(launch_plan.session_mode)
         << "\nPlayers:   " << static_cast<int>(launch_plan.players)
         << "\nHostRole:  " << participant_role_name(config.host_role)
-        << "\nJoypad:    " << config.retroarch_joypad_driver
+        << "\nJoypad:    " << config.pads.retroarch_joypad_driver
         << "\nUser:      " << save_profile.username
         << '\n';
 }
@@ -782,7 +783,7 @@ void ActiveSessionSlot::run_session() {
 
     auto lease = cadence_tracker_.leases();
     lease.set_pools(cadence_resource_pools_from(config));
-    const bool want_pulse = config.audio.enabled && should_use_slot_streaming_sink(config.audio.source);
+    const bool want_pulse = config.media.audio.enabled && should_use_slot_streaming_sink(config.media.audio.source);
     const auto grant = allocate_session_resources(
         lease,
         SessionResourceNeed{
@@ -795,10 +796,10 @@ void ActiveSessionSlot::run_session() {
         try {
             audio_channel_ = std::make_unique<SessionAudioChannel>(
                 slot, grant.pulse_sink, grant.pulse_app_id);
-            config.audio.source = audio_channel_->monitor_source();
+            config.media.audio.source = audio_channel_->monitor_source();
             std::cout
                 << "session slot " << slot << ": audio capture "
-                << config.audio.source
+                << config.media.audio.source
                 << " (id " << audio_channel_->application_id() << ")\n";
         } catch (const std::exception& error) {
             audio_channel_.reset();
@@ -891,7 +892,7 @@ void ActiveSessionSlot::run_session() {
         config.host_role == ParticipantRole::Player && config_.bridge_device.has_value();
 
     append_session_controller_ignore_list(
-        config,
+        config.pads,
         config_.bridge_device,
         "session slot " + std::to_string(slot) + ": ");
 
@@ -935,15 +936,16 @@ void ActiveSessionSlot::run_session() {
     // Concurrent slots must not see each other's ArchStreamer uinput pads. Exclusive
     // PadPlan IGNORES sibling VID/PIDs (EXCEPT alone fails for uinput under Ryujinx).
     auto devices = resolve_session_device_plan(
-        config,
-        launch_plan,
+        config.pads,
+        config.verbose,
+        launch_plan.players,
         SessionPadPlanKind::RetroArchSlot,
         grant.pad_product_base);
-    apply_capture_to_session_device_plan(
-        devices,
-        config,
+    SessionCaptureDevices capture;
+    capture.bind(
         launch_env.session.present,
-        launch_env.session.gpu.resolved_gpu);
+        launch_env.session.gpu.resolved_gpu,
+        config.media.video.resolution);
     virtual_joypad_index_ = devices.input.virtual_joypad_index;
 
     auto backend_context = make_session_backend_prepare_context(
@@ -951,6 +953,7 @@ void ActiveSessionSlot::run_session() {
         launch_plan,
         launch_assets,
         devices,
+        capture,
         backends,
         launch_env.session.request,
         resolve_session_plan_participants(save_profile_.username, plan));
@@ -964,7 +967,7 @@ void ActiveSessionSlot::run_session() {
     apply_capture_and_launch_environment(
         launch_config,
         launch_env.session.present,
-        config,
+        config.media.video.resolution,
         launch_env.session.gpu.gamescope_vk_device,
         launch_env.session.gpu.resolved_gpu,
         launch_env.session.request);
@@ -981,7 +984,7 @@ void ActiveSessionSlot::run_session() {
         launch_config.unset_environment = std::move(env.unset);
     }
 
-    if (config.audio.enabled) {
+    if (config.media.audio.enabled) {
         park_session_game_audio(audio_channel_.get());
     }
 
@@ -1141,7 +1144,7 @@ void ActiveSessionSlot::run_session() {
         SessionCaptureDevices{
             launch_env.session.gpu.resolved_gpu,
             launch_env.session.present,
-            config.video.resolution,
+            config.media.video.resolution,
         },
         &launch_env.session.request,
     };
@@ -1150,7 +1153,7 @@ void ActiveSessionSlot::run_session() {
         input_router_.get(),
         /*audio=*/nullptr,
         /*audio_slot_index=*/std::nullopt,
-        config.audio.enabled,
+        config.media.audio.enabled,
         audio_channel_.get());
 
     poll_while(should_stop, session_end_reason, relaunch_ctx);

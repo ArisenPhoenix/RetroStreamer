@@ -56,8 +56,9 @@ SwitchBackendPrepResult RyujinxBackend::prepare(
 void RyujinxBackend::assign_launch_env_profile(
     EmulatorLaunchEnvRequest& env,
     SwitchBackendPrepResult& prep) const {
-    env.ryujinx_profile = std::move(prep.ryujinx_profile);
-    env.yuzu_profile.reset();
+    if (prep.ryujinx_profile.has_value()) {
+        env.profile_env.merge_pairs(ryujinx_launch_environment(*prep.ryujinx_profile));
+    }
     if (prep.pad_plan.has_value()) {
         env.plug.seat = std::move(prep.pad_plan);
     }

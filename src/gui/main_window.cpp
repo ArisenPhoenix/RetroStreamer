@@ -479,7 +479,7 @@ QWidget* MainWindow::build_stream_tab() {
         QStringLiteral("3840x2160"),
     });
     host_capture_resolution_->setCurrentText(
-        QString::fromStdString(archstreamer::HostAppConfig{}.video.resolution));
+        QString::fromStdString(archstreamer::HostAppConfig{}.media.video.resolution));
     host_capture_resolution_->setToolTip(
         "Virtual display size the game renders into and the host encodes from.\n"
         "Client Stream size is clamped to this height, so an ultrawide client\n"

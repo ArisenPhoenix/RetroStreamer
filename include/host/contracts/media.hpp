@@ -7,18 +7,12 @@
 
 namespace archstreamer {
 
-// Preferred graphics API for standalone emulators (Yuzu). Ignored for RetroArch cores.
-enum class GraphicsApiPreference {
-    Auto,
-    OpenGL,
-    Vulkan,
-};
-
 /**
  * Combined capture request session passes into the media server.
  *
- * Video and audio still share one config object today (not yet cohesive).
- * Use present() / audio_tap() at concern boundaries instead of reading flags.
+ * Prefer `resolve_media_capture(MediaConfig, present, …)` at the MediaServer
+ * boundary. Use present() / audio_tap() at concern boundaries instead of
+ * reading flags.
  */
 struct GStreamerMediaCaptureConfig {
     bool video = false;

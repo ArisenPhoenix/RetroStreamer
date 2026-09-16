@@ -1,6 +1,7 @@
 #include "host/session/emulator_backend.hpp"
 
 #include "host/console/retroarch_config_writer.hpp"
+#include "host/session/backend_state.hpp"
 #include "host/session/launch_assemble.hpp"
 #include "host/virtual/soft_keyboard_host.hpp"
 #include "host/console/switch/switch_backend.hpp"
@@ -49,12 +50,12 @@ public:
                 game.launch_plan.players,
                 config.verbose,
                 devices.input.product_id_base,
-                config.ignore_controller.value_or(""),
-                config.graphics_api,
+                config.pads.ignore_controller.value_or(""),
+                config.gpu.graphics_api,
                 launch_env_request.plug.present,
                 video.switch_scale,
                 options.prefer_switch_handheld_mode,
-                &video.devices.resolved_gpu,
+                video.devices.resolved_gpu,
                 user.participants.profile_display_name,
                 std::move(devices.input.resolved_pads),
                 static_cast<std::size_t>(std::max(0, options.slot_index)),
@@ -113,7 +114,7 @@ public:
                 game.launch_plan.players,
                 config.verbose,
                 devices.input.product_id_base,
-                config.ignore_controller.value_or(""),
+                config.pads.ignore_controller.value_or(""),
                 options.slot_index,
                 user.participants.profile_display_name,
                 user.participants.display_layout,
@@ -163,7 +164,7 @@ public:
             std::cout
                 << "RetroArch config: " << runtime_override
                 << "\nVirtual joypad index: " << devices.input.virtual_joypad_index
-                << " (driver=" << config.retroarch_joypad_driver << ")\n";
+                << " (driver=" << config.pads.retroarch_joypad_driver << ")\n";
             const int scale = std::clamp(video.retroarch_scale, 1, 6);
             std::cout << "RetroArch resolution: " << scale << "x native"
                       << " (known cores via .opt)\n";

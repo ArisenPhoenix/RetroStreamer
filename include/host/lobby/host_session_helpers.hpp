@@ -47,7 +47,6 @@ void reset_reconnected_session_client(
     const SessionPlan& plan,
     const MediaEndpoint& endpoint);
 
-std::string hex_vid_pid(std::uint16_t vendor_id, std::uint16_t product_id);
 std::optional<std::string> sdl_ignore_list_for_session(const SessionPlan& plan);
 HostPlayerControllerIdentity host_player_controller_identity(const ControllerDevice& device);
 

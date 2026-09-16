@@ -2,7 +2,6 @@
 
 #include "common/platform/process_utils.hpp"
 #include "host/video/gstreamer_media_server.hpp"
-#include "host/hardware/gpu_select.hpp"
 #include "host/video/gamescope_pipewire_node.hpp"
 #include "host/video/virtual_display.hpp"
 
@@ -128,7 +127,7 @@ void apply_standalone_capture_prefix(
 void apply_retroarch_vgl_prefix(
     std::vector<std::string>& command_prefix,
     const PresentTarget& present,
-    const std::optional<GpuDevice>& resolved_gpu) {
+    const std::optional<GpuTarget>& resolved_gpu) {
     if (!present.uses_virtualgl()) {
         return;
     }

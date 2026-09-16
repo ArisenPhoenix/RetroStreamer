@@ -1,7 +1,6 @@
 #include "host/virtual/virtual_joypad_resolve.hpp"
 
 #include "common/protocol.hpp"
-#include "host/lobby/host_session_helpers.hpp"
 #include "host/platform/host_pad_platform.hpp"
 #include "host/virtual/virtual_gamepad.hpp"
 

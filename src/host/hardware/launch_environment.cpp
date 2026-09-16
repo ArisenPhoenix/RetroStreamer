@@ -84,9 +84,7 @@ ProcessEnvironment build_emulator_launch_environment(const EmulatorLaunchEnvRequ
     } else {
         env.merge(input_launch_environment(request.ignore_devices));
     }
-    if (request.render_gpu.has_value()) {
-        env.merge_pairs(render_gpu_environment(*request.render_gpu));
-    }
+    env.merge(request.gpu_env);
     env.merge(capture_launch_environment(request.plug.present));
     // Pin only: gamescope wrapper reserves lower :N (abstract bind-without-listen
     // + lock files) so nested Xwayland lands here. listen() hang firejail; lock
@@ -98,15 +96,7 @@ ProcessEnvironment build_emulator_launch_environment(const EmulatorLaunchEnvRequ
     if (!request.session_id.empty()) {
         env.set("ARCHSTREAMER_SESSION_ID", request.session_id);
     }
-    if (request.yuzu_profile.has_value()) {
-        env.merge_pairs(yuzu_launch_environment(*request.yuzu_profile));
-    }
-    if (request.ryujinx_profile.has_value()) {
-        env.merge_pairs(ryujinx_launch_environment(*request.ryujinx_profile));
-    }
-    if (request.melonds_profile.has_value()) {
-        env.merge_pairs(melonds_launch_environment(*request.melonds_profile));
-    }
+    env.merge(request.profile_env);
     // Re-apply pad plan last so profile merge cannot resurrect IGNORE alongside EXCEPT.
     if (request.plug.seat.has_value()) {
         apply_pad_plan(env, *request.plug.seat);

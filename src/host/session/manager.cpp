@@ -208,12 +208,12 @@ void SessionManager::start_session(SessionPlan plan, SessionId session_id) {
     if (config_.hub->live_slot_count() >= config_.max_slots) {
         throw std::runtime_error("host is at max concurrent sessions");
     }
-    if (!config_.host_config.ignore_controller.has_value()) {
-        config_.host_config.ignore_controller = sdl_ignore_list_for_session(plan);
+    if (!config_.host_config.pads.ignore_controller.has_value()) {
+        config_.host_config.pads.ignore_controller = sdl_ignore_list_for_session(plan);
     }
     auto lease = SessionSlotLease::claim(
         kSlotLeaseSpan,
-        parse_virtual_display_number(config_.host_config.video.virtual_display));
+        parse_virtual_display_number(config_.host_config.media.video.virtual_display));
     if (!lease.valid()) {
         throw std::runtime_error(
             "no free session slot on this machine (another host is using them)");

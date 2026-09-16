@@ -17,6 +17,7 @@
 #include "host/session/run_helpers.hpp"
 #include "host/virtual/soft_keyboard_host.hpp"
 #include "host/console/switch/switch_backend.hpp"
+#include "host/virtual/virtual_gamepad.hpp"
 #include "host/virtual/virtual_joypad_resolve.hpp"
 
 #include <algorithm>
@@ -33,9 +34,9 @@ std::optional<SessionLaunchContext> prepare_direct_session_context(
     GameCatalog& catalog,
     const GameList& list,
     const std::optional<HostPlayerControllerIdentity>& bridge_identity) {
-    const auto game_id = select_game_for_launch(list, *config.selector);
+    const auto game_id = select_game_for_launch(list, *config.game.selector);
     if (!game_id.has_value()) {
-        std::cerr << "Game not found: " << *config.selector << '\n';
+        std::cerr << "Game not found: " << *config.game.selector << '\n';
         return std::nullopt;
     }
     const auto selected_game = game_info_for(list, *game_id);
@@ -86,7 +87,7 @@ void print_direct_launch_summary(
         << "\nMode:      " << session_mode_name(launch_plan.session_mode)
         << "\nPlayers:   " << static_cast<int>(launch_plan.players)
         << "\nHostRole:  " << participant_role_name(config.host_role)
-        << "\nJoypad:    " << config.retroarch_joypad_driver
+        << "\nJoypad:    " << config.pads.retroarch_joypad_driver
         << "\nUser:      " << save_profile.username
         << "\nSaves:     " << save_profile.savefile_directory
         << "\nStates:    " << save_profile.savestate_directory
@@ -97,20 +98,20 @@ void print_direct_launch_summary(
                 << "Video:     client " << static_cast<int>(stream.client_id)
                 << " " << stream.endpoint.video_uri
                 << " from display " << capture_display
-                << " at " << config.video.resolution << '\n';
+                << " at " << config.media.video.resolution << '\n';
         }
         if (!stream.endpoint.audio_uri.empty()) {
             std::cout
                 << "Audio:     client " << static_cast<int>(stream.client_id)
                 << " " << stream.endpoint.audio_uri;
-            if (!config.audio.source.empty()) {
-                std::cout << " from " << config.audio.source;
+            if (!config.media.audio.source.empty()) {
+                std::cout << " from " << config.media.audio.source;
             }
             std::cout
                 << " via "
-                << (config.audio.backend == AudioCaptureBackend::PipeWire
+                << (config.media.audio.backend == AudioCaptureBackend::PipeWire
                         ? "pipewire"
-                        : config.audio.backend == AudioCaptureBackend::Wasapi ? "wasapi"
+                        : config.media.audio.backend == AudioCaptureBackend::Wasapi ? "wasapi"
                                                                              : "pulse")
                 << '\n';
         }
@@ -125,8 +126,8 @@ void print_direct_launch_summary(
                 static_cast<std::uint16_t>(identity.product_id + port))
             << '\n';
     }
-    if (config.ignore_controller.has_value()) {
-        std::cout << "Ignoring:  " << *config.ignore_controller << '\n';
+    if (config.pads.ignore_controller.has_value()) {
+        std::cout << "Ignoring:  " << *config.pads.ignore_controller << '\n';
     }
 }
 
@@ -249,9 +250,9 @@ EmulatorLaunchEnvRequest build_launch_env_request(
     CadenceResourceLease& lease) {
     EmulatorLaunchEnvRequest launch_env_request;
     launch_env_request.host_plays_locally = host_plays_locally;
-    launch_env_request.stream_media = config.audio.enabled || config.video.enabled;
-    launch_env_request.stream_audio = config.audio.enabled;
-    launch_env_request.ignore_devices = *config.ignore_controller;
+    launch_env_request.stream_media = config.media.audio.enabled || config.media.video.enabled;
+    launch_env_request.stream_audio = config.media.audio.enabled;
+    launch_env_request.ignore_devices = *config.pads.ignore_controller;
     const auto xtest_display = present.uses_pipewire()
         ? lease.claim_next(cadence::resource::kXtestDisplay)
         : present.display;
@@ -266,7 +267,7 @@ SessionGpuSelection prepare_direct_gpu(
     EmulatorLaunchEnvRequest& launch_env_request,
     const PresentTarget& present) {
     auto gpu_selection = resolve_session_gpu_selection(
-        config,
+        config.gpu,
         present,
         {},
         /*detailed_logging=*/true);

@@ -115,17 +115,17 @@ void log_switch_backend_prep(
     const EmulatorLaunchEnvRequest& env,
     const SwitchBackendPrepResult& prep,
     int resolution_scale,
-    const std::optional<GpuDevice>& resolved_gpu,
+    const std::optional<GpuTarget>& resolved_gpu,
     std::optional<int> slot_index) {
     (void)backend;
     if (env.plug.seat.has_value()) {
         log_pad_plan(*env.plug.seat, slot_index);
     }
     if (slot_index.has_value()) {
-        if (env.ryujinx_profile.has_value()) {
+        if (prep.ryujinx_profile.has_value()) {
             std::cout
                 << "session slot " << *slot_index << ": Ryujinx (ldn_mitm)"
-                << " config=" << env.ryujinx_profile->data_root
+                << " config=" << prep.ryujinx_profile->data_root
                 << " shared_saves=" << prep.synced_title_count << '\n';
         } else if (prep.synced_title_count > 0) {
             std::cout
@@ -135,8 +135,8 @@ void log_switch_backend_prep(
         return;
     }
 
-    if (env.ryujinx_profile.has_value()) {
-        const auto& ryujinx_user = *env.ryujinx_profile;
+    if (prep.ryujinx_profile.has_value()) {
+        const auto& ryujinx_user = *prep.ryujinx_profile;
         std::cout
             << "Ryujinx (ldn_mitm) config: " << ryujinx_user.data_root
             << "\nRyujinx keys:            " << ryujinx_user.keys_directory
@@ -149,10 +149,10 @@ void log_switch_backend_prep(
         return;
     }
 
-    if (!env.yuzu_profile.has_value()) {
+    if (!prep.yuzu_profile.has_value()) {
         return;
     }
-    const auto& yuzu_user = *env.yuzu_profile;
+    const auto& yuzu_user = *prep.yuzu_profile;
     std::cout
         << "Yuzu renderer: "
         << (prep.force_opengl ? "OpenGL"

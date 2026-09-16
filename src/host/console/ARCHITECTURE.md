@@ -2,9 +2,10 @@
 
 `src/host/console/` implements emulator, catalog, and content behavior.
 
-This includes catalog scanning/repair, RetroArch helpers, standalone emulator
-resolution, save-profile handling, console-specific services, and leftover
-emulator process reaping.
+This includes catalog scanning/repair, RetroArch helpers, content/assets
+resolution (`launch_content.cpp`), standalone emulator resolution,
+save-profile handling, console-specific services, and leftover emulator
+process reaping.
 
 Session lifecycle code should call into this layer for content and emulator
 facts, then keep runtime ownership in `src/host/session/`.

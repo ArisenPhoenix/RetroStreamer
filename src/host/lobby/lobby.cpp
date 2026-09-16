@@ -31,9 +31,9 @@ Lobby::Lobby(Config config)
     if (!config_.host_config.input_port.has_value()) {
         config_.host_config.input_port = 45454;
     }
-    art_root_ = config_.host_config.art_root.empty()
-        ? (config_.host_config.rom_root.parent_path() / "Art")
-        : config_.host_config.art_root;
+    art_root_ = config_.host_config.game.art_root.empty()
+        ? (config_.host_config.game.rom_root.parent_path() / "Art")
+        : config_.host_config.game.art_root;
 
     SessionManager::Config session_cfg;
     session_cfg.host_config = config_.host_config;
@@ -435,8 +435,8 @@ void Lobby::accept_once() {
             ActiveSessionInfo info;
             const auto live = session_manager_->live_count();
             info.active = live > 0;
-            info.video_enabled = config_.host_config.video.enabled;
-            info.audio_enabled = config_.host_config.audio.enabled;
+            info.video_enabled = config_.host_config.media.video.enabled;
+            info.audio_enabled = config_.host_config.media.audio.enabled;
             info.active_slots = static_cast<std::uint8_t>(live);
             info.max_slots = max_slots();
             if (info.active) {

@@ -798,9 +798,9 @@ void MainWindow::start_host() {
     QStringList args;
     {
         archstreamer::HostAppConfig host_cfg;
-        host_cfg.rom_root = rom_root_path();
-        host_cfg.meta_root = meta_root_path();
-        host_cfg.art_root = art_root_path();
+        host_cfg.game.rom_root = rom_root_path();
+        host_cfg.game.meta_root = meta_root_path();
+        host_cfg.game.art_root = art_root_path();
         host_cfg.save_root = save_root;
         host_cfg.log_root = log_root_path();
         host_cfg.host_name = profile_host_name();
@@ -816,36 +816,36 @@ void MainWindow::start_host() {
             ? archstreamer::ParticipantRole::Viewer
             : archstreamer::ParticipantRole::Player;
         host_cfg.session_mode = selected_mode(host_mode_);
-        host_cfg.encode_gpu = selected_encode_gpu_id();
-        host_cfg.separate_render_gpu =
+        host_cfg.gpu.encode_gpu = selected_encode_gpu_id();
+        host_cfg.gpu.separate_render_gpu =
             settings_separate_render_gpu_ != nullptr &&
             settings_separate_render_gpu_->isChecked();
-        host_cfg.render_gpu = selected_render_gpu_id();
+        host_cfg.gpu.render_gpu = selected_render_gpu_id();
         const auto renderer = selected_graphics_api_id();
         if (renderer == QLatin1String("opengl")) {
-            host_cfg.graphics_api = archstreamer::GraphicsApiPreference::OpenGL;
+            host_cfg.gpu.graphics_api = archstreamer::GraphicsApiPreference::OpenGL;
         } else if (renderer == QLatin1String("vulkan")) {
-            host_cfg.graphics_api = archstreamer::GraphicsApiPreference::Vulkan;
+            host_cfg.gpu.graphics_api = archstreamer::GraphicsApiPreference::Vulkan;
         } else {
-            host_cfg.graphics_api = archstreamer::GraphicsApiPreference::Auto;
+            host_cfg.gpu.graphics_api = archstreamer::GraphicsApiPreference::Auto;
         }
-        host_cfg.resolution.switch_scale = selected_switch_resolution_scale();
-        host_cfg.resolution.retroarch_scale = selected_retroarch_resolution_scale();
+        host_cfg.emulator.resolution.switch_scale = selected_switch_resolution_scale();
+        host_cfg.emulator.resolution.retroarch_scale = selected_retroarch_resolution_scale();
         host_cfg.owner_gui_pid = static_cast<int>(QCoreApplication::applicationPid());
         host_cfg.verbose = current_log_level() == GuiLogLevel::Verbose;
-        host_cfg.video.enabled = host_video_->isChecked();
-        host_cfg.video.port = static_cast<std::uint16_t>(host_video_port_->value());
-        host_cfg.video.resolution = selected_host_capture_resolution().toStdString();
-        host_cfg.audio.enabled = host_audio_->isChecked();
-        host_cfg.audio.port = static_cast<std::uint16_t>(host_audio_port_->value());
-        host_cfg.host_local_watch =
+        host_cfg.media.video.enabled = host_video_->isChecked();
+        host_cfg.media.video.port = static_cast<std::uint16_t>(host_video_port_->value());
+        host_cfg.media.video.resolution = selected_host_capture_resolution().toStdString();
+        host_cfg.media.audio.enabled = host_audio_->isChecked();
+        host_cfg.media.audio.port = static_cast<std::uint16_t>(host_audio_port_->value());
+        host_cfg.media.host_local_watch =
             host_local_media_ != nullptr && host_local_media_->isChecked();
         if (bridge_index >= 0) {
-            host_cfg.bridge_controller_index = static_cast<std::size_t>(bridge_index);
+            host_cfg.pads.bridge_controller_index = static_cast<std::size_t>(bridge_index);
         }
         if (host_game_picker_->hasSelection()) {
-            host_cfg.selector = *host_game_picker_->selectedGameId();
-            persisted_host_game_id_ = QString::fromStdString(*host_cfg.selector);
+            host_cfg.game.selector = *host_game_picker_->selectedGameId();
+            persisted_host_game_id_ = QString::fromStdString(*host_cfg.game.selector);
         }
         persist_settings_if_idle();
 

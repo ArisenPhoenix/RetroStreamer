@@ -4,6 +4,7 @@
 #include "host/virtual/virtual_gamepad.hpp"
 #include "host/console/save_profile.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -11,6 +12,24 @@
 #include <vector>
 
 namespace archstreamer {
+
+struct RetroArchOverrideParams {
+    std::size_t first_virtual_joypad_index = 0;
+    const std::vector<VirtualGamepadIdentity>* identities = nullptr;
+    std::string joypad_driver;
+    RetroArchPort players = 1;
+    const SaveProfile* save_profile = nullptr;
+    bool realtime_pacing = false;
+    bool capture_fullscreen = false;
+    std::string capture_resolution;
+    int vulkan_gpu_index = -1;
+    std::string system_key;
+    std::filesystem::path core_path;
+    int resolution_scale = 1;
+    int slot_index = 0;
+    std::uint16_t network_cmd_port = 55355;
+    DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto;
+};
 
 VirtualGamepadIdentity identity_for_port(
     const std::vector<VirtualGamepadIdentity>& identities,

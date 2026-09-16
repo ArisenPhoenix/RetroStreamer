@@ -1,8 +1,9 @@
 #include "host/session/launch_assemble.hpp"
 
-#include "host/hardware/gpu_select.hpp"
 #include "host/console/retroarch_config_writer.hpp"
+#include "host/console/switch/switch_backend.hpp"
 #include "host/console/switch_save_share.hpp"
+#include "host/video/capture_platform.hpp"
 
 #include <iostream>
 #include <stdexcept>
@@ -14,15 +15,15 @@ namespace archstreamer {
 void apply_capture_and_launch_environment(
     RetroArchLaunchConfig& launch_config,
     const PresentTarget& present,
-    const HostAppConfig& config,
+    const std::string& video_resolution,
     const std::string& gamescope_vk_device,
-    const std::optional<GpuDevice>& resolved_gpu,
+    const std::optional<GpuTarget>& resolved_gpu,
     const EmulatorLaunchEnvRequest& env_request) {
     if (launch_config.standalone) {
         apply_standalone_capture_prefix(
             launch_config.command_prefix,
             present,
-            config.video.resolution,
+            video_resolution,
             gamescope_vk_device);
     } else {
         apply_retroarch_vgl_prefix(

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "host/contracts/gpu.hpp"
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -62,6 +64,10 @@ void pin_nvenc_cuda_device_order();
 
 // Environment entries for RetroArch child (PRIME offload when NVIDIA).
 std::vector<std::pair<std::string, std::string>> render_gpu_environment(const GpuDevice& gpu);
+std::vector<std::pair<std::string, std::string>> render_gpu_environment(const GpuTarget& gpu);
+
+/** Bind facts for console/video. Fills `yuzu_vulkan_index`. */
+GpuTarget gpu_target_from(const GpuDevice& gpu);
 
 // Index into Yuzu's Vulkan device list for qt-config `vulkan_device`.
 // Yuzu re-sorts physical devices (discrete first, NVIDIA before AMD, name descending),

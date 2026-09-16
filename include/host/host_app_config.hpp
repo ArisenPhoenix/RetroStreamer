@@ -1,13 +1,13 @@
 #pragma once
 
-#include "common/catalog_paths.hpp"
 #include "common/participant_role.hpp"
 #include "common/protocol.hpp"
-#include "host/audio/audio_settings.hpp"
+#include "host/console/emulator_config.hpp"
+#include "host/console/game_config.hpp"
+#include "host/hardware/gpu_settings.hpp"
 #include "host/host_launch_planner.hpp"
-#include "host/contracts/media.hpp"
-#include "host/platform/host_pad_platform.hpp"
-#include "host/video/video_settings.hpp"
+#include "host/virtual/pad_settings.hpp"
+#include "host/video/media_config.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -24,25 +24,24 @@ namespace archstreamer {
  */
 constexpr std::uint8_t MaxConcurrentSessionSlots = 4;
 
-/** Internal-resolution multipliers for Switch standalone and RetroArch cores. */
-struct ResolutionSettings {
-    // Switch standalone IR (Yuzu qt-config + Ryujinx res_scale). Clamp 1–6 at write;
-    // Ryujinx caps at 4 internally.
-    int switch_scale = 1;
-    // RetroArch IR via known cores' .opt files (1–6).
-    int retroarch_scale = 1;
-};
-
+/**
+ * God profile: module-owned knobs plus host session-management fields.
+ * Session passes the nested structs into the owning buckets rather than the
+ * whole config.
+ */
 struct HostAppConfig {
-    std::filesystem::path rom_root = DefaultRomRoot;
-    std::filesystem::path meta_root;
-    std::optional<std::string> selector;
+    GameConfig game;
+    EmulatorConfig emulator;
+    /** Module-owned knobs; session reads these instead of a flat flag bag. */
+    MediaConfig media;
+    PadSettings pads;
+    GpuSettings gpu;
+
     GameSessionMode session_mode = GameSessionMode::SinglePlayer;
     std::uint8_t players = 1;
     bool list = false;
     bool list_gpus = false;
     bool dry_run = false;
-    bool pulse_input = false;
     bool verbose = false;
     std::optional<std::uint16_t> control_port;
     std::optional<std::uint16_t> input_port;
@@ -52,44 +51,16 @@ struct HostAppConfig {
     std::uint16_t client_timeout_seconds = 20;
     std::uint16_t player_reconnect_timeout_seconds = 60;
     ParticipantRole host_role = ParticipantRole::Viewer;
-    /** Module-owned knobs; session reads these instead of a flat flag bag. */
-    VideoSettings video;
-    AudioSettings audio;
-    bool host_local_watch = false;
-    std::optional<std::size_t> bridge_controller_index;
-    std::optional<std::size_t> virtual_joypad_index;
-    std::optional<std::string> ignore_controller;
-    std::string retroarch_joypad_driver = kDefaultRetroArchJoypadDriver;
     std::filesystem::path save_root;
     std::filesystem::path log_root;
-    std::filesystem::path art_root;
     std::string username;
     std::string host_name;
     /** When false, ClientHello for unknown usernames is rejected (no new save profiles). */
     bool allow_new_users = false;
-    // Primary GPU: H.264 nvenc encode, and game render unless separate_render_gpu.
-    // "auto" or a GpuDevice::id from list_render_gpus() (e.g. nvidia:0).
-    std::string encode_gpu = "auto";
-    // When true, render_gpu selects the card for RetroArch/Switch GL/Vulkan (PRIME).
-    bool separate_render_gpu = false;
-    // Used when separate_render_gpu is true; otherwise encode_gpu is used for render too.
-    std::string render_gpu = "auto";
-    // Preferred API for Switch standalone. Auto = backend default (Vulkan on gamescope,
-    // OpenGL on VirtualGL). Ignored for RetroArch.
-    GraphicsApiPreference graphics_api = GraphicsApiPreference::Auto;
-    ResolutionSettings resolution;
     // Set only by the local GUI. Remote-spawned host_runners intentionally have
     // no owner so the Remote tab can manage them as parentless processes.
     int owner_gui_pid = 0;
 };
-
-// GPU id used for RetroArch/Switch PRIME / Vulkan device selection.
-inline std::string effective_render_gpu_selection(const HostAppConfig& config) {
-    if (config.separate_render_gpu) {
-        return config.render_gpu.empty() ? "auto" : config.render_gpu;
-    }
-    return config.encode_gpu.empty() ? "auto" : config.encode_gpu;
-}
 
 HostMediaPlanConfig media_plan_config_for(const HostAppConfig& config);
 

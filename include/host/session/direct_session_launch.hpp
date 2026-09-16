@@ -11,6 +11,7 @@
 #include "host/console/retroarch_process.hpp"
 #include "host/console/retroarch_resolve.hpp"
 #include "host/console/save_profile.hpp"
+#include "host/session/backend_state.hpp"
 #include "host/session/launch_types.hpp"
 #include "host/session/runtime.hpp"
 #include "host/virtual/virtual_keyboard.hpp"

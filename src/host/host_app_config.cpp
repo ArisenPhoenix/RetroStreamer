@@ -24,13 +24,13 @@ const char* graphics_api_name(GraphicsApiPreference api) {
 
 HostMediaPlanConfig media_plan_config_for(const HostAppConfig& config) {
     return HostMediaPlanConfig{
-        config.video.enabled,
-        config.audio.enabled,
-        config.video.destination,
-        config.video.destination_explicit,
-        config.video.port,
-        config.audio.port,
-        config.host_local_watch,
+        config.media.video.enabled,
+        config.media.audio.enabled,
+        config.media.video.destination,
+        config.media.video.destination_explicit,
+        config.media.video.port,
+        config.media.audio.port,
+        config.media.host_local_watch,
         video_encode_settings(MediaStreamSize::P720, MediaQualityTier::Medium),
     };
 }
@@ -38,14 +38,14 @@ HostMediaPlanConfig media_plan_config_for(const HostAppConfig& config) {
 std::vector<std::string> host_app_config_to_argv(const HostAppConfig& config) {
     std::vector<std::string> args;
     args.push_back("--rom-root");
-    args.push_back(config.rom_root.string());
-    if (!config.meta_root.empty()) {
+    args.push_back(config.game.rom_root.string());
+    if (!config.game.meta_root.empty()) {
         args.push_back("--meta-root");
-        args.push_back(config.meta_root.string());
+        args.push_back(config.game.meta_root.string());
     }
-    if (!config.art_root.empty()) {
+    if (!config.game.art_root.empty()) {
         args.push_back("--art-root");
-        args.push_back(config.art_root.string());
+        args.push_back(config.game.art_root.string());
     }
     if (config.control_port.has_value()) {
         args.push_back("--control-port");
@@ -70,18 +70,18 @@ std::vector<std::string> host_app_config_to_argv(const HostAppConfig& config) {
     args.push_back("--players");
     args.push_back(std::to_string(config.players));
     args.push_back("--gpu");
-    args.push_back(config.encode_gpu);
-    if (config.separate_render_gpu) {
+    args.push_back(config.gpu.encode_gpu);
+    if (config.gpu.separate_render_gpu) {
         args.push_back("--separate-render-gpu");
         args.push_back("--render-gpu");
-        args.push_back(config.render_gpu);
+        args.push_back(config.gpu.render_gpu);
     }
     args.push_back("--renderer");
-    args.push_back(graphics_api_name(config.graphics_api));
+    args.push_back(graphics_api_name(config.gpu.graphics_api));
     args.push_back("--switch-resolution");
-    args.push_back(std::to_string(config.resolution.switch_scale));
+    args.push_back(std::to_string(config.emulator.resolution.switch_scale));
     args.push_back("--retroarch-resolution");
-    args.push_back(std::to_string(config.resolution.retroarch_scale));
+    args.push_back(std::to_string(config.emulator.resolution.retroarch_scale));
     if (config.owner_gui_pid > 0) {
         args.push_back("--owner-gui-pid");
         args.push_back(std::to_string(config.owner_gui_pid));
@@ -96,28 +96,28 @@ std::vector<std::string> host_app_config_to_argv(const HostAppConfig& config) {
     if (config.dry_run) {
         args.push_back("--dry-run");
     }
-    if (config.pulse_input) {
+    if (config.pads.pulse_input) {
         args.push_back("--pulse-input");
     }
-    if (config.host_local_watch) {
+    if (config.media.host_local_watch) {
         args.push_back("--host-local-watch");
     }
 
-    if (config.bridge_controller_index.has_value()) {
+    if (config.pads.bridge_controller_index.has_value()) {
         args.push_back("--bridge-controller");
-        args.push_back(std::to_string(*config.bridge_controller_index));
+        args.push_back(std::to_string(*config.pads.bridge_controller_index));
     }
-    if (config.virtual_joypad_index.has_value()) {
+    if (config.pads.virtual_joypad_index.has_value()) {
         args.push_back("--virtual-joypad-index");
-        args.push_back(std::to_string(*config.virtual_joypad_index));
+        args.push_back(std::to_string(*config.pads.virtual_joypad_index));
     }
-    if (config.ignore_controller.has_value()) {
+    if (config.pads.ignore_controller.has_value()) {
         args.push_back("--ignore-controller");
-        args.push_back(*config.ignore_controller);
+        args.push_back(*config.pads.ignore_controller);
     }
-    if (!config.retroarch_joypad_driver.empty()) {
+    if (!config.pads.retroarch_joypad_driver.empty()) {
         args.push_back("--retroarch-joypad-driver");
-        args.push_back(config.retroarch_joypad_driver);
+        args.push_back(config.pads.retroarch_joypad_driver);
     }
     if (!config.save_root.empty()) {
         args.push_back("--save-root");
@@ -139,21 +139,21 @@ std::vector<std::string> host_app_config_to_argv(const HostAppConfig& config) {
         args.push_back(config.host_name);
     }
 
-    if (config.video.enabled) {
+    if (config.media.video.enabled) {
         args.push_back("--video");
         args.push_back("--video-port");
-        args.push_back(std::to_string(config.video.port));
-        if (config.video.destination_explicit) {
+        args.push_back(std::to_string(config.media.video.port));
+        if (config.media.video.destination_explicit) {
             args.push_back("--video-dest");
-            args.push_back(config.video.destination);
+            args.push_back(config.media.video.destination);
         }
         args.push_back("--virtual-display");
-        args.push_back(config.video.virtual_display);
+        args.push_back(config.media.video.virtual_display);
         args.push_back("--video-resolution");
-        args.push_back(config.video.resolution);
-        if (config.video.preferred_backend != VirtualDisplayBackend::None) {
+        args.push_back(config.media.video.resolution);
+        if (config.media.video.preferred_backend != VirtualDisplayBackend::None) {
             args.push_back("--display-backend");
-            switch (config.video.preferred_backend) {
+            switch (config.media.video.preferred_backend) {
             case VirtualDisplayBackend::Xvfb:
                 args.push_back("xvfb");
                 break;
@@ -175,23 +175,23 @@ std::vector<std::string> host_app_config_to_argv(const HostAppConfig& config) {
         args.push_back("--no-video");
     }
 
-    if (config.audio.enabled) {
+    if (config.media.audio.enabled) {
         args.push_back("--audio");
         args.push_back("--audio-port");
-        args.push_back(std::to_string(config.audio.port));
-        if (!config.audio.source.empty()) {
+        args.push_back(std::to_string(config.media.audio.port));
+        if (!config.media.audio.source.empty()) {
             args.push_back("--audio-source");
-            args.push_back(config.audio.source);
+            args.push_back(config.media.audio.source);
         }
         args.push_back("--audio-backend");
         args.push_back(
-            config.audio.backend == AudioCaptureBackend::PipeWire ? "pipewire" : "pulse");
+            config.media.audio.backend == AudioCaptureBackend::PipeWire ? "pipewire" : "pulse");
     } else {
         args.push_back("--no-audio");
     }
 
-    if (config.selector.has_value()) {
-        args.push_back(*config.selector);
+    if (config.game.selector.has_value()) {
+        args.push_back(*config.game.selector);
     }
     return args;
 }

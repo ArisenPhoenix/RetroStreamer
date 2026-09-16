@@ -1,5 +1,5 @@
-#include "host/lobby/host_session_helpers.hpp"
 #include "host/hardware/local_controller_bridge.hpp"
+#include "host/virtual/virtual_gamepad.hpp"
 #include "common/platform/process_utils.hpp"
 
 #include <SDL.h>

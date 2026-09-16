@@ -1,6 +1,5 @@
 #include "host/console/switch/switch_backend.hpp"
 
-#include "host/hardware/gpu_select.hpp"
 #include "host/virtual/pad_plan.hpp"
 #include "host/console/standalone_emulator.hpp"
 
@@ -12,8 +11,8 @@ SwitchBackendPrepResult YuzuBackend::prepare(
     SwitchBackendPrepResult result;
     apply_common_prep(launch_config, ctx, result);
 
-    if (ctx.resolved_gpu != nullptr && ctx.resolved_gpu->has_value()) {
-        result.yuzu_vulkan_device = yuzu_vulkan_device_index(**ctx.resolved_gpu);
+    if (ctx.resolved_gpu.has_value()) {
+        result.yuzu_vulkan_device = ctx.resolved_gpu->yuzu_vulkan_index;
     }
     auto yuzu_user = prepare_yuzu_user_profile(
         ctx.save_profile,
@@ -37,8 +36,9 @@ SwitchBackendPrepResult YuzuBackend::prepare(
 void YuzuBackend::assign_launch_env_profile(
     EmulatorLaunchEnvRequest& env,
     SwitchBackendPrepResult& prep) const {
-    env.yuzu_profile = std::move(prep.yuzu_profile);
-    env.ryujinx_profile.reset();
+    if (prep.yuzu_profile.has_value()) {
+        env.profile_env.merge_pairs(yuzu_launch_environment(*prep.yuzu_profile));
+    }
     // Yuzu binds by GUID under the shared IGNORE blacklist (not exclusive EXCEPT).
     PadPlan plan;
     plan.mode = PadPlanMode::Shared;

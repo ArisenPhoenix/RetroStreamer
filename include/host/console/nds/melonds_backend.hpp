@@ -1,6 +1,5 @@
 #pragma once
 
-#include "host/hardware/gpu_select.hpp"
 #include "host/contracts/launch.hpp"
 #include "host/console/nds/melonds_ctrl_client.hpp"
 #include "host/console/nds/melonds_user_profile.hpp"

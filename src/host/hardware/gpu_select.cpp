@@ -392,7 +392,7 @@ void pin_nvenc_cuda_device_order() {
     }
 }
 
-std::vector<std::pair<std::string, std::string>> render_gpu_environment(const GpuDevice& gpu) {
+std::vector<std::pair<std::string, std::string>> render_gpu_environment(const GpuTarget& gpu) {
     std::vector<std::pair<std::string, std::string>> environment;
     if (gpu.nvidia_index < 0 || gpu.prime_provider.empty()) {
         return environment;
@@ -402,6 +402,13 @@ std::vector<std::pair<std::string, std::string>> render_gpu_environment(const Gp
     environment.emplace_back("__NV_PRIME_RENDER_OFFLOAD_PROVIDER", gpu.prime_provider);
     environment.emplace_back("__VK_LAYER_NV_optimus", "NVIDIA_only");
     return environment;
+}
+
+std::vector<std::pair<std::string, std::string>> render_gpu_environment(const GpuDevice& gpu) {
+    GpuTarget target;
+    target.nvidia_index = gpu.nvidia_index;
+    target.prime_provider = gpu.prime_provider;
+    return render_gpu_environment(target);
 }
 
 int yuzu_vulkan_device_index(const GpuDevice& gpu) {
@@ -473,6 +480,18 @@ int yuzu_vulkan_device_index(const GpuDevice& gpu) {
         }
     }
     return gpu.vulkan_index;
+}
+
+GpuTarget gpu_target_from(const GpuDevice& gpu) {
+    GpuTarget target;
+    target.id = gpu.id;
+    target.name = gpu.name;
+    target.pci_bus = gpu.pci_bus;
+    target.prime_provider = gpu.prime_provider;
+    target.vulkan_index = gpu.vulkan_index;
+    target.nvidia_index = gpu.nvidia_index;
+    target.yuzu_vulkan_index = yuzu_vulkan_device_index(gpu);
+    return target;
 }
 
 } // namespace archstreamer

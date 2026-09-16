@@ -9,7 +9,7 @@ that names the concern it owns.
 
 The main buckets are:
 
-- `contracts/`: shared language (`PresentTarget`, `AudioTap`, `PadPlan`, `EmulatorPlug`).
+- `contracts/`: shared language (`PresentTarget`, `GpuTarget`, `AudioTap`, `PadPlan`, `EmulatorPlug`).
 - `client/`: host-side client metadata and stream adaptation.
 - `console/`: emulator/content/save-profile configuration.
 - `db/`: database-backed persistence APIs.
@@ -23,5 +23,7 @@ The main buckets are:
 
 The host flow should pass `host/contracts/` types between these areas rather than
 rebuilding loose primitive groups in each layer. Host-facing knobs
-(`VideoSettings`, `AudioSettings`) live in the owning module and are embedded
-by `HostAppConfig`.
+(`MediaConfig`, `PadSettings`, `GpuSettings`, `GameConfig`, `EmulatorConfig`)
+live in the owning module and are embedded by `HostAppConfig`. `MediaConfig`
+composes `VideoSettings` + `AudioSettings`; MediaServer resolves Off /
+VideoOnly / AudioOnly / Both from it.

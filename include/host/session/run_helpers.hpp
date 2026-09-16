@@ -64,7 +64,7 @@ struct HostMediaStartRequest {
 };
 
 /**
- * normalize_audio_backend + make_host_media_server + start when A/V enabled.
+ * normalize_audio_backend + make_host_media_server(MediaConfig) + start when A/V enabled.
  * Returns nullptr when neither audio nor video is requested.
  */
 std::unique_ptr<MediaServer> start_host_media_server_if_needed(

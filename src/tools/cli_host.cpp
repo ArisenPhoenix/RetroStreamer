@@ -463,28 +463,28 @@ HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
         } else if (arg == "--dry-run") {
             args.dry_run = true;
         } else if (arg == "--pulse-input") {
-            args.pulse_input = true;
+            args.pads.pulse_input = true;
         } else if (arg == "--verbose") {
             args.verbose = true;
         } else if (arg == "--host-local-watch") {
-            args.host_local_watch = true;
+            args.media.host_local_watch = true;
         } else if (arg == "--video") {
-            args.video.enabled = true;
+            args.media.video.enabled = true;
         } else if (arg == "--no-video") {
-            args.video.enabled = false;
+            args.media.video.enabled = false;
         } else if (arg == "--audio") {
-            args.audio.enabled = true;
+            args.media.audio.enabled = true;
         } else if (arg == "--no-audio") {
-            args.audio.enabled = false;
+            args.media.audio.enabled = false;
         } else if (arg == "--rom-root") {
             if_throw(i, "--rom-root requires a path");
-            args.rom_root = merged_args[i];
+            args.game.rom_root = merged_args[i];
         } else if (arg == "--meta-root") {
             if_throw(i, "--meta-root requires a path");
-            args.meta_root = merged_args[i];
+            args.game.meta_root = merged_args[i];
         } else if (arg == "--art-root") {
             if_throw(i, "--art-root requires a path");
-            args.art_root = merged_args[i];
+            args.game.art_root = merged_args[i];
         } else if (arg == "--mode") {
             if_throw(i, "--mode requires singleplayer or multiplayer");
             args.session_mode = parse_session_mode(merged_args[i]);
@@ -525,55 +525,55 @@ HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
             args.host_role = parse_participant_role(merged_args[i]);
         } else if (arg == "--video-dest") {
             if_throw(i, "--video-dest requires an IP address");
-            args.video.enabled = true;
-            args.video.destination = merged_args[i];
-            args.video.destination_explicit = true;
+            args.media.video.enabled = true;
+            args.media.video.destination = merged_args[i];
+            args.media.video.destination_explicit = true;
         } else if (arg == "--video-port") {
             if_throw(i, "--video-port requires a port");
-            args.video.enabled = true;
-            args.video.port = static_cast<std::uint16_t>(std::stoul(merged_args[i]));
+            args.media.video.enabled = true;
+            args.media.video.port = static_cast<std::uint16_t>(std::stoul(merged_args[i]));
         } else if (arg == "--audio-port") {
             if_throw(i, "--audio-port requires a port");
-            args.audio.enabled = true;
-            args.audio.port = static_cast<std::uint16_t>(std::stoul(merged_args[i]));
+            args.media.audio.enabled = true;
+            args.media.audio.port = static_cast<std::uint16_t>(std::stoul(merged_args[i]));
         } else if (arg == "--audio-source") {
             if_throw(i, "--audio-source requires a source name");
-            args.audio.enabled = true;
-            args.audio.source = merged_args[i];
+            args.media.audio.enabled = true;
+            args.media.audio.source = merged_args[i];
         } else if (arg == "--audio-backend") {
             if_throw(i, "--audio-backend requires pulse or pipewire");
-            args.audio.enabled = true;
-            args.audio.backend = parse_audio_backend(merged_args[i]);
+            args.media.audio.enabled = true;
+            args.media.audio.backend = parse_audio_backend(merged_args[i]);
         } else if (arg == "--virtual-display") {
             if_throw(i, "--virtual-display requires a display name");
-            args.video.enabled = true;
-            args.video.virtual_display = merged_args[i];
+            args.media.video.enabled = true;
+            args.media.video.virtual_display = merged_args[i];
         } else if (arg == "--video-resolution") {
             if_throw(i, "--video-resolution requires a WxH value");
-            args.video.enabled = true;
-            args.video.resolution = merged_args[i];
+            args.media.video.enabled = true;
+            args.media.video.resolution = merged_args[i];
         } else if (arg == "--display-backend") {
             if_throw(i, "--display-backend requires auto, xvfb, xephyr, virtualgl, or gamescope");
-            args.video.enabled = true;
-            args.video.preferred_backend = parse_display_backend(merged_args[i]);
+            args.media.video.enabled = true;
+            args.media.video.preferred_backend = parse_display_backend(merged_args[i]);
         } else if (arg == "--renderer") {
             if_throw(i, "--renderer requires auto, opengl, or vulkan");
-            args.graphics_api = parse_graphics_api(merged_args[i]);
+            args.gpu.graphics_api = parse_graphics_api(merged_args[i]);
         } else if (arg == "--switch-resolution") {
             if_throw(i, "--switch-resolution requires an integer 1-6");
-            args.resolution.switch_scale = std::clamp(std::stoi(merged_args[i]), 1, 6);
+            args.emulator.resolution.switch_scale = std::clamp(std::stoi(merged_args[i]), 1, 6);
         } else if (arg == "--retroarch-resolution") {
             if_throw(i, "--retroarch-resolution requires an integer 1-6");
-            args.resolution.retroarch_scale = std::clamp(std::stoi(merged_args[i]), 1, 6);
+            args.emulator.resolution.retroarch_scale = std::clamp(std::stoi(merged_args[i]), 1, 6);
         } else if (arg == "--bridge-controller") {
             if_throw(i, "--bridge-controller requires a controller index");
-            args.bridge_controller_index = static_cast<std::size_t>(std::stoul(merged_args[i]));
+            args.pads.bridge_controller_index = static_cast<std::size_t>(std::stoul(merged_args[i]));
         } else if (arg == "--ignore-controller") {
             if_throw(i, "--ignore-controller requires a VID/PID pair");
-            args.ignore_controller = merged_args[i];
+            args.pads.ignore_controller = merged_args[i];
         } else if (arg == "--retroarch-joypad-driver") {
             if_throw(i, "--retroarch-joypad-driver requires a driver name");
-            args.retroarch_joypad_driver = merged_args[i];
+            args.pads.retroarch_joypad_driver = merged_args[i];
         } else if (arg == "--save-root") {
             if_throw(i, "--save-root requires a path");
             args.save_root = merged_args[i];
@@ -590,16 +590,16 @@ HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
             args.host_name = merged_args[i];
         } else if (arg == "--virtual-joypad-index") {
             if_throw(i, "--virtual-joypad-index requires an index");
-            args.virtual_joypad_index = static_cast<std::size_t>(std::stoul(merged_args[i]));
+            args.pads.virtual_joypad_index = static_cast<std::size_t>(std::stoul(merged_args[i]));
         } else if (arg == "--gpu") {
             if_throw(i, "--gpu requires auto, a device id (nvidia:0), or a name substring");
-            args.encode_gpu = merged_args[i];
+            args.gpu.encode_gpu = merged_args[i];
         } else if (arg == "--separate-render-gpu") {
-            args.separate_render_gpu = true;
+            args.gpu.separate_render_gpu = true;
         } else if (arg == "--render-gpu") {
             if_throw(i, "--render-gpu requires auto, a device id (nvidia:0), or a name substring");
-            args.render_gpu = merged_args[i];
-            args.separate_render_gpu = true;
+            args.gpu.render_gpu = merged_args[i];
+            args.gpu.separate_render_gpu = true;
         } else if (arg == "--owner-gui-pid") {
             if_throw(i, "--owner-gui-pid requires a pid");
             args.owner_gui_pid = std::stoi(merged_args[i]);
@@ -613,8 +613,8 @@ HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
                 && merged_args[i + 1].front() != '-') {
                 ++i;
             }
-        } else if (!args.selector.has_value()) {
-            args.selector = arg;
+        } else if (!args.game.selector.has_value()) {
+            args.game.selector = arg;
         } else {
             throw std::runtime_error("unexpected extra argument: " + arg);
         }

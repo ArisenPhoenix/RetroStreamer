@@ -2,7 +2,6 @@
 
 #include "common/keyboard_state.hpp"
 #include "common/protocol.hpp"
-#include "host/console/retroarch_netcmd.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -118,7 +117,8 @@ private:
     std::uint8_t ryujinx_vsync_mode_ = 0;
     bool ryujinx_switch_vsync_ = true;
     int target_pid_ = 0;
-    std::uint16_t netcmd_port_ = DefaultRetroArchNetcmdPort;
+    /** Cadence grant overrides this; 55355 matches DefaultRetroArchNetcmdPort. */
+    std::uint16_t netcmd_port_ = 55355;
     std::string melonds_ctrl_name_;
     std::uint32_t last_keys_ = 0;
     std::chrono::steady_clock::time_point last_space_repeat_{};

@@ -1,8 +1,8 @@
 #pragma once
 
-#include "host/hardware/gpu_select.hpp"
+#include "host/hardware/gpu_settings.hpp"
+#include "host/contracts/gpu.hpp"
 #include "host/contracts/launch.hpp"
-#include "host/contracts/media.hpp"
 #include "host/virtual/pad_plan.hpp"
 #include "host/console/retroarch_process.hpp"
 #include "host/console/save_profile.hpp"
@@ -28,7 +28,7 @@ struct SwitchBackendPrepContext {
     PresentTarget present;
     int resolution_scale = 1;
     bool prefer_handheld_mode = false;
-    const std::optional<GpuDevice>* resolved_gpu = nullptr;
+    std::optional<GpuTarget> resolved_gpu;
     /** Caller-resolved Ryujinx profile name (Steam persona or session hello). */
     std::string profile_display_name;
     std::vector<ArchStreamerSdlPad> resolved_pads;
@@ -75,7 +75,7 @@ public:
         RetroArchLaunchConfig& launch_config,
         SwitchBackendPrepContext ctx) = 0;
 
-    /** Assign ryujinx_profile or yuzu_profile onto the launch env request. */
+    /** Merge console profile env and seat onto the launch request. */
     virtual void assign_launch_env_profile(
         EmulatorLaunchEnvRequest& env,
         SwitchBackendPrepResult& prep) const = 0;
@@ -141,7 +141,7 @@ void log_switch_backend_prep(
     const EmulatorLaunchEnvRequest& env,
     const SwitchBackendPrepResult& prep,
     int resolution_scale,
-    const std::optional<GpuDevice>& resolved_gpu = std::nullopt,
+    const std::optional<GpuTarget>& resolved_gpu = std::nullopt,
     std::optional<int> slot_index = std::nullopt);
 
 } // namespace archstreamer

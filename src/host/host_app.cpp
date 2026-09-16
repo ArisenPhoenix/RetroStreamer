@@ -22,9 +22,11 @@
 #include "host/virtual/network_input_receiver.hpp"
 #include "host/hardware/default_host_platform.hpp"
 #include "host/hardware/gpu_select.hpp"
+#include "host/session/backend_state.hpp"
 #include "host/session/launch_assemble.hpp"
 #include "host/session/launch_types.hpp"
 #include "host/session/run_helpers.hpp"
+#include "host/video/capture_platform.hpp"
 #include "host/session/lobby.hpp"
 #include "host/session/runtime.hpp"
 #include "host/virtual/virtual_gamepad.hpp"
@@ -110,17 +112,17 @@ void HostApp::apply_host_player_media_policy(HostAppConfig& config, bool host_pl
     // Host Player is local RetroArch on the real display/speakers. Streaming the
     // same session captures the playback sink monitor (or fights virtio-evdev for
     // the pad) and sounds/feels broken — force media off regardless of CLI/GUI.
-    if (host_plays_locally && (config.audio.enabled || config.video.enabled)) {
+    if (host_plays_locally && (config.media.audio.enabled || config.media.video.enabled)) {
         std::cout
             << "Host Player: disabling stream video/audio for local play "
             << "(use Host Viewer to stream).\n";
-        config.audio.enabled = false;
-        config.video.enabled = false;
+        config.media.audio.enabled = false;
+        config.media.video.enabled = false;
     }
 }
 
 void HostApp::prepare_streaming_audio_source(HostAppConfig& config, StreamingAudioSink& sink) {
-    if (!config.audio.enabled || !config.audio.source.empty()) {
+    if (!config.media.audio.enabled || !config.media.audio.source.empty()) {
         return;
     }
     // Concurrent lobby uses archstreamer-0..N per session slot. Creating the
@@ -136,37 +138,37 @@ void HostApp::prepare_streaming_audio_source(HostAppConfig& config, StreamingAud
         return;
     }
     try {
-        config.audio.source = sink.monitor_source();
+        config.media.audio.source = sink.monitor_source();
         std::cout
-            << "Audio capture: " << config.audio.source
+            << "Audio capture: " << config.media.audio.source
             << " (null sink; host speakers stay quiet unless Watch stream locally)\n";
     } catch (const std::exception& error) {
-        config.audio.source = StreamingAudioSink::default_monitor_source();
+        config.media.audio.source = StreamingAudioSink::default_monitor_source();
         std::cerr << "Warning: " << error.what() << '\n';
-        if (config.audio.source.empty()) {
+        if (config.media.audio.source.empty()) {
             std::cerr
                 << "Warning: could not determine audio monitor source; "
                 << "audio capture will use the audio server default source.\n";
         } else {
             std::cerr
                 << "Warning: falling back to default sink monitor "
-                << config.audio.source
+                << config.media.audio.source
                 << " (host may hear game audio locally).\n";
         }
     }
 }
 
 std::optional<ControllerDevice> HostApp::resolve_bridge_device(const HostAppConfig& config) {
-    if (config.host_role == ParticipantRole::Viewer && config.bridge_controller_index.has_value()) {
+    if (config.host_role == ParticipantRole::Viewer && config.pads.bridge_controller_index.has_value()) {
         throw std::runtime_error("--bridge-controller cannot be used with --host-role viewer");
     }
-    if (config.host_role == ParticipantRole::Player && !config.bridge_controller_index.has_value()) {
+    if (config.host_role == ParticipantRole::Player && !config.pads.bridge_controller_index.has_value()) {
         throw std::runtime_error(
             "--host-role player requires --bridge-controller "
             "(or use --host-role viewer for a dedicated streaming host)");
     }
-    if (config.host_role == ParticipantRole::Player && config.bridge_controller_index.has_value()) {
-        return local_bridge_device_for(*config.bridge_controller_index);
+    if (config.host_role == ParticipantRole::Player && config.pads.bridge_controller_index.has_value()) {
+        return local_bridge_device_for(*config.pads.bridge_controller_index);
     }
     return std::nullopt;
 }
@@ -213,7 +215,7 @@ int HostApp::run_direct_session(
     // Blacklist every physical pad currently attached so RetroArch is less likely to
     // bind P1 to a host controller. Virtual ArchStreamer pads are created after this.
     append_session_controller_ignore_list(
-        config,
+        config.pads,
         bridge_device,
         {},
         /*warn_if_not_sdl2=*/true);
@@ -259,18 +261,23 @@ int HostApp::run_direct_session(
     wait_for_session_input_enumeration();
 
     auto devices = resolve_session_device_plan(
-        config,
-        launch_plan,
+        config.pads,
+        config.verbose,
+        launch_plan.players,
         SessionPadPlanKind::Direct,
         cadence.grant.pad_product_base);
-    apply_capture_to_session_device_plan(devices, config, launch_env.present);
-    devices.capture.resolved_gpu = launch_env.gpu.resolved_gpu;
+    SessionCaptureDevices capture;
+    capture.bind(
+        launch_env.present,
+        launch_env.gpu.resolved_gpu,
+        config.media.video.resolution);
 
     auto backend_context = make_session_backend_prepare_context(
         config,
         launch_plan,
         assets,
         devices,
+        capture,
         backends,
         launch_env.request,
         resolve_direct_session_participants(assets.save_profile.username));
@@ -279,17 +286,17 @@ int HostApp::run_direct_session(
     apply_capture_and_launch_environment(
         assets.launch_config,
         launch_env.present,
-        config,
+        config.media.video.resolution,
         launch_env.gpu.gamescope_vk_device,
         launch_env.gpu.resolved_gpu,
         launch_env.request);
 
-    if (devices.capture.present.captures()) {
-        std::cout << devices.capture_info();
+    if (capture.present.captures()) {
+        std::cout << capture.info();
     }
 
     // Pin Viewer RetroArch to the capture null sink (speakers stay quiet unless Watch-local).
-    if (config.audio.enabled) {
+    if (config.media.audio.enabled) {
         park_session_game_audio(&streaming_audio);
     }
 
@@ -385,7 +392,7 @@ int HostApp::run_direct_session(
         &input_router,
         &streaming_audio,
         std::nullopt,
-        config.audio.enabled);
+        config.media.audio.enabled);
     while (!should_stop() && session_runtime->emulator_running()) {
         loop_cadence.tick();
     }
@@ -448,7 +455,7 @@ int HostApp::run_direct_session(
 
     end_direct_cadence_session(cadence.tracker, launch_plan, end_reason);
     stop_session_media(media_server);
-    if (config.audio.enabled) {
+    if (config.media.audio.enabled) {
         streaming_audio.restore_default_sink();
     }
     cleanup_x11_capture_runtime_dir();
@@ -468,11 +475,11 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             << " input-port=" << (config_.input_port.has_value()
                 ? std::to_string(*config_.input_port)
                 : std::string("none"))
-            << " video-port=" << config_.video.port
-            << " audio-port=" << config_.audio.port
-            << " virtual-display=" << startup_quote(config_.video.virtual_display)
-            << " gpu=" << startup_quote(config_.encode_gpu)
-            << " render-gpu=" << startup_quote(effective_render_gpu_selection(config_))
+            << " video-port=" << config_.media.video.port
+            << " audio-port=" << config_.media.audio.port
+            << " virtual-display=" << startup_quote(config_.media.video.virtual_display)
+            << " gpu=" << startup_quote(config_.gpu.encode_gpu)
+            << " render-gpu=" << startup_quote(config_.gpu.effective_render_gpu())
             << " log-root=" << startup_quote(config_.log_root.string())
             << '\n';
         {
@@ -480,9 +487,9 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             log_startup_available_gpus(devices);
             log_startup_gpu_match(
                 "encode",
-                config_.encode_gpu,
-                resolve_render_gpu_with_match_from(devices, config_.encode_gpu));
-            const auto render_request = effective_render_gpu_selection(config_);
+                config_.gpu.encode_gpu,
+                resolve_render_gpu_with_match_from(devices, config_.gpu.encode_gpu));
+            const auto render_request = config_.gpu.effective_render_gpu();
             log_startup_gpu_match(
                 "render",
                 render_request,
@@ -571,9 +578,9 @@ int HostApp::run(const std::function<bool()>& should_stop) {
         auto config = config_;
         std::vector<CatalogScanIssue> scan_issues;
         auto catalog = scan_game_catalog(
-            config.rom_root,
+            config.game.rom_root,
             LibretroCoreRegistry::ubuntu_defaults(),
-            config.meta_root,
+            config.game.meta_root,
             &scan_issues);
         for (const auto& issue : scan_issues) {
             // Already printed to stderr inside scan; summarize count for operators.
@@ -590,20 +597,20 @@ int HostApp::run(const std::function<bool()>& should_stop) {
 
         const bool host_plays_locally =
             config.host_role == ParticipantRole::Player &&
-            config.bridge_controller_index.has_value();
+            config.pads.bridge_controller_index.has_value();
         apply_host_player_media_policy(config, host_plays_locally);
 
         StreamingAudioSink streaming_audio;
         prepare_streaming_audio_source(config, streaming_audio);
 
         if (list.games.empty()) {
-            std::cerr << "No supported games found under " << config.rom_root << '\n';
+            std::cerr << "No supported games found under " << config.game.rom_root << '\n';
             release_this_host("host exit");
             return 1;
         }
 
-        if (config.list || (!config.selector.has_value() && !config.control_port.has_value())) {
-            std::cout << "Found " << list.games.size() << " supported games under " << config.rom_root << ".\n";
+        if (config.list || (!config.game.selector.has_value() && !config.control_port.has_value())) {
+            std::cout << "Found " << list.games.size() << " supported games under " << config.game.rom_root << ".\n";
             print_game_catalog(std::cout, list);
             release_this_host("host exit");
             return config.list ? 0 : 2;

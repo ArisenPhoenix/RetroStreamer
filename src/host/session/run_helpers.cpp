@@ -6,6 +6,7 @@
 #include "host/hardware/local_controller_bridge.hpp"
 #include "host/console/nds/melonds_ctrl_client.hpp"
 #include "host/hardware/default_host_platform.hpp"
+#include "host/session/backend_state.hpp"
 #include "host/session/launch_types.hpp"
 
 #include <algorithm>
@@ -256,18 +257,15 @@ bool plug_gamescope_virtual_keyboard_after_start(
 
 std::unique_ptr<MediaServer> start_host_media_server_if_needed(
     const HostMediaStartRequest& req) {
-    if (!req.config.audio.enabled && !req.config.video.enabled) {
+    if (!req.config.media.enabled()) {
         return nullptr;
     }
-    normalize_audio_backend_for_platform(req.config.audio.backend);
-    auto media_server = make_host_media_server(make_media_capture_config(
-        req.config.video.enabled,
-        req.config.audio.enabled,
+    normalize_audio_backend_for_platform(req.config.media.audio.backend);
+    auto media_server = make_host_media_server(
+        req.config.media,
         req.capture.present,
-        req.config.audio.tap(),
-        req.config.video.resolution,
         req.config.verbose,
-        req.capture.nvenc_cuda_device_id));
+        req.capture.nvenc_cuda_device_id);
     media_server->start(
         req.stream.media_config,
         req.stream.destinations,
@@ -448,7 +446,7 @@ void post_emulator_start_warmup(
     SessionAudioChannel* audio_channel) {
     start_deferred_gamescope_video_if_needed(
         media,
-        config.video.resolution,
+        config.media.video.resolution,
         streams,
         runtime.emulator().process_id().value_or(0));
 
@@ -460,7 +458,7 @@ void post_emulator_start_warmup(
             log_prefix);
     }
 
-    if (config.audio.enabled) {
+    if (config.media.audio.enabled) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         if (const auto pid = runtime.emulator().process_id(); pid.has_value()) {
             if (audio_channel != nullptr) {
@@ -478,7 +476,7 @@ void post_emulator_start_warmup(
         }
     }
 
-    if (config.pulse_input && players > 0) {
+    if (config.pads.pulse_input && players > 0) {
         std::this_thread::sleep_for(std::chrono::seconds(2));
         pulse_virtual_pad_a(pads);
     }

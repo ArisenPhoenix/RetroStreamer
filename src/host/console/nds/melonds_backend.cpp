@@ -81,7 +81,7 @@ MelonDsBackendPrepResult MelonDsBackend::prepare(
 void MelonDsBackend::assign_launch_env_profile(
     EmulatorLaunchEnvRequest& env,
     MelonDsBackendPrepResult& prep) const {
-    env.melonds_profile = std::move(prep.profile);
+    env.profile_env.merge_pairs(melonds_launch_environment(prep.profile));
     if (prep.pad_plan.has_value()) {
         env.plug.seat = std::move(prep.pad_plan);
     }
@@ -144,10 +144,7 @@ void log_melonds_backend_prep(
     if (env.plug.seat.has_value()) {
         log_pad_plan(*env.plug.seat, slot_index);
     }
-    if (!env.melonds_profile.has_value()) {
-        return;
-    }
-    const auto& profile = *env.melonds_profile;
+    const auto& profile = prep.profile;
     if (slot_index.has_value()) {
         std::cout
             << "session slot " << *slot_index << ": melonDS"

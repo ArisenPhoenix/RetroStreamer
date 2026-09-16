@@ -8,5 +8,6 @@ This bucket covers null-sink / WASAPI loopback helpers that produce an
 the tap as `PULSE_SINK` (or equivalent); the fanout captures the monitor.
 
 `SessionAudioChannel` is the per-slot tap (lifetime owned by the active
-session). `AudioSettings` is the host-facing knobs `HostAppConfig` embeds.
-`normalize_audio_backend_for_platform` lives here too.
+session). `AudioSettings` is the per-track knobs `MediaConfig` embeds
+(`HostAppConfig.media.audio`). `normalize_audio_backend_for_platform` lives
+here too.

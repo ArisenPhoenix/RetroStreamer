@@ -3,9 +3,6 @@
 #include "host/contracts/audio.hpp"
 #include "host/contracts/present.hpp"
 #include "host/contracts/seat.hpp"
-#include "host/console/nds/melonds_user_profile.hpp"
-#include "host/console/standalone_emulator.hpp"
-#include "host/hardware/gpu_select.hpp"
 
 #include <optional>
 #include <string>
@@ -33,7 +30,7 @@ struct ProcessEnvironment {
  * One emulator process plug: present surface + audio tap + seat.
  *
  * Session fills this from video/audio/peripherals; build_emulator_launch_environment
- * applies it. Emulator-only bits (GPU, profiles, session id) stay on the request.
+ * applies it.
  */
 struct EmulatorPlug {
     PresentTarget present;
@@ -43,9 +40,11 @@ struct EmulatorPlug {
 
 // Resolved decisions from host_app; the assembler owns merge order so capture
 // backends cannot be applied without their matching env layer.
+// GPU and emulator-profile layers are ProcessEnvironment bags filled by
+// hardware/console — contracts do not include those types.
 struct EmulatorLaunchEnvRequest {
-    bool stream_media = false;       // config.audio.enabled || config.video.enabled
-    bool stream_audio = false;       // config.audio.enabled
+    bool stream_media = false;       // config.media.enabled()
+    bool stream_audio = false;       // config.media.audio.enabled
     bool host_plays_locally = false; // Host Player without remote stream
     EmulatorPlug plug;
     /** Fallback when plug.seat is unset (prefer PadPlan for all new paths). */
@@ -53,10 +52,10 @@ struct EmulatorLaunchEnvRequest {
     /** Lobby / SessionManager id; injected as ARCHSTREAMER_SESSION_ID. */
     std::string session_id;
 
-    std::optional<GpuDevice> render_gpu;
-    std::optional<YuzuUserProfile> yuzu_profile; // set for standalone Yuzu
-    std::optional<RyujinxUserProfile> ryujinx_profile; // set for standalone Ryujinx
-    std::optional<MelonDsUserProfile> melonds_profile; // set for standalone melonDS
+    /** PRIME / Vulkan device env from hardware (`render_gpu_environment` on GpuTarget). */
+    ProcessEnvironment gpu_env;
+    /** XDG / SDL profile env from the console backend. */
+    ProcessEnvironment profile_env;
 };
 
 // Layer builders (also usable for tests / diagnostics).

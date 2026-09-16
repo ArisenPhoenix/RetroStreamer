@@ -1,7 +1,7 @@
 #pragma once
 
 #include "host/console/retroarch_netcmd.hpp"
-#include "host/session/launch_types.hpp"
+#include "host/session/backend_state.hpp"
 
 #include <cstdint>
 #include <memory>

@@ -1,6 +1,7 @@
 #include "host/virtual/pad_plan.hpp"
 
 #include "host/contracts/launch.hpp"
+#include "host/virtual/virtual_joypad_resolve.hpp"
 
 #include <iostream>
 #include <utility>

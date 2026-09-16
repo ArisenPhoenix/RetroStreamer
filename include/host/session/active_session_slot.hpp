@@ -16,6 +16,7 @@
 #include "host/session/runtime.hpp"
 #include "host/session/slot_lease.hpp"
 #include "host/session/types.hpp"
+#include "host/video/capture_platform.hpp"
 #include "host/audio/streaming_audio_sink.hpp"
 #include "host/audio/audio_channel.hpp"
 #include "host/db/cadence_session_tracker.hpp"
@@ -42,7 +43,6 @@ namespace archstreamer {
 class GameCatalog;
 struct LocalControllerBridge;
 class ControllerDevice;
-struct GpuDevice;
 struct SessionBackendState;
 
 struct ActiveSessionSlotConfig {

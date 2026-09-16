@@ -1,9 +1,8 @@
 #pragma once
 
-#include "host/host_app_config.hpp"
+#include "common/media.hpp"
 #include "host/contracts/present.hpp"
-#include "host/video/media_server.hpp"
-#include "host/console/retroarch_process.hpp"
+#include "host/video/video_settings.hpp"
 
 #include <optional>
 #include <string>
@@ -11,57 +10,59 @@
 
 namespace archstreamer {
 
+class MediaServer;
 struct GpuDevice;
 
-/** Resolved capture topology for one emulator launch (platform-neutral). */
-struct CapturePlan {
-    bool use_virtual_capture = false;
-    bool capture_fullscreen = false;
-    bool gamescope_capture = false;
-    bool virtualgl_capture = false;
-    VirtualDisplayBackend display_backend = VirtualDisplayBackend::None;
+/**
+ * Facts video needs to pick a present surface. Session fills emulator-only
+ * bits; host video knobs come from VideoSettings.
+ */
+struct CaptureResolveInput {
+    bool stream_video = false;
+    bool standalone = false;
+    bool core_needs_gl = false;
+    VirtualDisplayBackend preferred_backend = VirtualDisplayBackend::None;
     std::string capture_display;
-
-    [[nodiscard]] PresentTarget present() const {
-        PresentTarget target;
-        target.backend = display_backend;
-        target.display = capture_display;
-        if (gamescope_capture) {
-            target.backend = VirtualDisplayBackend::Gamescope;
-        } else if (virtualgl_capture) {
-            target.backend = VirtualDisplayBackend::VirtualGL;
-        }
-        return target;
-    }
+    /** May be capped for software cores (caller copies back to VideoSettings). */
+    std::string video_resolution;
 };
 
-/**
- * Choose display backend / capture flags and optionally cap resolution for software cores.
- * Platform-specific: Linux may pick Gamescope/VirtualGL/Xvfb; Windows leaves backend alone.
- */
-CapturePlan resolve_capture_plan(
-    HostAppConfig& config,
-    const RetroArchLaunchConfig& launch_config);
+inline CaptureResolveInput make_capture_resolve_input(
+    const VideoSettings& video,
+    bool standalone,
+    bool core_needs_gl) {
+    CaptureResolveInput input;
+    input.stream_video = video.enabled;
+    input.standalone = standalone;
+    input.core_needs_gl = core_needs_gl;
+    input.preferred_backend = video.preferred_backend;
+    input.capture_display = video.virtual_display;
+    input.video_resolution = video.resolution;
+    return input;
+}
 
-/** Force Wasapi on Windows when Pulse was requested; no-op elsewhere. */
-void normalize_audio_backend_for_platform(HostAppConfig& config);
+/**
+ * Choose display backend and optionally cap resolution for software cores.
+ * Platform-specific: Linux may pick Gamescope/VirtualGL/Xvfb; Windows Desktop.
+ */
+PresentTarget resolve_present_target(CaptureResolveInput& input);
 
 /**
  * Apply gamescope / VirtualGL / desktop-capture command prefixes for standalone (Yuzu).
  * Logs the chosen path. Throws if a required Linux tool is missing.
  */
 void apply_standalone_capture_prefix(
-    RetroArchLaunchConfig& launch_config,
-    const CapturePlan& capture,
-    const HostAppConfig& config,
+    std::vector<std::string>& command_prefix,
+    const PresentTarget& present,
+    const std::string& video_resolution,
     const std::string& gamescope_vk_device);
 
 /**
- * Wrap RetroArch with VirtualGL when capture.virtualgl_capture is set (Linux only).
+ * Wrap RetroArch with VirtualGL when present uses VirtualGL (Linux only).
  */
 void apply_retroarch_vgl_prefix(
-    RetroArchLaunchConfig& launch_config,
-    const CapturePlan& capture,
+    std::vector<std::string>& command_prefix,
+    const PresentTarget& present,
     const std::optional<GpuDevice>& resolved_gpu);
 
 /**
@@ -71,7 +72,7 @@ void apply_retroarch_vgl_prefix(
  */
 void start_deferred_gamescope_video_if_needed(
     MediaServer* media_server,
-    const HostAppConfig& config,
+    const std::string& video_resolution,
     std::vector<MediaClientStream>& media_streams,
     int owner_pid = 0);
 

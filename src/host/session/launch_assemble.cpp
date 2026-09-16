@@ -13,16 +13,20 @@ namespace archstreamer {
 
 void apply_capture_and_launch_environment(
     RetroArchLaunchConfig& launch_config,
-    const CapturePlan& capture,
+    const PresentTarget& present,
     const HostAppConfig& config,
     const std::string& gamescope_vk_device,
     const std::optional<GpuDevice>& resolved_gpu,
     const EmulatorLaunchEnvRequest& env_request) {
     if (launch_config.standalone) {
         apply_standalone_capture_prefix(
-            launch_config, capture, config, gamescope_vk_device);
+            launch_config.command_prefix,
+            present,
+            config.video.resolution,
+            gamescope_vk_device);
     } else {
-        apply_retroarch_vgl_prefix(launch_config, capture, resolved_gpu);
+        apply_retroarch_vgl_prefix(
+            launch_config.command_prefix, present, resolved_gpu);
     }
     apply_launch_env_to_config(launch_config, env_request);
 }

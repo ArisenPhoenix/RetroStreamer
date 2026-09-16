@@ -14,6 +14,8 @@ enum class VirtualDisplayBackend {
     VirtualGL,
     // Headless gamescope compositor + PipeWire video source (Vulkan-capable).
     Gamescope,
+    // Host desktop / HWND capture (Windows d3d11screencapturesrc). No nested X.
+    Desktop,
 };
 
 /**
@@ -40,6 +42,12 @@ struct PresentTarget {
         return backend == VirtualDisplayBackend::Xvfb ||
             backend == VirtualDisplayBackend::Xephyr ||
             backend == VirtualDisplayBackend::VirtualGL;
+    }
+    [[nodiscard]] bool uses_virtualgl() const {
+        return backend == VirtualDisplayBackend::VirtualGL;
+    }
+    [[nodiscard]] bool uses_desktop() const {
+        return backend == VirtualDisplayBackend::Desktop;
     }
 };
 

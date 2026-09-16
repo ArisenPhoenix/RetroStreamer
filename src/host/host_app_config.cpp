@@ -24,12 +24,12 @@ const char* graphics_api_name(GraphicsApiPreference api) {
 
 HostMediaPlanConfig media_plan_config_for(const HostAppConfig& config) {
     return HostMediaPlanConfig{
-        config.video,
-        config.audio,
-        config.video_destination,
-        config.video_destination_explicit,
-        config.video_port,
-        config.audio_port,
+        config.video.enabled,
+        config.audio.enabled,
+        config.video.destination,
+        config.video.destination_explicit,
+        config.video.port,
+        config.audio.port,
         config.host_local_watch,
         video_encode_settings(MediaStreamSize::P720, MediaQualityTier::Medium),
     };
@@ -139,21 +139,21 @@ std::vector<std::string> host_app_config_to_argv(const HostAppConfig& config) {
         args.push_back(config.host_name);
     }
 
-    if (config.video) {
+    if (config.video.enabled) {
         args.push_back("--video");
         args.push_back("--video-port");
-        args.push_back(std::to_string(config.video_port));
-        if (config.video_destination_explicit) {
+        args.push_back(std::to_string(config.video.port));
+        if (config.video.destination_explicit) {
             args.push_back("--video-dest");
-            args.push_back(config.video_destination);
+            args.push_back(config.video.destination);
         }
         args.push_back("--virtual-display");
-        args.push_back(config.virtual_display);
+        args.push_back(config.video.virtual_display);
         args.push_back("--video-resolution");
-        args.push_back(config.video_resolution);
-        if (config.display_backend != VirtualDisplayBackend::None) {
+        args.push_back(config.video.resolution);
+        if (config.video.preferred_backend != VirtualDisplayBackend::None) {
             args.push_back("--display-backend");
-            switch (config.display_backend) {
+            switch (config.video.preferred_backend) {
             case VirtualDisplayBackend::Xvfb:
                 args.push_back("xvfb");
                 break;
@@ -166,6 +166,7 @@ std::vector<std::string> host_app_config_to_argv(const HostAppConfig& config) {
             case VirtualDisplayBackend::Gamescope:
                 args.push_back("gamescope");
                 break;
+            case VirtualDisplayBackend::Desktop:
             case VirtualDisplayBackend::None:
                 break;
             }
@@ -174,17 +175,17 @@ std::vector<std::string> host_app_config_to_argv(const HostAppConfig& config) {
         args.push_back("--no-video");
     }
 
-    if (config.audio) {
+    if (config.audio.enabled) {
         args.push_back("--audio");
         args.push_back("--audio-port");
-        args.push_back(std::to_string(config.audio_port));
-        if (!config.audio_source.empty()) {
+        args.push_back(std::to_string(config.audio.port));
+        if (!config.audio.source.empty()) {
             args.push_back("--audio-source");
-            args.push_back(config.audio_source);
+            args.push_back(config.audio.source);
         }
         args.push_back("--audio-backend");
         args.push_back(
-            config.audio_backend == AudioCaptureBackend::PipeWire ? "pipewire" : "pulse");
+            config.audio.backend == AudioCaptureBackend::PipeWire ? "pipewire" : "pulse");
     } else {
         args.push_back("--no-audio");
     }

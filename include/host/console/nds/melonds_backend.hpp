@@ -26,8 +26,6 @@ struct MelonDsBackendPrepContext {
     bool verbose = false;
     std::uint16_t product_id_base = 0;
     std::string ignore_controller;
-    bool virtualgl_capture = false;
-    bool gamescope_capture = false;
     int slot_index = 0;
     std::string profile_display_name;
     DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto;

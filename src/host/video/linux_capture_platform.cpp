@@ -4,7 +4,6 @@
 #include "host/video/gstreamer_media_server.hpp"
 #include "host/hardware/gpu_select.hpp"
 #include "host/video/gamescope_pipewire_node.hpp"
-#include "host/console/retroarch_config_writer.hpp"
 #include "host/video/virtual_display.hpp"
 
 #include <chrono>
@@ -38,76 +37,68 @@ bool platform_supports_virtualgl_capture() {
     return true;
 }
 
-CapturePlan resolve_capture_plan(
-    HostAppConfig& config,
-    const RetroArchLaunchConfig& launch_config) {
-    CapturePlan plan;
-    plan.use_virtual_capture = config.video;
-    plan.capture_fullscreen = config.video;
-    plan.capture_display = config.virtual_display;
-    plan.display_backend = config.display_backend;
-
-    if (launch_config.standalone && plan.use_virtual_capture &&
-        plan.display_backend == VirtualDisplayBackend::None) {
-        plan.display_backend = VirtualDisplayBackend::Gamescope;
+PresentTarget resolve_present_target(CaptureResolveInput& input) {
+    PresentTarget present;
+    present.display = input.capture_display;
+    if (!input.stream_video) {
+        return present;
     }
-    if (!launch_config.standalone && plan.use_virtual_capture &&
-        (plan.display_backend == VirtualDisplayBackend::None ||
-         plan.display_backend == VirtualDisplayBackend::Xvfb) &&
-        core_needs_gl_on_virtual_display(launch_config.core_path) &&
+    present.backend = input.preferred_backend;
+
+    if (input.standalone && present.backend == VirtualDisplayBackend::None) {
+        present.backend = VirtualDisplayBackend::Gamescope;
+    }
+    if (!input.standalone &&
+        (present.backend == VirtualDisplayBackend::None ||
+         present.backend == VirtualDisplayBackend::Xvfb) &&
+        input.core_needs_gl &&
         find_vglrun().has_value() && command_available("Xvfb")) {
         // Only wrap HW GL cores. Software cores use plain Xvfb + sdl2.
-        plan.display_backend = VirtualDisplayBackend::VirtualGL;
-    } else if (!launch_config.standalone && plan.use_virtual_capture &&
-               plan.display_backend == VirtualDisplayBackend::VirtualGL &&
-               !core_needs_gl_on_virtual_display(launch_config.core_path)) {
+        present.backend = VirtualDisplayBackend::VirtualGL;
+    } else if (!input.standalone &&
+               present.backend == VirtualDisplayBackend::VirtualGL &&
+               !input.core_needs_gl) {
         std::cout << "Display: plain Xvfb for software core (skipping VirtualGL)\n";
-        plan.display_backend = VirtualDisplayBackend::Xvfb;
+        present.backend = VirtualDisplayBackend::Xvfb;
     }
 
     // Software cores: keep the virtual framebuffer modest for Wi‑Fi clients.
-    if (!launch_config.standalone && plan.use_virtual_capture &&
-        !core_needs_gl_on_virtual_display(launch_config.core_path)) {
+    if (!input.standalone && !input.core_needs_gl) {
         int width = 0;
         int height = 0;
-        parse_resolution(config.video_resolution, width, height);
+        parse_resolution(input.video_resolution, width, height);
         if (width > 1280 || height > 720) {
             std::cout
                 << "Capture resolution capped to 1280x720 for software core "
-                << "(was " << config.video_resolution << ")\n";
-            config.video_resolution = "1280x720";
+                << "(was " << input.video_resolution << ")\n";
+            input.video_resolution = "1280x720";
         }
     }
 
-    plan.gamescope_capture =
-        plan.use_virtual_capture && plan.display_backend == VirtualDisplayBackend::Gamescope;
-    plan.virtualgl_capture =
-        plan.use_virtual_capture && plan.display_backend == VirtualDisplayBackend::VirtualGL;
-    return plan;
-}
-
-void normalize_audio_backend_for_platform(HostAppConfig& /*config*/) {
-    // Pulse/PipeWire are valid on Linux.
+    if (present.backend == VirtualDisplayBackend::None) {
+        present.backend = VirtualDisplayBackend::Xvfb;
+    }
+    return present;
 }
 
 void apply_standalone_capture_prefix(
-    RetroArchLaunchConfig& launch_config,
-    const CapturePlan& capture,
-    const HostAppConfig& config,
+    std::vector<std::string>& command_prefix,
+    const PresentTarget& present,
+    const std::string& video_resolution,
     const std::string& gamescope_vk_device) {
-    if (capture.gamescope_capture) {
+    if (present.uses_pipewire()) {
         int width = 1280;
         int height = 720;
-        parse_resolution(config.video_resolution, width, height);
+        parse_resolution(video_resolution, width, height);
         auto prefix = gamescope_command_prefix(width, height, gamescope_vk_device);
         if (prefix.empty()) {
             throw std::runtime_error(
                 "Switch streaming requires gamescope. Install it or set ARCHSTREAMER_GAMESCOPE "
                 "(managed: ~/.local/share/archstreamer/gamescope/archstreamer-gamescope)");
         }
-        launch_config.command_prefix = std::move(prefix);
+        command_prefix = std::move(prefix);
         std::cout
-            << "Yuzu: gamescope headless via " << launch_config.command_prefix.front()
+            << "Yuzu: gamescope headless via " << command_prefix.front()
             << " (" << width << "x" << height
             << ", prefer-vk-device " << gamescope_vk_device
             << ", Gamescope WSI enabled)\n";
@@ -120,25 +111,25 @@ void apply_standalone_capture_prefix(
         return;
     }
 
-    if (capture.virtualgl_capture) {
+    if (present.uses_virtualgl()) {
         auto prefix = virtual_gl_command_prefix();
         if (prefix.empty()) {
             throw std::runtime_error(
                 "VirtualGL (vglrun) not found; install VirtualGL or set ARCHSTREAMER_VGLRUN");
         }
-        launch_config.command_prefix = std::move(prefix);
+        command_prefix = std::move(prefix);
         std::cout
-            << "Yuzu: VirtualGL OpenGL via " << launch_config.command_prefix.front()
+            << "Yuzu: VirtualGL OpenGL via " << command_prefix.front()
             << " (3D " << default_vgl_display()
-            << ", capture " << capture.capture_display << ")\n";
+            << ", capture " << present.display << ")\n";
     }
 }
 
 void apply_retroarch_vgl_prefix(
-    RetroArchLaunchConfig& launch_config,
-    const CapturePlan& capture,
+    std::vector<std::string>& command_prefix,
+    const PresentTarget& present,
     const std::optional<GpuDevice>& resolved_gpu) {
-    if (!capture.virtualgl_capture) {
+    if (!present.uses_virtualgl()) {
         return;
     }
     auto prefix = virtual_gl_command_prefix();
@@ -146,15 +137,12 @@ void apply_retroarch_vgl_prefix(
         throw std::runtime_error(
             "VirtualGL (vglrun) not found; install VirtualGL or set ARCHSTREAMER_VGLRUN");
     }
-    prefix.insert(
-        prefix.end(),
-        launch_config.command_prefix.begin(),
-        launch_config.command_prefix.end());
-    launch_config.command_prefix = std::move(prefix);
+    prefix.insert(prefix.end(), command_prefix.begin(), command_prefix.end());
+    command_prefix = std::move(prefix);
     std::cout
-        << "RetroArch: VirtualGL via " << launch_config.command_prefix.front()
+        << "RetroArch: VirtualGL via " << command_prefix.front()
         << " (3D on " << default_vgl_display()
-        << ", capture " << capture.capture_display;
+        << ", capture " << present.display;
     if (resolved_gpu.has_value() && !resolved_gpu->prime_provider.empty()) {
         std::cout << ", PRIME " << resolved_gpu->prime_provider;
     }
@@ -163,7 +151,7 @@ void apply_retroarch_vgl_prefix(
 
 void start_deferred_gamescope_video_if_needed(
     MediaServer* media_server,
-    const HostAppConfig& config,
+    const std::string& video_resolution,
     std::vector<MediaClientStream>& media_streams,
     int owner_pid) {
     auto* gst = dynamic_cast<GStreamerMediaServer*>(media_server);
@@ -176,7 +164,7 @@ void start_deferred_gamescope_video_if_needed(
         << "...\n";
     int expect_w = 1280;
     int expect_h = 720;
-    parse_resolution(config.video_resolution, expect_w, expect_h);
+    parse_resolution(video_resolution, expect_w, expect_h);
     const auto node = wait_for_gamescope_pipewire_node(
         std::chrono::seconds(20),
         expect_w,

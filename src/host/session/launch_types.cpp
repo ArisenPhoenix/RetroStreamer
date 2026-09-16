@@ -6,9 +6,11 @@
 #include "host/lobby/host_session_helpers.hpp"
 #include "host/session/launch_assemble.hpp"
 #include "host/session/lobby.hpp"
+#include "host/console/retroarch_config_writer.hpp"
 #include "host/console/standalone_emulator.hpp"
 #include "host/console/switch_save_share.hpp"
 #include "host/video/virtual_display.hpp"
+#include "host/video/capture_platform.hpp"
 
 #include <chrono>
 #include <iostream>
@@ -99,24 +101,24 @@ void append_ignore_devices(HostAppConfig& config, const std::string& devices) {
 
 std::string SessionDevicePlan::capture_info() const {
     std::ostringstream o;
-    o << "Capture: " << (capture.capture_fullscreen ? "fullscreen" : "windowed")
+    o << "Capture: " << (capture.present.captures() ? "fullscreen" : "windowed")
       << capture.video_resolution
-      << " on display " << capture.capture_display
-      << (capture.use_virtual_capture ? " (virtual)" : " (host)") << '\n';
+      << " on display " << capture.present.display
+      << (capture.present.captures() && !capture.present.uses_desktop()
+              ? " (virtual)"
+              : " (host)")
+      << '\n';
     return o.str();
 }
 
 void apply_capture_to_session_device_plan(
     SessionDevicePlan& devices,
     const HostAppConfig& config,
-    const CapturePlan& capture,
+    const PresentTarget& present,
     std::optional<GpuDevice> resolved_gpu) {
     devices.capture.resolved_gpu = std::move(resolved_gpu);
-    devices.capture.use_virtual_capture = capture.use_virtual_capture;
-    devices.capture.capture_fullscreen = capture.capture_fullscreen;
-    devices.capture.capture_display = capture.capture_display;
-    devices.capture.display_backend = capture.display_backend;
-    devices.capture.video_resolution = config.video_resolution;
+    devices.capture.present = present;
+    devices.capture.video_resolution = config.video.resolution;
 }
 
 SessionDevicePlan resolve_session_device_plan(
@@ -188,14 +190,14 @@ SessionMediaPlan build_session_media_plan(
         if (session_plan == nullptr) {
             throw std::invalid_argument("slot media plan requires a SessionPlan");
         }
-        parse_video_resolution(config.video_resolution, media.capture_w, media.capture_h);
+        parse_video_resolution(config.video.resolution, media.capture_w, media.capture_h);
         configure_initial_session_video(*session_plan, media.capture_w, media.capture_h);
     }
     media.config = media_plan_config_for(config);
     if (kind == SessionMediaPlanKind::Slot) {
         media.config.initial_video_settings = session_plan->stream.video_settings;
     }
-    if (config.video || config.audio) {
+    if (config.video.enabled || config.audio.enabled) {
         if (kind == SessionMediaPlanKind::Slot) {
             media.destinations = media_destinations_for_session(media.config, *session_plan);
         } else {
@@ -407,7 +409,6 @@ SessionBackendPrepareContext make_session_backend_prepare_context(
     SessionLaunchAssets& assets,
     SessionDevicePlan& devices,
     SessionBackendState& backends,
-    const CapturePlan& capture,
     EmulatorLaunchEnvRequest& launch_env_request,
     SessionParticipantContext participants) {
     return SessionBackendPrepareContext{
@@ -422,9 +423,8 @@ SessionBackendPrepareContext make_session_backend_prepare_context(
             assets.content,
         },
         SessionVideoContext{
-            capture,
             devices.capture,
-            config.video_resolution,
+            config.video.resolution,
             config.resolution.retroarch_scale,
             config.resolution.switch_scale,
         },
@@ -452,12 +452,11 @@ RetroArchOverrideParams build_session_retroarch_override(
     override_params.joypad_driver = config.retroarch_joypad_driver;
     override_params.players = game.launch_plan.players;
     override_params.save_profile = &user.save_profile;
-    override_params.realtime_pacing = config.audio || config.video;
-    override_params.capture_fullscreen =
-        video.capture.capture_fullscreen && options.use_virtual_capture;
+    override_params.realtime_pacing = config.audio.enabled || config.video.enabled;
+    override_params.capture_fullscreen = video.devices.present.captures();
     override_params.capture_resolution = std::string(video.video_resolution);
     override_params.vulkan_gpu_index =
-        (!options.use_virtual_capture && video.devices.resolved_gpu.has_value())
+        (!video.devices.present.captures() && video.devices.resolved_gpu.has_value())
             ? video.devices.resolved_gpu->vulkan_index
             : -1;
     override_params.system_key = backends.system_key;
@@ -479,9 +478,22 @@ void wait_for_session_input_enumeration() {
     std::this_thread::sleep_for(std::chrono::milliseconds(750));
 }
 
+PresentTarget resolve_session_present_target(
+    HostAppConfig& config,
+    const RetroArchLaunchConfig& launch_config) {
+    auto input = make_capture_resolve_input(
+        config.video,
+        launch_config.standalone,
+        !launch_config.standalone &&
+            core_needs_gl_on_virtual_display(launch_config.core_path));
+    auto present = resolve_present_target(input);
+    config.video.resolution = std::move(input.video_resolution);
+    return present;
+}
+
 SessionGpuSelection resolve_session_gpu_selection(
     const HostAppConfig& config,
-    const CapturePlan& capture,
+    const PresentTarget& present,
     std::string_view log_prefix,
     bool detailed_logging) {
     SessionGpuSelection selection;
@@ -555,8 +567,8 @@ SessionGpuSelection resolve_session_gpu_selection(
                 << "(is DISPLAY set when scanning GPUs?). Capture GL may use llvmpipe.\n";
         }
         if (detailed_logging &&
-            capture.use_virtual_capture && !capture.virtualgl_capture &&
-            !capture.gamescope_capture && selection.resolved_gpu->nvidia_index > 0) {
+            present.uses_x11_capture() && !present.uses_virtualgl() &&
+            selection.resolved_gpu->nvidia_index > 0) {
             std::cerr
                 << "Warning: streamed OpenGL on plain Xvfb cannot select NVIDIA GPU index "
                 << selection.resolved_gpu->nvidia_index
@@ -586,6 +598,16 @@ void apply_session_gpu_to_launch_request(
     if (selection.resolved_gpu.has_value()) {
         request.render_gpu = *selection.resolved_gpu;
     }
+}
+
+void bind_session_plug(
+    EmulatorLaunchEnvRequest& request,
+    const PresentTarget& present,
+    const HostAppConfig& config,
+    std::string xtest_display) {
+    request.plug.present = present;
+    request.plug.present.xtest_display = std::move(xtest_display);
+    request.plug.audio = config.audio.tap();
 }
 
 void append_session_controller_ignore_list(

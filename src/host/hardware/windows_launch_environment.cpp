@@ -8,15 +8,11 @@ ProcessEnvironment audio_launch_environment(
     bool /*stream_media*/,
     bool /*stream_audio*/,
     bool /*host_plays_locally*/,
-    const std::string& /*audio_source*/) {
+    const AudioTap& /*audio*/) {
     return {};
 }
 
-ProcessEnvironment capture_launch_environment(
-    bool /*use_virtual_capture*/,
-    bool /*gamescope_capture*/,
-    bool /*virtualgl_capture*/,
-    const std::string& /*capture_display*/) {
+ProcessEnvironment capture_launch_environment(const PresentTarget& /*present*/) {
     return {};
 }
 

@@ -23,7 +23,7 @@
 #include "host/session/lobby.hpp"
 #include "host/session/launch_assemble.hpp"
 #include "host/session/run_helpers.hpp"
-#include "host/session/audio_channel.hpp"
+#include "host/audio/audio_channel.hpp"
 #include "host/session/launch_types.hpp"
 #include "host/console/switch/switch_backend.hpp"
 #include "host/console/switch/ryujinx_controls.hpp"
@@ -125,25 +125,18 @@ SlotLaunchEnvironment prepare_slot_launch_environment(
     const SessionId& session_id,
     CadenceResourceLease& lease) {
     SlotLaunchEnvironment env;
-    env.session.capture = resolve_capture_plan(config, launch_config);
-    env.session.request.stream_media = config.audio || config.video;
-    env.session.request.stream_audio = config.audio;
+    env.session.present = resolve_session_present_target(config, launch_config);
+    env.session.request.stream_media = config.audio.enabled || config.video.enabled;
+    env.session.request.stream_audio = config.audio.enabled;
     env.session.request.host_plays_locally = host_plays_locally;
-    env.session.request.audio_source = config.audio_source;
     env.session.request.ignore_devices = *config.ignore_controller;
-    env.session.request.use_virtual_capture = env.session.capture.use_virtual_capture;
-    env.session.request.gamescope_capture = env.session.capture.gamescope_capture;
-    env.session.request.virtualgl_capture = env.session.capture.virtualgl_capture;
-    env.session.request.capture_display = env.session.capture.capture_display;
-    env.xtest_display = env.session.capture.gamescope_capture
+    env.xtest_display = env.session.present.uses_pipewire()
         ? lease.claim_next(cadence::resource::kXtestDisplay)
-        : env.session.capture.capture_display;
-    if (env.session.capture.gamescope_capture) {
-        env.session.request.xtest_display = env.xtest_display;
-    }
+        : env.session.present.display;
+    bind_session_plug(env.session.request, env.session.present, config, env.xtest_display);
     if (!session_id.empty()) {
         env.session.request.session_id = session_id;
-        if (env.session.capture.gamescope_capture || env.session.capture.use_virtual_capture) {
+        if (env.session.present.captures()) {
             register_session_xtest_display(session_id, env.xtest_display);
             std::cout
                 << "session slot " << slot << ": session " << session_id
@@ -153,7 +146,7 @@ SlotLaunchEnvironment prepare_slot_launch_environment(
 
     const auto gpu = resolve_session_gpu_selection(
         config,
-        env.session.capture,
+        env.session.present,
         "session slot " + std::to_string(slot) + ": ");
     env.session.gpu = std::move(gpu);
     apply_session_gpu_to_launch_request(env.session.request, env.session.gpu);
@@ -250,12 +243,14 @@ RetroArchOverrideParams ActiveSessionSlot::make_relaunch_override_params(
     override_params.joypad_driver = slot_config_.retroarch_joypad_driver;
     override_params.players = players;
     override_params.save_profile = &save_profile_;
-    override_params.realtime_pacing = slot_config_.audio || slot_config_.video;
-    override_params.capture_fullscreen = ctx.capture.capture_fullscreen && use_virtual_capture_;
+    override_params.realtime_pacing = slot_config_.audio.enabled || slot_config_.video.enabled;
+    override_params.capture_fullscreen = ctx.capture.present.captures();
     override_params.capture_resolution = ctx.capture.video_resolution;
     const bool have_gpu = ctx.capture.resolved_gpu.has_value();
     override_params.vulkan_gpu_index =
-        (!use_virtual_capture_ && have_gpu) ? ctx.capture.resolved_gpu->vulkan_index : -1;
+        (!ctx.capture.present.captures() && have_gpu)
+            ? ctx.capture.resolved_gpu->vulkan_index
+            : -1;
     override_params.system_key = system_key_;
     override_params.core_path = core_path;
     override_params.resolution_scale = slot_config_.resolution.retroarch_scale;
@@ -630,8 +625,6 @@ struct SlotBackendPrepareRequest {
     int slot = 0;
     SessionPlan& plan;
     SessionBackendPrepareContext& backend;
-    bool use_virtual_capture = false;
-    bool gamescope_capture = false;
     VirtualKeyboard* keyboard = nullptr;
 };
 
@@ -643,8 +636,6 @@ void prepare_slot_backend(const SlotBackendPrepareRequest& req) {
             req.backend,
             SessionBackendPrepareOptions{
                 req.slot,
-                req.use_virtual_capture,
-                req.gamescope_capture,
                 false,
                 session_prefers_switch_handheld_mode(req.plan),
                 req.plan.control.retroarch_netcmd_port,
@@ -791,7 +782,7 @@ void ActiveSessionSlot::run_session() {
 
     auto lease = cadence_tracker_.leases();
     lease.set_pools(cadence_resource_pools_from(config));
-    const bool want_pulse = config.audio && should_use_slot_streaming_sink(config.audio_source);
+    const bool want_pulse = config.audio.enabled && should_use_slot_streaming_sink(config.audio.source);
     const auto grant = allocate_session_resources(
         lease,
         SessionResourceNeed{
@@ -804,10 +795,10 @@ void ActiveSessionSlot::run_session() {
         try {
             audio_channel_ = std::make_unique<SessionAudioChannel>(
                 slot, grant.pulse_sink, grant.pulse_app_id);
-            config.audio_source = audio_channel_->monitor_source();
+            config.audio.source = audio_channel_->monitor_source();
             std::cout
                 << "session slot " << slot << ": audio capture "
-                << config.audio_source
+                << config.audio.source
                 << " (id " << audio_channel_->application_id() << ")\n";
         } catch (const std::exception& error) {
             audio_channel_.reset();
@@ -911,8 +902,7 @@ void ActiveSessionSlot::run_session() {
         host_plays_locally,
         config_.session_id,
         lease);
-    use_virtual_capture_ = launch_env.session.capture.use_virtual_capture;
-    gamescope_capture_ = launch_env.session.capture.gamescope_capture;
+    present_ = launch_env.session.present;
 
     auto media = build_session_media_plan(
         config,
@@ -952,7 +942,7 @@ void ActiveSessionSlot::run_session() {
     apply_capture_to_session_device_plan(
         devices,
         config,
-        launch_env.session.capture,
+        launch_env.session.present,
         launch_env.session.gpu.resolved_gpu);
     virtual_joypad_index_ = devices.input.virtual_joypad_index;
 
@@ -962,21 +952,18 @@ void ActiveSessionSlot::run_session() {
         launch_assets,
         devices,
         backends,
-        launch_env.session.capture,
         launch_env.session.request,
         resolve_session_plan_participants(save_profile_.username, plan));
     prepare_slot_backend(SlotBackendPrepareRequest{
         slot,
         plan,
         backend_context,
-        use_virtual_capture_,
-        gamescope_capture_,
         keyboard_.get(),
     });
 
     apply_capture_and_launch_environment(
         launch_config,
-        launch_env.session.capture,
+        launch_env.session.present,
         config,
         launch_env.session.gpu.gamescope_vk_device,
         launch_env.session.gpu.resolved_gpu,
@@ -994,7 +981,7 @@ void ActiveSessionSlot::run_session() {
         launch_config.unset_environment = std::move(env.unset);
     }
 
-    if (config.audio) {
+    if (config.audio.enabled) {
         park_session_game_audio(audio_channel_.get());
     }
 
@@ -1019,8 +1006,7 @@ void ActiveSessionSlot::run_session() {
     media_server_ = start_host_media_server_if_needed(HostMediaStartRequest{
         config,
         SessionMediaCaptureContext{
-            launch_env.session.capture.capture_display,
-            launch_env.session.capture.display_backend,
+            launch_env.session.present,
             launch_env.session.gpu.nvenc_cuda_device_id,
         },
         SessionMediaStreamContext{
@@ -1036,8 +1022,7 @@ void ActiveSessionSlot::run_session() {
     const auto slot_prefix = "session slot " + std::to_string(slot) + ": ";
     plug_virtual_keyboard_with_retry(
         *keyboard_,
-        use_virtual_capture_,
-        gamescope_capture_,
+        present_,
         slot_prefix);
 
     for (const auto& stream : media.streams) {
@@ -1088,17 +1073,17 @@ void ActiveSessionSlot::run_session() {
         *gamepads_,
         launch_plan.players,
         keyboard_.get(),
-        gamescope_capture_,
+        present_,
         launch_env.xtest_display,
         slot_prefix,
         audio_channel_.get());
 
-    if (gamescope_capture_ && keyboard_ != nullptr && keyboard_->plugged()) {
+    if (present_.uses_pipewire() && keyboard_ != nullptr && keyboard_->plugged()) {
         const auto actual = keyboard_->capture_display();
         if (!actual.empty() && actual != launch_env.xtest_display) {
             if (lease.replace(cadence::resource::kXtestDisplay, actual)) {
                 launch_env.xtest_display = actual;
-                launch_env.session.request.xtest_display = actual;
+                launch_env.session.request.plug.present.xtest_display = actual;
                 if (!config_.session_id.empty()) {
                     register_session_xtest_display(config_.session_id, actual);
                 }
@@ -1155,11 +1140,8 @@ void ActiveSessionSlot::run_session() {
     const RelaunchContext relaunch_ctx{
         SessionCaptureDevices{
             launch_env.session.gpu.resolved_gpu,
-            launch_env.session.capture.use_virtual_capture,
-            launch_env.session.capture.capture_fullscreen,
-            launch_env.session.capture.capture_display,
-            launch_env.session.capture.display_backend,
-            config.video_resolution,
+            launch_env.session.present,
+            config.video.resolution,
         },
         &launch_env.session.request,
     };
@@ -1168,7 +1150,7 @@ void ActiveSessionSlot::run_session() {
         input_router_.get(),
         /*audio=*/nullptr,
         /*audio_slot_index=*/std::nullopt,
-        config.audio,
+        config.audio.enabled,
         audio_channel_.get());
 
     poll_while(should_stop, session_end_reason, relaunch_ctx);

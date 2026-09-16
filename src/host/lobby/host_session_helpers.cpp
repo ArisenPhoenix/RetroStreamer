@@ -247,8 +247,8 @@ void poll_active_session_joins(
         if (std::holds_alternative<ActiveSessionInfoRequest>(first_payload)) {
             stream->send_packet(serialize_packet(active_session_info_for(
                 plan,
-                config.video,
-                config.audio)));
+                config.video.enabled,
+                config.audio.enabled)));
             return;
         }
         if (const auto* log_bundle = std::get_if<ClientLogBundle>(&first_payload);

@@ -53,11 +53,23 @@ protected:
         if (key_event->isAutoRepeat()) {
             return false;
         }
+        auto& gui_keys = archstreamer::GuiFocusRemotedKeyboardSource::instance();
+        if (const auto* focus = QApplication::focusWidget(); focus != nullptr) {
+            if (focus->inherits("QLineEdit") ||
+                focus->inherits("QTextEdit") ||
+                focus->inherits("QPlainTextEdit") ||
+                focus->inherits("QAbstractSpinBox") ||
+                focus->inherits("QComboBox")) {
+                if (gui_keys.poll_keys() != 0) {
+                    gui_keys.set_keys(0);
+                }
+                return false;
+            }
+        }
         const auto bit = archstreamer::remoted_key_bit_from_qt_key(key_event->key());
         if (bit == 0) {
             return false;
         }
-        auto& gui_keys = archstreamer::GuiFocusRemotedKeyboardSource::instance();
         auto keys = gui_keys.poll_keys();
         if (event->type() == QEvent::KeyPress) {
             keys |= bit;

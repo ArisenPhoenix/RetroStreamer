@@ -1,5 +1,7 @@
 #pragma once
 
+#include "host/contracts/audio.hpp"
+
 #include <string>
 #include <string_view>
 
@@ -62,5 +64,8 @@ public:
     void track_emulator_process(int process_id, int slot_index = -1);
     void untrack_emulator_process(int slot_index = -1);
 };
+
+/** Force WASAPI on Windows when Pulse was requested; no-op on Linux. */
+void normalize_audio_backend_for_platform(AudioCaptureBackend& backend);
 
 } // namespace archstreamer

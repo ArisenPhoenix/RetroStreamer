@@ -51,8 +51,7 @@ public:
                 devices.input.product_id_base,
                 config.ignore_controller.value_or(""),
                 config.graphics_api,
-                video.capture.virtualgl_capture,
-                options.gamescope_capture,
+                launch_env_request.plug.present,
                 video.switch_scale,
                 options.prefer_switch_handheld_mode,
                 &video.devices.resolved_gpu,
@@ -115,8 +114,6 @@ public:
                 config.verbose,
                 devices.input.product_id_base,
                 config.ignore_controller.value_or(""),
-                video.capture.virtualgl_capture,
-                options.gamescope_capture,
                 options.slot_index,
                 user.participants.profile_display_name,
                 user.participants.display_layout,
@@ -156,7 +153,6 @@ public:
         const auto override_params = build_session_retroarch_override(
             context,
             SessionRetroArchOverrideOptions{
-                options.use_virtual_capture,
                 options.slot_index,
                 options.retroarch_netcmd_port,
                 user.participants.display_layout,
@@ -176,7 +172,7 @@ public:
                           << " (" << face_button_map_name(backends.system_key) << ")\n";
             }
         }
-        launch_env_request.pad_plan = devices.input.shared_pad_plan;
+        launch_env_request.plug.seat = devices.input.shared_pad_plan;
         log_pad_plan(devices.input.shared_pad_plan, options.slot_index);
         return {};
     }

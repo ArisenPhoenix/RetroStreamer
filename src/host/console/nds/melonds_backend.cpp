@@ -75,8 +75,6 @@ MelonDsBackendPrepResult MelonDsBackend::prepare(
         result.profile.ctrl_server_name,
     };
 
-    (void)ctx.virtualgl_capture;
-    (void)ctx.gamescope_capture;
     return result;
 }
 
@@ -85,7 +83,7 @@ void MelonDsBackend::assign_launch_env_profile(
     MelonDsBackendPrepResult& prep) const {
     env.melonds_profile = std::move(prep.profile);
     if (prep.pad_plan.has_value()) {
-        env.pad_plan = std::move(prep.pad_plan);
+        env.plug.seat = std::move(prep.pad_plan);
     }
 }
 
@@ -143,8 +141,8 @@ void log_melonds_backend_prep(
     const MelonDsBackendPrepResult& prep,
     std::optional<int> slot_index) {
     (void)backend;
-    if (env.pad_plan.has_value()) {
-        log_pad_plan(*env.pad_plan, slot_index);
+    if (env.plug.seat.has_value()) {
+        log_pad_plan(*env.plug.seat, slot_index);
     }
     if (!env.melonds_profile.has_value()) {
         return;

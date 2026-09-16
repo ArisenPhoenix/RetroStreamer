@@ -1,11 +1,12 @@
 #pragma once
 
+#include "host/contracts/present.hpp"
 #include "host/host_app_config.hpp"
 #include "host/host_launch_planner.hpp"
 #include "host/contracts/media.hpp"
 #include "host/video/media_server.hpp"
 #include "host/client/client_info.hpp"
-#include "host/session/audio_channel.hpp"
+#include "host/audio/audio_channel.hpp"
 #include "host/session/runtime.hpp"
 #include "host/audio/streaming_audio_sink.hpp"
 #include "host/virtual/virtual_gamepad.hpp"
@@ -31,8 +32,7 @@ struct SessionBackendState;
  */
 bool plug_virtual_keyboard_with_retry(
     VirtualKeyboard& keyboard,
-    bool use_virtual_capture,
-    bool gamescope_capture,
+    const PresentTarget& present,
     std::string_view log_prefix = {});
 
 /**
@@ -47,8 +47,7 @@ bool plug_gamescope_virtual_keyboard_after_start(
     std::string_view log_prefix = {});
 
 struct SessionMediaCaptureContext {
-    std::string capture_display;
-    VirtualDisplayBackend display_backend;
+    PresentTarget present;
     int nvenc_cuda_device_id = -1;
 };
 
@@ -107,7 +106,7 @@ void post_emulator_start_warmup(
     VirtualGamepadBus& pads,
     RetroArchPort players,
     VirtualKeyboard* keyboard = nullptr,
-    bool gamescope_capture = false,
+    const PresentTarget& present = {},
     const std::string& preferred_display = {},
     std::string_view log_prefix = {},
     SessionAudioChannel* audio_channel = nullptr);

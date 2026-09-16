@@ -833,11 +833,11 @@ void MainWindow::start_host() {
         host_cfg.resolution.retroarch_scale = selected_retroarch_resolution_scale();
         host_cfg.owner_gui_pid = static_cast<int>(QCoreApplication::applicationPid());
         host_cfg.verbose = current_log_level() == GuiLogLevel::Verbose;
-        host_cfg.video = host_video_->isChecked();
-        host_cfg.video_port = static_cast<std::uint16_t>(host_video_port_->value());
-        host_cfg.video_resolution = selected_host_capture_resolution().toStdString();
-        host_cfg.audio = host_audio_->isChecked();
-        host_cfg.audio_port = static_cast<std::uint16_t>(host_audio_port_->value());
+        host_cfg.video.enabled = host_video_->isChecked();
+        host_cfg.video.port = static_cast<std::uint16_t>(host_video_port_->value());
+        host_cfg.video.resolution = selected_host_capture_resolution().toStdString();
+        host_cfg.audio.enabled = host_audio_->isChecked();
+        host_cfg.audio.port = static_cast<std::uint16_t>(host_audio_port_->value());
         host_cfg.host_local_watch =
             host_local_media_ != nullptr && host_local_media_->isChecked();
         if (bridge_index >= 0) {

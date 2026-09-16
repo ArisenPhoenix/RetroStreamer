@@ -1061,12 +1061,9 @@ void MainWindow::start_client() {
         }
         client_video_controller_->setTitleFromGame(system_name, game_name);
         client_video_controller_->setMode(ClientVideoMode::TopLevel);
-        client_video_controller_->prepareForSession();
-        config.video_embed_xid = client_video_controller_->embedXid();
         config.video_embed = std::move(video_embed);
-        append_log(
-            client_log_,
-            QString("Video window ready (xid=%1).").arg(config.video_embed_xid));
+        // Window stays hidden until HostWelcome — a rejected Hello must not
+        // flash a video surface.
     }
 #endif
 
@@ -1087,8 +1084,27 @@ void MainWindow::start_client() {
                     .arg(full.games.size())
                     .arg(filtered.games.size()));
             };
-            callbacks.on_connected = [this, &connected_client_id](const archstreamer::ClientConnectionInfo& connection) {
+            callbacks.on_connected = [this, &config, &connected_client_id](
+                const archstreamer::ClientConnectionInfo& connection) {
                 connected_client_id = connection.client_id;
+#ifndef _WIN32
+                if (config.wants_video && client_video_controller_) {
+                    QMetaObject::invokeMethod(
+                        this,
+                        [this, &config] {
+                            if (!client_video_controller_) {
+                                return;
+                            }
+                            client_video_controller_->prepareForSession();
+                            config.video_embed_xid = client_video_controller_->embedXid();
+                            append_log(
+                                client_log_,
+                                QString("Video window ready (xid=%1).")
+                                    .arg(config.video_embed_xid));
+                        },
+                        Qt::BlockingQueuedConnection);
+                }
+#endif
                 QMetaObject::invokeMethod(
                     client_catalog_status_,
                     [this] {

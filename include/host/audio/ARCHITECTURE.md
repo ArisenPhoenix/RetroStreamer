@@ -7,5 +7,6 @@ This bucket covers null-sink / WASAPI loopback helpers that produce an
 (`gstreamer_audio_fanout.hpp`) composed by `MediaServer`. Emulators inherit
 the tap as `PULSE_SINK` (or equivalent); the fanout captures the monitor.
 
-`SessionAudioChannel` still lives in `host/session/` (session-owned tap
-lifetime; implementation is in `streaming_audio_sink.cpp`).
+`SessionAudioChannel` is the per-slot tap (lifetime owned by the active
+session). `AudioSettings` is the host-facing knobs `HostAppConfig` embeds.
+`normalize_audio_backend_for_platform` lives here too.

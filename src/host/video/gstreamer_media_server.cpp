@@ -1594,6 +1594,9 @@ void GStreamerMediaServer::start(
                 case VirtualDisplayBackend::Xvfb:
                     std::cout << "xvfb on " << capture_.virtual_display;
                     break;
+                case VirtualDisplayBackend::Desktop:
+                    std::cout << "desktop (host capture)";
+                    break;
                 case VirtualDisplayBackend::None:
                     std::cout << "none";
                     break;

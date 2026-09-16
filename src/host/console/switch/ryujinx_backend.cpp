@@ -59,7 +59,7 @@ void RyujinxBackend::assign_launch_env_profile(
     env.ryujinx_profile = std::move(prep.ryujinx_profile);
     env.yuzu_profile.reset();
     if (prep.pad_plan.has_value()) {
-        env.pad_plan = std::move(prep.pad_plan);
+        env.plug.seat = std::move(prep.pad_plan);
     }
 }
 

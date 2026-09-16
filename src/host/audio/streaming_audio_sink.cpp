@@ -1,6 +1,6 @@
 #ifndef _WIN32
 #include "host/audio/streaming_audio_sink.hpp"
-#include "host/session/audio_channel.hpp"
+#include "host/audio/audio_channel.hpp"
 #include "host/contracts/launch.hpp"
 
 #include "common/platform/process_utils.hpp"
@@ -651,6 +651,10 @@ void StreamingAudioSink::untrack_emulator_process(int slot_index) {
     g_tracked_roots.erase(slot_index);
 }
 
+void normalize_audio_backend_for_platform(AudioCaptureBackend& /*backend*/) {
+    // Pulse/PipeWire are valid on Linux.
+}
+
 SessionAudioChannel::SessionAudioChannel(int slot_index)
     : SessionAudioChannel(
           slot_index,
@@ -691,7 +695,7 @@ ProcessEnvironment SessionAudioChannel::launch_env() const {
         /*stream_media=*/true,
         /*stream_audio=*/true,
         /*host_plays_locally=*/false,
-        monitor_source());
+        AudioTap{AudioCaptureBackend::Pulse, monitor_source()});
 }
 
 int SessionAudioChannel::park() {

@@ -435,8 +435,8 @@ void Lobby::accept_once() {
             ActiveSessionInfo info;
             const auto live = session_manager_->live_count();
             info.active = live > 0;
-            info.video_enabled = config_.host_config.video;
-            info.audio_enabled = config_.host_config.audio;
+            info.video_enabled = config_.host_config.video.enabled;
+            info.audio_enabled = config_.host_config.audio.enabled;
             info.active_slots = static_cast<std::uint8_t>(live);
             info.max_slots = max_slots();
             if (info.active) {

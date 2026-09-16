@@ -388,6 +388,9 @@ std::optional<std::string> pci_vendor_device_id(const std::string& pci_bus) {
 }
 
 VirtualDisplayBackend choose_virtual_display_backend(VirtualDisplayBackend requested) {
+    if (requested == VirtualDisplayBackend::Desktop) {
+        return VirtualDisplayBackend::Desktop;
+    }
     if (requested == VirtualDisplayBackend::Gamescope) {
         if (!find_gamescope().has_value()) {
             throw std::runtime_error(
@@ -430,6 +433,7 @@ std::unique_ptr<VirtualDisplay> make_virtual_display(VirtualDisplayBackend backe
         return std::make_unique<XephyrDisplay>();
     case VirtualDisplayBackend::Xvfb:
         return std::make_unique<XvfbDisplay>();
+    case VirtualDisplayBackend::Desktop:
     case VirtualDisplayBackend::None:
         return nullptr;
     }

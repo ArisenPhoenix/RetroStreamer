@@ -104,9 +104,9 @@ std::vector<std::string> prefer_then_scan(int preferred, int count, MakeName&& m
 
 CadenceResourcePools cadence_resource_pools_from(const HostAppConfig& config) {
     CadenceResourcePools pools;
-    pools.capture_display_base = parse_display_number(config.virtual_display);
-    pools.video_port_base = config.video_port;
-    pools.audio_port_base = config.audio_port;
+    pools.capture_display_base = parse_display_number(config.video.virtual_display);
+    pools.video_port_base = config.video.port;
+    pools.audio_port_base = config.audio.port;
     pools.netcmd_port_base = DefaultRetroArchNetcmdPort;
     return pools;
 }
@@ -340,13 +340,13 @@ SessionResourceGrant allocate_session_resources(
 
 void apply_session_resource_grant(HostAppConfig& config, const SessionResourceGrant& grant) {
     if (!grant.capture_display.empty()) {
-        config.virtual_display = grant.capture_display;
+        config.video.virtual_display = grant.capture_display;
     }
     if (grant.video_port != 0) {
-        config.video_port = grant.video_port;
+        config.video.port = grant.video_port;
     }
     if (grant.audio_port != 0) {
-        config.audio_port = grant.audio_port;
+        config.audio.port = grant.audio_port;
     }
 }
 

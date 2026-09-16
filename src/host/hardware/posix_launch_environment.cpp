@@ -51,8 +51,9 @@ ProcessEnvironment audio_launch_environment(
     bool stream_media,
     bool stream_audio,
     bool host_plays_locally,
-    const std::string& audio_source) {
+    const AudioTap& audio) {
     ProcessEnvironment env;
+    const std::string& audio_source = audio.source;
     if (stream_media) {
         env.set("SDL_AUDIODRIVER", "pulse");
     }
@@ -109,24 +110,22 @@ ProcessEnvironment audio_launch_environment(
     return env;
 }
 
-ProcessEnvironment capture_launch_environment(
-    bool use_virtual_capture,
-    bool gamescope_capture,
-    bool virtualgl_capture,
-    const std::string& capture_display) {
+ProcessEnvironment capture_launch_environment(const PresentTarget& present) {
     ProcessEnvironment env;
-    if (!use_virtual_capture) {
+    if (!present.captures()) {
         return env;
     }
     // Mutually exclusive capture backends.
-    if (gamescope_capture) {
+    if (present.uses_pipewire()) {
         env.merge_pairs(gamescope_launch_environment());
-    } else {
+        return env;
+    }
+    if (present.uses_x11_capture()) {
         // Xvfb/Xephyr/VirtualGL: pin the emulator to the capture DISPLAY and strip
         // Wayland so RetroArch/SDL/Qt cannot attach to the host compositor (visible
         // game on the host desktop + black ximagesrc for clients).
-        if (!capture_display.empty()) {
-            env.set("DISPLAY", capture_display);
+        if (!present.display.empty()) {
+            env.set("DISPLAY", present.display);
         }
         env.add_unset("WAYLAND_DISPLAY");
         env.add_unset("WAYLAND_SOCKET");
@@ -146,7 +145,7 @@ ProcessEnvironment capture_launch_environment(
                 env.set("PULSE_SERVER", "unix:" + pulse_native.string());
             }
         }
-        if (virtualgl_capture) {
+        if (present.uses_virtualgl()) {
             env.merge_pairs(virtual_gl_environment());
         }
     }

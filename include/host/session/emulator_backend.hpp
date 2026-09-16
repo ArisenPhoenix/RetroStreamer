@@ -13,8 +13,6 @@ class VirtualKeyboard;
 
 struct SessionBackendPrepareOptions {
     int slot_index = 0;
-    bool use_virtual_capture = false;
-    bool gamescope_capture = false;
     bool log_retroarch_details = false;
     bool prefer_switch_handheld_mode = false;
     std::uint16_t retroarch_netcmd_port = DefaultRetroArchNetcmdPort;

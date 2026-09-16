@@ -537,6 +537,8 @@ ClientRunResult ClientApp::join_session(
             bool prev_p_down = false;
             bool prev_f_down = false;
             bool ff_latched = false;
+            bool ff_held_stable = false;
+            int ff_hold_ticks = 0;
             bool keyboard_pad_active_sent = false;
             std::array<ControllerMapApplyState, MaxPlayersPerClient> map_apply_states{};
             constexpr auto kInputTick = std::chrono::milliseconds(4);
@@ -666,7 +668,15 @@ ClientRunResult ClientApp::join_session(
                     keyboard_pad_active_sent = keyboard_pad_buttons != 0;
                 }
                 if (emulator_control) {
-                    emulator_control->set_fast_forward_held(any_ff_held);
+                    // Hold the last stable FF for ~48ms so a noisy keymap cannot
+                    // spam Ryujinx F1 VSync taps (3-state cycle desyncs, F won't off).
+                    if (any_ff_held == ff_held_stable) {
+                        ff_hold_ticks = 0;
+                    } else if (++ff_hold_ticks >= 12) {
+                        ff_held_stable = any_ff_held;
+                        ff_hold_ticks = 0;
+                    }
+                    emulator_control->set_fast_forward_held(ff_held_stable);
                     if (any_screen_swap) {
                         emulator_control->request_screen_swap();
                     }

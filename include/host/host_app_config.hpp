@@ -3,9 +3,11 @@
 #include "common/catalog_paths.hpp"
 #include "common/participant_role.hpp"
 #include "common/protocol.hpp"
+#include "host/audio/audio_settings.hpp"
 #include "host/host_launch_planner.hpp"
 #include "host/contracts/media.hpp"
 #include "host/platform/host_pad_platform.hpp"
+#include "host/video/video_settings.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -50,18 +52,10 @@ struct HostAppConfig {
     std::uint16_t client_timeout_seconds = 20;
     std::uint16_t player_reconnect_timeout_seconds = 60;
     ParticipantRole host_role = ParticipantRole::Viewer;
-    bool video = true;
-    std::string video_destination = "127.0.0.1";
-    bool video_destination_explicit = false;
-    std::uint16_t video_port = 5004;
-    bool audio = true;
-    std::uint16_t audio_port = 6004;
-    std::string audio_source;
-    AudioCaptureBackend audio_backend = AudioCaptureBackend::Pulse;
+    /** Module-owned knobs; session reads these instead of a flat flag bag. */
+    VideoSettings video;
+    AudioSettings audio;
     bool host_local_watch = false;
-    std::string virtual_display = ":99";
-    std::string video_resolution = "1920x1080";
-    VirtualDisplayBackend display_backend = VirtualDisplayBackend::None;
     std::optional<std::size_t> bridge_controller_index;
     std::optional<std::size_t> virtual_joypad_index;
     std::optional<std::string> ignore_controller;

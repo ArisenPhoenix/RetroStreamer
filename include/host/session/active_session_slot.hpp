@@ -17,7 +17,7 @@
 #include "host/session/slot_lease.hpp"
 #include "host/session/types.hpp"
 #include "host/audio/streaming_audio_sink.hpp"
-#include "host/session/audio_channel.hpp"
+#include "host/audio/audio_channel.hpp"
 #include "host/db/cadence_session_tracker.hpp"
 #include "host/virtual/virtual_keyboard.hpp"
 #include "host/hardware/default_host_platform.hpp"
@@ -198,8 +198,7 @@ private:
     std::string system_key_;
     std::size_t media_index_ = 0;
     std::size_t virtual_joypad_index_ = 0;
-    bool gamescope_capture_ = false;
-    bool use_virtual_capture_ = false;
+    PresentTarget present_;
     HostAppConfig slot_config_;
     /** True after cadence session_started until session_ended is recorded. */
     bool cadence_session_live_ = false;

@@ -213,7 +213,7 @@ void SessionManager::start_session(SessionPlan plan, SessionId session_id) {
     }
     auto lease = SessionSlotLease::claim(
         kSlotLeaseSpan,
-        parse_virtual_display_number(config_.host_config.virtual_display));
+        parse_virtual_display_number(config_.host_config.video.virtual_display));
     if (!lease.valid()) {
         throw std::runtime_error(
             "no free session slot on this machine (another host is using them)");

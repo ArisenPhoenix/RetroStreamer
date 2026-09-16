@@ -65,15 +65,15 @@ void SwitchBackend::apply_common_prep(
     if (ctx.graphics_api == GraphicsApiPreference::OpenGL) {
         result.force_opengl = true;
     } else if (ctx.graphics_api == GraphicsApiPreference::Vulkan) {
-        if (ctx.virtualgl_capture) {
+        if (ctx.present.uses_virtualgl()) {
             std::cerr << "Warning: VirtualGL path cannot present Vulkan; using OpenGL.\n";
             result.force_opengl = true;
         } else {
             result.force_vulkan = true;
         }
-    } else if (ctx.virtualgl_capture) {
+    } else if (ctx.present.uses_virtualgl()) {
         result.force_opengl = true;
-    } else if (ctx.gamescope_capture) {
+    } else if (ctx.present.uses_pipewire()) {
         result.force_vulkan = true;
     }
 
@@ -118,8 +118,8 @@ void log_switch_backend_prep(
     const std::optional<GpuDevice>& resolved_gpu,
     std::optional<int> slot_index) {
     (void)backend;
-    if (env.pad_plan.has_value()) {
-        log_pad_plan(*env.pad_plan, slot_index);
+    if (env.plug.seat.has_value()) {
+        log_pad_plan(*env.plug.seat, slot_index);
     }
     if (slot_index.has_value()) {
         if (env.ryujinx_profile.has_value()) {

@@ -27,7 +27,7 @@ struct GpuDevice;
  */
 void apply_capture_and_launch_environment(
     RetroArchLaunchConfig& launch_config,
-    const CapturePlan& capture,
+    const PresentTarget& present,
     const HostAppConfig& config,
     const std::string& gamescope_vk_device,
     const std::optional<GpuDevice>& resolved_gpu,

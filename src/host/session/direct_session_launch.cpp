@@ -97,20 +97,20 @@ void print_direct_launch_summary(
                 << "Video:     client " << static_cast<int>(stream.client_id)
                 << " " << stream.endpoint.video_uri
                 << " from display " << capture_display
-                << " at " << config.video_resolution << '\n';
+                << " at " << config.video.resolution << '\n';
         }
         if (!stream.endpoint.audio_uri.empty()) {
             std::cout
                 << "Audio:     client " << static_cast<int>(stream.client_id)
                 << " " << stream.endpoint.audio_uri;
-            if (!config.audio_source.empty()) {
-                std::cout << " from " << config.audio_source;
+            if (!config.audio.source.empty()) {
+                std::cout << " from " << config.audio.source;
             }
             std::cout
                 << " via "
-                << (config.audio_backend == AudioCaptureBackend::PipeWire
+                << (config.audio.backend == AudioCaptureBackend::PipeWire
                         ? "pipewire"
-                        : config.audio_backend == AudioCaptureBackend::Wasapi ? "wasapi"
+                        : config.audio.backend == AudioCaptureBackend::Wasapi ? "wasapi"
                                                                              : "pulse")
                 << '\n';
         }
@@ -244,22 +244,18 @@ void end_direct_cadence_session(
 
 EmulatorLaunchEnvRequest build_launch_env_request(
     const HostAppConfig& config,
-    const CapturePlan& capture,
+    const PresentTarget& present,
     bool host_plays_locally,
     CadenceResourceLease& lease) {
     EmulatorLaunchEnvRequest launch_env_request;
     launch_env_request.host_plays_locally = host_plays_locally;
-    launch_env_request.stream_media = config.audio || config.video;
-    launch_env_request.stream_audio = config.audio;
-    launch_env_request.audio_source = config.audio_source;
+    launch_env_request.stream_media = config.audio.enabled || config.video.enabled;
+    launch_env_request.stream_audio = config.audio.enabled;
     launch_env_request.ignore_devices = *config.ignore_controller;
-    launch_env_request.use_virtual_capture = capture.use_virtual_capture;
-    launch_env_request.gamescope_capture = capture.gamescope_capture;
-    launch_env_request.virtualgl_capture = capture.virtualgl_capture;
-    launch_env_request.capture_display = capture.capture_display;
-    launch_env_request.xtest_display = launch_env_request.gamescope_capture
+    const auto xtest_display = present.uses_pipewire()
         ? lease.claim_next(cadence::resource::kXtestDisplay)
-        : launch_env_request.capture_display;
+        : present.display;
+    bind_session_plug(launch_env_request, present, config, xtest_display);
     launch_env_request.session_id = lease.session_id();
     return launch_env_request;
 }
@@ -268,10 +264,10 @@ EmulatorLaunchEnvRequest build_launch_env_request(
 SessionGpuSelection prepare_direct_gpu(
     const HostAppConfig& config,
     EmulatorLaunchEnvRequest& launch_env_request,
-    const CapturePlan& capture) {
+    const PresentTarget& present) {
     auto gpu_selection = resolve_session_gpu_selection(
         config,
-        capture,
+        present,
         {},
         /*detailed_logging=*/true);
     apply_session_gpu_to_launch_request(launch_env_request, gpu_selection);
@@ -283,11 +279,11 @@ SessionLaunchEnvironment prepare_direct_launch_environment(
     RetroArchLaunchConfig& launch_config,
     bool host_plays_locally,
     CadenceResourceLease& lease) {
-    auto capture = resolve_capture_plan(config, launch_config);
-    auto request = build_launch_env_request(config, capture, host_plays_locally, lease);
-    auto gpu = prepare_direct_gpu(config, request, capture);
+    auto present = resolve_session_present_target(config, launch_config);
+    auto request = build_launch_env_request(config, present, host_plays_locally, lease);
+    auto gpu = prepare_direct_gpu(config, request, present);
     return SessionLaunchEnvironment{
-        std::move(capture),
+        std::move(present),
         std::move(request),
         std::move(gpu),
     };
@@ -301,8 +297,6 @@ void prepare_direct_backend(
         backend,
         SessionBackendPrepareOptions{
             0,
-            backend.input.devices.capture.use_virtual_capture,
-            backend.video.capture.gamescope_capture,
             true,
             false,
             netcmd_port,

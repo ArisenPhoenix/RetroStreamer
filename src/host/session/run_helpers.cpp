@@ -126,10 +126,9 @@ std::vector<std::string> gamescope_xtest_candidates(
 
 bool plug_virtual_keyboard_with_retry(
     VirtualKeyboard& keyboard,
-    bool use_virtual_capture,
-    bool gamescope_capture,
+    const PresentTarget& present,
     std::string_view log_prefix) {
-    if (use_virtual_capture && !gamescope_capture) {
+    if (present.captures() && !present.uses_pipewire()) {
         for (int attempt = 0; attempt < 20; ++attempt) {
             try {
                 keyboard.plug();
@@ -146,7 +145,7 @@ bool plug_virtual_keyboard_with_retry(
         }
         return false;
     }
-    if (!use_virtual_capture) {
+    if (!present.captures()) {
         try {
             keyboard.plug();
             return true;
@@ -257,21 +256,18 @@ bool plug_gamescope_virtual_keyboard_after_start(
 
 std::unique_ptr<MediaServer> start_host_media_server_if_needed(
     const HostMediaStartRequest& req) {
-    if (!req.config.audio && !req.config.video) {
+    if (!req.config.audio.enabled && !req.config.video.enabled) {
         return nullptr;
     }
-    normalize_audio_backend_for_platform(req.config);
-    auto media_server = make_host_media_server(GStreamerMediaCaptureConfig{
-        req.config.video,
-        req.config.audio,
-        req.capture.capture_display,
-        req.config.video_resolution,
-        req.capture.display_backend,
-        req.config.audio_backend,
-        req.config.audio_source,
+    normalize_audio_backend_for_platform(req.config.audio.backend);
+    auto media_server = make_host_media_server(make_media_capture_config(
+        req.config.video.enabled,
+        req.config.audio.enabled,
+        req.capture.present,
+        req.config.audio.tap(),
+        req.config.video.resolution,
         req.config.verbose,
-        req.capture.nvenc_cuda_device_id,
-    });
+        req.capture.nvenc_cuda_device_id));
     media_server->start(
         req.stream.media_config,
         req.stream.destinations,
@@ -446,17 +442,17 @@ void post_emulator_start_warmup(
     VirtualGamepadBus& pads,
     RetroArchPort players,
     VirtualKeyboard* keyboard,
-    bool gamescope_capture,
+    const PresentTarget& present,
     const std::string& preferred_display,
     std::string_view log_prefix,
     SessionAudioChannel* audio_channel) {
     start_deferred_gamescope_video_if_needed(
         media,
-        config,
+        config.video.resolution,
         streams,
         runtime.emulator().process_id().value_or(0));
 
-    if (gamescope_capture && keyboard != nullptr) {
+    if (present.uses_pipewire() && keyboard != nullptr) {
         plug_gamescope_virtual_keyboard_after_start(
             *keyboard,
             preferred_display,
@@ -464,7 +460,7 @@ void post_emulator_start_warmup(
             log_prefix);
     }
 
-    if (config.audio) {
+    if (config.audio.enabled) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         if (const auto pid = runtime.emulator().process_id(); pid.has_value()) {
             if (audio_channel != nullptr) {

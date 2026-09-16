@@ -25,8 +25,7 @@ struct SwitchBackendPrepContext {
     std::uint16_t product_id_base = 0;
     std::string ignore_controller;
     GraphicsApiPreference graphics_api = GraphicsApiPreference::Auto;
-    bool virtualgl_capture = false;
-    bool gamescope_capture = false;
+    PresentTarget present;
     int resolution_scale = 1;
     bool prefer_handheld_mode = false;
     const std::optional<GpuDevice>* resolved_gpu = nullptr;

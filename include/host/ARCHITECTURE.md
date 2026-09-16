@@ -22,4 +22,6 @@ The main buckets are:
 - `virtual/`: emulator-visible peripherals and input routing.
 
 The host flow should pass `host/contracts/` types between these areas rather than
-rebuilding loose primitive groups in each layer.
+rebuilding loose primitive groups in each layer. Host-facing knobs
+(`VideoSettings`, `AudioSettings`) live in the owning module and are embedded
+by `HostAppConfig`.

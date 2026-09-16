@@ -72,7 +72,7 @@ private:
 // Map a Qt::Key_* integer onto RemotedKey bits (no Qt headers in this lib).
 std::uint32_t remoted_key_bit_from_qt_key(int qt_key);
 
-// Linux: Evdev (primary) + GuiFocus + optional X11 keymap (last resort).
+// Linux: Evdev (primary) + GuiFocus; X11 keymap only when evdev has no devices.
 // Windows: Win32 GetAsyncKeyState + GuiFocus.
 std::unique_ptr<RemotedKeyboardSource> make_default_remoted_keyboard_source();
 

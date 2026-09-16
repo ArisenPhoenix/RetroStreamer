@@ -13,47 +13,40 @@ bool platform_supports_virtualgl_capture() {
     return false;
 }
 
-CapturePlan resolve_capture_plan(
-    HostAppConfig& config,
-    const RetroArchLaunchConfig& /*launch_config*/) {
-    CapturePlan plan;
-    plan.use_virtual_capture = config.video;
-    plan.capture_fullscreen = config.video;
-    plan.capture_display = config.virtual_display;
-    plan.display_backend = config.display_backend;
-    // Windows streams via d3d11screencapturesrc / desktop capture — no Xvfb/gamescope.
-    plan.gamescope_capture = false;
-    plan.virtualgl_capture = false;
-    return plan;
-}
-
-void normalize_audio_backend_for_platform(HostAppConfig& config) {
-    if (config.audio_backend == AudioCaptureBackend::Pulse) {
-        config.audio_backend = AudioCaptureBackend::Wasapi;
+PresentTarget resolve_present_target(CaptureResolveInput& input) {
+    PresentTarget present;
+    present.display = input.capture_display;
+    if (!input.stream_video) {
+        return present;
     }
+    present.backend = input.preferred_backend;
+    if (present.backend == VirtualDisplayBackend::None) {
+        present.backend = VirtualDisplayBackend::Desktop;
+    }
+    return present;
 }
 
 void apply_standalone_capture_prefix(
-    RetroArchLaunchConfig& launch_config,
-    const CapturePlan& capture,
-    const HostAppConfig& /*config*/,
+    std::vector<std::string>& /*command_prefix*/,
+    const PresentTarget& present,
+    const std::string& /*video_resolution*/,
     const std::string& /*gamescope_vk_device*/) {
-    if (launch_config.standalone && capture.use_virtual_capture) {
+    if (present.captures()) {
         std::cout
             << "Yuzu: Windows desktop capture (d3d11screencapturesrc / WASAPI loopback)\n";
     }
 }
 
 void apply_retroarch_vgl_prefix(
-    RetroArchLaunchConfig& /*launch_config*/,
-    const CapturePlan& /*capture*/,
+    std::vector<std::string>& /*command_prefix*/,
+    const PresentTarget& /*present*/,
     const std::optional<GpuDevice>& /*resolved_gpu*/) {
     // VirtualGL is Linux-only.
 }
 
 void start_deferred_gamescope_video_if_needed(
     MediaServer* /*media_server*/,
-    const HostAppConfig& /*config*/,
+    const std::string& /*video_resolution*/,
     std::vector<MediaClientStream>& /*media_streams*/,
     int /*owner_pid*/) {
     // Gamescope PipeWire path is Linux-only.

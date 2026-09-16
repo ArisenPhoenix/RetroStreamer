@@ -134,16 +134,24 @@ std::unique_ptr<RemotedKeyboardSource> make_default_remoted_keyboard_source() {
     sources.push_back(make_win32_remoted_keyboard_source());
 #else
     // Primary: focus-independent /dev/input (works while gst video has focus).
-    sources.push_back(make_evdev_remoted_keyboard_source());
+    auto evdev = make_evdev_remoted_keyboard_source();
+    const bool have_evdev = evdev && evdev->available();
+    sources.push_back(std::move(evdev));
 #endif
-    // Shared with the GUI event filter (lobby focus).
+    // Shared with the GUI event filter (lobby focus). Drop leftover bits so a
+    // password 'f' / Space cannot latch FF when the session input thread starts.
+    auto& gui_keys = GuiFocusRemotedKeyboardSource::instance();
+    gui_keys.set_keys(0);
     sources.push_back(
         std::shared_ptr<RemotedKeyboardSource>(
-            &GuiFocusRemotedKeyboardSource::instance(),
+            &gui_keys,
             [](RemotedKeyboardSource*) {}));
 #if !defined(_WIN32)
-    // Last resort for pure X11 clients (SPICE VMs). Not used on Wayland gtksink focus.
-    sources.push_back(make_x11_keymap_remoted_keyboard_source());
+    // Last resort for pure X11 clients (SPICE VMs). Do not OR this with evdev:
+    // XWayland keymaps flicker and spam Ryujinx F1 VSync / RA Space hold.
+    if (!have_evdev) {
+        sources.push_back(make_x11_keymap_remoted_keyboard_source());
+    }
 #endif
     return std::make_unique<CompositeRemotedKeyboardSource>(std::move(sources));
 }

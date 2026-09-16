@@ -110,17 +110,17 @@ void HostApp::apply_host_player_media_policy(HostAppConfig& config, bool host_pl
     // Host Player is local RetroArch on the real display/speakers. Streaming the
     // same session captures the playback sink monitor (or fights virtio-evdev for
     // the pad) and sounds/feels broken — force media off regardless of CLI/GUI.
-    if (host_plays_locally && (config.audio || config.video)) {
+    if (host_plays_locally && (config.audio.enabled || config.video.enabled)) {
         std::cout
             << "Host Player: disabling stream video/audio for local play "
             << "(use Host Viewer to stream).\n";
-        config.audio = false;
-        config.video = false;
+        config.audio.enabled = false;
+        config.video.enabled = false;
     }
 }
 
 void HostApp::prepare_streaming_audio_source(HostAppConfig& config, StreamingAudioSink& sink) {
-    if (!config.audio || !config.audio_source.empty()) {
+    if (!config.audio.enabled || !config.audio.source.empty()) {
         return;
     }
     // Concurrent lobby uses archstreamer-0..N per session slot. Creating the
@@ -136,21 +136,21 @@ void HostApp::prepare_streaming_audio_source(HostAppConfig& config, StreamingAud
         return;
     }
     try {
-        config.audio_source = sink.monitor_source();
+        config.audio.source = sink.monitor_source();
         std::cout
-            << "Audio capture: " << config.audio_source
+            << "Audio capture: " << config.audio.source
             << " (null sink; host speakers stay quiet unless Watch stream locally)\n";
     } catch (const std::exception& error) {
-        config.audio_source = StreamingAudioSink::default_monitor_source();
+        config.audio.source = StreamingAudioSink::default_monitor_source();
         std::cerr << "Warning: " << error.what() << '\n';
-        if (config.audio_source.empty()) {
+        if (config.audio.source.empty()) {
             std::cerr
                 << "Warning: could not determine audio monitor source; "
                 << "audio capture will use the audio server default source.\n";
         } else {
             std::cerr
                 << "Warning: falling back to default sink monitor "
-                << config.audio_source
+                << config.audio.source
                 << " (host may hear game audio locally).\n";
         }
     }
@@ -229,7 +229,9 @@ int HostApp::run_direct_session(
         assets.launch_config,
         host_plays_locally,
         lease);
-    register_session_xtest_display(launch_env.request.session_id, launch_env.request.xtest_display);
+    register_session_xtest_display(
+        launch_env.request.session_id,
+        launch_env.request.plug.present.xtest_display);
 
     auto media = build_session_media_plan(
         config,
@@ -242,7 +244,7 @@ int HostApp::run_direct_session(
         assets.save_profile,
         assets.launch_config,
         media.streams,
-        launch_env.capture.capture_display);
+        launch_env.present.display);
 
     if (config.dry_run) {
         cadence.tracker.end("dry run");
@@ -253,7 +255,7 @@ int HostApp::run_direct_session(
     HostVirtualGamepadBus gamepads(launch_plan.virtual_identities);
     plug_session_gamepads(gamepads, launch_plan.players);
     // Virtual keyboard targets ARCHSTREAMER_XTEST_DISPLAY for gamescope, else Xvfb capture.
-    VirtualKeyboard keyboard(launch_env.request.xtest_display);
+    VirtualKeyboard keyboard(launch_env.request.plug.present.xtest_display);
     wait_for_session_input_enumeration();
 
     auto devices = resolve_session_device_plan(
@@ -261,7 +263,7 @@ int HostApp::run_direct_session(
         launch_plan,
         SessionPadPlanKind::Direct,
         cadence.grant.pad_product_base);
-    apply_capture_to_session_device_plan(devices, config, launch_env.capture);
+    apply_capture_to_session_device_plan(devices, config, launch_env.present);
     devices.capture.resolved_gpu = launch_env.gpu.resolved_gpu;
 
     auto backend_context = make_session_backend_prepare_context(
@@ -270,25 +272,24 @@ int HostApp::run_direct_session(
         assets,
         devices,
         backends,
-        launch_env.capture,
         launch_env.request,
         resolve_direct_session_participants(assets.save_profile.username));
     prepare_direct_backend(backend_context, keyboard, cadence.grant.netcmd_port);
 
     apply_capture_and_launch_environment(
         assets.launch_config,
-        launch_env.capture,
+        launch_env.present,
         config,
         launch_env.gpu.gamescope_vk_device,
         launch_env.gpu.resolved_gpu,
         launch_env.request);
 
-    if (devices.capture.capture_fullscreen) {
+    if (devices.capture.present.captures()) {
         std::cout << devices.capture_info();
     }
 
     // Pin Viewer RetroArch to the capture null sink (speakers stay quiet unless Watch-local).
-    if (config.audio) {
+    if (config.audio.enabled) {
         park_session_game_audio(&streaming_audio);
     }
 
@@ -308,8 +309,7 @@ int HostApp::run_direct_session(
     auto media_server = start_host_media_server_if_needed(HostMediaStartRequest{
         config,
         SessionMediaCaptureContext{
-            devices.capture.capture_display,
-            devices.capture.display_backend,
+            launch_env.present,
             launch_env.gpu.nvenc_cuda_device_id,
         },
         SessionMediaStreamContext{
@@ -319,11 +319,9 @@ int HostApp::run_direct_session(
         },
     });
     // Plug after Xvfb/Xephyr is up. Soft-fail so a keyboard issue never kills the session.
-    if (!plug_virtual_keyboard_with_retry(
-            keyboard,
-            devices.capture.use_virtual_capture,
-            launch_env.capture.gamescope_capture)) {
-        if (devices.capture.use_virtual_capture && !launch_env.capture.gamescope_capture) {
+    if (!plug_virtual_keyboard_with_retry(keyboard, launch_env.present)) {
+        if (launch_env.present.captures() &&
+            !launch_env.present.uses_pipewire()) {
             std::cerr << "Warning: continuing without remoted keyboard (pads still work).\n";
         }
     }
@@ -349,14 +347,14 @@ int HostApp::run_direct_session(
         gamepads,
         launch_plan.players,
         &keyboard,
-        launch_env.capture.gamescope_capture,
-        launch_env.request.xtest_display);
+        launch_env.present,
+        launch_env.request.plug.present.xtest_display);
 
-    if (launch_env.capture.gamescope_capture && keyboard.plugged()) {
+    if (launch_env.present.uses_pipewire() && keyboard.plugged()) {
         const auto actual = keyboard.capture_display();
-        if (!actual.empty() && actual != launch_env.request.xtest_display) {
+        if (!actual.empty() && actual != launch_env.request.plug.present.xtest_display) {
             if (lease.replace(cadence::resource::kXtestDisplay, actual)) {
-                launch_env.request.xtest_display = actual;
+                launch_env.request.plug.present.xtest_display = actual;
                 register_session_xtest_display(launch_env.request.session_id, actual);
             }
         }
@@ -364,7 +362,7 @@ int HostApp::run_direct_session(
     attach_direct_cadence_emulator(cadence.tracker, launch_plan, *session_runtime);
 
     if (devices.keyboard.arm_soft_keyboard && devices.keyboard.standalone_soft_keyboard) {
-        std::string display = launch_env.request.xtest_display;
+        std::string display = launch_env.request.plug.present.xtest_display;
         if (keyboard.plugged()) {
             display = keyboard.capture_display();
         }
@@ -387,7 +385,7 @@ int HostApp::run_direct_session(
         &input_router,
         &streaming_audio,
         std::nullopt,
-        config.audio);
+        config.audio.enabled);
     while (!should_stop() && session_runtime->emulator_running()) {
         loop_cadence.tick();
     }
@@ -397,7 +395,8 @@ int HostApp::run_direct_session(
         const auto stderr_tail = session_runtime->last_stderr_tail();
         std::ostringstream reason;
         reason << format_emulator_exit_summary(code);
-        if (session_runtime->launch_config().standalone && launch_env.capture.gamescope_capture) {
+        if (session_runtime->launch_config().standalone &&
+            launch_env.present.uses_pipewire()) {
             reason << " — if Host GPU is the non-boot NVIDIA, check Gamescope WSI "
                       "(ENABLE_GAMESCOPE_WSI / VK_ADD_IMPLICIT_LAYER_PATH); "
                       "Switch emulators often log \"Device lacks a present queue\"";
@@ -449,7 +448,7 @@ int HostApp::run_direct_session(
 
     end_direct_cadence_session(cadence.tracker, launch_plan, end_reason);
     stop_session_media(media_server);
-    if (config.audio) {
+    if (config.audio.enabled) {
         streaming_audio.restore_default_sink();
     }
     cleanup_x11_capture_runtime_dir();
@@ -469,9 +468,9 @@ int HostApp::run(const std::function<bool()>& should_stop) {
             << " input-port=" << (config_.input_port.has_value()
                 ? std::to_string(*config_.input_port)
                 : std::string("none"))
-            << " video-port=" << config_.video_port
-            << " audio-port=" << config_.audio_port
-            << " virtual-display=" << startup_quote(config_.virtual_display)
+            << " video-port=" << config_.video.port
+            << " audio-port=" << config_.audio.port
+            << " virtual-display=" << startup_quote(config_.video.virtual_display)
             << " gpu=" << startup_quote(config_.encode_gpu)
             << " render-gpu=" << startup_quote(effective_render_gpu_selection(config_))
             << " log-root=" << startup_quote(config_.log_root.string())

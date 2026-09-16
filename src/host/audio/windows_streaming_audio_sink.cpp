@@ -1,5 +1,5 @@
 #include "host/audio/streaming_audio_sink.hpp"
-#include "host/session/audio_channel.hpp"
+#include "host/audio/audio_channel.hpp"
 #include "host/contracts/launch.hpp"
 
 #ifdef _WIN32
@@ -336,6 +336,12 @@ std::string StreamingAudioSink::default_monitor_source() {
     return {};
 }
 
+void normalize_audio_backend_for_platform(AudioCaptureBackend& backend) {
+    if (backend == AudioCaptureBackend::Pulse) {
+        backend = AudioCaptureBackend::Wasapi;
+    }
+}
+
 SessionAudioChannel::SessionAudioChannel(int slot_index)
     : SessionAudioChannel(
           slot_index,
@@ -365,7 +371,7 @@ ProcessEnvironment SessionAudioChannel::launch_env() const {
         /*stream_media=*/true,
         /*stream_audio=*/true,
         /*host_plays_locally=*/false,
-        monitor_source());
+        AudioTap{AudioCaptureBackend::Wasapi, monitor_source()});
 }
 
 int SessionAudioChannel::park() {

@@ -2,7 +2,7 @@
 
 #include "client/controller_manager.hpp"
 #include "common/protocol.hpp"
-#include "host/video/capture_platform.hpp"
+#include "host/contracts/present.hpp"
 #include "host/hardware/gpu_select.hpp"
 #include "host/console/game_catalog.hpp"
 #include "host/host_app_config.hpp"
@@ -38,7 +38,7 @@ struct SessionGpuSelection {
 };
 
 struct SessionLaunchEnvironment {
-    CapturePlan capture;
+    PresentTarget present;
     EmulatorLaunchEnvRequest request;
     SessionGpuSelection gpu;
 };
@@ -117,10 +117,7 @@ struct SessionTouchDevices {
 
 struct SessionCaptureDevices {
     std::optional<GpuDevice> resolved_gpu;
-    bool use_virtual_capture = false;
-    bool capture_fullscreen = false;
-    std::string capture_display;
-    VirtualDisplayBackend display_backend = VirtualDisplayBackend::None;
+    PresentTarget present;
     std::string video_resolution;
 };
 
@@ -145,7 +142,6 @@ struct SessionGameContext {
 };
 
 struct SessionVideoContext {
-    const CapturePlan& capture;
     SessionCaptureDevices& devices;
     std::string_view video_resolution;
     int retroarch_scale = 1;
@@ -167,7 +163,6 @@ struct SessionBackendPrepareContext {
 };
 
 struct SessionRetroArchOverrideOptions {
-    bool use_virtual_capture = false;
     int slot_index = 0;
     std::uint16_t network_cmd_port = 55355;
     DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto;
@@ -181,7 +176,7 @@ enum class SessionPadPlanKind {
 void apply_capture_to_session_device_plan(
     SessionDevicePlan& devices,
     const HostAppConfig& config,
-    const CapturePlan& capture,
+    const PresentTarget& present,
     std::optional<GpuDevice> resolved_gpu = std::nullopt);
 
 SessionDevicePlan resolve_session_device_plan(
@@ -242,7 +237,6 @@ SessionBackendPrepareContext make_session_backend_prepare_context(
     SessionLaunchAssets& assets,
     SessionDevicePlan& devices,
     SessionBackendState& backends,
-    const CapturePlan& capture,
     EmulatorLaunchEnvRequest& launch_env_request,
     SessionParticipantContext participants);
 
@@ -254,15 +248,27 @@ void plug_session_gamepads(VirtualGamepadBus& gamepads, RetroArchPort players);
 
 void wait_for_session_input_enumeration();
 
+/** Translate host video settings + emulator facts into a PresentTarget. */
+PresentTarget resolve_session_present_target(
+    HostAppConfig& config,
+    const RetroArchLaunchConfig& launch_config);
+
 SessionGpuSelection resolve_session_gpu_selection(
     const HostAppConfig& config,
-    const CapturePlan& capture,
+    const PresentTarget& present,
     std::string_view log_prefix = {},
     bool detailed_logging = false);
 
 void apply_session_gpu_to_launch_request(
     EmulatorLaunchEnvRequest& request,
     const SessionGpuSelection& selection);
+
+/** Copy present/audio into request.plug (xtest_display is the keyboard/gamescope lease). */
+void bind_session_plug(
+    EmulatorLaunchEnvRequest& request,
+    const PresentTarget& present,
+    const HostAppConfig& config,
+    std::string xtest_display);
 
 void append_session_controller_ignore_list(
     HostAppConfig& config,

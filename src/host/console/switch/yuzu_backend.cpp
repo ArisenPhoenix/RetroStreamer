@@ -44,7 +44,7 @@ void YuzuBackend::assign_launch_env_profile(
     plan.mode = PadPlanMode::Shared;
     plan.pads = prep.resolved_pads;
     plan.ignore_devices = env.ignore_devices;
-    env.pad_plan = std::move(plan);
+    env.plug.seat = std::move(plan);
 }
 
 } // namespace archstreamer

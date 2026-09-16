@@ -44,4 +44,25 @@ struct GStreamerMediaCaptureConfig {
     }
 };
 
+inline GStreamerMediaCaptureConfig make_media_capture_config(
+    bool video,
+    bool audio,
+    const PresentTarget& present,
+    const AudioTap& audio_tap,
+    std::string video_resolution,
+    bool verbose,
+    int nvenc_cuda_device_id) {
+    GStreamerMediaCaptureConfig config;
+    config.video = video;
+    config.audio = audio;
+    config.virtual_display = present.display;
+    config.video_resolution = std::move(video_resolution);
+    config.display_backend = present.backend;
+    config.audio_backend = audio_tap.backend;
+    config.audio_source = audio_tap.source;
+    config.verbose = verbose;
+    config.nvenc_cuda_device_id = nvenc_cuda_device_id;
+    return config;
+}
+
 } // namespace archstreamer

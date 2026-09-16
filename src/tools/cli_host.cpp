@@ -469,13 +469,13 @@ HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
         } else if (arg == "--host-local-watch") {
             args.host_local_watch = true;
         } else if (arg == "--video") {
-            args.video = true;
+            args.video.enabled = true;
         } else if (arg == "--no-video") {
-            args.video = false;
+            args.video.enabled = false;
         } else if (arg == "--audio") {
-            args.audio = true;
+            args.audio.enabled = true;
         } else if (arg == "--no-audio") {
-            args.audio = false;
+            args.audio.enabled = false;
         } else if (arg == "--rom-root") {
             if_throw(i, "--rom-root requires a path");
             args.rom_root = merged_args[i];
@@ -525,37 +525,37 @@ HostAppConfig HostRunnerCli::parse(int argc, char** argv) const {
             args.host_role = parse_participant_role(merged_args[i]);
         } else if (arg == "--video-dest") {
             if_throw(i, "--video-dest requires an IP address");
-            args.video = true;
-            args.video_destination = merged_args[i];
-            args.video_destination_explicit = true;
+            args.video.enabled = true;
+            args.video.destination = merged_args[i];
+            args.video.destination_explicit = true;
         } else if (arg == "--video-port") {
             if_throw(i, "--video-port requires a port");
-            args.video = true;
-            args.video_port = static_cast<std::uint16_t>(std::stoul(merged_args[i]));
+            args.video.enabled = true;
+            args.video.port = static_cast<std::uint16_t>(std::stoul(merged_args[i]));
         } else if (arg == "--audio-port") {
             if_throw(i, "--audio-port requires a port");
-            args.audio = true;
-            args.audio_port = static_cast<std::uint16_t>(std::stoul(merged_args[i]));
+            args.audio.enabled = true;
+            args.audio.port = static_cast<std::uint16_t>(std::stoul(merged_args[i]));
         } else if (arg == "--audio-source") {
             if_throw(i, "--audio-source requires a source name");
-            args.audio = true;
-            args.audio_source = merged_args[i];
+            args.audio.enabled = true;
+            args.audio.source = merged_args[i];
         } else if (arg == "--audio-backend") {
             if_throw(i, "--audio-backend requires pulse or pipewire");
-            args.audio = true;
-            args.audio_backend = parse_audio_backend(merged_args[i]);
+            args.audio.enabled = true;
+            args.audio.backend = parse_audio_backend(merged_args[i]);
         } else if (arg == "--virtual-display") {
             if_throw(i, "--virtual-display requires a display name");
-            args.video = true;
-            args.virtual_display = merged_args[i];
+            args.video.enabled = true;
+            args.video.virtual_display = merged_args[i];
         } else if (arg == "--video-resolution") {
             if_throw(i, "--video-resolution requires a WxH value");
-            args.video = true;
-            args.video_resolution = merged_args[i];
+            args.video.enabled = true;
+            args.video.resolution = merged_args[i];
         } else if (arg == "--display-backend") {
             if_throw(i, "--display-backend requires auto, xvfb, xephyr, virtualgl, or gamescope");
-            args.video = true;
-            args.display_backend = parse_display_backend(merged_args[i]);
+            args.video.enabled = true;
+            args.video.preferred_backend = parse_display_backend(merged_args[i]);
         } else if (arg == "--renderer") {
             if_throw(i, "--renderer requires auto, opengl, or vulkan");
             args.graphics_api = parse_graphics_api(merged_args[i]);

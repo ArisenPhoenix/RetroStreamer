@@ -1,9 +1,9 @@
 #pragma once
 
 #include "common/protocol.hpp"
-#include "host/hardware/capture_platform.hpp"
+#include "host/video/capture_platform.hpp"
 #include "host/host_app_config.hpp"
-#include "host/hardware/launch_environment.hpp"
+#include "host/contracts/launch.hpp"
 #include "host/console/retroarch_process.hpp"
 #include "host/console/save_profile.hpp"
 #include "host/console/switch/switch_backend.hpp"

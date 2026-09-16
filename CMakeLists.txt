@@ -356,16 +356,16 @@ if(ARCHSTREAMER_BUILD_HOST)
     if(WIN32)
         list(APPEND ARCHSTREAMER_HOST_SOURCES
             src/host/hardware/windows_launch_environment.cpp
-            src/host/windows_session_slot_lease.cpp
+            src/host/session/windows_session_slot_lease.cpp
             src/host/console/windows_retroarch_process.cpp
             src/host/console/windows_retroarch_resolve.cpp
             src/host/virtual/windows_vigem_gamepad.cpp
-            src/host/hardware/windows_media_server.cpp
-            src/host/hardware/windows_capture_platform.cpp
-            src/host/windows_emulator_orphan_reaper.cpp
+            src/host/video/windows_media_server.cpp
+            src/host/video/windows_capture_platform.cpp
+            src/host/console/windows_emulator_orphan_reaper.cpp
             src/host/virtual/windows_virtual_keyboard.cpp
             src/host/virtual/windows_soft_keyboard.cpp
-            src/host/hardware/windows_streaming_audio_sink.cpp
+            src/host/audio/windows_streaming_audio_sink.cpp
             src/host/console/windows_save_profile_paths.cpp
             src/host/console/switch/windows_switch_paths.cpp
             src/host/console/switch/windows_yuzu_runtime.cpp
@@ -375,17 +375,18 @@ if(ARCHSTREAMER_BUILD_HOST)
     else()
         list(APPEND ARCHSTREAMER_HOST_SOURCES
             src/host/hardware/posix_launch_environment.cpp
-            src/host/posix_session_slot_lease.cpp
-            src/host/hardware/gstreamer_media_server.cpp
-            src/host/rtp_frame_pace_debug.cpp
+            src/host/session/posix_session_slot_lease.cpp
+            src/host/video/gstreamer_media_server.cpp
+            src/host/video/rtp_frame_pace_debug.cpp
             src/host/virtual/linux_uinput_gamepad.cpp
             src/host/console/posix_retroarch_process.cpp
-            src/host/virtual/virtual_display.cpp
-            src/host/hardware/gamescope_pipewire_node.cpp
-            src/host/hardware/linux_capture_platform.cpp
-            src/host/linux_emulator_orphan_reaper.cpp
+            src/host/video/virtual_display.cpp
+            src/host/video/gamescope_pipewire_node.cpp
+            src/host/video/linux_capture_platform.cpp
+            src/host/console/linux_emulator_orphan_reaper.cpp
             src/host/virtual/virtual_keyboard.cpp
-            src/host/hardware/streaming_audio_sink.cpp
+            src/host/audio/streaming_audio_sink.cpp
+            src/host/audio/gstreamer_audio_fanout.cpp
             src/host/console/retroarch_resolve.cpp
             src/host/console/switch/posix_switch_paths.cpp
             src/host/console/switch/posix_yuzu_runtime.cpp

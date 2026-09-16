@@ -1,4 +1,4 @@
-#include "host/hardware/launch_environment.hpp"
+#include "host/contracts/launch.hpp"
 
 namespace archstreamer {
 

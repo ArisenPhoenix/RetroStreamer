@@ -8,8 +8,10 @@ Concern-specific implementation should live in child directories:
 - `client/`: connected-client stream policy and adaptation.
 - `console/`: emulator, catalog, and save-profile handling.
 - `db/`: persistence implementations.
-- `hardware/`: physical host hardware and OS media/platform adapters.
+- `video/`: present surfaces and video pipelines.
+- `audio/`: streaming audio taps.
+- `hardware/`: GPU, launch-env application, local controller bridge.
 - `lobby/`: lobby/session hub coordination.
 - `session/`: active session lifecycle and runtime state.
 - `user/`: user identity and sync behavior.
-- `virtual/`: virtual input/display devices and routing.
+- `virtual/`: virtual peripherals and routing.

@@ -6,7 +6,7 @@
 #include "host/console/game_catalog.hpp"
 #include "host/host_app_config.hpp"
 #include "host/host_launch_planner.hpp"
-#include "host/hardware/media_server.hpp"
+#include "host/video/media_server.hpp"
 #include "host/console/nds/melonds_ctrl_client.hpp"
 #include "host/console/retroarch_process.hpp"
 #include "host/console/retroarch_resolve.hpp"

@@ -1,8 +1,8 @@
 #pragma once
 
 #include "host/hardware/gpu_select.hpp"
-#include "host/hardware/launch_environment.hpp"
-#include "host/hardware/media_capture.hpp"
+#include "host/contracts/launch.hpp"
+#include "host/contracts/media.hpp"
 #include "host/virtual/pad_plan.hpp"
 #include "host/console/retroarch_process.hpp"
 #include "host/console/save_profile.hpp"

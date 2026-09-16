@@ -2,7 +2,7 @@
 
 #include "common/protocol.hpp"
 #include "host/hardware/gpu_select.hpp"
-#include "host/hardware/media_capture.hpp"
+#include "host/contracts/media.hpp"
 #include "host/console/retroarch_process.hpp"
 #include "host/console/save_profile.hpp"
 #include "host/virtual/virtual_joypad_resolve.hpp"

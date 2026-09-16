@@ -1,6 +1,6 @@
 #include "host/virtual/pad_plan.hpp"
 
-#include "host/hardware/launch_environment.hpp"
+#include "host/contracts/launch.hpp"
 
 #include <iostream>
 #include <utility>

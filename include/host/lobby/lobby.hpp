@@ -8,7 +8,7 @@
 #include "host/virtual/network_input_receiver.hpp"
 #include "host/session/manager.hpp"
 #include "host/session/types.hpp"
-#include "host/hardware/streaming_audio_sink.hpp"
+#include "host/audio/streaming_audio_sink.hpp"
 #include "common/platform/default_platform.hpp"
 #include "common/protocol.hpp"
 

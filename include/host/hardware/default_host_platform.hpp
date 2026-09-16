@@ -1,18 +1,18 @@
 #pragma once
 
 #if defined(_WIN32)
-#include "host/hardware/media_capture.hpp"
+#include "host/contracts/media.hpp"
 #include "host/platform/default_save_profile_paths.hpp"
-#include "host/hardware/windows_media_server.hpp"
+#include "host/video/windows_media_server.hpp"
 #include "host/console/windows_retroarch_process.hpp"
 #include "host/virtual/windows_vigem_gamepad.hpp"
 #else
-#include "host/hardware/gstreamer_media_server.hpp"
+#include "host/video/gstreamer_media_server.hpp"
 #include "host/virtual/linux_uinput_gamepad.hpp"
 #include "host/console/posix_retroarch_process.hpp"
 #endif
 
-#include "host/hardware/media_server.hpp"
+#include "host/video/media_server.hpp"
 #include "host/platform/host_pad_platform.hpp"
 #include "host/virtual/virtual_keyboard.hpp"
 

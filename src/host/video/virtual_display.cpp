@@ -1,4 +1,4 @@
-#include "host/virtual/virtual_display.hpp"
+#include "host/video/virtual_display.hpp"
 
 #include "host/session/slot_lease.hpp"
 

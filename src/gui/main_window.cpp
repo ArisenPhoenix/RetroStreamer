@@ -62,7 +62,7 @@
 #include "gui_host_runner.hpp"
 #include "host/hardware/gpu_select.hpp"
 #include "host/host_app_config.hpp"
-#include "host/hardware/media_capture.hpp"
+#include "host/contracts/media.hpp"
 #include "host/console/standalone_emulator.hpp"
 #endif
 

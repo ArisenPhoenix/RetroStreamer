@@ -12,4 +12,6 @@ This bucket owns:
 - reusable session state types.
 
 It should receive validated lobby output and prepared host configuration, then
-own the running session until teardown.
+own the running session until teardown. Cross-concern data should be
+`PresentTarget`, `AudioTap`, `PadPlan`, and `EmulatorPlug` from
+`host/contracts/`.

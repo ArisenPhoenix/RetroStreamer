@@ -1,8 +1,8 @@
 #pragma once
 
 #include "host/host_app_config.hpp"
-#include "host/hardware/media_capture.hpp"
-#include "host/hardware/media_server.hpp"
+#include "host/contracts/present.hpp"
+#include "host/video/media_server.hpp"
 #include "host/console/retroarch_process.hpp"
 
 #include <optional>
@@ -21,6 +21,18 @@ struct CapturePlan {
     bool virtualgl_capture = false;
     VirtualDisplayBackend display_backend = VirtualDisplayBackend::None;
     std::string capture_display;
+
+    [[nodiscard]] PresentTarget present() const {
+        PresentTarget target;
+        target.backend = display_backend;
+        target.display = capture_display;
+        if (gamescope_capture) {
+            target.backend = VirtualDisplayBackend::Gamescope;
+        } else if (virtualgl_capture) {
+            target.backend = VirtualDisplayBackend::VirtualGL;
+        }
+        return target;
+    }
 };
 
 /**

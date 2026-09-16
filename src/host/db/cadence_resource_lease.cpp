@@ -3,7 +3,7 @@
 #include "archstreamer/runtime_cadence/cadence.hpp"
 #include "host/console/retroarch_netcmd.hpp"
 #include "host/db/cadence_session_events.hpp"
-#include "host/hardware/streaming_audio_sink.hpp"
+#include "host/audio/streaming_audio_sink.hpp"
 
 #include <filesystem>
 #include <sstream>

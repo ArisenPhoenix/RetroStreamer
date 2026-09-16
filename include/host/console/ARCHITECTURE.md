@@ -10,5 +10,6 @@ This bucket owns:
 - save-profile resolution and console-specific save handling;
 - system-specific subdirectories such as `switch/` and `nds/`.
 
-It should not own session admission, active connection state, or physical capture
-devices. Those belong in `lobby/`, `session/`, and `hardware/`.
+It should not own session admission, active connection state, or present/audio
+capture. Those belong in `lobby/`, `session/`, `video/`, and `audio/`.
+Emulator process reaping lives here (`emulator_orphan_reaper.hpp`).

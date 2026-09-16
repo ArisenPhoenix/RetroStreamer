@@ -1,7 +1,7 @@
 #pragma once
 
 #include "common/platform/default_platform.hpp"
-#include "host/hardware/media_capture.hpp"
+#include "host/contracts/present.hpp"
 
 #include <cstddef>
 #include <memory>

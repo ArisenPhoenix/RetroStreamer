@@ -1,9 +1,9 @@
 #include "host/lobby/lobby.hpp"
 
 #include "host/user/controls_db_sync.hpp"
-#include "host/emulator_orphan_reaper.hpp"
+#include "host/console/emulator_orphan_reaper.hpp"
 #include "host/lobby/host_session_helpers.hpp"
-#include "host/hardware/launch_environment.hpp"
+#include "host/contracts/launch.hpp"
 #include "host/db/save_active_sessions.hpp"
 #include "host/session/lobby.hpp"
 #include "host/user/user_credentials.hpp"

@@ -2,7 +2,7 @@
 
 #include "common/protocol.hpp"
 #include "host/virtual/input_router.hpp"
-#include "host/hardware/media_server.hpp"
+#include "host/video/media_server.hpp"
 #include "host/session/lobby.hpp"
 
 #include <chrono>

@@ -43,14 +43,17 @@ boundaries where practical.
 Host subdirectories have their own architecture notes for the current cleanup
 boundaries:
 
+- [host/contracts](include/host/contracts/ARCHITECTURE.md): shared present/audio/seat/launch language.
 - [host/client](include/host/client/ARCHITECTURE.md): host-side client identity and stream policy.
 - [host/console](include/host/console/ARCHITECTURE.md): emulator, catalog, and save-profile concerns.
 - [host/db](include/host/db/ARCHITECTURE.md): persistence APIs.
-- [host/hardware](include/host/hardware/ARCHITECTURE.md): physical host platform and media adapters.
+- [host/video](include/host/video/ARCHITECTURE.md): present surfaces and outbound video.
+- [host/audio](include/host/audio/ARCHITECTURE.md): streaming audio taps.
+- [host/hardware](include/host/hardware/ARCHITECTURE.md): leftover physical adapters (GPU, launch-env).
 - [host/lobby](include/host/lobby/ARCHITECTURE.md): pre-session lobby and join admission.
 - [host/session](include/host/session/ARCHITECTURE.md): active session lifecycle.
 - [host/user](include/host/user/ARCHITECTURE.md): user identity and user-facing sync.
-- [host/virtual](include/host/virtual/ARCHITECTURE.md): emulator-visible virtual devices.
+- [host/virtual](include/host/virtual/ARCHITECTURE.md): emulator-visible peripherals.
 
 ## Channel Model
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "host/contracts/seat.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -7,17 +9,9 @@
 
 namespace archstreamer {
 
-struct ArchStreamerSdlPad {
-    std::size_t sdl_index = 0;
-    // CRC bytes zeroed — Yuzu/Ryujinx store/match GUIDs this way.
-    std::string guid;
-    // Full SDL GUID (with name CRC) for SDL_GAMECONTROLLERCONFIG matching.
-    std::string mapping_guid;
-    std::uint16_t product_id = 0;
-};
-
-// Prefer PadPlan (include/host/virtual/pad_plan.hpp): resolve once, apply_pad_plan for env,
-// binders read pads/indices. These helpers remain the low-level SDL/udev scanners.
+// Prefer PadPlan (include/host/contracts/seat.hpp): resolve once, apply_pad_plan
+// for env, binders read pads/indices. These helpers remain the low-level
+// SDL/udev scanners.
 
 // VID/PID whitelist helper (ArchStreamer uinput pads) in SDL hint form.
 std::string sdl_archstreamer_pad_whitelist(
@@ -53,14 +47,6 @@ std::vector<ArchStreamerSdlPad> find_archstreamer_sdl_pads(
     const std::string& ignore_devices = {},
     bool verbose = false,
     std::uint16_t product_id_base = 0);
-
-struct ArchStreamerPadBinding {
-    std::vector<ArchStreamerSdlPad> pads;
-    // SDL_GAMECONTROLLER_IGNORE_DEVICES value the child must run with for
-    // `pads[i].sdl_index` to be the index it sees (sibling + physical blacklist).
-    // Empty when the filtered scan found nothing / fell back.
-    std::string sdl_device_filter;
-};
 
 // Resolve this session's pads as seen by a child that hides sibling ArchStreamer
 // pads (and physical controllers) via IGNORE. Emulators that key bindings on the

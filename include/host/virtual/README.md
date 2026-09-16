@@ -1,8 +1,8 @@
 # include/host/virtual
 
-Virtual host device headers live here.
+Virtual peripheral headers live here.
 
-This area owns virtual gamepads, keyboards, displays, input routing, seat plans,
-and network input receivers that feed emulator-visible devices.
-
-Physical host hardware adapters belong under `include/host/hardware/`.
+Gamepads, keyboards, input routing, and seat *resolution* belong in this
+directory. `PadPlan` itself is the shared seat language under
+`include/host/contracts/seat.hpp`. Present surfaces belong under
+`include/host/video/`.

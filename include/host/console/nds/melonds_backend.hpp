@@ -1,7 +1,7 @@
 #pragma once
 
 #include "host/hardware/gpu_select.hpp"
-#include "host/hardware/launch_environment.hpp"
+#include "host/contracts/launch.hpp"
 #include "host/console/nds/melonds_ctrl_client.hpp"
 #include "host/console/nds/melonds_user_profile.hpp"
 #include "host/virtual/pad_plan.hpp"

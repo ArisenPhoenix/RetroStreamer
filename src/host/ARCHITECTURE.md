@@ -8,11 +8,13 @@ in child directories:
 - `client/`: client stream policy and adaptation.
 - `console/`: game catalog, emulator process/config, and save-profile work.
 - `db/`: persistence stores.
-- `hardware/`: capture, audio, GPU, launch environment, and OS media adapters.
+- `video/`: present surfaces and video capture/encode.
+- `audio/`: streaming audio taps.
+- `hardware/`: GPU, launch-env application, local controller bridge.
 - `lobby/`: client gathering and join/rejoin admission.
 - `session/`: active session lifecycle and runtime ownership.
 - `user/`: user credentials and sync helpers.
-- `virtual/`: virtual devices and input routing.
+- `virtual/`: virtual peripherals and input routing.
 
-New code should prefer passing structured buckets across these layers instead of
+New code should prefer passing `host/contracts/` types across these layers instead of
 reconstructing ad hoc groups of primitive values.

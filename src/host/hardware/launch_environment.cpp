@@ -1,6 +1,6 @@
-#include "host/hardware/launch_environment.hpp"
+#include "host/contracts/launch.hpp"
 
-#include "host/console/nds/melonds_user_profile.hpp"
+#include "host/virtual/pad_plan.hpp"
 
 #include <algorithm>
 #include <utility>

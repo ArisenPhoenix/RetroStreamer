@@ -1,29 +1,11 @@
 #pragma once
 
-#include "common/protocol.hpp"
+#include "host/contracts/audio.hpp"
+#include "host/contracts/present.hpp"
 
-#include <cstdint>
 #include <string>
 
 namespace archstreamer {
-
-enum class VirtualDisplayBackend {
-    None,
-    Xvfb,
-    Xephyr,
-    // Xvfb for capture + VirtualGL (vglrun) so OpenGL uses the host GPU.
-    // Kept for revisit; Switch streaming prefers Gamescope.
-    VirtualGL,
-    // Headless gamescope compositor + PipeWire video source (Vulkan-capable).
-    Gamescope,
-};
-
-enum class AudioCaptureBackend {
-    Pulse,
-    PipeWire,
-    // Windows host: WASAPI loopback via wasapisrc.
-    Wasapi,
-};
 
 // Preferred graphics API for standalone emulators (Yuzu). Ignored for RetroArch cores.
 enum class GraphicsApiPreference {
@@ -32,7 +14,12 @@ enum class GraphicsApiPreference {
     Vulkan,
 };
 
-// Capture config passed into make_host_media_server (Linux GStreamer or Windows DXGI/WASAPI).
+/**
+ * Combined capture request session passes into the media server.
+ *
+ * Video and audio still share one config object today (not yet cohesive).
+ * Use present() / audio_tap() at concern boundaries instead of reading flags.
+ */
 struct GStreamerMediaCaptureConfig {
     bool video = false;
     bool audio = false;
@@ -44,6 +31,17 @@ struct GStreamerMediaCaptureConfig {
     bool verbose = false;
     // nvidia-smi index for the gst-launch nvenc process (CUDA_VISIBLE_DEVICES); -1 = default.
     int nvenc_cuda_device_id = -1;
+
+    [[nodiscard]] PresentTarget present() const {
+        PresentTarget target;
+        target.backend = display_backend;
+        target.display = virtual_display;
+        return target;
+    }
+
+    [[nodiscard]] AudioTap audio_tap() const {
+        return AudioTap{audio_backend, audio_source};
+    }
 };
 
 } // namespace archstreamer

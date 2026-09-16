@@ -1,7 +1,7 @@
 #include "host/session/run_helpers.hpp"
 
 #include "common/ds_touch_mapping.hpp"
-#include "host/hardware/capture_platform.hpp"
+#include "host/video/capture_platform.hpp"
 #include "host/virtual/input_router.hpp"
 #include "host/hardware/local_controller_bridge.hpp"
 #include "host/console/nds/melonds_ctrl_client.hpp"

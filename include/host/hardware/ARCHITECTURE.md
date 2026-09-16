@@ -1,10 +1,11 @@
 # include/host/hardware Architecture
 
-`include/host/hardware/` defines physical host platform contracts.
+`include/host/hardware/` defines leftover physical-host adapters.
 
-This bucket owns display/audio capture, media sender abstractions, GPU selection,
-launch environment discovery, local controller bridges, and OS-specific media
-services.
+This bucket now owns GPU selection, applying `EmulatorLaunchEnvRequest` to a
+child environment, local controller bridging, and the OS composition header
+(`default_host_platform.hpp`).
 
-Virtual emulator-facing devices belong in `host/virtual/`. Console-specific
-emulator configuration belongs in `host/console/`.
+Video capture belongs in `host/video/`. Audio taps belong in `host/audio/`.
+The shared plug language belongs in `host/contracts/`. Virtual pads belong in
+`host/virtual/`.

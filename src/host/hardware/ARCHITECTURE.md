@@ -1,20 +1,11 @@
 # src/host/hardware Architecture
 
-`src/host/hardware/` implements physical host platform behavior.
+`src/host/hardware/` implements physical-host adapters that do not belong to
+video, audio, or peripherals.
 
-This includes capture backends, GStreamer media senders, audio sinks, GPU
-selection, launch environment setup, local controller bridging, and OS-specific
-hardware adapters.
+This includes GPU enumeration, POSIX/Windows launch-environment application,
+and bridging a real local controller into the virtual pad bus.
 
-It should expose capabilities to session code without deciding lobby or gameplay
-policy.
-
-In-process `ximagesrc` capture retries the same way PipeWire does, so a new
-RetroArch session after a Switch/gamescope session can open `:99` once Xvfb is
-actually accepting connections.
-
-Property quoting differs by runner. In-process pipelines are one
-`gst_parse_launch` string, so values use double quotes (`display-name=":99"`);
-the parser leaves single quotes in the property and `XOpenDisplay` fails.
-The gst-launch child builds argv tokens (`display-name=:99`) and must not wrap
-simple values — gst-launch joins those tokens, then parse-launchs the result.
+Video pipelines live in `src/host/video/`. Audio taps live in `src/host/audio/`.
+`posix_launch_environment.cpp` still includes `VirtualDisplay` to set XDG for
+X11 capture — that cross-link should shrink to `PresentTarget` later.

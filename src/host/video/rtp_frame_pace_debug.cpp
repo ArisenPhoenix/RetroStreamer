@@ -1,6 +1,6 @@
 // TEMP: frame pacing debug — remove when judder investigation is done.
 
-#include "host/rtp_frame_pace_debug.hpp"
+#include "host/video/rtp_frame_pace_debug.hpp"
 
 #include <algorithm>
 #include <atomic>

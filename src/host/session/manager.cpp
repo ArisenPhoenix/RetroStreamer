@@ -1,6 +1,6 @@
 #include "host/session/manager.hpp"
 
-#include "host/emulator_orphan_reaper.hpp"
+#include "host/console/emulator_orphan_reaper.hpp"
 #include "host/host_launch_planner.hpp"
 #include "host/lobby/host_session_helpers.hpp"
 #include "host/session/lobby.hpp"

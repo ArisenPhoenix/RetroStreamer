@@ -1,4 +1,4 @@
-#include "host/hardware/windows_media_server.hpp"
+#include "host/video/windows_media_server.hpp"
 
 #ifdef _WIN32
 

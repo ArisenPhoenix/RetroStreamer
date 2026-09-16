@@ -1,7 +1,7 @@
 #include "host/session/slot_lease.hpp"
 
 #include "common/platform/paths.hpp"
-#include "host/emulator_orphan_reaper.hpp"
+#include "host/console/emulator_orphan_reaper.hpp"
 
 #include <cstdlib>
 #include <filesystem>

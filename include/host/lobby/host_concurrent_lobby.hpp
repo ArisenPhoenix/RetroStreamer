@@ -2,7 +2,7 @@
 
 #include "host/console/game_catalog.hpp"
 #include "host/host_app_config.hpp"
-#include "host/hardware/streaming_audio_sink.hpp"
+#include "host/audio/streaming_audio_sink.hpp"
 #include "client/controller_manager.hpp"
 
 #include <functional>

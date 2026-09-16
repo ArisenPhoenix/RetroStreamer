@@ -1,6 +1,7 @@
 # src/host/hardware
 
-Physical host hardware implementation lives here.
+Physical host adapter implementation lives here.
 
-This area implements media capture, media servers, audio sinks, launch
-environment discovery, GPU selection, and OS-specific hardware adapters.
+GPU selection, launch-environment application, and local controller bridging
+belong in this directory. Media capture moved to `src/host/video/` and
+`src/host/audio/`.

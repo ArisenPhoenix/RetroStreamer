@@ -1,8 +1,8 @@
-#include "host/hardware/launch_environment.hpp"
+#include "host/contracts/launch.hpp"
 
 #include "common/platform/process_utils.hpp"
-#include "host/hardware/streaming_audio_sink.hpp"
-#include "host/virtual/virtual_display.hpp"
+#include "host/audio/streaming_audio_sink.hpp"
+#include "host/video/virtual_display.hpp"
 
 #include <filesystem>
 #include <stdexcept>

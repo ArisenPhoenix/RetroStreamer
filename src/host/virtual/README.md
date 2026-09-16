@@ -1,6 +1,6 @@
 # src/host/virtual
 
-Virtual host device implementation lives here.
+Virtual peripheral implementation lives here.
 
-This area implements virtual gamepads, keyboards, displays, seat planning,
-network input receiving, and emulator control routing.
+This area implements virtual gamepads, keyboards, seat planning, network input
+receiving, and emulator control routing.

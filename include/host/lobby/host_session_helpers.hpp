@@ -3,7 +3,7 @@
 #include "client/controller_manager.hpp"
 #include "common/protocol.hpp"
 #include "host/host_app_config.hpp"
-#include "host/hardware/media_server.hpp"
+#include "host/video/media_server.hpp"
 #include "host/session/types.hpp"
 
 #include <functional>

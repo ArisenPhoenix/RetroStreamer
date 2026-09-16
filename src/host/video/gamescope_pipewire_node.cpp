@@ -1,4 +1,4 @@
-#include "host/hardware/gamescope_pipewire_node.hpp"
+#include "host/video/gamescope_pipewire_node.hpp"
 
 #include "common/platform/process_utils.hpp"
 

@@ -1,9 +1,11 @@
 #pragma once
 
-#include "host/hardware/gpu_select.hpp"
+#include "host/contracts/audio.hpp"
+#include "host/contracts/present.hpp"
+#include "host/contracts/seat.hpp"
 #include "host/console/nds/melonds_user_profile.hpp"
-#include "host/virtual/pad_plan.hpp"
 #include "host/console/standalone_emulator.hpp"
+#include "host/hardware/gpu_select.hpp"
 
 #include <optional>
 #include <string>
@@ -27,6 +29,18 @@ struct ProcessEnvironment {
     void merge_pairs(const std::vector<std::pair<std::string, std::string>>& pairs);
 };
 
+/**
+ * One emulator process plug: present surface + audio tap + seat.
+ *
+ * Session fills this from video/audio/peripherals, then console applies it
+ * through build_emulator_launch_environment.
+ */
+struct EmulatorPlug {
+    PresentTarget present;
+    AudioTap audio;
+    PadPlan seat;
+};
+
 // Resolved decisions from host_app; the assembler owns merge order so capture
 // backends cannot be applied without their matching env layer.
 struct EmulatorLaunchEnvRequest {
@@ -34,6 +48,7 @@ struct EmulatorLaunchEnvRequest {
     bool stream_audio = false;       // config.audio
     bool host_plays_locally = false; // Host Player without remote stream
     std::string audio_source;        // may be "*.monitor" when capturing a sink
+    AudioCaptureBackend audio_backend = AudioCaptureBackend::Pulse;
     /** Fallback when pad_plan is unset (prefer PadPlan for all new paths). */
     std::string ignore_devices;
     /**
@@ -59,6 +74,34 @@ struct EmulatorLaunchEnvRequest {
     std::optional<YuzuUserProfile> yuzu_profile; // set for standalone Yuzu
     std::optional<RyujinxUserProfile> ryujinx_profile; // set for standalone Ryujinx
     std::optional<MelonDsUserProfile> melonds_profile; // set for standalone melonDS
+
+    [[nodiscard]] PresentTarget present() const {
+        PresentTarget target;
+        if (gamescope_capture) {
+            target.backend = VirtualDisplayBackend::Gamescope;
+        } else if (virtualgl_capture) {
+            target.backend = VirtualDisplayBackend::VirtualGL;
+        } else if (use_virtual_capture) {
+            target.backend = VirtualDisplayBackend::Xvfb;
+        }
+        target.display = capture_display;
+        target.xtest_display = xtest_display;
+        return target;
+    }
+
+    [[nodiscard]] AudioTap audio_tap() const {
+        return AudioTap{audio_backend, audio_source};
+    }
+
+    [[nodiscard]] EmulatorPlug plug() const {
+        EmulatorPlug result;
+        result.present = present();
+        result.audio = audio_tap();
+        if (pad_plan.has_value()) {
+            result.seat = *pad_plan;
+        }
+        return result;
+    }
 };
 
 // Layer builders (also usable for tests / diagnostics).

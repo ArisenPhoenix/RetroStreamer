@@ -8,7 +8,7 @@
 #include "host/session/lobby.hpp"
 #include "host/console/standalone_emulator.hpp"
 #include "host/console/switch_save_share.hpp"
-#include "host/virtual/virtual_display.hpp"
+#include "host/video/virtual_display.hpp"
 
 #include <chrono>
 #include <iostream>

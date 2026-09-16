@@ -2,10 +2,11 @@
 
 #include "common/protocol.hpp"
 #include "common/platform/default_platform.hpp"
-#include "host/hardware/gamescope_pipewire_node.hpp"
-#include "host/hardware/media_capture.hpp"
-#include "host/hardware/media_server.hpp"
-#include "host/virtual/virtual_display.hpp"
+#include "host/audio/gstreamer_audio_fanout.hpp"
+#include "host/video/gamescope_pipewire_node.hpp"
+#include "host/contracts/media.hpp"
+#include "host/video/media_server.hpp"
+#include "host/video/virtual_display.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -106,39 +107,6 @@ private:
     int nvenc_cuda_device_id_ = -1;
     std::vector<Destination> destinations_;
     std::unique_ptr<SharedVideoPipelineRunner> shared_pipeline_;
-};
-
-// One pulsesrc/opus encode shared by Watch-local + all remotes (multiudpsink).
-class GStreamerAudioFanout {
-public:
-    ~GStreamerAudioFanout();
-
-    std::vector<MediaClientStream> start(
-        AudioCaptureBackend backend,
-        const std::string& source,
-        const std::vector<MediaStreamRequest>& destinations);
-    MediaClientStream add(
-        AudioCaptureBackend backend,
-        const std::string& source,
-        const MediaStreamRequest& destination);
-    void stop();
-    void stop_client(ClientId client_id);
-    /** Rebuild the shared Opus encode (pair with video ladder restarts for A/V realign). */
-    void restart();
-
-private:
-    struct Destination {
-        ClientId client_id = 0;
-        std::string host;
-        std::uint16_t port = 0;
-    };
-
-    void restart_pipeline();
-
-    AudioCaptureBackend backend_ = AudioCaptureBackend::Pulse;
-    std::string source_;
-    std::vector<Destination> destinations_;
-    ChildProcess process_;
 };
 
 class GStreamerMediaServer final : public MediaServer {

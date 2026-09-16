@@ -1,8 +1,8 @@
 # include/host/hardware
 
-Physical host hardware headers live here.
+Physical host adapter headers live here.
 
-This area owns capture platforms, GPU selection, media servers, audio sinks,
-launch environment discovery, and local controller bridging.
-
-Virtual devices exposed to emulators belong under `include/host/virtual/`.
+GPU selection, launch-environment *application* (POSIX/Windows env), and local
+controller bridging belong in this directory. Present surfaces and media
+senders moved to `include/host/video/`. Audio taps moved to
+`include/host/audio/`. Shared types live under `include/host/contracts/`.

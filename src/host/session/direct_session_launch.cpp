@@ -7,7 +7,7 @@
 #include "host/db/cadence_session_events.hpp"
 #include "host/lobby/host_session_helpers.hpp"
 #include "host/virtual/input_router.hpp"
-#include "host/hardware/launch_environment.hpp"
+#include "host/contracts/launch.hpp"
 #include "host/console/nds/melonds_backend.hpp"
 #include "host/virtual/pad_plan.hpp"
 #include "host/console/retroarch_config_writer.hpp"

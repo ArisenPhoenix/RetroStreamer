@@ -1,11 +1,11 @@
-#include "host/hardware/capture_platform.hpp"
+#include "host/video/capture_platform.hpp"
 
 #include "common/platform/process_utils.hpp"
-#include "host/hardware/gstreamer_media_server.hpp"
+#include "host/video/gstreamer_media_server.hpp"
 #include "host/hardware/gpu_select.hpp"
-#include "host/hardware/gamescope_pipewire_node.hpp"
+#include "host/video/gamescope_pipewire_node.hpp"
 #include "host/console/retroarch_config_writer.hpp"
-#include "host/virtual/virtual_display.hpp"
+#include "host/video/virtual_display.hpp"
 
 #include <chrono>
 #include <iostream>

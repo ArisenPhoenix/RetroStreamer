@@ -2,12 +2,12 @@
 
 #include "host/host_app_config.hpp"
 #include "host/host_launch_planner.hpp"
-#include "host/hardware/media_capture.hpp"
-#include "host/hardware/media_server.hpp"
+#include "host/contracts/media.hpp"
+#include "host/video/media_server.hpp"
 #include "host/client/client_info.hpp"
 #include "host/session/audio_channel.hpp"
 #include "host/session/runtime.hpp"
-#include "host/hardware/streaming_audio_sink.hpp"
+#include "host/audio/streaming_audio_sink.hpp"
 #include "host/virtual/virtual_gamepad.hpp"
 #include "host/virtual/virtual_keyboard.hpp"
 

@@ -7,7 +7,7 @@
 #include "host/lobby/host_session_hub.hpp"
 #include "host/virtual/input_router_demux.hpp"
 #include "host/session/types.hpp"
-#include "host/hardware/streaming_audio_sink.hpp"
+#include "host/audio/streaming_audio_sink.hpp"
 
 #include <cstdint>
 #include <functional>

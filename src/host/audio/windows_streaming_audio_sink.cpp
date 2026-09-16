@@ -1,6 +1,6 @@
-#include "host/hardware/streaming_audio_sink.hpp"
+#include "host/audio/streaming_audio_sink.hpp"
 #include "host/session/audio_channel.hpp"
-#include "host/hardware/launch_environment.hpp"
+#include "host/contracts/launch.hpp"
 
 #ifdef _WIN32
 

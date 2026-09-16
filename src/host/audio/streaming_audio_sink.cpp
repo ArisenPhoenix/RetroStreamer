@@ -1,7 +1,7 @@
 #ifndef _WIN32
-#include "host/hardware/streaming_audio_sink.hpp"
+#include "host/audio/streaming_audio_sink.hpp"
 #include "host/session/audio_channel.hpp"
-#include "host/hardware/launch_environment.hpp"
+#include "host/contracts/launch.hpp"
 
 #include "common/platform/process_utils.hpp"
 

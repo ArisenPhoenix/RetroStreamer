@@ -1,4 +1,4 @@
-#include "host/hardware/capture_platform.hpp"
+#include "host/video/capture_platform.hpp"
 
 #include <iostream>
 #include "host/hardware/gpu_select.hpp"

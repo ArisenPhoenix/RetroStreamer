@@ -26,6 +26,10 @@ void register_emulator_session_token(const std::string&) {}
 
 void unregister_emulator_session_token(const std::string&) {}
 
+bool any_registered_emulator_session_token() {
+    return false;
+}
+
 int reap_stale_emulator_session_tokens() {
     return 0;
 }

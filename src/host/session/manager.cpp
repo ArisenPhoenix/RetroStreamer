@@ -6,7 +6,9 @@
 #include "host/session/lobby.hpp"
 #include "host/session/slot_lease.hpp"
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <iostream>
 #include <stdexcept>
 #include <utility>
@@ -15,6 +17,17 @@ namespace archstreamer {
 namespace {
 
 constexpr int kSlotLeaseSpan = 16;
+
+std::string lower_copy(std::string value) {
+    for (char& ch : value) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return value;
+}
+
+bool same_username(std::string_view a, std::string_view b) {
+    return lower_copy(std::string(a)) == lower_copy(std::string(b));
+}
 
 } // namespace
 
@@ -101,16 +114,78 @@ void SessionManager::apply_one(LobbyCommand& command) {
 }
 
 void SessionManager::start_session(SessionPlan plan, SessionId session_id) {
-    std::lock_guard lock(mutex_);
-    // Drop finished slots without taking mutex again (already held).
-    for (auto& slot : slots_) {
-        if (slot != nullptr && !slot->finished()) {
-            const auto snap = slot->status_snapshot();
-            if (snap.request_destroy_reason.has_value()) {
-                slot->request_stop();
+    std::unique_ptr<ActiveSessionSlot> previous;
+    {
+        std::lock_guard lock(mutex_);
+        for (auto& slot : slots_) {
+            if (slot != nullptr && !slot->finished()) {
+                const auto snap = slot->status_snapshot();
+                if (snap.request_destroy_reason.has_value()) {
+                    slot->request_stop();
+                }
             }
         }
+        slots_.erase(
+            std::remove_if(
+                slots_.begin(),
+                slots_.end(),
+                [](const std::unique_ptr<ActiveSessionSlot>& slot) {
+                    if (slot == nullptr || !slot->finished()) {
+                        return false;
+                    }
+                    slot->join();
+                    return true;
+                }),
+            slots_.end());
+
+        const auto& username = plan.game.save_username;
+        if (!username.empty()) {
+            for (auto& slot : slots_) {
+                if (slot == nullptr || slot->finished()) {
+                    continue;
+                }
+                if (!same_username(slot->plan().game.save_username, username)) {
+                    continue;
+                }
+                const auto snap = slot->status_snapshot();
+                const bool switching_games =
+                    slot->plan().game.selected_game_id != plan.game.selected_game_id;
+                const bool stopping =
+                    snap.phase == SessionPhase::Stopping ||
+                    snap.request_destroy_reason.has_value();
+                if (!switching_games && !stopping) {
+                    throw std::runtime_error(
+                        "user " + username +
+                        " already has an active session; reconnect to it or end it first");
+                }
+                std::cout
+                    << "Game switch for " << username
+                    << ": waiting for session " << slot->session_id()
+                    << " (" << slot->plan().game.selected_game_id << ") to stop"
+                    << " before starting " << plan.game.selected_game_id << '\n';
+                slot->request_stop();
+                previous = std::move(slot);
+                break;
+            }
+            slots_.erase(
+                std::remove_if(
+                    slots_.begin(),
+                    slots_.end(),
+                    [](const std::unique_ptr<ActiveSessionSlot>& slot) {
+                        return slot == nullptr;
+                    }),
+                slots_.end());
+        }
     }
+
+    if (previous != nullptr) {
+        previous->join();
+        previous.reset();
+    }
+    (void)reap_stale_emulator_session_tokens();
+    slot_lock::release_stale_x11_reservation_locks();
+
+    std::lock_guard lock(mutex_);
     slots_.erase(
         std::remove_if(
             slots_.begin(),
@@ -216,6 +291,7 @@ std::size_t SessionManager::reap_finished() {
         slots_.end());
     if (slots_.size() != before) {
         (void)reap_stale_emulator_session_tokens();
+        slot_lock::release_stale_x11_reservation_locks();
     }
     return before - slots_.size();
 }

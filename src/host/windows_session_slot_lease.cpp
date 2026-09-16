@@ -51,4 +51,6 @@ bool display_number_free(int) {
     return true;
 }
 
+void release_stale_x11_reservation_locks() {}
+
 } // namespace archstreamer::slot_lock

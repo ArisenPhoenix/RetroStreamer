@@ -2,6 +2,7 @@
 
 #include "common/platform/paths.hpp"
 #include "host/emulator_orphan_reaper.hpp"
+#include "host/session/slot_lease.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -145,6 +146,109 @@ void signal_pids(const std::set<pid_t>& pids, int sig) {
     for (const pid_t pid : pids) {
         kill(pid, sig);
     }
+}
+
+std::string read_proc_blob(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return {};
+    }
+    std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    for (char& ch : raw) {
+        if (ch == '\0' || ch == '\n') {
+            ch = ' ';
+        }
+    }
+    return raw;
+}
+
+std::string ascii_lower(std::string value) {
+    for (char& ch : value) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return value;
+}
+
+enum class SessionProcKind {
+    Emulator,
+    Compositor,
+    Firejail,
+    Helper,
+};
+
+SessionProcKind classify_session_pid(pid_t pid) {
+    const auto dir = std::filesystem::path{"/proc"} / std::to_string(pid);
+    const auto hay = ascii_lower(
+        read_proc_blob(dir / "comm") + " " + read_proc_blob(dir / "cmdline"));
+    if (hay.find("firejail") != std::string::npos) {
+        return SessionProcKind::Firejail;
+    }
+    if (hay.find("gamescope") != std::string::npos ||
+        hay.find("xwayland") != std::string::npos ||
+        hay.find("xvfb") != std::string::npos ||
+        hay.find("xephyr") != std::string::npos) {
+        return SessionProcKind::Compositor;
+    }
+    static constexpr const char* kEmulators[] = {
+        "ryujinx",
+        "yuzu",
+        "sudachi",
+        "suyu",
+        "retroarch",
+        "melonds",
+        "melon ds",
+        "pcsx2",
+        "dolphin",
+        "citra",
+        "lime3ds",
+        "ppsspp",
+        "mupen",
+        "mgba",
+    };
+    for (const char* name : kEmulators) {
+        if (hay.find(name) != std::string::npos) {
+            return SessionProcKind::Emulator;
+        }
+    }
+    return SessionProcKind::Helper;
+}
+
+std::set<pid_t> filter_session_pids(
+    const std::set<pid_t>& pids,
+    SessionProcKind kind) {
+    std::set<pid_t> out;
+    for (const pid_t pid : pids) {
+        if (classify_session_pid(pid) == kind) {
+            out.insert(pid);
+        }
+    }
+    return out;
+}
+
+std::set<pid_t> exclude_session_kind(
+    const std::set<pid_t>& pids,
+    SessionProcKind kind) {
+    std::set<pid_t> out;
+    for (const pid_t pid : pids) {
+        if (classify_session_pid(pid) != kind) {
+            out.insert(pid);
+        }
+    }
+    return out;
+}
+
+bool session_tree_gone(pid_t group, const std::string& token, pid_t leader) {
+    auto targets = collect_pids_for_session(group, token);
+    if (leader > 0) {
+        targets.insert(leader);
+    }
+    if (any_pid_alive(targets)) {
+        return false;
+    }
+    if (group > 0 && kill(-group, 0) == 0) {
+        return false;
+    }
+    return true;
 }
 
 /** flatpak run drops unknown env; pass the session token explicitly. */
@@ -492,75 +596,118 @@ void PosixRetroArchProcess::stop() {
         return;
     }
 
-    // Snapshot by process group and ARCHSTREAMER_SLOT_TOKEN so AppImage/flatpak
-    // re-execs that leave the original setsid group are still terminated.
-    auto targets = collect_pids_for_session(group, token);
-    if (pid_ > 0) {
-        targets.insert(pid_);
-    }
-    if (group > 0) {
-        kill(-group, SIGTERM);
-    }
-    signal_pids(targets, SIGTERM);
-
-    for (int i = 0; i < 40; ++i) {
-        if (pid_ > 0) {
-            int status = 0;
-            const pid_t result = waitpid(pid_, &status, WNOHANG);
-            if (result == pid_) {
-                record_status(status);
-                pid_ = -1;
-            } else if (result < 0 && errno == ECHILD) {
-                pid_ = -1;
-            }
+    auto reap_leader = [this] {
+        if (pid_ <= 0) {
+            return;
         }
-        targets = collect_pids_for_session(group, token);
+        int status = 0;
+        const pid_t result = waitpid(pid_, &status, WNOHANG);
+        if (result == pid_) {
+            record_status(status);
+            pid_ = -1;
+        } else if (result < 0 && errno == ECHILD) {
+            pid_ = -1;
+        }
+    };
+
+    auto snapshot = [&] {
+        auto targets = collect_pids_for_session(group, token);
         if (pid_ > 0) {
             targets.insert(pid_);
         }
-        if (!any_pid_alive(targets)
-            && (group <= 0 || (kill(-group, 0) != 0 && errno == ESRCH))) {
-            pid_ = -1;
-            process_group_id_ = -1;
-            unregister_emulator_session_token(session_token_);
-            session_token_.clear();
-            return;
+        return targets;
+    };
+
+    auto wait_gone = [&](int attempts, int sleep_ms) {
+        for (int i = 0; i < attempts; ++i) {
+            reap_leader();
+            if (session_tree_gone(group, token, pid_)) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        reap_leader();
+        return session_tree_gone(group, token, pid_);
+    };
+
+    // Snapshot by process group and ARCHSTREAMER_SLOT_TOKEN so AppImage/flatpak
+    // re-execs that leave the original setsid group are still terminated.
+    auto targets = snapshot();
+
+    // 1. SIGTERM the guest emulator first while gamescope/Xwayland is still up.
+    //    Killing gamescope first breaks Ryujinx's X connection and it aborts
+    //    (`malloc_consolidate`, leftover jail PIDs, stale :1–:19 lock files).
+    const auto emulators = filter_session_pids(targets, SessionProcKind::Emulator);
+    if (!emulators.empty()) {
+        std::cout
+            << "session stop: SIGTERM " << emulators.size()
+            << " emulator process(es) before gamescope\n";
+        signal_pids(emulators, SIGTERM);
+        (void)wait_gone(50, 100);
+
+        // 2. SIGTERM compositors and helpers (gamescope, Xwayland, reservation python).
+        targets = snapshot();
+        signal_pids(exclude_session_kind(targets, SessionProcKind::Firejail), SIGTERM);
+        (void)wait_gone(20, 100);
+
+        // 3. Then firejail / the session process group so the netns can unwind.
+        targets = snapshot();
+        if (group > 0) {
+            kill(-group, SIGTERM);
+        }
+        signal_pids(targets, SIGTERM);
+        (void)wait_gone(20, 100);
+    } else {
+        // Guest PIDs were not visible (pid namespace). SIGTERM the whole tree
+        // and wait long enough for Ryujinx to exit before SIGKILL.
+        if (group > 0) {
+            kill(-group, SIGTERM);
+        }
+        signal_pids(targets, SIGTERM);
+        (void)wait_gone(50, 100);
     }
 
-    targets = collect_pids_for_session(group, token);
-    if (pid_ > 0) {
-        targets.insert(pid_);
-    }
+    // 4. SIGKILL stragglers. Firejail last so it can still reap the pid ns.
+    targets = snapshot();
+    signal_pids(exclude_session_kind(targets, SessionProcKind::Firejail), SIGKILL);
+    (void)wait_gone(20, 50);
+    targets = snapshot();
     if (group > 0) {
         kill(-group, SIGKILL);
     }
     signal_pids(targets, SIGKILL);
     if (pid_ > 0) {
         int status = 0;
-        if (waitpid(pid_, &status, 0) == pid_) {
+        if (waitpid(pid_, &status, WNOHANG) == pid_) {
             record_status(status);
+            pid_ = -1;
         }
     }
-    // Final sweep for stragglers that reparented during the kill window.
-    targets = collect_pids_for_session(group, token);
-    signal_pids(targets, SIGKILL);
-    if (any_pid_alive(targets)) {
+    if (!wait_gone(40, 50)) {
+        // One more token sweep after SIGKILL in case grandchildren reparented.
+        targets = snapshot();
+        signal_pids(targets, SIGKILL);
+        (void)wait_gone(20, 50);
+    }
+
+    const bool gone = session_tree_gone(group, token, pid_);
+    pid_ = -1;
+    process_group_id_ = -1;
+    unregister_emulator_session_token(token);
+    session_token_.clear();
+    slot_lock::release_stale_x11_reservation_locks();
+    if (!gone) {
+        const auto leftovers = collect_pids_for_session(group, token);
         std::cerr
             << "Warning: emulator session tree still alive after SIGKILL"
             << (token.empty() ? "" : (" token=" + token))
-            << "; will retry on next stop/destructor\n";
-        pid_ = -1;
-        // Keep process_group_id_ / session_token_ so a later stop() can find them.
-        // Unregister so mid-lobby stale reap can also clean them up.
-        unregister_emulator_session_token(token);
-        return;
+            << "; asking mid-lobby stale reap to finish cleanup\n";
+        (void)reap_stale_emulator_session_tokens();
+        slot_lock::release_stale_x11_reservation_locks();
+        if (any_pid_alive(leftovers)) {
+            return;
+        }
     }
-    pid_ = -1;
-    process_group_id_ = -1;
-    unregister_emulator_session_token(session_token_);
-    session_token_.clear();
 }
 
 bool PosixRetroArchProcess::running() const {

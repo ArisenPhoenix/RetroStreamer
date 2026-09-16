@@ -1,9 +1,11 @@
 #include "host/session/slot_lease.hpp"
 
 #include "common/platform/paths.hpp"
+#include "host/emulator_orphan_reaper.hpp"
 
 #include <cstdlib>
 #include <filesystem>
+#include <iostream>
 #include <system_error>
 
 #include <fcntl.h>
@@ -57,6 +59,32 @@ bool display_number_free(int display_number) {
         return false;
     }
     return !std::filesystem::exists("/tmp/.X" + suffix + "-lock", error);
+}
+
+void release_stale_x11_reservation_locks() {
+    if (any_registered_emulator_session_token()) {
+        return;
+    }
+    int removed = 0;
+    std::error_code error;
+    for (int n = 1; n < 256; ++n) {
+        const auto suffix = std::to_string(n);
+        if (std::filesystem::exists("/tmp/.X11-unix/X" + suffix, error)) {
+            continue;
+        }
+        const auto lock = "/tmp/.X" + suffix + "-lock";
+        if (!std::filesystem::exists(lock, error)) {
+            continue;
+        }
+        if (std::filesystem::remove(lock, error) && !error) {
+            ++removed;
+        }
+    }
+    if (removed > 0) {
+        std::cout
+            << "Cleared " << removed
+            << " stale gamescope X reservation lock(s)\n";
+    }
 }
 
 } // namespace archstreamer::slot_lock

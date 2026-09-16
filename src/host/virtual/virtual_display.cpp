@@ -3,7 +3,10 @@
 #include "host/session/slot_lease.hpp"
 
 #include <chrono>
+#include <cstddef>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -12,6 +15,8 @@
 #include <system_error>
 #include <thread>
 
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 namespace archstreamer {
@@ -456,13 +461,41 @@ void require_free_display(const std::string& display, const char* server) {
         "machine; start this one with a different --virtual-display.");
 }
 
+bool x11_display_accepts_connections(int number) {
+    if (number < 0) {
+        return false;
+    }
+    const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) {
+        return false;
+    }
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    const int printed = std::snprintf(
+        addr.sun_path,
+        sizeof(addr.sun_path),
+        "/tmp/.X11-unix/X%d",
+        number);
+    if (printed < 0 || static_cast<std::size_t>(printed) >= sizeof(addr.sun_path)) {
+        ::close(fd);
+        return false;
+    }
+    const int rc = ::connect(
+        fd,
+        reinterpret_cast<sockaddr*>(&addr),
+        sizeof(addr));
+    ::close(fd);
+    return rc == 0;
+}
+
 void await_display_ready(const std::string& display, const ChildProcess& process) {
     const int number = x_display_number(display);
     const auto socket = "/tmp/.X11-unix/X" + std::to_string(number);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (std::chrono::steady_clock::now() < deadline) {
         std::error_code error;
-        if (number >= 0 && std::filesystem::exists(socket, error)) {
+        if (number >= 0 && std::filesystem::exists(socket, error) &&
+            x11_display_accepts_connections(number)) {
             return;
         }
         if (!process.running()) {

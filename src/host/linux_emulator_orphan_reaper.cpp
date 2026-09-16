@@ -485,6 +485,11 @@ void unregister_emulator_session_token(const std::string& token) {
     g_live_tokens.erase(token);
 }
 
+bool any_registered_emulator_session_token() {
+    std::lock_guard lock(g_live_tokens_mutex);
+    return !g_live_tokens.empty();
+}
+
 int reap_stale_emulator_session_tokens() {
     std::set<std::string> live;
     {

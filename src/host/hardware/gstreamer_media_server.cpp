@@ -116,16 +116,38 @@ void configure_managed_pipewire_environment() {
 #endif
 }
 
-std::string gst_quote(std::string_view value) {
-    std::string quoted = "'";
+// gst_parse_launch() description strings: only double quotes are stripped.
+// Single quotes stay in the property (display-name=':99' → "':99'"), which
+// makes ximagesrc's XOpenDisplay fail with "Could not open X display".
+std::string gst_parse_quote(std::string_view value) {
+    std::string quoted = "\"";
     for (const char ch : value) {
-        if (ch == '\\' || ch == '\'') {
+        if (ch == '\\' || ch == '"') {
             quoted.push_back('\\');
         }
         quoted.push_back(ch);
     }
-    quoted.push_back('\'');
+    quoted.push_back('"');
     return quoted;
+}
+
+std::string gst_parse_property(std::string_view key, std::string_view value) {
+    return std::string(key) + "=" + gst_parse_quote(value);
+}
+
+// gst-launch-1.0 argv: each key=value is already one exec token, then the
+// tool joins tokens with spaces and calls gst_parse_launch. Leave simple
+// values bare (display-name=:99). Quote only when the joined description
+// would split the value. Never wrap with single quotes.
+std::string gst_argv_property(std::string_view key, std::string_view value) {
+    const bool needs_quotes = value.empty() ||
+        std::any_of(value.begin(), value.end(), [](char ch) {
+            return ch == ' ' || ch == '\t' || ch == '!' || ch == '"' || ch == '\\';
+        });
+    if (needs_quotes) {
+        return std::string(key) + "=" + gst_parse_quote(value);
+    }
+    return std::string(key) + "=" + std::string(value);
 }
 
 std::string multiudp_clients_arg(
@@ -354,7 +376,7 @@ void append_h264_branch_args(
             "byte-stream=true",
             "bframes=0",
             "threads=1",
-            "option-string=scenecut=40",
+            gst_argv_property("option-string", "scenecut=40"),
             "!",
             "video/x-h264,profile=constrained-baseline,stream-format=byte-stream",
         });
@@ -429,7 +451,7 @@ void append_h264_branch_desc(
             << " bitrate=" << bitrate
             << " key-int-max=" << key_int_max
             << " byte-stream=true bframes=0 threads=1"
-            << " option-string=" << gst_quote("scenecut=40")
+            << " " << gst_parse_property("option-string", "scenecut=40")
             << " ! video/x-h264,profile=constrained-baseline,stream-format=byte-stream";
     }
     if (gst_element_available("h264parse")) {
@@ -538,7 +560,7 @@ public:
         if (source.kind == SharedVideoSource::Kind::PipeWire) {
             args.insert(args.end(), {
                 "pipewiresrc",
-                "path=" + source.value,
+                gst_argv_property("path", source.value),
                 "do-timestamp=true",
                 "!",
                 "video/x-raw,format=BGRx",
@@ -548,7 +570,7 @@ public:
         } else {
             args.insert(args.end(), {
                 "ximagesrc",
-                "display-name=" + source.value,
+                gst_argv_property("display-name", source.value),
                 "use-damage=false",
                 "show-pointer=false",
                 "do-timestamp=true",
@@ -635,9 +657,12 @@ public:
         pin_nvenc_cuda_device_order();
         stop();
         constexpr int PipeWireStartupAttempts = 8;
-        constexpr auto PipeWireStartupRetryDelay = std::chrono::milliseconds(250);
+        constexpr int X11StartupAttempts = 8;
+        constexpr auto StartupRetryDelay = std::chrono::milliseconds(250);
         const int startup_attempts =
-            source.kind == SharedVideoSource::Kind::PipeWire ? PipeWireStartupAttempts : 1;
+            source.kind == SharedVideoSource::Kind::PipeWire
+                ? PipeWireStartupAttempts
+                : X11StartupAttempts;
         const auto selectors = source.kind == SharedVideoSource::Kind::PipeWire
             ? pipewire_source_selectors(source)
             : std::vector<PipeWireSourceSelector>{};
@@ -645,7 +670,7 @@ public:
         std::string managed_errors;
         for (int attempt = 1; attempt <= startup_attempts; ++attempt) {
             if (attempt > 1) {
-                std::this_thread::sleep_for(PipeWireStartupRetryDelay);
+                std::this_thread::sleep_for(StartupRetryDelay);
             }
             const int selector_count = source.kind == SharedVideoSource::Kind::PipeWire
                 ? static_cast<int>(selectors.size())
@@ -657,11 +682,11 @@ public:
                     const auto& selector = selectors[selector_index];
                     selector_label = selector.property + "=" + selector.value;
                     desc
-                        << "pipewiresrc " << selector.property << "=" << selector.value
+                        << "pipewiresrc " << gst_parse_property(selector.property, selector.value)
                         << " do-timestamp=true ! video/x-raw,format=BGRx ! videoconvert";
                 } else {
                     desc
-                        << "ximagesrc display-name=" << gst_quote(source.value)
+                        << "ximagesrc " << gst_parse_property("display-name", source.value)
                         << " use-damage=false show-pointer=false do-timestamp=true ! videoconvert";
                 }
                 if (branches.size() == 1) {

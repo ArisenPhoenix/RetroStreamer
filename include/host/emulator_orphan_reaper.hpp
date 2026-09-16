@@ -77,6 +77,7 @@ int reap_orphaned_emulator_processes();
  */
 void register_emulator_session_token(const std::string& token);
 void unregister_emulator_session_token(const std::string& token);
+[[nodiscard]] bool any_registered_emulator_session_token();
 
 /**
  * Kill processes whose environ still carries ARCHSTREAMER_SLOT_TOKEN but the

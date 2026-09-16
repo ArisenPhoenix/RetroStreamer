@@ -1,16 +1,22 @@
+__pycache__
+.vscode
+.cache
+
 build/
 _dependencies/
-.cache
 deploy/lan-sim/*.log
 build-flatpak/
 build-client-only/
 .flatpak-builder/
-scripts/.flatpak-builder/
+host_runner_logged
+
+
 *.flatpak
 logs
 windows_log_ssh.sh
 
 # Local-only catalog/filesystem helpers (not pushed)
+scripts/.flatpak-builder/
 scripts/local/
 
 # Android client (see also mobile/android/.gitignore)
@@ -18,6 +24,5 @@ mobile/android/.gradle/
 mobile/android/**/build/
 mobile/android/local.properties
 mobile/android/.idea/
-__pycache__
+
 .idea
-host_runner_logged

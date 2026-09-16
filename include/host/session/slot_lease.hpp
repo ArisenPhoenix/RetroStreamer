@@ -57,6 +57,18 @@ void release(std::intptr_t handle);
 /** True when no X server owns this display number (always true on Windows). */
 bool display_number_free(int display_number);
 
+/**
+ * Unlink leftover gamescope X reservation lock files (`/tmp/.Xn-lock`, n>=1)
+ * that have no matching `/tmp/.X11-unix/Xn` socket.
+ *
+ * The gamescope wrapper creates those locks without a filesystem socket so
+ * nested Xwayland lands on `:20`. SIGKILL of the helper skips atexit, so the
+ * files linger and the next session can fail to open a capture display.
+ * Skipped while any `ARCHSTREAMER_SLOT_TOKEN` process is still alive so a
+ * sibling slot keeps its reservations. No-op on Windows.
+ */
+void release_stale_x11_reservation_locks();
+
 } // namespace slot_lock
 
 } // namespace archstreamer

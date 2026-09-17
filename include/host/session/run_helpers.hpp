@@ -52,8 +52,8 @@ struct SessionMediaCaptureContext {
 };
 
 struct SessionMediaStreamContext {
-    const HostMediaPlanConfig& media_config;
-    const std::vector<HostMediaDestination>& destinations;
+    const MediaPlanConfig& media_config;
+    const std::vector<MediaDestination>& destinations;
     std::vector<MediaClientStream>& streams;
 };
 

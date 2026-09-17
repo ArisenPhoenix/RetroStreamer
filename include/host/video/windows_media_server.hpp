@@ -24,8 +24,8 @@ public:
     explicit WindowsMediaServer(WindowsMediaCaptureConfig capture);
 
     void start(
-        const HostMediaPlanConfig& plan,
-        const std::vector<HostMediaDestination>& destinations,
+        const MediaPlanConfig& plan,
+        const std::vector<MediaDestination>& destinations,
         std::vector<MediaClientStream>& streams) override;
     MediaEndpoint add_client(
         ClientId client_id,
@@ -55,8 +55,8 @@ private:
     void restart_audio();
 
     WindowsMediaCaptureConfig capture_;
-    HostMediaPlanConfig plan_{};
-    std::vector<HostMediaDestination> destinations_;
+    MediaPlanConfig plan_{};
+    std::vector<MediaDestination> destinations_;
     VideoEncodeSettings video_settings_ =
         video_encode_settings(MediaStreamSize::P720, MediaQualityTier::Medium);
     ChildProcess video_process_;

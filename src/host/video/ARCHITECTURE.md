@@ -15,5 +15,6 @@ the parser leaves single quotes in the property and `XOpenDisplay` fails.
 The gst-launch child builds argv tokens (`display-name=:99`) and must not wrap
 simple values — gst-launch joins those tokens, then parse-launchs the result.
 
-`GStreamerMediaServer` remains the session-facing A/V facade. Audio encode lives
-in `src/host/audio/gstreamer_audio_fanout.cpp`.
+`GStreamerMediaServer` remains the session-facing A/V facade. It owns
+`MediaPlanConfig`; session fills that from `MediaConfig` and passes it to
+`start()`. Audio encode lives in `src/host/audio/gstreamer_audio_fanout.cpp`.

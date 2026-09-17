@@ -1,4 +1,3 @@
-#include "common/addresses.hpp"
 #include "host/host_launch_planner.hpp"
 
 #include <algorithm>
@@ -160,7 +159,7 @@ HostLaunchPlan launch_plan_for_direct(
 }
 
 std::string media_destination_host(
-    const HostMediaPlanConfig& config,
+    const MediaPlanConfig& config,
     const std::string& peer_address) {
     if (config.destination_host_explicit) {
         return config.destination_host;
@@ -172,12 +171,12 @@ std::string media_destination_host(
     return config.destination_host;
 }
 
-std::vector<HostMediaDestination> media_destinations_for_session(
-    const HostMediaPlanConfig& config,
+std::vector<MediaDestination> media_destinations_for_session(
+    const MediaPlanConfig& config,
     const SessionPlan& plan) {
-    auto destinations = std::vector<HostMediaDestination>{};
+    auto destinations = std::vector<MediaDestination>{};
     if (config.include_host_loopback && (config.video || config.audio)) {
-        destinations.push_back(HostMediaDestination{
+        destinations.push_back(MediaDestination{
             HostClientId,
             "127.0.0.1",
         });
@@ -187,7 +186,7 @@ std::vector<HostMediaDestination> media_destinations_for_session(
             continue;
         }
         if ((config.video && client.hello.wants_video) || (config.audio && client.hello.wants_audio)) {
-            destinations.push_back(HostMediaDestination{
+            destinations.push_back(MediaDestination{
                 client.info.client_id,
                 media_destination_host(config, client.lifecycle.stream.peer_address()),
             });
@@ -196,97 +195,20 @@ std::vector<HostMediaDestination> media_destinations_for_session(
     return destinations;
 }
 
-std::vector<HostMediaDestination> media_destinations_for_host(
-    const HostMediaPlanConfig& config) {
+std::vector<MediaDestination> media_destinations_for_host(
+    const MediaPlanConfig& config) {
     if (!config.video && !config.audio) {
         return {};
     }
     if (!config.include_host_loopback && !config.destination_host_explicit) {
         return {};
     }
-    return std::vector<HostMediaDestination>{
-        HostMediaDestination{
+    return std::vector<MediaDestination>{
+        MediaDestination{
             HostClientId,
             config.destination_host,
         },
     };
-}
-
-MediaStreamRequest video_request_for_destination(
-    const HostMediaPlanConfig& config,
-    const HostMediaDestination& destination,
-    std::size_t media_index) {
-    return MediaStreamRequest{
-        destination.client_id,
-        destination.host,
-        static_cast<std::uint16_t>(config.video_port + media_index),
-    };
-}
-
-MediaStreamRequest audio_request_for_destination(
-    const HostMediaPlanConfig& config,
-    const HostMediaDestination& destination,
-    std::size_t media_index) {
-    return MediaStreamRequest{
-        destination.client_id,
-        destination.host,
-        static_cast<std::uint16_t>(config.audio_port + media_index),
-    };
-}
-
-std::vector<MediaStreamRequest> video_requests_from_media_destinations(
-    const HostMediaPlanConfig& config,
-    const std::vector<HostMediaDestination>& destinations) {
-    auto requests = std::vector<MediaStreamRequest>{};
-    requests.reserve(destinations.size());
-
-    for (std::size_t index = 0; index < destinations.size(); ++index) {
-        requests.push_back(video_request_for_destination(config, destinations[index], index));
-    }
-
-    return requests;
-}
-
-std::vector<MediaStreamRequest> audio_requests_from_media_destinations(
-    const HostMediaPlanConfig& config,
-    const std::vector<HostMediaDestination>& destinations) {
-    auto requests = std::vector<MediaStreamRequest>{};
-    requests.reserve(destinations.size());
-
-    for (std::size_t index = 0; index < destinations.size(); ++index) {
-        requests.push_back(audio_request_for_destination(config, destinations[index], index));
-    }
-
-    return requests;
-}
-
-std::vector<MediaClientStream> media_streams_for_dry_run(
-    const HostMediaPlanConfig& config,
-    const std::vector<HostMediaDestination>& destinations) {
-    auto streams = std::vector<MediaClientStream>{};
-    streams.reserve(destinations.size());
-
-    for (std::size_t index = 0; index < destinations.size(); ++index) {
-        const auto& destination = destinations[index];
-        auto endpoint = MediaEndpoint{};
-        if (config.video) {
-            endpoint.video_uri = rtp_h264_uri(
-                destination.host,
-                static_cast<std::uint16_t>(config.video_port + index));
-        }
-        if (config.audio) {
-            endpoint.audio_uri = rtp_opus_uri(
-                destination.host,
-                static_cast<std::uint16_t>(config.audio_port + index));
-        }
-        streams.push_back(MediaClientStream{
-            destination.client_id,
-            destination.host,
-            endpoint,
-        });
-    }
-
-    return streams;
 }
 
 } // namespace archstreamer

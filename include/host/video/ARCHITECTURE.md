@@ -21,4 +21,6 @@ Not yet cohesive:
 - `MediaServer` is the session-facing A/V facade (intentional). Audio
   encode lives in `host/audio/`; this object composes it from `MediaConfig`.
 - `HostAppConfig` embeds `MediaConfig` (video + audio + host loopback);
-  MediaServer resolves the send profile. Sync is a client playback choice.
+  MediaServer resolves the send profile. Host builds `MediaPlanConfig` from
+  that (`make_media_plan_config`) and passes it to `MediaServer.start()`.
+  Sync is a client playback choice.

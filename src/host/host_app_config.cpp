@@ -22,19 +22,6 @@ const char* graphics_api_name(GraphicsApiPreference api) {
 
 } // namespace
 
-HostMediaPlanConfig media_plan_config_for(const HostAppConfig& config) {
-    return HostMediaPlanConfig{
-        config.media.video.enabled,
-        config.media.audio.enabled,
-        config.media.video.destination,
-        config.media.video.destination_explicit,
-        config.media.video.port,
-        config.media.audio.port,
-        config.media.host_local_watch,
-        video_encode_settings(MediaStreamSize::P720, MediaQualityTier::Medium),
-    };
-}
-
 std::vector<std::string> host_app_config_to_argv(const HostAppConfig& config) {
     std::vector<std::string> args;
     args.push_back("--rom-root");

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "common/media.hpp"
 #include "host/session/lobby.hpp"
+#include "host/video/media_server.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -27,23 +27,6 @@ struct HostPlayerControllerIdentity {
     std::uint16_t product_id = 0;
 };
 
-struct HostMediaPlanConfig {
-    bool video = false;
-    bool audio = false;
-    std::string destination_host = "127.0.0.1";
-    bool destination_host_explicit = false;
-    std::uint16_t video_port = 5004;
-    std::uint16_t audio_port = 6004;
-    bool include_host_loopback = false;
-    VideoEncodeSettings initial_video_settings =
-        video_encode_settings(MediaStreamSize::P720, MediaQualityTier::Medium);
-};
-
-struct HostMediaDestination {
-    ClientId client_id = 0;
-    std::string host;
-};
-
 std::optional<GameId> select_game_for_launch(const GameList& list, const std::string& selector);
 void validate_direct_launch(
     GameSessionMode mode,
@@ -64,29 +47,12 @@ HostLaunchPlan launch_plan_for_direct(
     const std::optional<HostPlayerControllerIdentity>& controller);
 
 std::string media_destination_host(
-    const HostMediaPlanConfig& config,
+    const MediaPlanConfig& config,
     const std::string& peer_address);
-std::vector<HostMediaDestination> media_destinations_for_session(
-    const HostMediaPlanConfig& config,
+std::vector<MediaDestination> media_destinations_for_session(
+    const MediaPlanConfig& config,
     const SessionPlan& plan);
-std::vector<HostMediaDestination> media_destinations_for_host(
-    const HostMediaPlanConfig& config);
-MediaStreamRequest video_request_for_destination(
-    const HostMediaPlanConfig& config,
-    const HostMediaDestination& destination,
-    std::size_t media_index);
-MediaStreamRequest audio_request_for_destination(
-    const HostMediaPlanConfig& config,
-    const HostMediaDestination& destination,
-    std::size_t media_index);
-std::vector<MediaStreamRequest> video_requests_from_media_destinations(
-    const HostMediaPlanConfig& config,
-    const std::vector<HostMediaDestination>& destinations);
-std::vector<MediaStreamRequest> audio_requests_from_media_destinations(
-    const HostMediaPlanConfig& config,
-    const std::vector<HostMediaDestination>& destinations);
-std::vector<MediaClientStream> media_streams_for_dry_run(
-    const HostMediaPlanConfig& config,
-    const std::vector<HostMediaDestination>& destinations);
+std::vector<MediaDestination> media_destinations_for_host(
+    const MediaPlanConfig& config);
 
 } // namespace archstreamer

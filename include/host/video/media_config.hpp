@@ -21,6 +21,8 @@ enum class MediaProfile {
  * Host-facing media knobs. MediaServer owns this composition so session does
  * not thread video and audio as parallel flag bags. VideoSettings / AudioSettings
  * stay the per-track types; host_local_watch is the combined loopback option.
+ * Host builds `MediaPlanConfig` from this (`make_media_plan_config`) and passes
+ * it to `MediaServer.start()`.
  *
  * Sync is a client playback choice (`ClientAppConfig.synced_av`), not a host knob.
  */

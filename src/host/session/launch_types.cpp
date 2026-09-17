@@ -24,7 +24,7 @@ SessionMediaPlan build_session_media_plan(
         parse_video_resolution(config.media.video.resolution, media.capture_w, media.capture_h);
         configure_initial_session_video(*session_plan, media.capture_w, media.capture_h);
     }
-    media.config = media_plan_config_for(config);
+    media.config = make_media_plan_config(config.media);
     if (kind == SessionMediaPlanKind::Slot) {
         media.config.initial_video_settings = session_plan->stream.video_settings;
     }

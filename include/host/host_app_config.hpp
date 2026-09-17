@@ -5,7 +5,6 @@
 #include "host/console/emulator_config.hpp"
 #include "host/console/game_config.hpp"
 #include "host/hardware/gpu_settings.hpp"
-#include "host/host_launch_planner.hpp"
 #include "host/virtual/pad_settings.hpp"
 #include "host/video/media_config.hpp"
 
@@ -61,8 +60,6 @@ struct HostAppConfig {
     // no owner so the Remote tab can manage them as parentless processes.
     int owner_gui_pid = 0;
 };
-
-HostMediaPlanConfig media_plan_config_for(const HostAppConfig& config);
 
 // Serialize config to host_runner argv (without the program name). Shared by CLI round-trips
 // and the GUI so flags cannot drift.

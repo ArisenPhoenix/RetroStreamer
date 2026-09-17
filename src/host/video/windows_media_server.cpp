@@ -5,7 +5,6 @@
 #include "common/addresses.hpp"
 #include "common/media.hpp"
 #include "common/protocol.hpp"
-#include "host/host_launch_planner.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -214,8 +213,8 @@ void WindowsMediaServer::restart_audio() {
 }
 
 void WindowsMediaServer::start(
-    const HostMediaPlanConfig& plan,
-    const std::vector<HostMediaDestination>& destinations,
+    const MediaPlanConfig& plan,
+    const std::vector<MediaDestination>& destinations,
     std::vector<MediaClientStream>& streams) {
     plan_ = plan;
     destinations_ = destinations;
@@ -259,7 +258,7 @@ MediaEndpoint WindowsMediaServer::add_client(
     std::size_t /*media_index*/,
     bool wants_video,
     bool wants_audio) {
-    destinations_.push_back(HostMediaDestination{client_id, destination_host});
+    destinations_.push_back(MediaDestination{client_id, destination_host});
     MediaEndpoint endpoint;
     const auto index = destinations_.size() - 1;
     if (wants_video && capture_.video && plan_.video) {
@@ -280,7 +279,7 @@ void WindowsMediaServer::remove_client(ClientId client_id) {
         std::remove_if(
             destinations_.begin(),
             destinations_.end(),
-            [client_id](const HostMediaDestination& destination) {
+            [client_id](const MediaDestination& destination) {
                 return destination.client_id == client_id;
             }),
         destinations_.end());

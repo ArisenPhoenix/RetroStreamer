@@ -3,7 +3,6 @@
 #include "common/platform/process_utils.hpp"
 #include "host/hardware/gpu_select.hpp"
 #include "host/video/gstreamer_media_server.hpp"
-#include "host/host_launch_planner.hpp"
 #include "host/video/rtp_frame_pace_debug.hpp"
 
 #include <array>
@@ -1570,8 +1569,8 @@ GStreamerMediaServer::GStreamerMediaServer(GStreamerMediaCaptureConfig capture)
 }
 
 void GStreamerMediaServer::start(
-    const HostMediaPlanConfig& plan,
-    const std::vector<HostMediaDestination>& destinations,
+    const MediaPlanConfig& plan,
+    const std::vector<MediaDestination>& destinations,
     std::vector<MediaClientStream>& streams) {
     plan_ = plan;
     destinations_ = destinations;
@@ -1696,7 +1695,7 @@ MediaEndpoint GStreamerMediaServer::add_client(
     bool wants_video,
     bool wants_audio) {
     auto endpoint = MediaEndpoint{};
-    const auto destination = HostMediaDestination{client_id, destination_host};
+    const auto destination = MediaDestination{client_id, destination_host};
     if (wants_video && capture_.video && video()) {
         const auto stream = video_fanout_->add(
             capture_.virtual_display,

@@ -581,7 +581,7 @@ void ActiveSessionSlot::drain_pending_joins() {
                 join.client_id,
                 join.udp_session_token,
                 plan,
-                media_plan_config_for(slot_config_),
+                make_media_plan_config(slot_config_.media),
                 media_index_,
                 *media_server_,
             });

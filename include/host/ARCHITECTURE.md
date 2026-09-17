@@ -26,4 +26,5 @@ rebuilding loose primitive groups in each layer. Host-facing knobs
 (`MediaConfig`, `PadSettings`, `GpuSettings`, `GameConfig`, `EmulatorConfig`)
 live in the owning module and are embedded by `HostAppConfig`. `MediaConfig`
 composes `VideoSettings` + `AudioSettings`; MediaServer resolves Off /
-VideoOnly / AudioOnly / Both from it.
+VideoOnly / AudioOnly / Both from it. Host builds `MediaPlanConfig` from
+`MediaConfig` and passes it to `MediaServer.start()`.

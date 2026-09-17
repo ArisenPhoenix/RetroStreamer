@@ -356,7 +356,7 @@ void poll_active_session_joins(
             join.client_id,
             join.udp_session_token,
             plan,
-            media_plan_config_for(config),
+            make_media_plan_config(config.media),
             media_index,
             media_server,
         });

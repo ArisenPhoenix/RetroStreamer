@@ -116,8 +116,8 @@ public:
     bool video() const {return video_fanout_.has_value();}
 
     void start(
-        const HostMediaPlanConfig& plan,
-        const std::vector<HostMediaDestination>& destinations,
+        const MediaPlanConfig& plan,
+        const std::vector<MediaDestination>& destinations,
         std::vector<MediaClientStream>& streams) override;
     MediaEndpoint add_client(
         ClientId client_id,
@@ -150,8 +150,8 @@ public:
 
 private:
     GStreamerMediaCaptureConfig capture_;
-    HostMediaPlanConfig plan_;
-    std::vector<HostMediaDestination> destinations_;
+    MediaPlanConfig plan_;
+    std::vector<MediaDestination> destinations_;
     bool defer_pipewire_video_ = false;
     std::unique_ptr<VirtualDisplay> virtual_display_;
     std::optional<GStreamerVideoFanout> video_fanout_;

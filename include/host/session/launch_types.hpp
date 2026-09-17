@@ -7,6 +7,7 @@
 #include "host/hardware/gpu_selection.hpp"
 #include "host/host_app_config.hpp"
 #include "host/host_launch_planner.hpp"
+#include "host/video/media_server.hpp"
 #include "host/virtual/device_plan.hpp"
 
 #include <cstdint>
@@ -25,8 +26,8 @@ struct SessionLaunchEnvironment {
 };
 
 struct SessionMediaPlan {
-    HostMediaPlanConfig config;
-    std::vector<HostMediaDestination> destinations;
+    MediaPlanConfig config;
+    std::vector<MediaDestination> destinations;
     std::vector<MediaClientStream> streams;
     std::uint16_t capture_w = 1920;
     std::uint16_t capture_h = 1080;

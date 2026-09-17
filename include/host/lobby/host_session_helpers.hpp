@@ -3,6 +3,7 @@
 #include "client/controller_manager.hpp"
 #include "common/protocol.hpp"
 #include "host/host_app_config.hpp"
+#include "host/host_launch_planner.hpp"
 #include "host/video/media_server.hpp"
 #include "host/session/types.hpp"
 
@@ -28,7 +29,7 @@ struct LiveSessionJoinHandshake {
     ClientId client_id = 0;
     std::uint64_t udp_session_token = 0;
     SessionPlan& plan;
-    const HostMediaPlanConfig& media_config;
+    const MediaPlanConfig& media_config;
     std::size_t& media_index;
     MediaServer& media_server;
 };

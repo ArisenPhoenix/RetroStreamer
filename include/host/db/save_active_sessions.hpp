@@ -74,6 +74,28 @@ std::optional<std::string> take_active_session_stop_request(
     const std::filesystem::path& save_root,
     int slot_index);
 
+/**
+ * Ask a live slot to copy its video to 127.0.0.1 so this machine can watch it.
+ * The slot writes the RTP URI for read_local_session_view_uri.
+ */
+void request_local_session_view(
+    const std::filesystem::path& save_root,
+    int slot_index);
+
+/** If a view was requested, remove the marker and return true. */
+bool take_local_session_view_request(
+    const std::filesystem::path& save_root,
+    int slot_index);
+
+void publish_local_session_view_uri(
+    const std::filesystem::path& save_root,
+    int slot_index,
+    std::string_view video_uri);
+
+std::optional<std::string> read_local_session_view_uri(
+    const std::filesystem::path& save_root,
+    int slot_index);
+
 void publish_connected_client(
     const std::filesystem::path& save_root,
     const ConnectedClientPresence& client);

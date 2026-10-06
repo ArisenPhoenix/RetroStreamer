@@ -109,6 +109,11 @@ data class ControlsState(
     val overlayOpacity: Float = OverlayProfile.DEFAULT_OPACITY,
     val swapNw: Boolean = false,
     val swapSe: Boolean = false,
+    /**
+     * Virtual-stick click dwell, in milliseconds. Global: one value for every stick.
+     * A physical controller ignores it.
+     */
+    val stickClickDwellMs: Int = OverlayProfile.DEFAULT_STICK_CLICK_DWELL_MS,
     /** Resolved pad chrome for play / editor (defaults or custom). */
     val overlayItems: List<OverlayItem> = OverlayPresets.forLayout(PadLayout.Standard),
     /** Active orientation for custom resolve / editor. */

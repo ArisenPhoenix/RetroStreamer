@@ -4,10 +4,14 @@
 #include "host/hardware/gpu_select.hpp"
 #include "host/video/gstreamer_media_server.hpp"
 #include "host/video/rtp_frame_pace_debug.hpp"
+#if defined(ARCHSTREAMER_HAS_GST_LIBS)
+#include "host/video/gst/gst_video_engine.hpp"
+#include "host/video/gst/gst_video_pipeline.hpp"
+#include "host/video/gst/gst_video_worker_client.hpp"
+#endif
 
 #include <array>
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <cctype>
 #include <cstdio>
@@ -15,60 +19,15 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
-#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
-#include <unordered_map>
 #include <utility>
 
 #include <unistd.h>
 
-#if defined(ARCHSTREAMER_HAS_GST_LIBS)
-#include <gst/gst.h>
-#endif
-
 namespace archstreamer {
 namespace {
-
-#if defined(ARCHSTREAMER_HAS_GST_LIBS)
-std::once_flag g_gst_once;
-bool g_gst_available = false;
-
-void ensure_gst_initialized() {
-    std::call_once(g_gst_once, [] {
-        GError* error = nullptr;
-        g_gst_available = gst_init_check(nullptr, nullptr, &error);
-        if (error != nullptr) {
-            std::cerr << "GStreamer init failed: " << error->message << '\n';
-            g_error_free(error);
-        }
-    });
-}
-
-std::string gst_message_error_string(GstMessage* msg) {
-    GError* gst_error = nullptr;
-    gchar* debug = nullptr;
-    gst_message_parse_error(msg, &gst_error, &debug);
-    std::string reason = "bus error";
-    if (GST_OBJECT_NAME(msg->src) != nullptr) {
-        reason += std::string(" at ") + GST_OBJECT_NAME(msg->src);
-    }
-    reason += ": ";
-    reason += gst_error != nullptr ? gst_error->message : "unknown error";
-    if (debug != nullptr) {
-        reason += " | debug: ";
-        reason += debug;
-    }
-    if (gst_error != nullptr) {
-        g_error_free(gst_error);
-    }
-    if (debug != nullptr) {
-        g_free(debug);
-    }
-    return reason;
-}
-#endif
 
 std::string getenv_string(const char* key) {
     const char* value = std::getenv(key);
@@ -173,53 +132,20 @@ std::vector<std::pair<std::string, std::uint16_t>> multiudp_clients_with_pace_te
     return clients;
 }
 
-struct GstInspectCacheEntry {
-    bool available = false;
-    std::string output;
-};
-
-const GstInspectCacheEntry& gst_inspect_element_cached(const std::string& element) {
-    static std::mutex cache_mutex;
-    static std::unordered_map<std::string, GstInspectCacheEntry> cache;
-
-    std::lock_guard lock(cache_mutex);
-    if (const auto found = cache.find(element); found != cache.end()) {
-        return found->second;
-    }
-
-    auto entry = GstInspectCacheEntry{};
-    static const bool inspect_available = command_available("gst-inspect-1.0");
-    if (inspect_available) {
-        entry.output = read_command_output(
-            (std::string("gst-inspect-1.0 ") + element + " 2>/dev/null").c_str());
-        entry.available = !entry.output.empty();
-    }
-    return cache.emplace(element, std::move(entry)).first->second;
-}
-
 bool gst_element_available(const char* element) {
-    if (element == nullptr || element[0] == '\0') {
-        return false;
-    }
-    return gst_inspect_element_cached(element).available;
-}
-
-bool gst_element_has_writable_property(const char* element, const char* property) {
-    if (element == nullptr || element[0] == '\0' ||
-        property == nullptr || property[0] == '\0') {
-        return false;
-    }
-    const auto& probe = gst_inspect_element_cached(element);
-    if (!probe.available) {
-        return false;
-    }
-    return probe.output.find(std::string("\n  ") + property) != std::string::npos;
+#if defined(ARCHSTREAMER_HAS_GST_LIBS)
+    return gst_video_element_available(element);
+#else
+    (void)element;
+    return false;
+#endif
 }
 
 enum class VideoPipelineMode {
     Auto,
     Child,
     Managed,
+    Worker,
 };
 
 VideoPipelineMode video_pipeline_mode_from_environment() {
@@ -227,8 +153,9 @@ VideoPipelineMode video_pipeline_mode_from_environment() {
     std::transform(mode.begin(), mode.end(), mode.begin(), [](unsigned char ch) {
         return static_cast<char>(std::tolower(ch));
     });
-    // temporarily default to Managed to test it without confusion in envs, later will use this though
-    return VideoPipelineMode::Managed;
+    if (mode.empty() || mode == "worker" || mode == "managed-worker") {
+        return VideoPipelineMode::Worker;
+    }
     if (mode == "managed" || mode == "in-process" || mode == "inprocess") {
         return VideoPipelineMode::Managed;
     }
@@ -238,7 +165,7 @@ VideoPipelineMode video_pipeline_mode_from_environment() {
     if (mode == "auto") {
         return VideoPipelineMode::Auto;
     }
-    return VideoPipelineMode::Child;
+    return VideoPipelineMode::Worker;
 }
 
 struct SharedVideoSource {
@@ -270,9 +197,17 @@ struct SharedVideoBranch {
     std::vector<std::pair<std::string, std::uint16_t>> clients;
 };
 
+bool same_sink_list(
+    std::vector<std::pair<std::string, std::uint16_t>> left,
+    std::vector<std::pair<std::string, std::uint16_t>> right) {
+    std::sort(left.begin(), left.end());
+    std::sort(right.begin(), right.end());
+    return left == right;
+}
+
 std::string video_settings_summary(const VideoEncodeSettings& settings) {
     const int bitrate = settings.bitrate_kbps == 0 ? 1500 : settings.bitrate_kbps;
-    const int framerate = settings.framerate == 0 ? 30 : static_cast<int>(settings.framerate);
+    const int framerate = settings.framerate == 0 ? 60 : static_cast<int>(settings.framerate);
     const int queue_buffers =
         settings.queue_buffers == 0 ? 1 : static_cast<int>(settings.queue_buffers);
     std::ostringstream out;
@@ -320,7 +255,7 @@ void append_h264_branch_args(
     const std::vector<std::pair<std::string, std::uint16_t>>& clients,
     const H264BranchOptions& options) {
     const int bitrate = settings.bitrate_kbps == 0 ? 1500 : settings.bitrate_kbps;
-    const int framerate = settings.framerate == 0 ? 30 : static_cast<int>(settings.framerate);
+    const int framerate = settings.framerate == 0 ? 60 : static_cast<int>(settings.framerate);
     const int configured_key_int =
         settings.key_int_max == 0 ? framerate : static_cast<int>(settings.key_int_max);
     const int sixth_sec = std::max(5, framerate / 6);
@@ -407,7 +342,7 @@ void append_h264_branch_desc(
     const std::vector<std::pair<std::string, std::uint16_t>>& clients,
     const H264BranchOptions& options) {
     const int bitrate = settings.bitrate_kbps == 0 ? 1500 : settings.bitrate_kbps;
-    const int framerate = settings.framerate == 0 ? 30 : static_cast<int>(settings.framerate);
+    const int framerate = settings.framerate == 0 ? 60 : static_cast<int>(settings.framerate);
     const int configured_key_int =
         settings.key_int_max == 0 ? framerate : static_cast<int>(settings.key_int_max);
     const int sixth_sec = std::max(5, framerate / 6);
@@ -617,36 +552,42 @@ private:
 
 class ManagedGStreamerVideoPipelineRunner final : public SharedVideoPipelineRunner {
 public:
+    ManagedGStreamerVideoPipelineRunner() {
+#if defined(ARCHSTREAMER_HAS_GST_LIBS)
+        engine_.set_event_handler([](const GstVideoEvent& event) {
+            switch (event.kind) {
+            case GstVideoEventKind::Error:
+                std::cerr << "Managed GStreamer video runtime error: " << event.message << '\n';
+                break;
+            case GstVideoEventKind::Warning:
+                std::cerr << "Managed GStreamer video warning: " << event.message << '\n';
+                break;
+            case GstVideoEventKind::Eos:
+                std::cerr << "Managed GStreamer video runtime EOS\n";
+                break;
+            default:
+                break;
+            }
+        });
+#endif
+    }
+
     ~ManagedGStreamerVideoPipelineRunner() override {
         stop();
     }
 
     void stop() override {
 #if defined(ARCHSTREAMER_HAS_GST_LIBS)
-        monitor_running_ = false;
-        if (monitor_.joinable()) {
-            monitor_.join();
-        }
-        if (pipeline_ != nullptr) {
-            auto* pipeline = static_cast<GstElement*>(pipeline_);
-            gst_element_set_state(pipeline, GST_STATE_NULL);
-            gst_element_get_state(pipeline, nullptr, nullptr, 2 * GST_SECOND);
-            gst_object_unref(pipeline);
-            pipeline_ = nullptr;
-        }
+        engine_.execute(gst_video_stop_command());
 #endif
     }
 
     [[nodiscard]] bool running() const override {
 #if defined(ARCHSTREAMER_HAS_GST_LIBS)
-        if (pipeline_ != nullptr) {
-            GstState state = GST_STATE_NULL;
-            auto* pipeline = static_cast<GstElement*>(pipeline_);
-            gst_element_get_state(pipeline, &state, nullptr, 0);
-            return state == GST_STATE_PLAYING || state == GST_STATE_PAUSED;
-        }
-#endif
+        return engine_.running();
+#else
         return false;
+#endif
     }
 
     bool start(
@@ -655,80 +596,63 @@ public:
         const H264BranchOptions& options) {
         pin_nvenc_cuda_device_order();
         stop();
-        constexpr int PipeWireStartupAttempts = 8;
-        constexpr int X11StartupAttempts = 8;
-        constexpr auto StartupRetryDelay = std::chrono::milliseconds(250);
-        const int startup_attempts =
-            source.kind == SharedVideoSource::Kind::PipeWire
-                ? PipeWireStartupAttempts
-                : X11StartupAttempts;
-        const auto selectors = source.kind == SharedVideoSource::Kind::PipeWire
-            ? pipewire_source_selectors(source)
-            : std::vector<PipeWireSourceSelector>{};
-
-        std::string managed_errors;
-        for (int attempt = 1; attempt <= startup_attempts; ++attempt) {
-            if (attempt > 1) {
-                std::this_thread::sleep_for(StartupRetryDelay);
+#if defined(ARCHSTREAMER_HAS_GST_LIBS)
+        GstVideoGraph graph;
+        graph.source.kind = source.kind == SharedVideoSource::Kind::PipeWire
+            ? GstVideoSourceKind::PipeWire
+            : GstVideoSourceKind::X11;
+        graph.source.value = source.value;
+        graph.source.target_object = source.target_object;
+        graph.nvenc_cuda_device_id = options.nvenc_cuda_device_id;
+        graph.branches.reserve(branches.size());
+        for (const auto& branch : branches) {
+            GstVideoBranch gst_branch;
+            gst_branch.encode = GstVideoEncode{
+                branch.settings.bitrate_kbps,
+                branch.settings.framerate,
+                branch.settings.key_int_max,
+                branch.settings.width,
+                branch.settings.height,
+                branch.settings.queue_buffers,
+                branch.settings.nvenc_high_quality,
+            };
+            for (const auto& [host, port] : branch.clients) {
+                gst_branch.sinks.push_back(GstVideoSink{host, port});
             }
-            const int selector_count = source.kind == SharedVideoSource::Kind::PipeWire
-                ? static_cast<int>(selectors.size())
-                : 1;
-            for (int selector_index = 0; selector_index < selector_count; ++selector_index) {
-                std::ostringstream desc;
-                std::string selector_label;
-                if (source.kind == SharedVideoSource::Kind::PipeWire) {
-                    const auto& selector = selectors[selector_index];
-                    selector_label = selector.property + "=" + selector.value;
-                    desc
-                        << "pipewiresrc " << gst_parse_property(selector.property, selector.value)
-                        << " do-timestamp=true ! video/x-raw,format=BGRx ! videoconvert";
-                } else {
-                    desc
-                        << "ximagesrc " << gst_parse_property("display-name", source.value)
-                        << " use-damage=false show-pointer=false do-timestamp=true ! videoconvert";
-                }
-                if (branches.size() == 1) {
-                    desc << " ! ";
-                    append_h264_branch_desc(
-                        desc, branches[0].settings, branches[0].clients, options);
-                } else {
-                    desc << " ! tee name=t";
-                    for (const auto& branch : branches) {
-                        desc << " t. ! ";
-                        append_h264_branch_desc(desc, branch.settings, branch.clients, options);
-                    }
-                }
-
-                const auto summary = managed_pipeline_summary(
-                    source,
-                    selector_label,
-                    branches,
-                    options,
-                    attempt);
-                std::string managed_error;
-                if (start_description(desc.str(), summary, &managed_error)) {
-                    log_video_ladder(
-                        "in-process",
-                        source,
-                        branches,
-                        options.use_nvenc,
-                        options.nvenc_cuda_device_id,
-                        attempt);
-                    return true;
-                }
-                if (!managed_errors.empty()) {
-                    managed_errors += " | ";
-                }
-                managed_errors += "attempt " + std::to_string(attempt);
-                if (!selector_label.empty()) {
-                    managed_errors += " " + selector_label;
-                }
-                managed_errors += ": " + managed_error;
-            }
+            graph.branches.push_back(std::move(gst_branch));
         }
-        last_error_ = managed_errors;
+        const auto summary = managed_pipeline_summary(
+            source, {}, branches, options, 1);
+        std::cout << "Managed GStreamer video pipeline: " << summary << '\n';
+        if (getenv_bool("ARCHSTREAMER_GST_VERBOSE")) {
+            std::cout
+                << "Managed GStreamer pipeline graph: "
+                << gst_video_graph_summary(graph) << '\n';
+        }
+        const auto reply = engine_.execute(
+            gst_video_graph_command(GstVideoCommandVerb::Start, std::move(graph), summary));
+        if (reply.kind == GstVideoEventKind::Ready) {
+            log_video_ladder(
+                "in-process",
+                source,
+                branches,
+                options.use_nvenc,
+                options.nvenc_cuda_device_id);
+            return true;
+        }
+        last_error_ = reply.message.empty()
+            ? "GStreamer engine failed to start"
+            : reply.message;
+        std::cerr << "Managed GStreamer video failed: " << last_error_ << '\n';
         return false;
+#else
+        (void)source;
+        (void)branches;
+        (void)options;
+        last_error_ = "GStreamer libraries are not available in this build";
+        std::cerr << "Managed GStreamer video failed: " << last_error_ << '\n';
+        return false;
+#endif
     }
 
     [[nodiscard]] const std::string& last_error() const {
@@ -736,169 +660,159 @@ public:
     }
 
 private:
-    bool start_description(
-        std::string_view description,
-        std::string_view summary,
-        std::string* error_out) {
-        auto fail = [&](std::string reason) {
-            if (error_out != nullptr) {
-                *error_out = reason;
-            }
-            std::cerr << "Managed GStreamer video failed: " << reason << '\n';
-            return false;
-        };
 #if defined(ARCHSTREAMER_HAS_GST_LIBS)
-        ensure_gst_initialized();
-        if (g_gst_available) {
-            std::cout << "Managed GStreamer video pipeline: " << summary << '\n';
-            if (getenv_bool("ARCHSTREAMER_GST_VERBOSE")) {
-                std::cout << "Managed GStreamer pipeline detail: " << description << '\n';
-            }
-            GError* error = nullptr;
-            auto* pipeline = gst_parse_launch(std::string(description).c_str(), &error);
-            if (error != nullptr) {
-                const std::string reason = std::string("parse failed: ") + error->message;
-                g_error_free(error);
-                if (pipeline == nullptr) {
-                    return fail(reason);
-                }
-                std::cerr << "Managed GStreamer video warning: " << reason << '\n';
-            }
-            if (pipeline == nullptr) {
-                return fail("parse returned no pipeline");
-            }
+    GstVideoEngine engine_;
+#endif
+    std::string last_error_;
+};
 
-            auto* bus = gst_element_get_bus(pipeline);
-            const auto ret = gst_element_set_state(pipeline, GST_STATE_PLAYING);
-            if (ret == GST_STATE_CHANGE_FAILURE) {
-                std::string reason = "state change to PLAYING failed";
-                if (bus != nullptr) {
-                    GstMessage* msg = gst_bus_timed_pop_filtered(
-                        bus,
-                        2 * GST_SECOND,
-                        static_cast<GstMessageType>(GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
-                    if (msg != nullptr) {
-                        if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_ERROR) {
-                            reason += ": " + gst_message_error_string(msg);
-                        } else if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_EOS) {
-                            reason += ": pipeline posted EOS during startup";
-                        }
-                        gst_message_unref(msg);
-                    }
-                }
-                if (bus != nullptr) {
-                    gst_object_unref(bus);
-                }
-                gst_element_set_state(pipeline, GST_STATE_NULL);
-                gst_object_unref(pipeline);
-                return fail(reason);
-            }
+std::string gst_worker_executable() {
+    if (const char* env = std::getenv("ARCHSTREAMER_GST_WORKER");
+        env != nullptr && env[0] != '\0' && access(env, X_OK) == 0) {
+        return env;
+    }
+    char self[4096];
+    const ssize_t length = readlink("/proc/self/exe", self, sizeof(self) - 1);
+    if (length > 0) {
+        self[length] = '\0';
+        const auto sibling = std::filesystem::path(self).parent_path() / "archstreamer_gst_worker";
+        if (access(sibling.c_str(), X_OK) == 0) {
+            return sibling.string();
+        }
+    }
+    return "archstreamer_gst_worker";
+}
 
-            if (bus != nullptr) {
-                GstMessage* msg = gst_bus_timed_pop_filtered(
-                    bus,
-                    500 * GST_MSECOND,
-                    static_cast<GstMessageType>(GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
-                if (msg != nullptr) {
-                    if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_ERROR) {
-                        const auto reason = gst_message_error_string(msg);
-                        gst_message_unref(msg);
-                        gst_object_unref(bus);
-                        gst_element_set_state(pipeline, GST_STATE_NULL);
-                        gst_object_unref(pipeline);
-                        return fail(reason);
-                    }
-                    if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_EOS) {
-                        gst_message_unref(msg);
-                        gst_object_unref(bus);
-                        gst_element_set_state(pipeline, GST_STATE_NULL);
-                        gst_object_unref(pipeline);
-                        return fail("pipeline posted EOS during startup");
-                    }
-                    gst_message_unref(msg);
-                    gst_object_unref(bus);
-                    gst_element_set_state(pipeline, GST_STATE_NULL);
-                    gst_object_unref(pipeline);
-                    return fail("pipeline posted an unexpected startup message");
-                }
-                gst_object_unref(bus);
-            }
+#if defined(ARCHSTREAMER_HAS_GST_LIBS)
+GstVideoGraph gst_graph_from_branches(
+    const SharedVideoSource& source,
+    const std::vector<SharedVideoBranch>& branches,
+    const H264BranchOptions& options) {
+    GstVideoGraph graph;
+    graph.source.kind = source.kind == SharedVideoSource::Kind::PipeWire
+        ? GstVideoSourceKind::PipeWire
+        : GstVideoSourceKind::X11;
+    graph.source.value = source.value;
+    graph.source.target_object = source.target_object;
+    graph.nvenc_cuda_device_id = options.nvenc_cuda_device_id;
+    graph.branches.reserve(branches.size());
+    for (const auto& branch : branches) {
+        GstVideoBranch gst_branch;
+        gst_branch.encode = GstVideoEncode{
+            branch.settings.bitrate_kbps,
+            branch.settings.framerate,
+            branch.settings.key_int_max,
+            branch.settings.width,
+            branch.settings.height,
+            branch.settings.queue_buffers,
+            branch.settings.nvenc_high_quality,
+        };
+        for (const auto& [host, port] : branch.clients) {
+            gst_branch.sinks.push_back(GstVideoSink{host, port});
+        }
+        graph.branches.push_back(std::move(gst_branch));
+    }
+    return graph;
+}
+#endif
 
-            pipeline_ = pipeline;
-            start_bus_monitor();
+class WorkerVideoPipelineRunner final : public SharedVideoPipelineRunner {
+public:
+    ~WorkerVideoPipelineRunner() override {
+        stop();
+    }
+
+    void stop() override {
+#if defined(ARCHSTREAMER_HAS_GST_LIBS)
+        client_.stop();
+#endif
+    }
+
+    [[nodiscard]] bool running() const override {
+#if defined(ARCHSTREAMER_HAS_GST_LIBS)
+        return client_.running();
+#else
+        return false;
+#endif
+    }
+
+    bool start(
+        const SharedVideoSource& source,
+        const std::vector<SharedVideoBranch>& branches,
+        const H264BranchOptions& options) {
+        pin_nvenc_cuda_device_order();
+        stop();
+#if defined(ARCHSTREAMER_HAS_GST_LIBS)
+        const auto executable = gst_worker_executable();
+        try {
+            client_.set_event_handler([](const GstVideoEvent& event) {
+                switch (event.kind) {
+                case GstVideoEventKind::Error:
+                    std::cerr << "GStreamer worker runtime error: " << event.message << '\n';
+                    break;
+                case GstVideoEventKind::Warning:
+                    std::cerr << "GStreamer worker warning: " << event.message << '\n';
+                    break;
+                case GstVideoEventKind::Eos:
+                    std::cerr << "GStreamer worker runtime EOS\n";
+                    break;
+                default:
+                    break;
+                }
+            });
+            client_.start(executable);
+        } catch (const std::exception& error) {
+            last_error_ = error.what();
+            std::cerr << "GStreamer worker failed: " << last_error_ << '\n';
+            return false;
+        }
+
+        auto graph = gst_graph_from_branches(source, branches, options);
+        const auto summary = managed_pipeline_summary(source, {}, branches, options, 1);
+        std::cout << "GStreamer worker video pipeline: " << summary << '\n';
+        const auto reply = client_.execute(
+            gst_video_graph_command(GstVideoCommandVerb::Start, std::move(graph), summary));
+        if (reply.kind == GstVideoEventKind::Ready) {
+            pipeline_id_ = gst_video_event_pipeline_id(reply.message);
+            std::cout << "GStreamer worker pid=" << client_.pid();
+            if (!pipeline_id_.empty()) {
+                std::cout
+                    << " pipeline=" << pipeline_id_
+                    << " record=" << gst_video_pipeline_record_path(pipeline_id_);
+            }
+            std::cout << '\n';
+            log_video_ladder(
+                "gst-worker",
+                source,
+                branches,
+                options.use_nvenc,
+                options.nvenc_cuda_device_id);
             return true;
         }
+        last_error_ = reply.message.empty() ? "GStreamer worker failed to start" : reply.message;
+        std::cerr << "GStreamer worker video failed: " << last_error_ << '\n';
+        client_.stop();
+        return false;
 #else
-        (void)description;
+        (void)source;
+        (void)branches;
+        (void)options;
+        last_error_ = "GStreamer libraries are not available in this build";
+        std::cerr << "GStreamer worker video failed: " << last_error_ << '\n';
+        return false;
 #endif
-        return fail("GStreamer libraries are not available in this build");
     }
 
-    void* pipeline_ = nullptr; // GstElement*
-    std::string last_error_;
-    std::atomic<bool> monitor_running_{false};
-    std::thread monitor_;
+    [[nodiscard]] const std::string& last_error() const {
+        return last_error_;
+    }
 
-    void start_bus_monitor() {
+private:
 #if defined(ARCHSTREAMER_HAS_GST_LIBS)
-        monitor_running_ = false;
-        if (monitor_.joinable()) {
-            monitor_.join();
-        }
-        auto* pipeline = static_cast<GstElement*>(pipeline_);
-        if (pipeline == nullptr) {
-            return;
-        }
-        auto* bus = gst_element_get_bus(pipeline);
-        if (bus == nullptr) {
-            return;
-        }
-        monitor_running_ = true;
-        monitor_ = std::thread([this, bus] {
-            while (monitor_running_.load(std::memory_order_relaxed)) {
-                GstMessage* msg = gst_bus_timed_pop_filtered(
-                    bus,
-                    250 * GST_MSECOND,
-                    static_cast<GstMessageType>(
-                        GST_MESSAGE_ERROR |
-                        GST_MESSAGE_EOS |
-                        GST_MESSAGE_WARNING));
-                if (msg == nullptr) {
-                    continue;
-                }
-                if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_ERROR) {
-                    std::cerr
-                        << "Managed GStreamer video runtime error: "
-                        << gst_message_error_string(msg) << '\n';
-                } else if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_WARNING) {
-                    GError* warning = nullptr;
-                    gchar* debug = nullptr;
-                    gst_message_parse_warning(msg, &warning, &debug);
-                    std::cerr << "Managed GStreamer video warning";
-                    if (GST_OBJECT_NAME(msg->src) != nullptr) {
-                        std::cerr << " at " << GST_OBJECT_NAME(msg->src);
-                    }
-                    std::cerr << ": "
-                              << (warning != nullptr ? warning->message : "unknown warning");
-                    if (debug != nullptr) {
-                        std::cerr << " | debug: " << debug;
-                    }
-                    std::cerr << '\n';
-                    if (warning != nullptr) {
-                        g_error_free(warning);
-                    }
-                    if (debug != nullptr) {
-                        g_free(debug);
-                    }
-                } else if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_EOS) {
-                    std::cerr << "Managed GStreamer video runtime EOS\n";
-                }
-                gst_message_unref(msg);
-            }
-            gst_object_unref(bus);
-        });
+    GstVideoWorkerClient client_;
+    std::string pipeline_id_;
 #endif
-    }
+    std::string last_error_;
 };
 
 enum class VideoPipelineUse {
@@ -917,16 +831,17 @@ const char* video_pipeline_use_name(VideoPipelineUse use) {
 }
 
 H264BranchOptions probe_h264_branch_options(int nvenc_cuda_device_id) {
-    const bool legacy_nvenc = gst_element_available("nvh264enc");
-    const bool managed_nvenc_device_select =
-        nvenc_cuda_device_id >= 0 &&
-        gst_element_available("nvautogpuh264enc") &&
-        gst_element_has_writable_property("nvautogpuh264enc", "cuda-device-id");
+#if defined(ARCHSTREAMER_HAS_GST_LIBS)
+    const auto probed = gst_video_probe_h264(nvenc_cuda_device_id);
     return H264BranchOptions{
-        managed_nvenc_device_select || legacy_nvenc,
-        managed_nvenc_device_select,
-        nvenc_cuda_device_id,
+        probed.use_nvenc,
+        probed.managed_nvenc_device_select,
+        probed.nvenc_cuda_device_id,
     };
+#else
+    (void)nvenc_cuda_device_id;
+    return {};
+#endif
 }
 
 bool managed_inprocess_can_run(const H264BranchOptions& options) {
@@ -947,6 +862,16 @@ std::unique_ptr<SharedVideoPipelineRunner> start_selected_video_pipeline(
         (pipeline_mode == VideoPipelineMode::Auto && managed_inprocess_can_run(options));
 
     const auto* label = video_pipeline_use_name(use);
+    if (pipeline_mode == VideoPipelineMode::Worker) {
+        std::cout << "Video pipeline runner (" << label << "): gst worker process\n";
+        auto worker = std::make_unique<WorkerVideoPipelineRunner>();
+        if (worker->start(source, branches, options)) {
+            return worker;
+        }
+        throw std::runtime_error(
+            std::string{"gst worker video pipeline failed for "} +
+            label + ": " + worker->last_error());
+    }
     if (use_managed_inprocess) {
         std::cout
             << "Video pipeline runner (" << label << "): in-process GStreamer"
@@ -1159,6 +1084,7 @@ bool GStreamerVideoFanout::reconfigure_shared(const VideoEncodeSettings& setting
         destination.settings = settings;
     }
 
+    stop_sample_pipelines();
     restart_pipeline();
     const bool ok = shared_pipeline_running();
     if (ok) {
@@ -1212,6 +1138,7 @@ bool GStreamerVideoFanout::apply_branch_layout(
         }
     }
     if (already_configured) {
+        last_layout_rebuilt_ = false;
         return true;
     }
 
@@ -1239,8 +1166,9 @@ bool GStreamerVideoFanout::apply_branch_layout(
         }
     }
 
-    restart_pipeline();
+    apply_encode_tree(trunk);
     const bool ok = shared_pipeline_running();
+    last_layout_rebuilt_ = ok;
     if (ok) {
         std::cout << "Video branch layout applied (trunk "
                   << trunk.bitrate_kbps << "kbps/"
@@ -1419,9 +1347,11 @@ void GStreamerVideoFanout::stop() {
         rtp_frame_pace_debug::stop_tee(destination.port);
         rtp_frame_pace_debug::stop_tee(destination.base_port);
     }
+    stop_sample_pipelines();
     stop_shared_pipeline();
     destinations_.clear();
     display_.clear();
+    trunk_clients_.clear();
     rtp_frame_pace_debug::stop_all();
 }
 
@@ -1447,7 +1377,9 @@ void GStreamerVideoFanout::stop_client(ClientId client_id) {
         destinations_.end());
     if (was_on_shared_tee) {
         if (destinations_.empty()) {
+            stop_sample_pipelines();
             stop_shared_pipeline();
+            trunk_clients_.clear();
             return;
         }
         // Only rebuild shared tee when the removed client was on it.
@@ -1466,10 +1398,19 @@ void GStreamerVideoFanout::stop_client(ClientId client_id) {
     }
 }
 
-void GStreamerVideoFanout::stop_shared_pipeline() {
-    if (shared_pipeline_) {
-        shared_pipeline_->stop();
+void GStreamerVideoFanout::stop_sample_pipelines() {
+    for (auto& sample : sample_encodes_) {
+        stop_pipeline(sample.pipeline);
     }
+    sample_encodes_.clear();
+}
+
+void GStreamerVideoFanout::stop_shared_pipeline() {
+    stop_pipeline(shared_pipeline_);
+}
+
+bool GStreamerVideoFanout::consume_last_layout_rebuilt() {
+    return std::exchange(last_layout_rebuilt_, true);
 }
 
 bool GStreamerVideoFanout::shared_pipeline_running() const {
@@ -1477,8 +1418,6 @@ bool GStreamerVideoFanout::shared_pipeline_running() const {
 }
 
 void GStreamerVideoFanout::restart_pipeline() {
-    stop_shared_pipeline();
-
     std::vector<SharedVideoBranch> branches;
     for (const auto& destination : destinations_) {
         if (pipeline_running(destination.dedicated)) {
@@ -1497,9 +1436,62 @@ void GStreamerVideoFanout::restart_pipeline() {
             branches.push_back(SharedVideoBranch{destination.settings, {client}});
         }
     }
-
     if (branches.empty()) {
+        stop_sample_pipelines();
+        stop_shared_pipeline();
+        trunk_clients_.clear();
         return;
+    }
+    VideoEncodeSettings trunk = branches.front().settings;
+    for (const auto& branch : branches) {
+        trunk = dominate_video_encode_settings(trunk, branch.settings);
+    }
+    apply_encode_tree(trunk);
+}
+
+void GStreamerVideoFanout::apply_encode_tree(const VideoEncodeSettings& trunk) {
+    std::vector<SharedVideoBranch> branches;
+    for (const auto& destination : destinations_) {
+        if (pipeline_running(destination.dedicated)) {
+            continue;
+        }
+        const auto client = std::make_pair(destination.host, destination.port);
+        bool merged = false;
+        for (auto& branch : branches) {
+            if (branch.settings == destination.settings) {
+                branch.clients.push_back(client);
+                merged = true;
+                break;
+            }
+        }
+        if (!merged) {
+            branches.push_back(SharedVideoBranch{destination.settings, {client}});
+        }
+    }
+    if (branches.empty()) {
+        stop_sample_pipelines();
+        stop_shared_pipeline();
+        trunk_clients_.clear();
+        return;
+    }
+
+    SharedVideoBranch trunk_branch{trunk, {}};
+    std::vector<SharedVideoBranch> samples;
+    for (const auto& branch : branches) {
+        if (branch.settings == trunk) {
+            for (const auto& client : branch.clients) {
+                trunk_branch.clients.push_back(client);
+            }
+        } else {
+            samples.push_back(branch);
+        }
+    }
+    if (trunk_branch.clients.empty()) {
+        trunk_branch = branches.front();
+        samples.clear();
+        for (std::size_t i = 1; i < branches.size(); ++i) {
+            samples.push_back(branches[i]);
+        }
     }
 
     const auto restart_started = std::chrono::steady_clock::now();
@@ -1509,13 +1501,6 @@ void GStreamerVideoFanout::restart_pipeline() {
         std::cout << "Video pipeline restart +" << elapsed.count() << "ms: " << step << '\n';
     };
 
-    // Crash leftovers (e.g. black ximagesrc) can keep publishing on the same RTP ports.
-    for (const auto& destination : destinations_) {
-        if (!pipeline_running(destination.dedicated)) {
-            terminate_gst_multiudpsink_on_port(destination.port); 
-        }
-    }
-    log_restart_step("stale destination ports cleared");
     if (source_kind_ == SourceKind::X11 && display_.empty()) {
         return;
     }
@@ -1535,13 +1520,8 @@ void GStreamerVideoFanout::restart_pipeline() {
         log_restart_step("pipewire environment configured");
     }
 
-    const bool legacy_nvenc = gst_element_available("nvh264enc");
-    log_restart_step("legacy nvenc probe complete");
-    const bool managed_nvenc_device_select =
-        nvenc_cuda_device_id_ >= 0 &&
-        gst_element_available("nvautogpuh264enc") &&
-        gst_element_has_writable_property("nvautogpuh264enc", "cuda-device-id");
-    log_restart_step("managed nvenc probe complete");
+    const auto options = probe_h264_branch_options(nvenc_cuda_device_id_);
+    log_restart_step("nvenc probe complete");
 
     const SharedVideoSource source{
         source_kind_ == SourceKind::PipeWire
@@ -1551,17 +1531,76 @@ void GStreamerVideoFanout::restart_pipeline() {
         source_kind_ == SourceKind::PipeWire ? pipewire_target_.target_object : std::string{},
     };
 
-    const H264BranchOptions options{
-        managed_nvenc_device_select || legacy_nvenc,
-        managed_nvenc_device_select,
-        nvenc_cuda_device_id_,
-    };
+    std::vector<SharedVideoBranch> graph_branches;
+    graph_branches.push_back(trunk_branch);
+    for (const auto& sample : samples) {
+        graph_branches.push_back(sample);
+    }
 
-    shared_pipeline_ = start_selected_video_pipeline(
-        source,
-        branches,
-        options,
-        VideoPipelineUse::Shared);
+    bool samples_unchanged = sample_encodes_.size() == samples.size();
+    if (samples_unchanged) {
+        for (const auto& wanted : samples) {
+            bool found = false;
+            for (const auto& existing : sample_encodes_) {
+                if (existing.settings == wanted.settings &&
+                    same_sink_list(existing.clients, wanted.clients)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                samples_unchanged = false;
+                break;
+            }
+        }
+    }
+
+    const bool graph_unchanged =
+        shared_pipeline_running() &&
+        trunk_settings_ == trunk_branch.settings &&
+        same_sink_list(trunk_clients_, trunk_branch.clients) &&
+        samples_unchanged;
+    if (!graph_unchanged) {
+        for (const auto& branch : graph_branches) {
+            for (const auto& [host, port] : branch.clients) {
+                (void)host;
+                terminate_gst_multiudpsink_on_port(port);
+            }
+        }
+        stop_sample_pipelines();
+        stop_shared_pipeline();
+        shared_pipeline_ = start_selected_video_pipeline(
+            source,
+            graph_branches,
+            options,
+            VideoPipelineUse::Shared);
+        trunk_settings_ = trunk_branch.settings;
+        trunk_clients_ = trunk_branch.clients;
+        sample_encodes_.clear();
+        for (const auto& sample : samples) {
+            SampleEncode slot;
+            slot.settings = sample.settings;
+            slot.clients = sample.clients;
+            sample_encodes_.push_back(std::move(slot));
+        }
+        log_restart_step(
+            samples.empty() ? "trunk encode started" : "trunk+sample tee started");
+    } else {
+        log_restart_step("trunk encode unchanged");
+    }
+
+    std::cout
+        << "Video encode tree: trunk "
+        << trunk_branch.settings.bitrate_kbps << "kbps/"
+        << static_cast<int>(trunk_branch.settings.framerate) << "fps";
+    if (trunk_branch.settings.width > 0 && trunk_branch.settings.height > 0) {
+        std::cout
+            << "/" << trunk_branch.settings.width << "x" << trunk_branch.settings.height;
+    }
+    std::cout
+        << " clients=" << trunk_branch.clients.size()
+        << " samples=" << sample_encodes_.size()
+        << " capture=single-tee\n";
 }
 
 GStreamerMediaServer::GStreamerMediaServer(GStreamerMediaCaptureConfig capture)
@@ -1582,7 +1621,9 @@ void GStreamerMediaServer::start(
                 std::cout << "Virtual display backend=";
                 switch (virtual_display_->backend()) {
                 case VirtualDisplayBackend::Gamescope:
-                    std::cout << "gamescope (headless + PipeWire)";
+                    std::cout << "gamescope (PipeWire"
+                              << (gamescope_headless_backend() ? ", headless" : ", nested window")
+                              << ")";
                     break;
                 case VirtualDisplayBackend::VirtualGL:
                     std::cout << "virtualgl (Xvfb + vglrun)";
@@ -1738,6 +1779,13 @@ bool GStreamerMediaServer::apply_video_branch_layout(
     }
     plan_.initial_video_settings = trunk;
     return video_fanout_->apply_branch_layout(trunk, per_client);
+}
+
+bool GStreamerMediaServer::consume_video_layout_rebuilt() {
+    if (!video()) {
+        return false;
+    }
+    return video_fanout_->consume_last_layout_rebuilt();
 }
 
 bool GStreamerMediaServer::restart_shared_audio() {

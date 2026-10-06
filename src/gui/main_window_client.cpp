@@ -1099,7 +1099,7 @@ void MainWindow::start_client() {
                             config.video_embed_xid = client_video_controller_->embedXid();
                             append_log(
                                 client_log_,
-                                QString("Video window ready (xid=%1).")
+                                QString("Video window prepared (xid=%1, hidden until stream).")
                                     .arg(config.video_embed_xid));
                         },
                         Qt::BlockingQueuedConnection);
@@ -1138,6 +1138,16 @@ void MainWindow::start_client() {
                 if (!endpoint.video_uri.empty()) {
                     append_log(client_log_, QString("Video: %1").arg(QString::fromStdString(endpoint.video_uri)));
                     append_log(client_log_, "Starting GStreamer video into ArchStreamer window.");
+#ifndef _WIN32
+                    QMetaObject::invokeMethod(
+                        this,
+                        [this] {
+                            if (client_video_controller_) {
+                                client_video_controller_->showForMedia();
+                            }
+                        },
+                        Qt::BlockingQueuedConnection);
+#endif
                 } else if (client_video_->isChecked()) {
                     append_log(
                         client_log_,
@@ -1156,9 +1166,11 @@ void MainWindow::start_client() {
             };
             callbacks.on_session_ended = [this](const std::string& reason) {
                 append_log(client_log_, QString("Session ended: %1").arg(QString::fromStdString(reason)), GuiLogLevel::Quiet);
+                QMetaObject::invokeMethod(this, [this] { clear_session_controller_family(); }, Qt::QueuedConnection);
             };
             callbacks.on_host_disconnected = [this] {
                 append_log(client_log_, "Host disconnected.", GuiLogLevel::Quiet);
+                QMetaObject::invokeMethod(this, [this] { clear_session_controller_family(); }, Qt::QueuedConnection);
             };
             callbacks.on_input_streaming_started = [this](const std::string& host, std::uint16_t port) {
                 append_log(client_log_, QString("Streaming input to %1:%2.")
@@ -1173,6 +1185,12 @@ void MainWindow::start_client() {
             };
             callbacks.on_status = [this](const std::string& message) {
                 append_log(client_log_, QString::fromStdString(message));
+            };
+            callbacks.on_controller_map_family = [this](archstreamer::ControllerMapFamily family) {
+                QMetaObject::invokeMethod(
+                    this,
+                    [this, family] { apply_session_controller_family(family); },
+                    Qt::QueuedConnection);
             };
             callbacks.on_password_change_required = [this](const std::string& /*current*/) {
                 QString new_password;

@@ -9,6 +9,7 @@
 #include "host/console/standalone_emulator.hpp"
 #include "host/virtual/virtual_joypad_resolve.hpp"
 
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -42,6 +43,8 @@ struct SwitchBackendPrepContext {
     std::string title_id;
     /** True when this catalog title has a .m3m (version/policy map). */
     bool uses_m3m_map = false;
+    /** Optional .m3m TEXTURE_PACK path. Empty when the key is omitted. */
+    std::filesystem::path texture_pack;
 };
 
 struct SwitchBackendPrepResult {

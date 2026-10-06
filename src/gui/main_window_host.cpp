@@ -478,7 +478,8 @@ void MainWindow::load_host_games() {
                 host_log_,
                 QString("%1 title(s) locked until Meta exists, ROM stem matches "
                         "display_name / version (bare title, or \"Title (1.1)\" for labeled builds), "
-                        "and any .m3m has TITLE_ID / ROM / PATCH_TITLE_ID / BASE.")
+                        "and any .m3m has TITLE_ID / ROM / PATCH_TITLE_ID / BASE "
+                        "(TEXTURE_PACK is optional).")
                     .arg(scan_issues.size()),
                 GuiLogLevel::Quiet);
         }
@@ -994,6 +995,112 @@ void MainWindow::stop_host_local_media() {
     }
 }
 
+void MainWindow::start_local_video_watch(const std::string& video_uri) {
+    if (video_uri.empty()) {
+        append_log(host_log_, "Local session view has no video address.", GuiLogLevel::Quiet);
+        return;
+    }
+    if (host_local_media_ != nullptr && host_local_media_->isChecked()) {
+        const QSignalBlocker block(host_local_media_);
+        host_local_media_->setChecked(false);
+    }
+
+    archstreamer::MediaEndpoint endpoint;
+    endpoint.video_uri = video_uri;
+
+    try {
+        stop_host_local_media();
+        std::uint64_t embed_xid = 0;
+        std::shared_ptr<archstreamer::VideoEmbedBridge> video_embed;
+#ifndef _WIN32
+        video_embed = std::make_shared<archstreamer::VideoEmbedBridge>();
+        host_local_video_controller_ = std::make_unique<ClientVideoController>(this);
+        host_local_video_controller_->setVideoEmbedBridge(video_embed);
+        host_local_video_controller_->setTitleFromGame(
+            QStringLiteral("Host"),
+            QStringLiteral("Session view"));
+        host_local_video_controller_->setMode(ClientVideoMode::TopLevel);
+        host_local_video_controller_->prepareForSession();
+        host_local_video_controller_->showForMedia();
+        embed_xid = host_local_video_controller_->embedXid();
+        QObject::connect(
+            host_local_video_controller_.get(),
+            &ClientVideoController::userClosed,
+            this,
+            [this] {
+                QTimer::singleShot(0, this, [this] { stop_host_local_media(); });
+            });
+#endif
+        auto playback = std::make_unique<archstreamer::ClientMediaPlayback>();
+        playback->connect(
+            endpoint,
+            archstreamer::ClientMediaPlayback::Strategy::Legacy,
+            embed_xid,
+            video_embed);
+        if (video_embed) {
+            int w = 0;
+            int h = 0;
+            std::uint64_t serial = 0;
+            if (video_embed->take_size(w, h, serial)) {
+                playback->apply_video_overlay_geometry(w, h);
+            }
+        }
+        host_local_receiver_ = std::move(playback);
+        if (host_local_media_poll_timer_ == nullptr) {
+            host_local_media_poll_timer_ = new QTimer(this);
+            host_local_media_poll_timer_->setInterval(500);
+            connect(host_local_media_poll_timer_, &QTimer::timeout, this, [this] {
+                if (!host_local_receiver_) {
+                    return;
+                }
+                try {
+                    if (host_local_video_controller_ && host_local_receiver_) {
+                        if (auto* surface = host_local_video_controller_->surface()) {
+                            host_local_receiver_->apply_video_overlay_geometry(
+                                surface->width(),
+                                surface->height());
+                        }
+                    }
+                    if (host_local_receiver_->poll()) {
+                        append_log(host_log_, "Local watch: audio output device changed; playback rebound.");
+                    }
+                } catch (const std::exception& error) {
+                    append_log(
+                        host_log_,
+                        QString("Local watch audio rebind failed: %1").arg(error.what()),
+                        GuiLogLevel::Quiet);
+                }
+            });
+        }
+        host_local_media_poll_timer_->start();
+#ifndef _WIN32
+        if (host_local_video_controller_ && host_local_receiver_) {
+            if (auto* surface = host_local_video_controller_->surface()) {
+                QObject::connect(
+                    surface,
+                    &ArchStreamerVideoSurface::geometryChanged,
+                    this,
+                    [this](int w, int h) {
+                        if (host_local_receiver_) {
+                            host_local_receiver_->apply_video_overlay_geometry(w, h);
+                        }
+                    });
+            }
+        }
+#endif
+        append_log(
+            host_log_,
+            QStringLiteral("Watching session video at %1.")
+                .arg(QString::fromStdString(video_uri)));
+    } catch (const std::exception& error) {
+        stop_host_local_media();
+        append_log(
+            host_log_,
+            QString("Local session view failed: %1").arg(error.what()),
+            GuiLogLevel::Quiet);
+    }
+}
+
 void MainWindow::sync_host_local_media() {
     if (host_local_media_ == nullptr) {
         return;
@@ -1039,6 +1146,7 @@ void MainWindow::sync_host_local_media() {
                 QStringLiteral("Watch locally"));
             host_local_video_controller_->setMode(ClientVideoMode::TopLevel);
             host_local_video_controller_->prepareForSession();
+            host_local_video_controller_->showForMedia();
             embed_xid = host_local_video_controller_->embedXid();
             QObject::connect(
                 host_local_video_controller_.get(),

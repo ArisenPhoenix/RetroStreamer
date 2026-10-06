@@ -264,7 +264,8 @@ RyujinxUserProfile RyujinxUserProfileService::prepare(
     std::string_view lan_interface_id,
     std::string_view game_id,
     std::string_view content_stem,
-    std::string_view title_id) {
+    std::string_view title_id,
+    const std::filesystem::path& texture_pack) {
     RyujinxUserProfile profile;
     profile.xdg_config_home = save_profile.user_directory / "ryujinx" / "xdg-config";
     profile.data_root = profile.xdg_config_home / "Ryujinx";
@@ -296,6 +297,7 @@ RyujinxUserProfile RyujinxUserProfileService::prepare(
     } else {
         ensure_ryujinx_title_updates(profile.data_root);
     }
+    ensure_ryujinx_texture_pack(profile.data_root, title_id, texture_pack);
 
     const auto updates_dir = switch_title_updates_directory();
     const std::string lan_iface{lan_interface_id};

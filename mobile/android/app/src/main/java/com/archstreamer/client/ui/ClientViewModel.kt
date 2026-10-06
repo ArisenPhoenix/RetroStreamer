@@ -63,6 +63,7 @@ import com.archstreamer.client.ui.menu.MenuOption
 import com.archstreamer.client.ui.menu.MenuSection
 import com.archstreamer.client.ui.menu.NavDir
 import com.archstreamer.client.ui.menu.NavOutcome
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -122,6 +123,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
     // the legacy file still holds the button map on a profile that has not synced. The
     // stored copies replace both from [adoptStoredControls] a beat later.
     private var overlayProfiles = OverlayProfileStore.loadAll(prefs).toMutableMap()
+    private var stickClickDwellMs = OverlayProfileStore.loadStickClickDwellMs(prefs)
     private var buttonMapDocument =
         if (buttonMapFile.isFile) ControllerMapStore.load(buttonMapFile) else ControllerMapDocument()
     private var passwordChangeLatch: java.util.concurrent.CountDownLatch? = null
@@ -189,6 +191,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
                 editingOverlayProfile = overlayProfiles[OverlaySystemFamily.Standard]
                     ?: OverlayProfile.DEFAULT,
                 editingMapProfile = buttonMapDocument.profile(ControllerMapFamily.Standard),
+                stickClickDwellMs = stickClickDwellMs,
                 usePhysicalController = resolveInitialPreferPhysical(),
             ),
             profile = ProfileState(
@@ -479,7 +482,11 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         if (username != null) {
             cadenceControls.findControls(username, CadenceControlsStore.KIND_OVERLAY_PROFILES)
                 ?.let { json ->
-                    OverlayProfileStore.decodeDocument(json)?.let { return it }
+                    OverlayProfileStore.decodeDocument(json)?.let { profiles ->
+                        stickClickDwellMs = OverlayProfileStore.stickClickDwellMsFromDocument(json)
+                        OverlayProfileStore.saveStickClickDwellMs(prefs, stickClickDwellMs)
+                        return profiles
+                    }
                 }
             // One-shot import from SharedPreferences → SQL for this profile.
             val fromPrefs = OverlayProfileStore.loadAll(prefs)
@@ -494,8 +501,9 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         username: String? = storedProfileUsernameOrNull(),
     ) {
         OverlayProfileStore.saveAll(prefs, profiles)
+        OverlayProfileStore.saveStickClickDwellMs(prefs, stickClickDwellMs)
         if (username == null) return
-        val json = OverlayProfileStore.encodeDocument(profiles)
+        val json = OverlayProfileStore.encodeDocument(profiles, stickClickDwellMs)
         cadenceControls.upsertControls(
             username = username,
             kind = CadenceControlsStore.KIND_OVERLAY_PROFILES,
@@ -519,7 +527,7 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
         _state.update {
             it.copy(controls = it.controls.copy(editingOverlayProfile = overlayProfiles[family] ?: OverlayProfile.DEFAULT, editingMapProfile = buttonMapDocument.profile(
                     OverlaySystemFamily.toMapFamily(family),
-                )))
+                ), stickClickDwellMs = stickClickDwellMs))
         }
     }
 
@@ -745,6 +753,14 @@ class ClientViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setOverlaySwapSe(value: Boolean) {
         updateEditingMapProfile { it.copy(swapSe = value) }
+    }
+
+    fun setStickClickDwellMs(value: Float) {
+        val ms = OverlayProfile.clampStickClickDwellMs(value.roundToInt())
+        if (ms == stickClickDwellMs) return
+        stickClickDwellMs = ms
+        updateControls { copy(stickClickDwellMs = ms) }
+        persistOverlayProfiles()
     }
 
     fun setOverlayOpacity(value: Float) {

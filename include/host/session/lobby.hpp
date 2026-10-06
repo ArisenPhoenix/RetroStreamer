@@ -46,7 +46,7 @@ struct SessionClientStreamPreferences {
     MediaStreamBitrate wanted_bitrate = MediaStreamBitrate::Auto;
     MediaStreamBitrate applied_bitrate = MediaStreamBitrate::Auto;
     MediaStreamFps adaptive_fps_cap = MediaStreamFps::Auto;
-    MediaStreamFps applied_fps = MediaStreamFps::Fps30;
+    MediaStreamFps applied_fps = MediaStreamFps::Fps60;
     DisplayLayoutPreference display_layout = DisplayLayoutPreference::Auto;
     std::uint16_t max_bitrate_kbps = 0;
     bool show_framecount = false;
@@ -129,7 +129,7 @@ struct SessionStreamState {
     MediaQualityTier video_tier = MediaQualityTier::Medium;
     MediaStreamFeel video_feel = MediaStreamFeel::LowLatency;
     MediaStreamBitrate video_bitrate = MediaStreamBitrate::Auto;
-    MediaStreamFps video_fps = MediaStreamFps::Fps30;
+    MediaStreamFps video_fps = MediaStreamFps::Fps60;
     bool video_configured = false;
 };
 

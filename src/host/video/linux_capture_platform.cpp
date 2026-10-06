@@ -5,6 +5,7 @@
 #include "host/video/gamescope_pipewire_node.hpp"
 #include "host/video/virtual_display.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <stdexcept>
@@ -96,8 +97,11 @@ void apply_standalone_capture_prefix(
                 "(managed: ~/.local/share/archstreamer/gamescope/archstreamer-gamescope)");
         }
         command_prefix = std::move(prefix);
+        const bool headless = std::find(
+            command_prefix.begin(), command_prefix.end(), "--headless") != command_prefix.end();
         std::cout
-            << "Yuzu: gamescope headless via " << command_prefix.front()
+            << "Yuzu: gamescope " << (headless ? "headless" : "nested window")
+            << " via " << command_prefix.front()
             << " (" << width << "x" << height
             << ", prefer-vk-device " << gamescope_vk_device
             << ", Gamescope WSI enabled)\n";

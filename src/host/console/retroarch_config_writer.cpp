@@ -45,18 +45,16 @@ std::string sanitize_device_name(std::string_view value) {
 // Linux udev indexes EV_KEY in ascending code order. With our uinput pad
 // (BTN_C not advertised) that is:
 //   0=SOUTH, 1=EAST, 2=NORTH, 3=WEST
-// NOT the common SDL face order (2=WEST, 3=NORTH). Mixing those up swaps
-// Square/Triangle on PS (and X/Y on Nintendo) while leaving Cross/Circle OK.
 //
-// Host is a dumb NESW relay: South→RetroPad A, East→RetroPad B, West→RetroPad Y,
-// North→RetroPad X (Xbox/SDL letter layout). Per-system or DualShock quirks are
-// fixed on the client via Swap NW / Swap SE — not here.
+// Wire bits are already NESW (A=south, B=east, X=west, Y=north). The client
+// owns Swap SE / Swap NW. Host only names those positions for RetroArch:
+//   south→B, east→A, west→Y, north→X.
 struct FaceButtonIndices {
-    const char* b = "1"; // EAST
-    const char* a = "0"; // SOUTH
-    const char* y = "2"; // NORTH
-    const char* x = "3"; // WEST
-    const char* name = "NESW letter map";
+    const char* b = "0"; // SOUTH
+    const char* a = "1"; // EAST
+    const char* y = "3"; // WEST
+    const char* x = "2"; // NORTH
+    const char* name = "NESW position relay";
 };
 
 FaceButtonIndices face_button_indices_for_system(std::string_view /*system_key*/) {

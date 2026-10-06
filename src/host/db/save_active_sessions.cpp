@@ -252,6 +252,83 @@ std::optional<std::string> take_active_session_stop_request(
     return reason;
 }
 
+std::filesystem::path view_request_path(
+    const std::filesystem::path& save_root,
+    int slot_index) {
+    return active_save_sessions_directory(save_root)
+        / ("view-" + std::to_string(slot_index));
+}
+
+std::filesystem::path view_uri_path(
+    const std::filesystem::path& save_root,
+    int slot_index) {
+    return active_save_sessions_directory(save_root)
+        / ("view-" + std::to_string(slot_index) + ".uri");
+}
+
+void request_local_session_view(
+    const std::filesystem::path& save_root,
+    int slot_index) {
+    if (save_root.empty() || slot_index < 0) {
+        return;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(active_save_sessions_directory(save_root), ec);
+    std::filesystem::remove(view_uri_path(save_root, slot_index), ec);
+    std::ofstream out(view_request_path(save_root, slot_index), std::ios::trunc);
+    if (out) {
+        out << "view\n";
+    }
+}
+
+bool take_local_session_view_request(
+    const std::filesystem::path& save_root,
+    int slot_index) {
+    if (save_root.empty() || slot_index < 0) {
+        return false;
+    }
+    const auto path = view_request_path(save_root, slot_index);
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec)) {
+        return false;
+    }
+    std::filesystem::remove(path, ec);
+    return true;
+}
+
+void publish_local_session_view_uri(
+    const std::filesystem::path& save_root,
+    int slot_index,
+    std::string_view video_uri) {
+    if (save_root.empty() || slot_index < 0) {
+        return;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(active_save_sessions_directory(save_root), ec);
+    std::ofstream out(view_uri_path(save_root, slot_index), std::ios::trunc);
+    if (out) {
+        out << video_uri << '\n';
+    }
+}
+
+std::optional<std::string> read_local_session_view_uri(
+    const std::filesystem::path& save_root,
+    int slot_index) {
+    if (save_root.empty() || slot_index < 0) {
+        return std::nullopt;
+    }
+    std::ifstream in(view_uri_path(save_root, slot_index));
+    if (!in) {
+        return std::nullopt;
+    }
+    std::string uri;
+    std::getline(in, uri);
+    if (uri.empty()) {
+        return std::nullopt;
+    }
+    return uri;
+}
+
 ConnectedClientPresence make_connected_client_presence(
     ClientInfo info,
     int slot_index,
@@ -449,6 +526,20 @@ std::vector<ActiveSaveSession> list_active_save_sessions(
         active.system_key = session.system_key;
         active.display_name = session.game_key;
         active.slot_index = session.slot;
+        if (active.system_key.empty() && !active.game_id.empty()) {
+            try {
+                GameMetaStore meta;
+                if (meta.ready()) {
+                    if (const auto row = meta.resolve(active.game_id, {})) {
+                        active.system_key = row->system_key;
+                        if (!row->display_name.empty()) {
+                            active.display_name = row->display_name;
+                        }
+                    }
+                }
+            } catch (...) {
+            }
+        }
         if (!active.username.empty()) {
             out.push_back(std::move(active));
         }

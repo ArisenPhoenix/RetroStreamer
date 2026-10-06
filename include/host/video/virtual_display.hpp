@@ -16,7 +16,9 @@ namespace archstreamer {
 // session that publishes frames on PipeWire instead.
 //
 // VirtualGlDisplay: Xvfb + vglrun (OpenGL). Kept for later revisit.
-// GamescopeDisplay: headless gamescope wrapper; capture via PipeWire node.
+// GamescopeDisplay: gamescope wrapper; capture via PipeWire node.
+// Headless by default. ARCHSTREAMER_GAMESCOPE_WINDOW=1 opens a borderless
+// nested window on DISPLAY so this machine can see the picture if PipeWire stops.
 class VirtualDisplay {
 public:
     virtual ~VirtualDisplay();
@@ -107,6 +109,8 @@ std::unique_ptr<VirtualDisplay> make_virtual_display(VirtualDisplayBackend backe
 [[nodiscard]] std::vector<std::pair<std::string, std::string>> virtual_gl_environment();
 
 [[nodiscard]] std::optional<std::string> find_gamescope();
+// True unless ARCHSTREAMER_GAMESCOPE_WINDOW=1 and DISPLAY is set.
+[[nodiscard]] bool gamescope_headless_backend();
 [[nodiscard]] std::vector<std::string> gamescope_command_prefix(
     int width,
     int height,

@@ -449,8 +449,21 @@ ClientRunResult ClientApp::join_session(
                 break;
             }
         }
-        callbacks.controller_map_prefs->set_active_family(
-            controller_map_family_from_system_key(system_key));
+        const auto family = controller_map_family_from_system_key(system_key);
+        callbacks.controller_map_prefs->set_active_family(family);
+        if (callbacks.on_status) {
+            std::string message = "Controller mapping: ";
+            message += controller_map_family_title(family);
+            if (!system_key.empty()) {
+                message += " (system ";
+                message += system_key;
+                message += ")";
+            }
+            callbacks.on_status(message);
+        }
+        if (callbacks.on_controller_map_family) {
+            callbacks.on_controller_map_family(family);
+        }
     }
     if (callbacks.emulator_control) {
         callbacks.emulator_control->reset();

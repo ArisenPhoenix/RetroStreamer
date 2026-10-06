@@ -18,6 +18,7 @@ SessionContentInfo resolve_session_content_info(
         content.active_display_name = hosted_game.info.display_name;
         content.catalog_content_path = hosted_game.content_path;
         content.m3m_title_id = hosted_game.m3m_title_id;
+        content.m3m_texture_pack = hosted_game.m3m_texture_pack;
         content.playlist_discs = hosted_game.info.playlist_discs;
     } else if (const auto info = catalog.find(game_id); info.has_value()) {
         content.system_key = info->system_key;
@@ -136,6 +137,7 @@ SwitchLaunchContent resolve_switch_launch_content(
                     : " (cached title " + switch_content.title_id + ")")
             << '\n';
     }
+    switch_content.texture_pack = content.m3m_texture_pack;
     return switch_content;
 }
 

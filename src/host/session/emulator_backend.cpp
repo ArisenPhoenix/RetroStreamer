@@ -63,6 +63,7 @@ public:
                 switch_content.content_stem,
                 switch_content.title_id,
                 switch_content.uses_m3m_map,
+                switch_content.texture_pack,
             });
         devices.input.resolved_pads = std::move(switch_prep.resolved_pads);
         backends.switch_backend->assign_launch_env_profile(launch_env_request, switch_prep);

@@ -101,6 +101,10 @@ std::optional<M3mPlaylist> parse_m3m_playlist(
     out.patch_title_id = *patch_title_id;
     out.base = *base;
     out.rom_path = (m3m_path.parent_path() / out.rom).lexically_normal();
+    if (const auto pack = values.find("TEXTURE_PACK"); pack != values.end() && !pack->second.empty()) {
+        out.texture_pack = pack->second;
+        out.texture_pack_path = (m3m_path.parent_path() / out.texture_pack).lexically_normal();
+    }
 
     std::error_code ec;
     if (!std::filesystem::is_regular_file(out.rom_path, ec) || ec) {

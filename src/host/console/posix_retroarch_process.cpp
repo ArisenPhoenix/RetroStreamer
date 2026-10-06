@@ -3,6 +3,7 @@
 #include "common/platform/paths.hpp"
 #include "host/console/emulator_orphan_reaper.hpp"
 #include "host/session/slot_lease.hpp"
+#include "host/virtual/linux_uinput_isolation.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -75,19 +76,6 @@ std::string make_session_token() {
     out << "as-" << getpid() << '-' << counter.fetch_add(1) << '-'
         << std::chrono::steady_clock::now().time_since_epoch().count();
     return out.str();
-}
-
-void close_inherited_fds() {
-    int max_fd = static_cast<int>(sysconf(_SC_OPEN_MAX));
-    if (max_fd < 1024) {
-        max_fd = 1024;
-    }
-    if (max_fd > 65536) {
-        max_fd = 65536;
-    }
-    for (int fd = 3; fd < max_fd; ++fd) {
-        close(fd);
-    }
 }
 
 bool environ_contains_token(const std::filesystem::path& environ_path, const std::string& token) {
@@ -541,7 +529,13 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
         if (setsid() < 0) {
             _exit(127);
         }
-        close_inherited_fds();
+        for (const auto& key : launch.unset_environment) {
+            unsetenv(key.c_str());
+        }
+        for (const auto& [key, value] : launch.environment) {
+            setenv(key.c_str(), value.c_str(), 1);
+        }
+        apply_isolated_pads_in_child();
         if (launch.quiet_stdio) {
             const int null_fd = open("/dev/null", O_RDWR);
             int err_fd = -1;
@@ -562,12 +556,6 @@ void PosixRetroArchProcess::launch(const RetroArchLaunchConfig& config) {
             if (null_fd > STDERR_FILENO) {
                 close(null_fd);
             }
-        }
-        for (const auto& key : launch.unset_environment) {
-            unsetenv(key.c_str());
-        }
-        for (const auto& [key, value] : launch.environment) {
-            setenv(key.c_str(), value.c_str(), 1);
         }
 
         std::vector<char*> argv;

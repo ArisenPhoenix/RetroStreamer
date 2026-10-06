@@ -45,8 +45,10 @@ public:
     void setHeartbeatPrefs(std::shared_ptr<archstreamer::ClientHeartbeatPrefs> prefs);
     void setDsTouchBridge(std::shared_ptr<archstreamer::DsTouchBridge> bridge);
 
-    /** Show/raise the surface for a live session; creates native window handle. */
+    /** Create the native window handle; keep it hidden until media starts. */
     void prepareForSession();
+    /** Show/raise after the host provides a video URI. */
+    void showForMedia();
     /** Hide and force-close after gst has been stopped. */
     void endSession();
 
@@ -67,7 +69,7 @@ signals:
     void userClosed();
 
 private:
-    void applyMode();
+    void applyMode(bool show_window);
     void pushGeometryToBridge(int width, int height);
 
     ClientVideoMode mode_ = ClientVideoMode::TopLevel;

@@ -241,7 +241,6 @@ StreamPipelineAction decide_stream_pipeline_action(
         return StreamPipelineAction::None;
     }
     if (session_video_configured && proposed_trunk == current_trunk) {
-        // SampleFromTrunk will branch here once weak-receiver sampling exists.
         return StreamPipelineAction::SyncToTrunk;
     }
     return StreamPipelineAction::ReplaceTrunk;
@@ -263,6 +262,16 @@ bool stream_branch_matches_trunk(
     const VideoEncodeSettings& target,
     const VideoEncodeSettings& trunk) {
     return target == trunk;
+}
+
+bool stream_encode_is_raise(
+    const VideoEncodeSettings& proposed,
+    const VideoEncodeSettings& current) {
+    return proposed.width > current.width ||
+        proposed.height > current.height ||
+        proposed.bitrate_kbps > current.bitrate_kbps ||
+        proposed.framerate > current.framerate ||
+        proposed.queue_buffers > current.queue_buffers;
 }
 
 StreamBranchDecision decide_stream_branch_action(
@@ -416,26 +425,54 @@ StreamFanoutPlan build_stream_fanout_plan(
     StreamFanoutPlan plan;
     plan.current_trunk = current_trunk;
     plan.proposed_trunk = proposed_trunk;
-
-
     plan.proposed_size = ceilings.size;
     plan.proposed_tier = ceilings.tier;
     plan.proposed_feel = ceilings.feel;
     plan.proposed_bitrate = ceilings.bitrate;
     plan.proposed_fps = ceilings.fps;
-    plan.trunk_changes =
-        !session_video_configured || proposed_trunk != current_trunk;
 
-    // Branch consolidation always targets the destination trunk.
-    plan.branches = decide_stream_branch_actions(candidates, proposed_trunk);
-    plan.streams = group_stream_branch_decisions(plan.branches, proposed_trunk);
+    auto refresh_branches = [&]() {
+        plan.branches = decide_stream_branch_actions(candidates, plan.proposed_trunk);
+        plan.streams = group_stream_branch_decisions(plan.branches, plan.proposed_trunk);
+    };
+    refresh_branches();
+
+    const StreamBranchDecision* requester_branch = nullptr;
+    for (const auto& branch : plan.branches) {
+        if (branch.client_id == requesting_client.info.client_id) {
+            requester_branch = &branch;
+            break;
+        }
+    }
+    const bool requester_samples =
+        requester_branch != nullptr &&
+        (requester_branch->action == StreamBranchAction::SampleFromTrunk ||
+         requester_branch->action == StreamBranchAction::ReuseClient);
+    const bool dropping_trunk =
+        session_video_configured &&
+        plan.proposed_trunk != current_trunk &&
+        !stream_encode_is_raise(plan.proposed_trunk, current_trunk);
+
+    // Weak receivers must not lower the shared encode. Raises still apply so a
+    // higher seated player already in the ceiling can lift the trunk.
+    if (requester_samples && dropping_trunk) {
+        plan.proposed_trunk = current_trunk;
+        plan.proposed_size = media_stream_size_for_settings(current_trunk);
+        plan.proposed_tier = media_quality_tier_for_settings(current_trunk);
+        plan.proposed_bitrate = media_stream_bitrate_for_settings(current_trunk);
+        plan.proposed_fps = media_stream_fps_for_framerate(current_trunk.framerate);
+        refresh_branches();
+    }
+
+    plan.trunk_changes =
+        !session_video_configured || plan.proposed_trunk != current_trunk;
 
     plan.trunk_action = decide_stream_pipeline_action(
         requesting_client,
         is_seated_player,
         session_video_configured,
         current_trunk,
-        proposed_trunk,
+        plan.proposed_trunk,
         cutover_in_flight,
         within_reconfigure_cooldown);
 
@@ -443,8 +480,6 @@ StreamFanoutPlan build_stream_fanout_plan(
         return plan;
     }
 
-    // Trunk unchanged: SyncToTrunk if everyone rides trunk; SampleFromTrunk if any
-    // sample/reuse branch must be (re)shaped.
     if (!plan.trunk_changes &&
         (plan.trunk_action == StreamPipelineAction::SyncToTrunk ||
          plan.trunk_action == StreamPipelineAction::SampleFromTrunk)) {
@@ -623,7 +658,7 @@ StreamRequestResolution resolve_stream_request_for_client(
             client.video_health.decode_pressure_streak = 0;
             MediaStreamFps fps = resolution.request.fps;
             if (fps == MediaStreamFps::Auto) {
-                fps = current.fps == MediaStreamFps::Auto ? MediaStreamFps::Fps30 : current.fps;
+                fps = current.fps == MediaStreamFps::Auto ? MediaStreamFps::Fps60 : current.fps;
             }
             const auto next_fps = step_stream_fps_down(fps);
             if (next_fps != fps) {

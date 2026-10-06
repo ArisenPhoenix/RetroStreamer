@@ -238,31 +238,6 @@ SaveNameHints hints_from_meta_store() {
  */
 std::vector<ActiveSaveSession> load_users_active_sessions(
     const std::filesystem::path& save_root) {
-    std::vector<ActiveSaveSession> out;
-    try {
-        auto store = cadence::make_runtime_store();
-        if (store && store->ensure_ready()) {
-            for (const auto& session : store->list_sessions(true)) {
-                if (session.username.empty()) {
-                    continue;
-                }
-                ActiveSaveSession active;
-                active.username = session.username;
-                active.game_id = session.game_key;
-                active.system_key = session.system_key;
-                active.slot_index = session.slot;
-                active.display_name = session.game_key;
-                out.push_back(std::move(active));
-            }
-        }
-    } catch (...) {
-    }
-
-    if (!out.empty()) {
-        return out;
-    }
-
-    // Legacy fallback: older hosts may still have side JSON only.
     return list_active_save_sessions(save_root);
 }
 
@@ -321,7 +296,7 @@ QWidget* MainWindow::build_saves_tab() {
 
     auto* intro = new QLabel(
         "Per-user save profiles under the host save root, grouped User → System → Game. "
-        "Right-click for Add / Remove / Kick / Block. "
+        "Right-click for Add / Remove / Kick / Block / View session. "
         "Status sits on the user (Connected) or game (Active). "
         "Blocked games are hidden from that user's catalog after they connect.",
         page);
@@ -400,7 +375,7 @@ QWidget* MainWindow::build_saves_tab() {
     root->addWidget(split, 1);
 
     saves_status_ = new QLabel(
-        "Right-click a game to Block it for that user. Kick is also on the context menu.",
+        "Right-click a user or game for Kick, Block, or View session.",
         page);
     saves_status_->setWordWrap(true);
     root->addWidget(saves_status_);
@@ -410,6 +385,7 @@ QWidget* MainWindow::build_saves_tab() {
     saves_remove_system_action_ = new QAction("System…", page);
     saves_remove_game_action_ = new QAction("Game…", page);
     saves_kick_action_ = new QAction("Kick…", page);
+    saves_view_action_ = new QAction("View session", page);
     saves_block_game_action_ = new QAction("Block game for user", page);
     saves_unblock_game_action_ = new QAction("Unblock game", page);
     auto* saves_copy_action = new QAction("Copy", page);
@@ -468,6 +444,7 @@ QWidget* MainWindow::build_saves_tab() {
     connect(saves_remove_system_action_, &QAction::triggered, this, [this] { saves_remove_system(); });
     connect(saves_remove_game_action_, &QAction::triggered, this, [this] { saves_remove_game(); });
     connect(saves_kick_action_, &QAction::triggered, this, [this] { saves_kick_user(); });
+    connect(saves_view_action_, &QAction::triggered, this, [this] { saves_view_session(); });
     connect(saves_block_game_action_, &QAction::triggered, this, [this] {
         saves_block_selected_game();
     });
@@ -581,6 +558,7 @@ void MainWindow::saves_show_context_menu(const QPoint& pos) {
     menu.addSeparator();
     menu.addAction(saves_block_game_action_);
     menu.addAction(saves_kick_action_);
+    menu.addAction(saves_view_action_);
     menu.exec(saves_tree_->viewport()->mapToGlobal(pos));
     saves_context_menu_open_ = false;
 }
@@ -735,8 +713,12 @@ void MainWindow::refresh_saves_browser_list() {
     const auto connected_clients = list_connected_clients(root);
 
     std::unordered_set<std::string> active_usernames;
+    std::unordered_map<std::string, int> active_slot_by_user;
     for (const auto& active : active_sessions) {
         active_usernames.insert(active.username);
+        if (active.slot_index >= 0) {
+            active_slot_by_user.emplace(active.username, active.slot_index);
+        }
     }
 
     // Connected usernames that are not currently Active (playing).
@@ -949,6 +931,10 @@ void MainWindow::refresh_saves_browser_list() {
         user_item = new SavesTreeItem(saves_tree_);
         user_item->setText(0, username);
         apply_saves_node_roles(user_item, SavesNodeKind::User, username);
+        if (const auto slot_it = active_slot_by_user.find(username.toStdString());
+            slot_it != active_slot_by_user.end()) {
+            user_item->setData(0, kUserRoleSlot, slot_it->second);
+        }
         auto font = user_item->font(0);
         font.setBold(true);
         user_item->setFont(0, font);
@@ -1109,6 +1095,10 @@ void MainWindow::update_saves_action_enabled() {
     }
     if (saves_kick_action_ != nullptr) {
         saves_kick_action_->setEnabled(true);
+    }
+    if (saves_view_action_ != nullptr) {
+        const bool can_view = has_row && !item->data(0, kUserRoleUsername).toString().isEmpty();
+        saves_view_action_->setEnabled(can_view);
     }
     if (saves_block_game_action_ != nullptr) {
         saves_block_game_action_->setEnabled(saves_selected_catalog_game_id().has_value());
@@ -1280,6 +1270,83 @@ void MainWindow::saves_remove_game() {
     } catch (const std::exception& error) {
         QMessageBox::warning(this, "Remove Game", error.what());
     }
+}
+
+void MainWindow::saves_view_session() {
+    const auto* item = saves_tree_ != nullptr ? saves_tree_->currentItem() : nullptr;
+    if (item == nullptr) {
+        QMessageBox::information(this, "View session", "Select a user or their game first.");
+        return;
+    }
+    const auto username = item->data(0, kUserRoleUsername).toString();
+    const auto root = save_root_path();
+    int slot = -1;
+    if (!username.isEmpty()) {
+        for (const auto& active : load_users_active_sessions(root)) {
+            if (QString::fromStdString(active.username) == username && active.slot_index >= 0) {
+                slot = active.slot_index;
+                break;
+            }
+        }
+    }
+    if (slot < 0) {
+        for (const auto* node = item; node != nullptr; node = node->parent()) {
+            const auto data = node->data(0, kUserRoleSlot);
+            if (data.isValid() && data.toInt() >= 0) {
+                slot = data.toInt();
+                break;
+            }
+        }
+    }
+    if (slot < 0) {
+        QMessageBox::information(
+            this,
+            "View session",
+            "That user is not in a live game.");
+        return;
+    }
+
+    request_local_session_view(root, slot);
+    local_session_view_slot_ = slot;
+    local_session_view_tries_ = 0;
+    if (saves_status_ != nullptr) {
+        saves_status_->setText(QStringLiteral("Opening local view for slot %1…").arg(slot));
+    }
+    if (local_session_view_wait_ == nullptr) {
+        local_session_view_wait_ = new QTimer(this);
+        local_session_view_wait_->setInterval(200);
+        connect(local_session_view_wait_, &QTimer::timeout, this, [this] {
+            ++local_session_view_tries_;
+            const auto uri = read_local_session_view_uri(
+                save_root_path(),
+                local_session_view_slot_);
+            if (uri.has_value()) {
+                local_session_view_wait_->stop();
+                start_local_video_watch(*uri);
+                if (saves_status_ != nullptr) {
+                    saves_status_->setText(
+                        QStringLiteral("Viewing slot %1.").arg(local_session_view_slot_));
+                }
+                append_log(
+                    host_log_,
+                    QStringLiteral("[users] local view %1")
+                        .arg(QString::fromStdString(*uri)));
+                return;
+            }
+            if (local_session_view_tries_ >= 40) {
+                local_session_view_wait_->stop();
+                if (saves_status_ != nullptr) {
+                    saves_status_->setText(QStringLiteral("Local view did not open."));
+                }
+                QMessageBox::warning(
+                    this,
+                    "View session",
+                    "The live session did not open a local view. Stop Host and start it again "
+                    "so it is running this build, then try View session.");
+            }
+        });
+    }
+    local_session_view_wait_->start();
 }
 
 void MainWindow::saves_kick_user() {

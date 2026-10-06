@@ -68,8 +68,8 @@ StreamRequestResolution resolve_stream_request_for_client(
  * ReplaceTrunk = warm a new encode then hand off (target: session-wide trunk swap).
  * HardRestartTrunk = tear down / restart the shared encode immediately.
  * SyncToTrunk = ceiling unchanged; keep riding the existing trunk.
- * SampleFromTrunk = ceiling unchanged but this receiver needs a lighter derived stream
- *   (reserved; not emitted until weak-receiver sampling is wired).
+ * SampleFromTrunk = ceiling unchanged; reshape below-trunk branches only.
+ *   A seated player below the max consumer must not ReplaceTrunk.
  */
 enum class StreamPipelineAction : std::uint8_t {
     None = 0,
@@ -174,7 +174,7 @@ struct StreamFanoutPlan {
     MediaQualityTier proposed_tier = MediaQualityTier::Medium;
     MediaStreamFeel proposed_feel = MediaStreamFeel::LowLatency;
     MediaStreamBitrate proposed_bitrate = MediaStreamBitrate::Auto;
-    MediaStreamFps proposed_fps = MediaStreamFps::Fps30;
+    MediaStreamFps proposed_fps = MediaStreamFps::Fps60;
     /** Trunk encode must change (proposed != current). */
     bool trunk_changes = false;
     StreamPipelineAction trunk_action = StreamPipelineAction::None;
@@ -195,7 +195,7 @@ struct SessionVideoCeiling {
     MediaQualityTier tier = MediaQualityTier::Medium;
     MediaStreamFeel feel = MediaStreamFeel::LowLatency;
     MediaStreamBitrate bitrate = MediaStreamBitrate::Auto;
-    MediaStreamFps fps = MediaStreamFps::Fps30;
+    MediaStreamFps fps = MediaStreamFps::Fps60;
     bool any_player = false;
 
 };

@@ -14,6 +14,10 @@ namespace archstreamer {
  *   TITLE_ID, ROM, PATCH_TITLE_ID, BASE
  * ROM is relative to the .m3m directory and must exist as a regular file.
  * BASE is a declaration only (no file check).
+ *
+ * Optional:
+ *   TEXTURE_PACK — path relative to the .m3m (directory, or .7z/.zip/.rar).
+ *   Missing key, empty value, or a path that is not on disk: play without it.
  */
 struct M3mPlaylist {
     std::string title_id;
@@ -21,6 +25,8 @@ struct M3mPlaylist {
     std::string patch_title_id;
     std::string base;
     std::filesystem::path rom_path; // absolute/lexically_normal resolved path
+    std::string texture_pack; // as written; empty when omitted
+    std::filesystem::path texture_pack_path; // resolved; may not exist yet
 };
 
 /**

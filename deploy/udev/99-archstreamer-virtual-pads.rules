@@ -1,0 +1,9 @@
+# Virtual pads are opened by host_runner and inherited by the emulator it
+# spawns. systemd uaccess otherwise adds an ACL for the seat user, so every
+# process of that user (Prism, Minecraft, desktop apps) also gets the remote
+# player's controller.
+#
+# MODE 000 + TAG-="uaccess": desktop opens fail. Keep ID_INPUT_JOYSTICK so
+# session children still enumerate the pad, then reopen it through
+# libarchstreamer_pad_access.so (inherited fd) instead of the 000 node.
+KERNEL=="event*|js*", ATTRS{name}=="ArchStreamer*", MODE="0000", GROUP="root", TAG-="uaccess"

@@ -18,3 +18,8 @@ simple values — gst-launch joins those tokens, then parse-launchs the result.
 `GStreamerMediaServer` remains the session-facing A/V facade. It owns
 `MediaPlanConfig`; session fills that from `MediaConfig` and passes it to
 `start()`. Audio encode lives in `src/host/audio/gstreamer_audio_fanout.cpp`.
+Managed parse-launch and bus watching live in `src/host/video/gst/`
+(`archstreamer_gst`). MediaServer starts a `GstVideoGraph` (source + trunk
+branch). Below-trunk clients get their own sample encode so the trunk pipeline
+is not relaunched. Sessions spawn `archstreamer_gst_worker` (one process per
+pipeline). `ARCHSTREAMER_VIDEO_PIPELINE=managed` keeps the in-process engine.

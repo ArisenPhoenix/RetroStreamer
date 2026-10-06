@@ -53,6 +53,27 @@ void CadenceSessionTracker::begin(
     (void)store->upsert_session(session);
 }
 
+void CadenceSessionTracker::note_game(
+    std::string_view game_key,
+    std::string_view system_key) {
+    if (session_id_.empty()) {
+        return;
+    }
+    auto store = store_or_null();
+    if (!store) {
+        return;
+    }
+    auto session = store->find_session(session_id_);
+    if (!session.has_value()) {
+        return;
+    }
+    if (!game_key.empty()) {
+        session->game_key = std::string(game_key);
+    }
+    session->system_key = std::string(system_key);
+    (void)store->upsert_session(*session);
+}
+
 CadenceResourceLease CadenceSessionTracker::leases() const {
     return CadenceResourceLease(session_id_, host_id_, slot_);
 }

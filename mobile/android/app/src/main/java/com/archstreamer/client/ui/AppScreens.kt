@@ -1024,6 +1024,7 @@ private fun PlayScreen(
                 opacity = state.controls.overlayOpacity,
                 editing = state.controls.overlayEditing,
                 playActionFor = viewModel::playOverlayAction,
+                stickClickDwellMs = state.controls.stickClickDwellMs,
                 onState = viewModel::onPadState,
                 onMenuClick = onOpenMenu,
                 onFastForwardHold = viewModel::setFastForwardHold,

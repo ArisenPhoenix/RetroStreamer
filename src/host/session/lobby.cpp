@@ -799,9 +799,43 @@ SessionPlan gather_session_clients(
                 continue;
             }
 
+            if (const auto* presence = std::get_if<LobbyPresence>(&*next_payload);
+                presence != nullptr) {
+                if (!valid_username(presence->username)) {
+                    std::cerr << "Ignored lobby presence during player wait (invalid username).\n";
+                    continue;
+                }
+                const auto auth = verify_or_create_on_hello(
+                    save_root,
+                    presence->username,
+                    presence->password,
+                    allow_new_users);
+                if (auth != UserAuthResult::Ok && auth != UserAuthResult::MustChange) {
+                    std::cerr << "Ignored lobby presence during player wait (auth failed).\n";
+                    continue;
+                }
+                CatalogUserBlocks blocks;
+                try {
+                    GameMetaStore store;
+                    if (store.ready()) {
+                        blocks = store.catalog_user_blocks_for(
+                            presence->username,
+                            presence->client_blocks_revision);
+                    }
+                } catch (...) {
+                }
+                stream->send_packet(serialize_packet(blocks));
+                stream->send_packet(serialize_packet(LobbyPresenceAck{0}));
+                std::cout
+                    << "Lobby catalog client during player wait ("
+                    << presence->username << "); still waiting for session hellos.\n";
+                continue;
+            }
+
             const auto* hello = std::get_if<ClientHello>(&*next_payload);
             if (hello == nullptr) {
-                throw std::runtime_error("expected ClientHello from session client");
+                std::cerr << "Ignored non-hello control client during player wait.\n";
+                continue;
             }
             auto authenticated_hello = *hello;
             if (!valid_username(authenticated_hello.username)) {

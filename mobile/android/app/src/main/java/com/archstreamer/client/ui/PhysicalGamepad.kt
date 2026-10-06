@@ -172,13 +172,38 @@ class PhysicalGamepadTracker(
                 sources and InputDevice.SOURCE_GAMEPAD == InputDevice.SOURCE_GAMEPAD
         if (!fromStick) return false
 
+        val device = InputDevice.getDevice(event.deviceId)
+        // Xbox-style pads put the right stick on AXIS_Z / AXIS_RZ (centered -1..1).
+        // DualSense and generic HID put L2/R2 on those axes as 0..1 triggers, with the
+        // right stick on AXIS_RX / AXIS_RY. Reading a trigger-shaped RZ as stick Y drops ZR.
+        val zIsTrigger = isTriggerShaped(motionRange(device, MotionEvent.AXIS_Z, sources))
+        val rzIsTrigger = isTriggerShaped(motionRange(device, MotionEvent.AXIS_RZ, sources))
+
         leftX = axisToShort(event.getAxisValue(MotionEvent.AXIS_X))
         leftY = axisToShort(event.getAxisValue(MotionEvent.AXIS_Y))
-        rightX = axisToShort(firstAxis(event, MotionEvent.AXIS_Z, MotionEvent.AXIS_RX))
-        rightY = axisToShort(firstAxis(event, MotionEvent.AXIS_RZ, MotionEvent.AXIS_RY))
+        rightX = axisToShort(
+            if (zIsTrigger) event.getAxisValue(MotionEvent.AXIS_RX)
+            else firstAxis(event, MotionEvent.AXIS_Z, MotionEvent.AXIS_RX),
+        )
+        rightY = axisToShort(
+            if (rzIsTrigger) event.getAxisValue(MotionEvent.AXIS_RY)
+            else firstAxis(event, MotionEvent.AXIS_RZ, MotionEvent.AXIS_RY),
+        )
 
-        leftTriggerAxis = triggerAxis(event, MotionEvent.AXIS_LTRIGGER, MotionEvent.AXIS_BRAKE)
-        rightTriggerAxis = triggerAxis(event, MotionEvent.AXIS_RTRIGGER, MotionEvent.AXIS_GAS)
+        leftTriggerAxis = strongestTrigger(
+            event,
+            device,
+            MotionEvent.AXIS_LTRIGGER,
+            MotionEvent.AXIS_BRAKE,
+            if (zIsTrigger) MotionEvent.AXIS_Z else -1,
+        )
+        rightTriggerAxis = strongestTrigger(
+            event,
+            device,
+            MotionEvent.AXIS_RTRIGGER,
+            MotionEvent.AXIS_GAS,
+            if (rzIsTrigger) MotionEvent.AXIS_RZ else -1,
+        )
         refreshTriggers()
 
         val hatX = event.getAxisValue(MotionEvent.AXIS_HAT_X)
@@ -429,15 +454,53 @@ class PhysicalGamepadTracker(
             return event.getAxisValue(fallback)
         }
 
-        private fun triggerAxis(event: MotionEvent, primary: Int, fallback: Int): Float {
-            val a = event.getAxisValue(primary)
-            if (a > 0.01f) return a.coerceIn(0f, 1f)
-            val b = event.getAxisValue(fallback)
-            return when {
-                b > 0.01f -> b.coerceIn(0f, 1f)
-                b < -0.01f -> ((b + 1f) * 0.5f).coerceIn(0f, 1f)
-                else -> 0f
+        private fun motionRange(device: InputDevice?, axis: Int, source: Int): InputDevice.MotionRange? {
+            if (device == null) return null
+            return device.getMotionRange(axis, source) ?: device.getMotionRange(axis)
+        }
+
+        /** 0..1 (rest at the low end). Centered sticks are about -1..1 and stay sticks. */
+        private fun isTriggerShaped(range: InputDevice.MotionRange?): Boolean {
+            if (range == null || range.max <= range.min) return false
+            return range.min >= -0.05f
+        }
+
+        /**
+         * Strongest candidate wins. A noisy AXIS_RTRIGGER rest value must not hide a
+         * real press on GAS or a trigger-shaped AXIS_RZ.
+         */
+        private fun strongestTrigger(
+            event: MotionEvent,
+            device: InputDevice?,
+            vararg axes: Int,
+        ): Float {
+            var best = 0f
+            for (axis in axes) {
+                if (axis < 0) continue
+                val mag = triggerMagnitude(
+                    event.getAxisValue(axis),
+                    motionRange(device, axis, event.source),
+                )
+                if (mag > best) best = mag
             }
+            return best
+        }
+
+        private fun triggerMagnitude(value: Float, range: InputDevice.MotionRange?): Float {
+            if (range != null && range.max > 1.5f && range.min >= -0.05f) {
+                val span = range.max - range.min
+                if (span <= 0f) return 0f
+                val norm = ((value - range.min) / span).coerceIn(0f, 1f)
+                return if (norm > 0.01f) norm else 0f
+            }
+            if (value > 0.01f) return value.coerceIn(0f, 1f)
+            if (value < -0.01f && range != null && range.min < -0.25f) {
+                val span = range.max - range.min
+                if (span <= 0f) return 0f
+                val norm = ((value - range.min) / span).coerceIn(0f, 1f)
+                return if (norm > 0.01f) norm else 0f
+            }
+            return 0f
         }
     }
 }

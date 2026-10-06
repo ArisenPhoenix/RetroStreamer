@@ -25,6 +25,8 @@ using LocalPlayerIndex = std::uint8_t;
 using RetroArchPort = std::uint8_t;
 
 constexpr ClientId HostClientId = 0;
+/** Host-local "View session" sink. Not a seated player. */
+constexpr ClientId LocalSessionViewClientId = 255;
 
 enum class PacketType : std::uint8_t {
     ClientHello = 1,
@@ -461,7 +463,7 @@ enum class MediaStreamFps : std::uint8_t {
 
 struct VideoEncodeSettings {
     std::uint16_t bitrate_kbps = 1500;
-    std::uint8_t framerate = 30;
+    std::uint8_t framerate = 60;
     std::uint16_t key_int_max = 30;
     // 0 = encode at capture resolution (no videoscale).
     std::uint16_t width = 0;
@@ -603,9 +605,10 @@ inline VideoEncodeSettings video_encode_settings_for_quality(MediaQualityTier qu
     case MediaQualityTier::VeryHigh:
         return VideoEncodeSettings{25000, 60, 30, 0, 0};
     case MediaQualityTier::Medium:
+        return VideoEncodeSettings{3500, 30, 15, 0, 0};
     case MediaQualityTier::Auto:
     default:
-        return VideoEncodeSettings{3500, 30, 15, 0, 0};
+        return VideoEncodeSettings{3500, 60, 30, 0, 0};
     }
 }
 
@@ -619,9 +622,10 @@ inline std::uint8_t framerate_for_quality_tier(MediaQualityTier quality) {
     case MediaQualityTier::VeryHigh:
         return 60;
     case MediaQualityTier::Medium:
+        return 30;
     case MediaQualityTier::Auto:
     default:
-        return 30;
+        return 60;
     }
 }
 
@@ -664,12 +668,13 @@ inline std::uint8_t framerate_for_stream_fps(MediaStreamFps fps) {
         return 24;
     case MediaStreamFps::Fps45:
         return 45;
+    case MediaStreamFps::Fps30:
+        return 30;
     case MediaStreamFps::Fps60:
         return 60;
-    case MediaStreamFps::Fps30:
     case MediaStreamFps::Auto:
     default:
-        return 30;
+        return 60;
     }
 }
 

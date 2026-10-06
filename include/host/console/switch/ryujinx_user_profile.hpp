@@ -3,6 +3,7 @@
 #include "host/console/save_profile.hpp"
 #include "host/console/standalone_emulator.hpp"
 
+#include <filesystem>
 #include <string_view>
 
 namespace archstreamer {
@@ -18,7 +19,8 @@ public:
         std::string_view lan_interface_id = {},
         std::string_view game_id = {},
         std::string_view content_stem = {},
-        std::string_view title_id = {});
+        std::string_view title_id = {},
+        const std::filesystem::path& texture_pack = {});
 };
 
 } // namespace archstreamer

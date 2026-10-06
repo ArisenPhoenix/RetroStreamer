@@ -150,6 +150,8 @@ public:
     virtual bool apply_video_branch_layout(
         const VideoEncodeSettings& trunk,
         const std::vector<std::pair<ClientId, VideoEncodeSettings>>& per_client) = 0;
+    /** True if the last apply_video_branch_layout rebuilt the capture graph. */
+    virtual bool consume_video_layout_rebuilt() { return true; }
     /** Restart the shared audio fanout without changing client ports. */
     virtual bool restart_shared_audio() = 0;
 

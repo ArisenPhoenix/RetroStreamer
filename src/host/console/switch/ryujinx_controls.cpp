@@ -96,7 +96,10 @@ std::string archstreamer_sdl_gamecontroller_mapping(const std::string& sdl_guid,
         "back:b6,start:b7,guide:b8,"
         "leftstick:b9,rightstick:b10,"
         "dpup:b11,dpdown:b12,dpleft:b13,dpright:b14,"
-        "leftx:a0,lefty:a1,lefttrigger:a2,rightx:a3,righty:a4,righttrigger:a5";
+        "leftx:a0,lefty:a1,lefttrigger:a2,rightx:a3,righty:a4,righttrigger:a5,";
+    // Trailing comma is required. SDL 2.30 appends "crc:XXXX" to the mapping and,
+    // without that comma, glues it onto the last field ("righttrigger:a5crc:…"),
+    // so ZR stays unbound while ZL (earlier in the string) still works.
 }
 
 } // namespace

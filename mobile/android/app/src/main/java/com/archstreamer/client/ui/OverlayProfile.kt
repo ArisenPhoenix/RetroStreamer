@@ -121,6 +121,14 @@ data class OverlayProfile(
         const val MIN_OPACITY = 0.25f
         const val MAX_OPACITY = 1.0f
 
+        /** How long a virtual stick must stay inside its opening slop before the click latches. */
+        const val DEFAULT_STICK_CLICK_DWELL_MS = 150
+        const val MIN_STICK_CLICK_DWELL_MS = 50
+        const val MAX_STICK_CLICK_DWELL_MS = 500
+
+        fun clampStickClickDwellMs(ms: Int): Int =
+            ms.coerceIn(MIN_STICK_CLICK_DWELL_MS, MAX_STICK_CLICK_DWELL_MS)
+
         val DEFAULT = OverlayProfile()
     }
 }
@@ -213,8 +221,37 @@ object OverlayProfileStore {
             .apply()
     }
 
+    private const val STICK_CLICK_PREF = "overlay.stick_click_ms"
+
+    fun loadStickClickDwellMs(prefs: SharedPreferences): Int =
+        OverlayProfile.clampStickClickDwellMs(
+            prefs.getInt(STICK_CLICK_PREF, OverlayProfile.DEFAULT_STICK_CLICK_DWELL_MS),
+        )
+
+    fun saveStickClickDwellMs(prefs: SharedPreferences, ms: Int) {
+        prefs.edit()
+            .putInt(STICK_CLICK_PREF, OverlayProfile.clampStickClickDwellMs(ms))
+            .apply()
+    }
+
+    /** Global field on the overlay document. Missing on older packs, so it falls back to the default. */
+    fun stickClickDwellMsFromDocument(raw: String?): Int {
+        if (raw.isNullOrBlank()) return OverlayProfile.DEFAULT_STICK_CLICK_DWELL_MS
+        return runCatching {
+            OverlayProfile.clampStickClickDwellMs(
+                JSONObject(raw).optInt(
+                    "stick_click_ms",
+                    OverlayProfile.DEFAULT_STICK_CLICK_DWELL_MS,
+                ),
+            )
+        }.getOrDefault(OverlayProfile.DEFAULT_STICK_CLICK_DWELL_MS)
+    }
+
     /** Encode all families into the overlay_profiles SQL document JSON. */
-    fun encodeDocument(profiles: Map<OverlaySystemFamily, OverlayProfile>): String {
+    fun encodeDocument(
+        profiles: Map<OverlaySystemFamily, OverlayProfile>,
+        stickClickDwellMs: Int = OverlayProfile.DEFAULT_STICK_CLICK_DWELL_MS,
+    ): String {
         val families = JSONObject()
         OverlaySystemFamily.entries.forEach { family ->
             val profile = profiles[family] ?: OverlayProfile.DEFAULT
@@ -233,6 +270,10 @@ object OverlayProfileStore {
         }
         return JSONObject()
             .put("version", DOCUMENT_VERSION)
+            .put(
+                "stick_click_ms",
+                OverlayProfile.clampStickClickDwellMs(stickClickDwellMs),
+            )
             .put("families", families)
             .toString()
     }

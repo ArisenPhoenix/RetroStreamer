@@ -21,6 +21,9 @@
 #include "host/hardware/local_controller_bridge.hpp"
 #include "host/virtual/network_input_receiver.hpp"
 #include "host/hardware/default_host_platform.hpp"
+#ifndef _WIN32
+#include "host/virtual/linux_uinput_isolation.hpp"
+#endif
 #include "host/hardware/gpu_select.hpp"
 #include "host/session/backend_state.hpp"
 #include "host/session/launch_assemble.hpp"
@@ -221,7 +224,8 @@ int HostApp::run_direct_session(
         /*warn_if_not_sdl2=*/true);
 
     // Host Player keeps the real DISPLAY (and speakers). Streamed RetroArch needs a
-    // virtual capture surface. Switch standalone defaults to headless gamescope on Linux;
+    // virtual capture surface. Switch standalone uses headless gamescope on Linux
+    // (ARCHSTREAMER_GAMESCOPE_WINDOW=1 opens a nested window);
     // Windows captures the desktop/HWND via d3d11screencapturesrc (no gamescope).
     auto cadence = open_direct_cadence_session(launch_plan, config);
     auto lease = cadence.tracker.leases();
@@ -290,6 +294,15 @@ int HostApp::run_direct_session(
         launch_env.gpu.gamescope_vk_device,
         launch_env.gpu.resolved_gpu,
         launch_env.request);
+
+#ifndef _WIN32
+    {
+        ProcessEnvironment pad_env;
+        pad_env.merge_pairs(assets.launch_config.environment);
+        contribute_isolated_pad_environment(pad_env);
+        assets.launch_config.environment = std::move(pad_env.entries);
+    }
+#endif
 
     if (capture.present.captures()) {
         std::cout << capture.info();

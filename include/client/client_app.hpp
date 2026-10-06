@@ -464,6 +464,8 @@ struct ClientAppCallbacks {
     std::function<void(const std::string& host, std::uint16_t input_port)> on_input_streaming_started;
     std::function<void()> on_waiting_without_input;
     std::function<void(const std::string& message)> on_status;
+    /** Game system picked the live controller family. GUI may mirror it; a later manual choice can override. */
+    std::function<void(ControllerMapFamily family)> on_controller_map_family;
     /**
      * Host sent PasswordChangeRequired during join. Return the new password.
      * Called on the session worker thread — use BlockingQueuedConnection for UI.

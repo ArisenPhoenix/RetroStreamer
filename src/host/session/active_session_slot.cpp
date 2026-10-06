@@ -33,11 +33,15 @@
 #include "host/virtual/pad_plan.hpp"
 #include "host/video/virtual_display.hpp"
 #include "host/virtual/virtual_keyboard.hpp"
+#ifndef _WIN32
+#include "host/virtual/linux_uinput_isolation.hpp"
+#endif
 #include "host/virtual/soft_keyboard_host.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -825,6 +829,7 @@ void ActiveSessionSlot::run_session() {
     system_key_.clear();
     system_key_ = content.system_key;
     plan.game.system_key = system_key_;
+    cadence_tracker_.note_game(plan.game.selected_game_id, system_key_);
 
     // Advertise this live save profile to the host Users browser (cleared on exit).
     ActiveSaveSessionGuard active_save_guard{config.save_root, slot};
@@ -983,6 +988,17 @@ void ActiveSessionSlot::run_session() {
         launch_config.environment = std::move(env.entries);
         launch_config.unset_environment = std::move(env.unset);
     }
+#ifndef _WIN32
+    {
+        ProcessEnvironment pad_env;
+        pad_env.merge_pairs(launch_config.environment);
+        contribute_isolated_pad_environment(pad_env);
+        launch_config.environment = std::move(pad_env.entries);
+        if (!pad_env.unset.empty()) {
+            launch_config.unset_environment = std::move(pad_env.unset);
+        }
+    }
+#endif
 
     if (config.media.audio.enabled) {
         park_session_game_audio(audio_channel_.get());
@@ -1182,6 +1198,34 @@ void ActiveSessionSlot::poll_while(
     const RelaunchContext& relaunch_ctx) {
     while (!should_stop() && session_runtime_->emulator_running()) {
         drain_pending_joins();
+        if (take_local_session_view_request(slot_config_.save_root, config_.slot_index)) {
+            if (local_view_uri_.empty() && media_server_ != nullptr) {
+                try {
+                    const auto endpoint = media_server_->add_client(
+                        LocalSessionViewClientId,
+                        "127.0.0.1",
+                        media_index_,
+                        true,
+                        false);
+                    if (media_index_ < std::numeric_limits<std::size_t>::max()) {
+                        ++media_index_;
+                    }
+                    local_view_uri_ = endpoint.video_uri;
+                    std::cout
+                        << "session slot " << config_.slot_index
+                        << ": local view " << local_view_uri_ << '\n';
+                } catch (const std::exception& error) {
+                    std::cerr
+                        << "session slot " << config_.slot_index
+                        << ": local view failed: " << error.what() << '\n';
+                    local_view_uri_.clear();
+                }
+            }
+            publish_local_session_view_uri(
+                slot_config_.save_root,
+                config_.slot_index,
+                local_view_uri_);
+        }
         if (const auto reason = poll_session_monitor_stop(); reason.has_value()) {
             session_end_reason = reason;
             break;

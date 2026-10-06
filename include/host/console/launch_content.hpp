@@ -17,6 +17,7 @@ struct SessionContentInfo {
     std::string active_display_name;
     std::filesystem::path catalog_content_path;
     std::string m3m_title_id;
+    std::filesystem::path m3m_texture_pack;
     std::vector<std::string> playlist_discs;
     std::string system_key;
 };
@@ -33,6 +34,8 @@ struct SwitchLaunchContent {
     std::string title_id;
     /** True when this catalog title has a .m3m (version/policy map). */
     bool uses_m3m_map = false;
+    /** Optional texture pack from TEXTURE_PACK=. Empty when omitted. */
+    std::filesystem::path texture_pack;
 };
 
 SessionContentInfo resolve_session_content_info(

@@ -23,9 +23,9 @@ struct ClientStreamPolicy {
 
 struct InitialSessionVideoPolicy {
     MediaStreamSize size = MediaStreamSize::P720;
-    MediaQualityTier tier = MediaQualityTier::Medium;
+    MediaQualityTier tier = MediaQualityTier::Auto;
     MediaStreamBitrate bitrate = MediaStreamBitrate::Auto;
-    MediaStreamFps fps = MediaStreamFps::Fps30;
+    MediaStreamFps fps = MediaStreamFps::Fps60;
     bool align_encode_to_macroblocks = false;
     const char* reason = "default";
 };

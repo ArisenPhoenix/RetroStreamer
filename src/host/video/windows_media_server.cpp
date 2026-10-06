@@ -94,7 +94,7 @@ void WindowsMediaServer::restart_video() {
     const auto [width, height] = parse_resolution(capture_.video_resolution);
     const auto& settings = video_settings_;
     const auto bitrate = settings.bitrate_kbps == 0 ? 3500 : settings.bitrate_kbps;
-    const auto framerate = settings.framerate == 0 ? 30 : static_cast<int>(settings.framerate);
+    const auto framerate = settings.framerate == 0 ? 60 : static_cast<int>(settings.framerate);
     const int out_w = settings.width > 0 ? static_cast<int>(settings.width) : width;
     const int out_h = settings.height > 0 ? static_cast<int>(settings.height) : height;
 

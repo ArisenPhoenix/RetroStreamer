@@ -5,6 +5,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -82,6 +85,8 @@ fun GamepadOverlay(
     onMenuClick: () -> Unit = {},
     onFastForwardHold: (Boolean) -> Unit = {},
     onScreenSwap: () -> Unit = {},
+    /** Virtual stick click dwell. Hardware pads do not use this. */
+    stickClickDwellMs: Int = OverlayProfile.DEFAULT_STICK_CLICK_DWELL_MS,
     onItemsChange: (List<OverlayItem>) -> Unit = {},
     onDoneEditing: () -> Unit = {},
 ) {
@@ -150,7 +155,8 @@ fun GamepadOverlay(
             OverlayAction.Select -> setButton(ControllerState.BUTTON_BACK, down)
             OverlayAction.Start -> setButton(ControllerState.BUTTON_START, down)
             OverlayAction.Menu -> if (down) onMenuClickLatest()
-            OverlayAction.LeftStick, OverlayAction.RightStick -> Unit
+            OverlayAction.LeftStick -> setButton(ControllerState.BUTTON_LEFT_STICK, down)
+            OverlayAction.RightStick -> setButton(ControllerState.BUTTON_RIGHT_STICK, down)
             OverlayAction.FastForward -> onFastForwardHoldLatest(down)
             OverlayAction.ScreenSwap -> if (down) onScreenSwapLatest()
         }
@@ -373,6 +379,8 @@ fun GamepadOverlay(
                                     }
                                     emit()
                                 },
+                                onClick = { down -> applyAction(actionForItem(item), down) },
+                                clickDwellMs = stickClickDwellMs,
                             )
                         }
                         OverlayControlKind.RightStick -> {
@@ -393,6 +401,8 @@ fun GamepadOverlay(
                                     }
                                     emit()
                                 },
+                                onClick = { down -> applyAction(actionForItem(item), down) },
+                                clickDwellMs = stickClickDwellMs,
                             )
                         }
                         OverlayControlKind.Dpad -> {
@@ -703,17 +713,26 @@ private fun ShoulderButton(
     }
 }
 
+/** A tap that ends before the dwell still has to stay down long enough for the input poll. */
+private const val STICK_CLICK_PULSE_MS = 50L
+
 @Composable
 private fun VirtualStick(
     size: Dp,
     colors: PadColors,
     enabled: Boolean = true,
     onAxis: (Float, Float) -> Unit,
+    onClick: (Boolean) -> Unit,
+    clickDwellMs: Int = OverlayProfile.DEFAULT_STICK_CLICK_DWELL_MS,
 ) {
+    val dwellMs = OverlayProfile.clampStickClickDwellMs(clickDwellMs).toLong()
     val knob = size * 0.38f
     val density = LocalDensity.current
     val radiusPx = with(density) { ((size - knob) / 2).toPx() }
+    val slopPx = with(density) { 14.dp.toPx() }
     var knobOffset by remember { mutableStateOf(Offset.Zero) }
+    val onAxisLatest by rememberUpdatedState(onAxis)
+    val onClickLatest by rememberUpdatedState(onClick)
 
     Box(
         modifier = Modifier
@@ -723,31 +742,94 @@ private fun VirtualStick(
             .border(2.dp, colors.border, CircleShape)
             .then(
                 if (enabled) {
-                    Modifier.pointerInput(size) {
-                        detectDragGestures(
-                            onDragEnd = {
-                                knobOffset = Offset.Zero
-                                onAxis(0f, 0f)
-                            },
-                            onDragCancel = {
-                                knobOffset = Offset.Zero
-                                onAxis(0f, 0f)
-                            },
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                val next = knobOffset + dragAmount
-                                val clamped = if (next.getDistance() > radiusPx) {
-                                    next * (radiusPx / next.getDistance())
-                                } else {
-                                    next
+                    Modifier.pointerInput(size, dwellMs) {
+                        // awaitEachGesture is a restricted scope: kotlinx delay() is illegal
+                        // there. The short-tap hold runs on this normal scope instead.
+                        coroutineScope {
+                            val scope = this
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                down.consume()
+                                val origin = down.position
+                                val t0 = System.nanoTime()
+                                // 0 = still inside the opening slop, 1 = press (click stays down
+                                // even if the stick then moves), 2 = left the slop immediately.
+                                var mode = 0
+                                var released = false
+                                fun elapsedMs() = (System.nanoTime() - t0) / 1_000_000L
+                                // delay() is illegal in this restricted scope, so the settle
+                                // timer runs on the outer coroutine.
+                                val commit = scope.launch {
+                                    delay(dwellMs)
+                                    if (mode == 0) {
+                                        mode = 1
+                                        onClickLatest(true)
+                                    }
                                 }
-                                knobOffset = clamped
-                                onAxis(
-                                    (clamped.x / radiusPx).coerceIn(-1f, 1f),
-                                    (clamped.y / radiusPx).coerceIn(-1f, 1f),
-                                )
-                            },
-                        )
+                                fun place(pos: Offset) {
+                                    val delta = pos - origin
+                                    val dist = delta.getDistance()
+                                    // Time from touch-down to leaving the slop decides the gesture.
+                                    // A drag that exits early wins even if the dwell timer already
+                                    // latched the click on the previous frame.
+                                    if (dist > slopPx && mode != 2) {
+                                        if (elapsedMs() < dwellMs) {
+                                            if (mode == 1) onClickLatest(false)
+                                            mode = 2
+                                            commit.cancel()
+                                        } else if (mode == 0) {
+                                            mode = 1
+                                            onClickLatest(true)
+                                        }
+                                    }
+                                    if (mode != 2 && dist <= slopPx) {
+                                        if (knobOffset != Offset.Zero) knobOffset = Offset.Zero
+                                        onAxisLatest(0f, 0f)
+                                        return
+                                    }
+                                    val clamped = if (dist > radiusPx && dist > 0f) {
+                                        delta * (radiusPx / dist)
+                                    } else {
+                                        delta
+                                    }
+                                    knobOffset = clamped
+                                    val scale = if (radiusPx > 0f) radiusPx else 1f
+                                    onAxisLatest(
+                                        (clamped.x / scale).coerceIn(-1f, 1f),
+                                        (clamped.y / scale).coerceIn(-1f, 1f),
+                                    )
+                                }
+                                try {
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.id == down.id }
+                                        if (change == null || !change.pressed) {
+                                            released = true
+                                            break
+                                        }
+                                        change.consume()
+                                        place(change.position)
+                                    }
+                                } finally {
+                                    commit.cancel()
+                                    knobOffset = Offset.Zero
+                                    onAxisLatest(0f, 0f)
+                                    if (mode == 1) onClickLatest(false)
+                                }
+                                // A short press that never left the slop still has to be visible
+                                // to the input poll, which only samples the latest pad state.
+                                if (released && mode == 0) {
+                                    scope.launch {
+                                        try {
+                                            onClickLatest(true)
+                                            delay(STICK_CLICK_PULSE_MS)
+                                        } finally {
+                                            onClickLatest(false)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 } else {
                     Modifier

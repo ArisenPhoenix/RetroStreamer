@@ -177,6 +177,15 @@ std::optional<std::string> find_gamescope() {
     return std::nullopt;
 }
 
+bool gamescope_headless_backend() {
+    const char* window = std::getenv("ARCHSTREAMER_GAMESCOPE_WINDOW");
+    if (window == nullptr || std::strcmp(window, "1") != 0) {
+        return true;
+    }
+    const char* display = std::getenv("DISPLAY");
+    return display == nullptr || display[0] == '\0';
+}
+
 std::vector<std::string> gamescope_command_prefix(
     int width,
     int height,
@@ -185,9 +194,18 @@ std::vector<std::string> gamescope_command_prefix(
     if (!gamescope.has_value()) {
         return {};
     }
-    std::vector<std::string> args{
-        *gamescope,
-        "--headless",
+    const bool headless = gamescope_headless_backend();
+    std::vector<std::string> args{*gamescope};
+    if (headless) {
+        args.emplace_back("--headless");
+    } else {
+        // Borderless window on this desktop. PipeWire is still the remote
+        // capture, and gamescope only accepts one PipeWire consumer, so a
+        // later viewer cannot attach to the node. The window is the picture
+        // that stays on this machine when that stream stops.
+        args.emplace_back("-b");
+    }
+    args.insert(args.end(), {
         "-w",
         std::to_string(width),
         "-h",
@@ -197,13 +215,14 @@ std::vector<std::string> gamescope_command_prefix(
         "-H",
         std::to_string(height),
         "--force-windows-fullscreen",
-        // -r = nested refresh. -o = refresh when unfocused (headless counts as
-        // unfocused) — not "output fps". Keep them equal so 60fps games aren't capped.
+        // -r = nested refresh. -o = refresh when unfocused — not "output fps".
+        // Keep them equal so 60fps games aren't capped. Headless counts as
+        // unfocused; a nested window does too while it is in the background.
         "-r",
         "60",
         "-o",
         "60",
-    };
+    });
     if (!prefer_vk_device.empty()) {
         args.push_back("--prefer-vk-device");
         args.push_back(prefer_vk_device);
@@ -594,7 +613,8 @@ void GamescopeDisplay::start(const std::string& display, const std::string& reso
     if (!find_gamescope().has_value()) {
         throw std::runtime_error("gamescope not found");
     }
-    // No X server process — gamescope --headless owns nested Xwayland + PipeWire output.
+    // No X server process of our own. Gamescope owns nested Xwayland and the
+    // PipeWire output. A borderless window is opt-in (ARCHSTREAMER_GAMESCOPE_WINDOW=1).
 }
 
 void GamescopeDisplay::stop() {}

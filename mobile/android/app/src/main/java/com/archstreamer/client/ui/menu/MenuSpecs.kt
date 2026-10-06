@@ -578,6 +578,27 @@ object ControlsSpec : SectionSpec {
         )
         add(
             MenuOption.Slider(
+                id = "controls-stick-click",
+                title = "Virtual stick press ${state.controls.stickClickDwellMs} ms",
+                value = state.controls.stickClickDwellMs.toFloat(),
+                range = OverlayProfile.MIN_STICK_CLICK_DWELL_MS.toFloat()..
+                    OverlayProfile.MAX_STICK_CLICK_DWELL_MS.toFloat(),
+                steps = (OverlayProfile.MAX_STICK_CLICK_DWELL_MS -
+                    OverlayProfile.MIN_STICK_CLICK_DWELL_MS) / 10 - 1,
+                onChange = vm::setStickClickDwellMs,
+            ),
+        )
+        add(
+            small(
+                "controls-stick-click-note",
+                "How long a touch must stay in the center before the stick clicks. " +
+                    "Leaving sooner moves the stick only. One setting for both sticks. " +
+                    "A physical controller is unchanged.",
+                MenuOption.Note.Emphasis.Muted,
+            ),
+        )
+        add(
+            MenuOption.Slider(
                 id = "controls-opacity",
                 title = "Opacity ${(profile.clampedOpacity() * 100).toInt()}%",
                 value = profile.clampedOpacity(),

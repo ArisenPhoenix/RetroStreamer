@@ -1,10 +1,15 @@
 #include "host/virtual/linux_uinput_gamepad.hpp"
+#include "host/virtual/linux_uinput_isolation.hpp"
 
 #include <cerrno>
+#include <chrono>
 #include <cstring>
+#include <iostream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
+#include <vector>
 
 #include <fcntl.h>
 #include <linux/input-event-codes.h>
@@ -40,6 +45,27 @@ void setup_abs(uinput_user_dev& device, int axis, int min, int max, int flat = 0
 
 void set_button_bit(int fd, int button) {
     checked_ioctl(fd, UI_SET_KEYBIT, button, "failed to set uinput button bit");
+}
+
+void isolate_created_pad(int uinput_fd) {
+    std::vector<std::string> nodes;
+    for (int attempt = 0; attempt < 40 && nodes.empty(); ++attempt) {
+        nodes = input_dev_nodes_for_uinput(uinput_fd);
+        if (nodes.empty()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+    for (const auto& path : nodes) {
+        const int event_fd = hold_input_node_for_session(path);
+        if (event_fd < 0) {
+            continue;
+        }
+        register_isolated_pad_node(IsolatedPadNode{path, event_fd});
+        (void)hide_input_node_from_desktop(path);
+    }
+    if (nodes.empty()) {
+        std::cerr << "Virtual pad: no /dev/input node to isolate after uinput create\n";
+    }
 }
 
 } // namespace
@@ -107,6 +133,7 @@ void LinuxUinputGamepadBus::plug(RetroArchPort port) {
         checked_ioctl(fd, UI_SET_ABSBIT, ABS_RY, "failed to set ABS_RY");
         checked_ioctl(fd, UI_SET_ABSBIT, ABS_Z, "failed to set ABS_Z");
         checked_ioctl(fd, UI_SET_ABSBIT, ABS_RZ, "failed to set ABS_RZ");
+        ioctl(fd, UI_SET_PHYS, "archstreamer/virtual");
 
         const auto identity = identity_for(port);
 
@@ -131,6 +158,7 @@ void LinuxUinputGamepadBus::plug(RetroArchPort port) {
 
         pad.fd = fd;
         pad.plugged = true;
+        isolate_created_pad(fd);
     } catch (...) {
         close(fd);
         throw;
@@ -143,7 +171,9 @@ void LinuxUinputGamepadBus::unplug(RetroArchPort port) {
         return;
     }
 
+    const auto nodes = input_dev_nodes_for_uinput(pad.fd);
     ioctl(pad.fd, UI_DEV_DESTROY);
+    clear_isolated_pad_nodes_for_paths(nodes);
     close(pad.fd);
     pad.fd = -1;
     pad.plugged = false;

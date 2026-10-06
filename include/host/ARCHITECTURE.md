@@ -13,7 +13,8 @@ The main buckets are:
 - `client/`: host-side client metadata and stream adaptation.
 - `console/`: emulator/content/save-profile configuration.
 - `db/`: database-backed persistence APIs.
-- `video/`: present surfaces and outbound video.
+- `video/`: present surfaces and outbound video. GStreamer encode commands
+  live in `video/gst/` (`archstreamer_gst`).
 - `audio/`: streaming audio taps.
 - `hardware/`: leftover physical adapters (GPU, launch-env application, local pads).
 - `lobby/`: pre-session gathering and join/rejoin admission.

@@ -24,3 +24,7 @@ Not yet cohesive:
   MediaServer resolves the send profile. Host builds `MediaPlanConfig` from
   that (`make_media_plan_config`) and passes it to `MediaServer.start()`.
   Sync is a client playback choice.
+- `gst/` owns GStreamer encode commands (`GstVideoCommand` / `GstVideoEngine`).
+  MediaServer still builds the parse-launch string and calls the engine
+  in the `archstreamer_gst_worker` process (one per pipeline).
+  `ARCHSTREAMER_VIDEO_PIPELINE=managed` keeps the in-process engine.

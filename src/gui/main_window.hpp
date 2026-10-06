@@ -100,6 +100,9 @@ private:
     void refresh_game_options_ui();
     void sync_controller_map_editor_ui();
     void commit_controller_map_editor_ui();
+    void apply_session_controller_family(ControllerMapFamily family);
+    void clear_session_controller_family();
+    void refresh_controller_map_session_hint();
     ControllerMapFamily selected_controller_map_family() const;
     std::filesystem::path controller_map_file_path() const;
     void load_controller_map_document();
@@ -148,6 +151,8 @@ private:
     void saves_remove_system();
     void saves_remove_game();
     void saves_kick_user();
+    void saves_view_session();
+    void start_local_video_watch(const std::string& video_uri);
     void saves_block_selected_game();
     void saves_unblock_selected_blocked_game();
     void refresh_saves_blocked_list();
@@ -350,6 +355,8 @@ private:
     std::shared_ptr<MediaResyncBridge> media_resync_;
     std::unique_ptr<ClientVideoController> client_video_controller_;
     QComboBox* game_options_map_family_ = nullptr;
+    QLabel* controller_map_session_hint_ = nullptr;
+    std::optional<ControllerMapFamily> session_controller_family_;
     QCheckBox* game_options_swap_nw_ = nullptr;
     QCheckBox* game_options_swap_se_ = nullptr;
     QComboBox* game_options_remap_select_ = nullptr;
@@ -417,10 +424,14 @@ private:
     QAction* saves_remove_system_action_ = nullptr;
     QAction* saves_remove_game_action_ = nullptr;
     QAction* saves_kick_action_ = nullptr;
+    QAction* saves_view_action_ = nullptr;
     QAction* saves_block_game_action_ = nullptr;
     QAction* saves_unblock_game_action_ = nullptr;
     SaveNameHints saves_hints_;
     QTimer* saves_refresh_timer_ = nullptr;
+    QTimer* local_session_view_wait_ = nullptr;
+    int local_session_view_slot_ = -1;
+    int local_session_view_tries_ = 0;
     /** Skip tree rebuilds while the Users context menu is open (shared actions gray out otherwise). */
     bool saves_context_menu_open_ = false;
 

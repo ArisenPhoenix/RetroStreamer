@@ -1,5 +1,7 @@
 #include "host/console/switch/ldn_net_isolation.hpp"
 
+#include "host/virtual/linux_uinput_isolation.hpp"
+
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -176,6 +178,8 @@ std::vector<std::string> ldn_firejail_command_prefix(std::size_t slot_index) {
     std::vector<std::string> prefix = {
         std::move(firejail),
         "--noprofile",
+        // firejail closes fds 3+ unless told otherwise; session pad fds live there.
+        "--keep-fd=all",
         std::string("--net=") + kBridgeName,
         std::string("--ip=") + ip,
         std::string("--defaultgw=") + kGateway,
@@ -183,6 +187,12 @@ std::vector<std::string> ldn_firejail_command_prefix(std::size_t slot_index) {
         // AppImage / gamescope / NVIDIA need a permissive device/fs view.
         "--quiet",
     };
+    // firejail strips LD_PRELOAD from the inherited environment.
+    const auto pad_so = pad_access_library_path();
+    if (!pad_so.empty() && pad_so.find('/') != std::string::npos) {
+        prefix.push_back(std::string("--env=LD_PRELOAD=") + pad_so);
+        prefix.push_back(std::string("--env=ARCHSTREAMER_PAD_ACCESS_SO=") + pad_so);
+    }
     std::cout
         << "LDN net: firejail slot " << slot_index << " → " << ip << " on " << kBridgeName
         << '\n';

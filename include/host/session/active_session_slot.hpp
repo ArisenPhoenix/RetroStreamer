@@ -197,6 +197,7 @@ private:
     SaveProfile save_profile_;
     std::string system_key_;
     std::size_t media_index_ = 0;
+    std::string local_view_uri_;
     std::size_t virtual_joypad_index_ = 0;
     PresentTarget present_;
     HostAppConfig slot_config_;

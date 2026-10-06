@@ -2,6 +2,9 @@
 
 #include "common/addresses.hpp"
 #include "common/platform/process_utils.hpp"
+#if defined(ARCHSTREAMER_HAS_GST_LIBS)
+#include "host/video/gst/gst_video_pipeline.hpp"
+#endif
 
 #include <algorithm>
 #include <iostream>
@@ -32,9 +35,13 @@ bool gst_element_available(const char* element) {
     if (element == nullptr || element[0] == '\0') {
         return false;
     }
+#if defined(ARCHSTREAMER_HAS_GST_LIBS)
+    return gst_video_element_available(element);
+#else
     const auto output = read_command_output(
         (std::string("gst-inspect-1.0 ") + element + " 2>/dev/null").c_str());
     return !output.empty();
+#endif
 }
 
 } // namespace

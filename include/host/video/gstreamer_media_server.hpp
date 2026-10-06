@@ -14,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace archstreamer {
@@ -56,6 +57,7 @@ public:
     bool apply_branch_layout(
         const VideoEncodeSettings& trunk,
         const std::vector<std::pair<ClientId, VideoEncodeSettings>>& per_client);
+    bool consume_last_layout_rebuilt();
 
     // Legacy dual-stream API — warm probe for trunk replace; commit uses shared restart.
     std::optional<std::string> begin_tier_cutover(
@@ -94,10 +96,18 @@ private:
     Destination* find_destination(ClientId client_id);
     const Destination* find_destination(ClientId client_id) const;
     void restart_pipeline();
+    void apply_encode_tree(const VideoEncodeSettings& trunk);
+    void stop_sample_pipelines();
     void stop_shared_pipeline();
     bool shared_pipeline_running() const;
     /** Staging encodes log to a file so a failed cutover is diagnosable. */
     static std::string staging_encode_log_path();
+
+    struct SampleEncode {
+        VideoEncodeSettings settings{};
+        std::vector<std::pair<std::string, std::uint16_t>> clients;
+        std::unique_ptr<SharedVideoPipelineRunner> pipeline;
+    };
 
     enum class SourceKind { X11, PipeWire };
     SourceKind source_kind_ = SourceKind::X11;
@@ -107,6 +117,10 @@ private:
     int nvenc_cuda_device_id_ = -1;
     std::vector<Destination> destinations_;
     std::unique_ptr<SharedVideoPipelineRunner> shared_pipeline_;
+    std::vector<SampleEncode> sample_encodes_;
+    VideoEncodeSettings trunk_settings_{};
+    std::vector<std::pair<std::string, std::uint16_t>> trunk_clients_{};
+    bool last_layout_rebuilt_ = true;
 };
 
 class GStreamerMediaServer final : public MediaServer {
@@ -130,6 +144,7 @@ public:
     bool apply_video_branch_layout(
         const VideoEncodeSettings& trunk,
         const std::vector<std::pair<ClientId, VideoEncodeSettings>>& per_client) override;
+    bool consume_video_layout_rebuilt() override;
     bool restart_shared_audio() override;
     std::optional<std::string> begin_video_tier_cutover(
         ClientId client_id,

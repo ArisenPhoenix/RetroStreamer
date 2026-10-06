@@ -88,7 +88,8 @@ RyujinxUserProfile prepare_ryujinx_user_profile(
     std::string_view lan_interface_id,
     std::string_view game_id,
     std::string_view content_stem,
-    std::string_view title_id) {
+    std::string_view title_id,
+    const std::filesystem::path& texture_pack) {
     return RyujinxUserProfileService::prepare(
         save_profile,
         enable_ldn_mitm,
@@ -98,7 +99,8 @@ RyujinxUserProfile prepare_ryujinx_user_profile(
         lan_interface_id,
         game_id,
         content_stem,
-        title_id);
+        title_id,
+        texture_pack);
 }
 
 void configure_ryujinx_archstreamer_controls(

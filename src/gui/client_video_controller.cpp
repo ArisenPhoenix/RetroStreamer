@@ -23,7 +23,7 @@ ClientVideoController::~ClientVideoController() {
 void ClientVideoController::setMode(ClientVideoMode mode) {
     mode_ = mode;
     if (surface_) {
-        applyMode();
+        applyMode(surface_->isVisible());
     }
 }
 
@@ -39,7 +39,7 @@ void ClientVideoController::setTitleFromGame(
 void ClientVideoController::setEmbedParent(QWidget* parent) {
     embed_parent_ = parent;
     if (surface_ && mode_ == ClientVideoMode::Embedded) {
-        applyMode();
+        applyMode(surface_->isVisible());
     }
 }
 
@@ -96,13 +96,24 @@ void ClientVideoController::prepareForSession() {
     surface_->setFrameBridge(embed_bridge_);
     surface_->setDsTouchBridge(ds_touch_);
     surface_->setWindowTitle(title_);
-    applyMode();
-    surface_->show();
+    applyMode(false);
+    surface_->hide();
+    (void)surface_->winId();
+    pushGeometryToBridge(surface_->width(), surface_->height());
+}
+
+void ClientVideoController::showForMedia() {
+    if (!surface_) {
+        prepareForSession();
+    }
+    applyMode(true);
     surface_->raise();
     surface_->activateWindow();
     qApp->processEvents();
     pushGeometryToBridge(surface_->width(), surface_->height());
-    refresh_timer_->start();
+    if (refresh_timer_ != nullptr) {
+        refresh_timer_->start();
+    }
 }
 
 void ClientVideoController::endSession() {
@@ -179,7 +190,7 @@ void ClientVideoController::pushGeometryToBridge(int width, int height) {
     }
 }
 
-void ClientVideoController::applyMode() {
+void ClientVideoController::applyMode(bool show_window) {
     if (!surface_) {
         return;
     }
@@ -188,21 +199,32 @@ void ClientVideoController::applyMode() {
         if (embed_parent_ != nullptr) {
             surface_->setParent(embed_parent_);
             surface_->setWindowFlags(Qt::Widget);
-            surface_->show();
         } else {
             surface_->setParent(nullptr);
             surface_->setWindowFlags(Qt::Window);
-            surface_->show();
         }
         break;
     case ClientVideoMode::TopLevel:
         surface_->setParent(nullptr);
         surface_->setWindowFlags(Qt::Window);
-        surface_->showNormal();
         break;
     case ClientVideoMode::FullScreen:
         surface_->setParent(nullptr);
         surface_->setWindowFlags(Qt::Window);
+        break;
+    }
+    if (!show_window) {
+        surface_->hide();
+        return;
+    }
+    switch (mode_) {
+    case ClientVideoMode::Embedded:
+        surface_->show();
+        break;
+    case ClientVideoMode::TopLevel:
+        surface_->showNormal();
+        break;
+    case ClientVideoMode::FullScreen:
         surface_->showFullScreen();
         break;
     }

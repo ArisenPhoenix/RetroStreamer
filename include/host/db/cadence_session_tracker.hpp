@@ -27,6 +27,9 @@ public:
         std::string_view system_key,
         std::string_view mode);
 
+    /** Fill game and system once content is resolved. begin() runs earlier. */
+    void note_game(std::string_view game_key, std::string_view system_key);
+
     [[nodiscard]] CadenceResourceLease leases() const;
 
     void claim(std::string_view resource_type, std::string_view resource_name, std::string_view detail = {});

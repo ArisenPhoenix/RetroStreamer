@@ -37,4 +37,15 @@ void ensure_ryujinx_catalog_addons(
  */
 void ensure_ryujinx_title_updates(const std::filesystem::path& ryujinx_data_root);
 
+/**
+ * Link an optional .m3m TEXTURE_PACK into this Ryujinx profile.
+ * A missing path, or an omitted pack, removes a previous ArchStreamer link
+ * and leaves the rest of the mods folder alone. Archives (.7z/.zip/.rar) are
+ * unpacked beside the archive on first use when 7z is on PATH.
+ */
+void ensure_ryujinx_texture_pack(
+    const std::filesystem::path& ryujinx_data_root,
+    std::string_view title_id,
+    const std::filesystem::path& texture_pack);
+
 } // namespace archstreamer

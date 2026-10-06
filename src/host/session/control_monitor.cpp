@@ -233,7 +233,7 @@ struct PlayerEncodeContribution {
     MediaQualityTier tier = MediaQualityTier::Medium;
     MediaStreamFeel feel = MediaStreamFeel::LowLatency;
     MediaStreamBitrate bitrate = MediaStreamBitrate::Auto;
-    MediaStreamFps fps = MediaStreamFps::Fps30;
+    MediaStreamFps fps = MediaStreamFps::Fps60;
 };
 
 PlayerEncodeContribution player_encode_contribution(
@@ -366,7 +366,7 @@ SessionVideoCeiling compute_session_video_ceiling(
             ceiling.tier = MediaQualityTier::Medium;
             ceiling.feel = MediaStreamFeel::LowLatency;
             ceiling.bitrate = MediaStreamBitrate::Auto;
-            ceiling.fps = MediaStreamFps::Fps30;
+            ceiling.fps = MediaStreamFps::Fps60;
         }
         return ceiling;
     }
@@ -1609,7 +1609,9 @@ void SessionControlMonitor::apply_video_encode(
 
     client.video_health.bad_health_streak = 0;
     client.video_health.good_health_streak = 0;
-    log_stream_fanout_plan(fanout, reason);
+    if (fanout.trunk_action != StreamPipelineAction::SampleFromTrunk) {
+        log_stream_fanout_plan(fanout, reason);
+    }
 
     auto commit_session_trunk = [&]() {
         plan_.stream.video_settings = fanout.proposed_trunk;
@@ -1622,7 +1624,6 @@ void SessionControlMonitor::apply_video_encode(
     };
 
     auto apply_layout = [&]() -> bool {
-        reset_video_stall_tracking(plan_);
         if (!media_server_.apply_video_branch_layout(
                 fanout.proposed_trunk,
                 branch_layout_client_settings(fanout))) {
@@ -1630,6 +1631,10 @@ void SessionControlMonitor::apply_video_encode(
         }
         commit_session_trunk();
         sync_all_applied_from_fanout(plan_, fanout);
+        if (!media_server_.consume_video_layout_rebuilt()) {
+            return false;
+        }
+        reset_video_stall_tracking(plan_);
         const auto completed_at = std::chrono::steady_clock::now();
         for (auto& other : plan_.clients) {
             if (other.lifecycle.connection_state == SessionConnectionState::Connected) {
@@ -1695,6 +1700,7 @@ void SessionControlMonitor::apply_video_encode(
         if (!apply_layout()) {
             return;
         }
+        log_stream_fanout_plan(fanout, reason);
         std::cerr
             << "Branch layout refreshed without trunk replace from "
             << client_label(client) << ": " << reason << '\n';
@@ -1786,7 +1792,7 @@ void SessionControlMonitor::mark_player_disconnected(SessionClientConnection& cl
             MediaQualityTier::Medium,
             MediaStreamFeel::LowLatency,
             MediaStreamBitrate::Auto,
-            MediaStreamFps::Fps30,
+            MediaStreamFps::Fps60,
             false);
         if (ceilings.settings != plan_.stream.video_settings) {
             if (media_server_.reconfigure_shared_video(ceilings.settings)) {

@@ -29,6 +29,8 @@ struct HostedGame {
     std::string m3m_title_id;
     std::string m3m_patch_title_id;
     std::string m3m_base;
+    /** Optional TEXTURE_PACK from the .m3m. Empty when the key is omitted. */
+    std::filesystem::path m3m_texture_pack;
 };
 
 class GameCatalog {

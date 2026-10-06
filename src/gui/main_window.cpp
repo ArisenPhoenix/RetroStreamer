@@ -371,7 +371,7 @@ QWidget* MainWindow::build_stream_tab() {
     client_stream_quality_->setCurrentIndex(0);
     client_stream_quality_->setToolTip(
         "Preferred encode frame rate sent to the host each second.\n"
-        "Auto starts at 30 fps and steps from decode health (~1 Hz heartbeats).\n"
+        "Auto starts at 60 fps and steps from decode health (~1 Hz heartbeats).\n"
         "Bitrate is chosen separately; resolution under Stream size.");
     client_stream_bitrate_ = new QComboBox(client_box);
     client_stream_bitrate_->addItem("Auto", static_cast<int>(archstreamer::MediaStreamBitrate::Auto));
@@ -600,9 +600,14 @@ QWidget* MainWindow::build_controls_tab() {
             QString::fromUtf8(archstreamer::controller_map_family_id(family).data()));
     }
     game_options_map_family_->setToolTip(
-        "Per-system family profiles (same families as the mobile overlay).\n"
-        "During a session the active profile follows the game's system key.");
+        "Saved mapping for each system, same families as mobile.\n"
+        "A session starts on the game's system. Changing this during play uses that family instead.");
     map_form->addRow("System family", game_options_map_family_);
+    controller_map_session_hint_ = new QLabel(
+        "A game uses its system's mapping automatically. Pick a family here to edit that saved mapping.",
+        map_box);
+    controller_map_session_hint_->setWordWrap(true);
+    map_form->addRow("", controller_map_session_hint_);
 
     game_options_swap_nw_ = new QCheckBox("Swap NW (Triangle ↔ Square / Y ↔ X)", map_box);
     game_options_swap_se_ = new QCheckBox("Swap SE (Cross ↔ Circle / A ↔ B)", map_box);
@@ -668,17 +673,23 @@ QWidget* MainWindow::build_controls_tab() {
 
     auto* remap_hint = new QLabel(
         "Remaps apply to physical button presses (e.g. L3 → Fast-forward, Select → Screen swap "
-        "for DS). Stick movement, face A/B/X/Y, and the D-pad stay fixed; "
+        "for DS). L3 and R3 are stick clicks. On the phone overlay a press sends that click "
+        "and the stick can move with it; a drag that leaves the center slop immediately is "
+        "only the stick. Stick movement, face A/B/X/Y, and the D-pad stay fixed; "
         "use Swap NW/SE for face buttons.",
         map_box);
     remap_hint->setWordWrap(true);
     remap_hint->setAlignment(Qt::AlignTop | Qt::AlignLeft);
-    remap_hint->setMinimumHeight(remap_hint->fontMetrics().lineSpacing() * 3 + 12);
+    remap_hint->setMinimumHeight(remap_hint->fontMetrics().lineSpacing() * 5 + 12);
     remap_hint->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
     map_layout->addWidget(remap_hint);
 
     connect(game_options_map_family_, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
         sync_controller_map_editor_ui();
+        if (session_controller_family_.has_value() && controller_map_prefs_) {
+            controller_map_prefs_->set_active_family(selected_controller_map_family());
+        }
+        refresh_controller_map_session_hint();
     });
     const auto commit = [this](bool) {
         commit_controller_map_editor_ui();
@@ -915,6 +926,52 @@ ControllerMapFamily MainWindow::selected_controller_map_family() const {
     }
     const auto id = game_options_map_family_->currentData().toString().toStdString();
     return controller_map_family_from_id(id).value_or(ControllerMapFamily::Standard);
+}
+
+void MainWindow::apply_session_controller_family(ControllerMapFamily family) {
+    session_controller_family_ = family;
+    if (game_options_map_family_ == nullptr) {
+        return;
+    }
+    const auto id = QString::fromUtf8(controller_map_family_id(family).data());
+    const int index = game_options_map_family_->findData(id);
+    if (index >= 0 && game_options_map_family_->currentIndex() != index) {
+        game_options_map_family_->setCurrentIndex(index);
+        return;
+    }
+    sync_controller_map_editor_ui();
+    if (controller_map_prefs_) {
+        controller_map_prefs_->set_active_family(family);
+    }
+    refresh_controller_map_session_hint();
+}
+
+void MainWindow::clear_session_controller_family() {
+    session_controller_family_.reset();
+    refresh_controller_map_session_hint();
+}
+
+void MainWindow::refresh_controller_map_session_hint() {
+    if (controller_map_session_hint_ == nullptr) {
+        return;
+    }
+    if (!session_controller_family_.has_value()) {
+        controller_map_session_hint_->setText(
+            "A game uses its system's mapping automatically. Pick a family here to edit that saved mapping.");
+        return;
+    }
+    const auto session_title = QString::fromUtf8(
+        controller_map_family_title(*session_controller_family_).data());
+    if (selected_controller_map_family() == *session_controller_family_) {
+        controller_map_session_hint_->setText(
+            QString("This session is using %1, from the game.").arg(session_title));
+        return;
+    }
+    const auto selected_title = QString::fromUtf8(
+        controller_map_family_title(selected_controller_map_family()).data());
+    controller_map_session_hint_->setText(
+        QString("This session is using %1. The game's mapping is %2.")
+            .arg(selected_title, session_title));
 }
 
 void MainWindow::sync_controller_map_editor_ui() {

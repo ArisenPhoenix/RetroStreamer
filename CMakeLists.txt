@@ -383,6 +383,7 @@ if(ARCHSTREAMER_BUILD_HOST)
             src/host/video/gstreamer_media_server.cpp
             src/host/video/rtp_frame_pace_debug.cpp
             src/host/virtual/linux_uinput_gamepad.cpp
+            src/host/virtual/linux_uinput_isolation.cpp
             src/host/console/posix_retroarch_process.cpp
             src/host/video/virtual_display.cpp
             src/host/video/gamescope_pipewire_node.cpp
@@ -400,6 +401,42 @@ if(ARCHSTREAMER_BUILD_HOST)
         )
     endif()
 
+    if(NOT WIN32 AND ARCHSTREAMER_HAS_GST_LIBS)
+        find_package(Threads REQUIRED)
+        add_library(archstreamer_gst
+            src/host/video/gst/gst_video_command.cpp
+            src/host/video/gst/gst_video_codec.cpp
+            src/host/video/gst/gst_video_pipeline.cpp
+            src/host/video/gst/gst_video_engine.cpp
+            src/host/video/gst/gst_video_worker_client.cpp
+        )
+        target_include_directories(archstreamer_gst PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        target_compile_definitions(archstreamer_gst PUBLIC ARCHSTREAMER_HAS_GST_LIBS=1)
+        target_link_libraries(archstreamer_gst
+            PRIVATE
+                PkgConfig::ARCHSTREAMER_GST
+                Threads::Threads
+            INTERFACE
+                $<LINK_ONLY:PkgConfig::ARCHSTREAMER_GST>
+                $<LINK_ONLY:Threads::Threads>
+        )
+        add_executable(archstreamer_gst_worker
+            src/host/video/gst/gst_video_worker.cpp
+        )
+        target_link_libraries(archstreamer_gst_worker PRIVATE archstreamer_gst)
+    endif()
+
+    if(NOT WIN32)
+        add_library(archstreamer_pad_access SHARED src/host/virtual/linux_pad_access.c)
+        set_target_properties(archstreamer_pad_access PROPERTIES
+            PREFIX "lib"
+            OUTPUT_NAME "archstreamer_pad_access"
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+        )
+        target_link_libraries(archstreamer_pad_access PRIVATE ${CMAKE_DL_LIBS})
+    endif()
+
     add_library(archstreamer_host ${ARCHSTREAMER_HOST_SOURCES})
     target_compile_definitions(archstreamer_host PUBLIC ARCHSTREAMER_HAS_HOST=1)
     target_link_libraries(archstreamer_host
@@ -414,7 +451,7 @@ if(ARCHSTREAMER_BUILD_HOST)
         find_package(X11 REQUIRED)
         if(ARCHSTREAMER_HAS_GST_LIBS)
             target_compile_definitions(archstreamer_host PUBLIC ARCHSTREAMER_HAS_GST_LIBS=1)
-            target_link_libraries(archstreamer_host PRIVATE PkgConfig::ARCHSTREAMER_GST)
+            target_link_libraries(archstreamer_host PRIVATE archstreamer_gst)
         endif()
         if(NOT TARGET X11::Xtst AND NOT X11_Xtst_FOUND)
             find_path(X11_Xtst_INCLUDE_PATH NAMES X11/extensions/XTest.h)
@@ -469,12 +506,16 @@ if(ARCHSTREAMER_BUILD_HOST)
         src/tools/host_runner_main.cpp
     )
     target_link_libraries(host_runner PRIVATE archstreamer_host)
+    if(NOT WIN32)
+        add_dependencies(host_runner archstreamer_pad_access)
+    endif()
 
     if(NOT WIN32)
         add_executable(host_runner_logged
             src/tools/host_runner_logged.cpp
         )
         target_link_libraries(host_runner_logged PRIVATE archstreamer_host)
+        add_dependencies(host_runner_logged archstreamer_pad_access)
     endif()
 
     list(APPEND ARCHSTREAMER_INSTALL_TARGETS
@@ -485,7 +526,10 @@ if(ARCHSTREAMER_BUILD_HOST)
         host_runner
     )
     if(NOT WIN32)
-        list(APPEND ARCHSTREAMER_INSTALL_TARGETS host_runner_logged)
+        list(APPEND ARCHSTREAMER_INSTALL_TARGETS host_runner_logged archstreamer_pad_access)
+        if(ARCHSTREAMER_HAS_GST_LIBS)
+            list(APPEND ARCHSTREAMER_INSTALL_TARGETS archstreamer_gst_worker)
+        endif()
     endif()
     if(ARCHSTREAMER_CADENCE_SIDECAR_TARGET)
         list(APPEND ARCHSTREAMER_INSTALL_TARGETS archstreamer_cadence)
@@ -634,6 +678,7 @@ endif()
 
 install(TARGETS ${ARCHSTREAMER_INSTALL_TARGETS}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
 
 # Desktop entry + hicolor icons (native Linux; Flatpak installs the same branding assets).
@@ -685,7 +730,7 @@ else()
 endif()
 message(STATUS "  Require GUI:      ${ARCHSTREAMER_REQUIRE_GUI}")
 if(ARCHSTREAMER_HAS_GST_LIBS)
-    message(STATUS "  GStreamer libs:   yes (in-process Qt overlay available)")
+    message(STATUS "  GStreamer libs:   yes (archstreamer_gst + worker; Qt overlay available)")
 else()
     message(STATUS "  GStreamer libs:   no (Qt embed disabled; standalone gst-launch only)")
 endif()

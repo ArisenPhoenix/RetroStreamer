@@ -123,7 +123,8 @@ RyujinxUserProfile prepare_ryujinx_user_profile(
     std::string_view lan_interface_id = {},
     std::string_view game_id = {},
     std::string_view content_stem = {},
-    std::string_view title_id = {});
+    std::string_view title_id = {},
+    const std::filesystem::path& texture_pack = {});
 
 // Bind Player1…N to ArchStreamer uinput pads (GamepadSDL2 + GUID) and build an
 // SDL_GAMECONTROLLERCONFIG mapping so Ryujinx can open those pads under gamescope.

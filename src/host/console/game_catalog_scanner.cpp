@@ -778,6 +778,7 @@ GameCatalog scan_game_catalog(
         std::string m3m_title_id;
         std::string m3m_patch_title_id;
         std::string m3m_base;
+        std::filesystem::path m3m_texture_pack;
         const auto content_ext = normalized_extension(content_path);
         if (content_ext == "m3u") {
             playlist_members = parse_m3u_member_basenames(content_path);
@@ -800,6 +801,7 @@ GameCatalog scan_game_catalog(
             m3m_title_id = m3m->title_id;
             m3m_patch_title_id = m3m->patch_title_id;
             m3m_base = m3m->base;
+            m3m_texture_pack = m3m->texture_pack_path;
         }
 
         // DB owns identity for known titles; scan only discovers paths / new games.
@@ -819,6 +821,7 @@ GameCatalog scan_game_catalog(
             std::move(m3m_title_id),
             std::move(m3m_patch_title_id),
             std::move(m3m_base),
+            std::move(m3m_texture_pack),
         });
     }
 

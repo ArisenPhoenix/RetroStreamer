@@ -33,7 +33,8 @@ SwitchBackendPrepResult RyujinxBackend::prepare(
         lan_iface,
         ctx.game_id,
         ctx.content_stem,
-        ctx.title_id);
+        ctx.title_id,
+        ctx.texture_pack);
     auto pad_plan = resolve_exclusive_pad_plan(
         ctx.players,
         ctx.verbose,

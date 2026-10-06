@@ -9,13 +9,19 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iostream>
 #include <optional>
 #include <regex>
+#include <spawn.h>
 #include <string>
+#include <string_view>
+#include <sys/wait.h>
 #include <vector>
+
+extern char** environ;
 
 namespace archstreamer {
 namespace {
@@ -735,6 +741,259 @@ void ensure_ryujinx_title_updates(const std::filesystem::path& ryujinx_data_root
             << "Ryujinx title updates: scanned " << nsps.size() << " NSP(s) → " << registered
             << " (" << unpacked << " unpacked/linked)\n";
     }
+}
+
+namespace {
+
+constexpr const char* kTextureModName = "archstreamer-texture-pack";
+constexpr const char* kTextureOwnedMarker = ".archstreamer-owned";
+
+std::string lower_ext(const std::filesystem::path& path) {
+    std::string ext = path.extension().string();
+    for (char& ch : ext) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return ext;
+}
+
+bool is_archive_ext(std::string_view ext) {
+    return ext == ".7z" || ext == ".zip" || ext == ".rar";
+}
+
+bool dir_has_child(const std::filesystem::path& dir, const char* name) {
+    std::error_code ec;
+    return std::filesystem::is_directory(dir / name, ec) && !ec;
+}
+
+bool is_ryujinx_mod_root(const std::filesystem::path& dir) {
+    return dir_has_child(dir, "romfs") || dir_has_child(dir, "exefs") ||
+        dir_has_child(dir, "textures") || dir_has_child(dir, "cheats");
+}
+
+bool looks_like_loose_textures(const std::filesystem::path& dir) {
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+        if (!entry.is_regular_file(ec)) {
+            continue;
+        }
+        const auto ext = lower_ext(entry.path());
+        if (ext == ".png" || ext == ".dds" || ext == ".astc" || ext == ".jpg" ||
+            ext == ".jpeg" || ext == ".bmp") {
+            return true;
+        }
+    }
+    return false;
+}
+
+/** One wrapper folder (common in archives) is not the mod itself. */
+std::filesystem::path descend_single_wrapper(const std::filesystem::path& dir) {
+    if (is_ryujinx_mod_root(dir) || looks_like_loose_textures(dir)) {
+        return dir;
+    }
+    std::error_code ec;
+    std::vector<std::filesystem::path> kids;
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+        if (entry.is_directory(ec)) {
+            kids.push_back(entry.path());
+        }
+    }
+    if (kids.size() == 1) {
+        return kids.front();
+    }
+    return dir;
+}
+
+std::optional<std::filesystem::path> find_7z() {
+    const char* path_env = std::getenv("PATH");
+    if (path_env == nullptr || *path_env == '\0') {
+        return std::nullopt;
+    }
+    std::string_view rest(path_env);
+    while (!rest.empty()) {
+        const auto colon = rest.find(':');
+        const auto dir = rest.substr(0, colon == std::string_view::npos ? rest.size() : colon);
+        rest = colon == std::string_view::npos ? std::string_view{} : rest.substr(colon + 1);
+        if (dir.empty()) {
+            continue;
+        }
+        for (const char* name : {"7z", "7zz", "7za"}) {
+            const auto candidate = std::filesystem::path(std::string(dir)) / name;
+            std::error_code ec;
+            if (std::filesystem::is_regular_file(candidate, ec) && !ec) {
+                return candidate;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+bool run_7z_extract(const std::filesystem::path& tool, const std::filesystem::path& archive, const std::filesystem::path& dest) {
+    const auto tool_s = tool.string();
+    const auto archive_s = archive.string();
+    const auto out_flag = std::string("-o") + dest.string();
+    const char* argv[] = {
+        tool_s.c_str(),
+        "x",
+        "-y",
+        "-bd",
+        out_flag.c_str(),
+        archive_s.c_str(),
+        nullptr,
+    };
+    pid_t pid = 0;
+    const auto spawned = posix_spawnp(
+        &pid,
+        tool_s.c_str(),
+        nullptr,
+        nullptr,
+        const_cast<char**>(argv),
+        environ);
+    if (spawned != 0) {
+        return false;
+    }
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) {
+        return false;
+    }
+    if (!WIFEXITED(status)) {
+        return false;
+    }
+    const auto code = WEXITSTATUS(status);
+    return code == 0 || code == 1;
+}
+
+std::filesystem::path materialize_texture_pack(const std::filesystem::path& pack) {
+    std::error_code ec;
+    if (std::filesystem::is_directory(pack, ec) && !ec) {
+        return descend_single_wrapper(pack);
+    }
+    if (!std::filesystem::is_regular_file(pack, ec) || ec) {
+        return {};
+    }
+    if (!is_archive_ext(lower_ext(pack))) {
+        std::cerr
+            << "Ryujinx texture pack: " << pack
+            << " is not a directory or .7z/.zip/.rar\n";
+        return {};
+    }
+    const auto tool = find_7z();
+    if (!tool.has_value()) {
+        std::cerr
+            << "Ryujinx texture pack: " << pack.filename().string()
+            << " needs 7z on PATH to unpack\n";
+        return {};
+    }
+    const auto dest = pack.parent_path() / (pack.stem().string() + ".unpacked");
+    const auto stamp = dest / kTextureOwnedMarker;
+    const auto archived_at = std::filesystem::last_write_time(pack, ec);
+    if (!ec && std::filesystem::is_directory(dest, ec)) {
+        std::ifstream in(stamp);
+        std::string recorded;
+        std::getline(in, recorded);
+        const auto ticks = static_cast<long long>(archived_at.time_since_epoch().count());
+        if (recorded == std::to_string(ticks)) {
+            return descend_single_wrapper(dest);
+        }
+    }
+    std::filesystem::remove_all(dest, ec);
+    std::filesystem::create_directories(dest, ec);
+    if (ec || !run_7z_extract(*tool, pack, dest)) {
+        std::cerr << "Ryujinx texture pack: failed to unpack " << pack << '\n';
+        std::filesystem::remove_all(dest, ec);
+        return {};
+    }
+    std::ofstream out(stamp, std::ios::trunc);
+    out << static_cast<long long>(archived_at.time_since_epoch().count()) << '\n';
+    std::cout << "Ryujinx texture pack: unpacked " << pack.filename().string() << " → " << dest << '\n';
+    return descend_single_wrapper(dest);
+}
+
+void remove_owned_texture_mod(const std::filesystem::path& mod_dir) {
+    std::error_code ec;
+    if (std::filesystem::is_symlink(mod_dir, ec)) {
+        std::filesystem::remove(mod_dir, ec);
+        return;
+    }
+    if (std::filesystem::is_directory(mod_dir, ec) &&
+        std::filesystem::is_regular_file(mod_dir / kTextureOwnedMarker, ec)) {
+        std::filesystem::remove_all(mod_dir, ec);
+    }
+}
+
+void link_texture_dir(const std::filesystem::path& link, const std::filesystem::path& target) {
+    std::error_code ec;
+    if (std::filesystem::is_symlink(link, ec)) {
+        const auto current = std::filesystem::read_symlink(link, ec);
+        if (!ec && current == target) {
+            return;
+        }
+        std::filesystem::remove(link, ec);
+    } else if (std::filesystem::exists(link, ec)) {
+        std::cerr
+            << "Ryujinx texture pack: " << link << " exists and is not a symlink\n";
+        return;
+    }
+    std::filesystem::create_directories(link.parent_path(), ec);
+    std::filesystem::create_directory_symlink(target, link, ec);
+    if (ec) {
+        std::cerr
+            << "Ryujinx texture pack: failed to link " << target << " → " << link
+            << ": " << ec.message() << '\n';
+        return;
+    }
+    std::cout << "Ryujinx texture pack: linked " << target << " → " << link << '\n';
+}
+
+} // namespace
+
+void ensure_ryujinx_texture_pack(
+    const std::filesystem::path& ryujinx_data_root,
+    std::string_view title_id,
+    const std::filesystem::path& texture_pack) {
+    const auto tid = normalize_switch_title_id(title_id);
+    if (!looks_like_switch_title_id(tid) || ryujinx_data_root.empty()) {
+        if (!texture_pack.empty()) {
+            std::cerr << "Ryujinx texture pack: no title id, skipping " << texture_pack << '\n';
+        }
+        return;
+    }
+    const auto mod_dir =
+        ryujinx_data_root / "mods" / "contents" / tid / kTextureModName;
+    if (texture_pack.empty()) {
+        remove_owned_texture_mod(mod_dir);
+        return;
+    }
+    std::error_code ec;
+    if (!std::filesystem::exists(texture_pack, ec) || ec) {
+        std::cout
+            << "Ryujinx texture pack: " << texture_pack << " is not on disk, skipping\n";
+        remove_owned_texture_mod(mod_dir);
+        return;
+    }
+    const auto source = materialize_texture_pack(texture_pack);
+    if (source.empty()) {
+        remove_owned_texture_mod(mod_dir);
+        return;
+    }
+    if (is_ryujinx_mod_root(source)) {
+        remove_owned_texture_mod(mod_dir);
+        link_texture_dir(mod_dir, source);
+        return;
+    }
+    if (!looks_like_loose_textures(source)) {
+        std::cerr
+            << "Ryujinx texture pack: " << source
+            << " has no romfs/exefs/textures folder and no texture files\n";
+        remove_owned_texture_mod(mod_dir);
+        return;
+    }
+    if (std::filesystem::is_symlink(mod_dir, ec)) {
+        std::filesystem::remove(mod_dir, ec);
+    }
+    std::filesystem::create_directories(mod_dir, ec);
+    std::ofstream marker(mod_dir / kTextureOwnedMarker, std::ios::trunc);
+    marker << "loose-textures\n";
+    link_texture_dir(mod_dir / "textures", source);
 }
 
 } // namespace archstreamer

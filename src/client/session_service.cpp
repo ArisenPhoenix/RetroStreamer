@@ -45,16 +45,6 @@ constexpr std::string_view kCatalogArtRoles[] = {
     "icon",
 };
 
-std::uint64_t read_art_sync_revision(const std::filesystem::path& art_cache_root) {
-    std::ifstream file(art_cache_root / ".art_sync_catalog_revision");
-    if (!file) {
-        return 0;
-    }
-    std::uint64_t revision = 0;
-    file >> revision;
-    return revision;
-}
-
 void write_art_sync_revision(
     const std::filesystem::path& art_cache_root,
     std::uint64_t catalog_revision) {
@@ -64,20 +54,18 @@ void write_art_sync_revision(
     }
 }
 
-// Art files live under art_cache_root (same layout as host Art/). Sync is gated on the
-// catalog offerings revision — unchanged catalog → zero art TCP. When needed, one
-// control connection does GameList then all missing ArtAssetRequests (host accepts
-// ArtAsset after GameList on the same socket).
+// Art files live under art_cache_root (same layout as host Art/). A matching catalog
+// revision is not enough to skip the sync: host art can be added without a revision
+// change, and an earlier sync may have run on another user's blocked subset of the
+// list. Missing role files are still fetched. When every role is already cached,
+// there is no art TCP. When needed, one control connection does GameList then the
+// missing ArtAssetRequests (host accepts ArtAsset after GameList on the same socket).
 void sync_art_for_catalog(
     const std::string& host,
     std::uint16_t control_port,
     const GameList& catalog,
     const std::filesystem::path& art_cache_root) {
     std::filesystem::create_directories(art_cache_root);
-    if (catalog.catalog_revision != 0 &&
-        read_art_sync_revision(art_cache_root) == catalog.catalog_revision) {
-        return;
-    }
 
     bool need_fetch = false;
     for (const auto& game : catalog.games) {

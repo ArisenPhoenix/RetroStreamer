@@ -5,6 +5,7 @@
 #include "host/console/catalog_ops.hpp"
 #include "host/db/game_meta_edit_log.hpp"
 #include "host/db/game_meta_store.hpp"
+#include "host/save_manager.hpp"
 #endif
 
 #include <QAbstractItemView>
@@ -20,16 +21,22 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSignalBlocker>
+#include <QSpinBox>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTabWidget>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QWidgetAction>
 
 #include <optional>
 #include <cstdint>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace archstreamer::gui {
 
@@ -148,15 +155,54 @@ std::optional<std::int64_t> selected_edit_id(QTableWidget* table) {
     return id;
 }
 
-std::optional<GameMetaRecord> selected_meta_row(QTableWidget* table) {
-    if (table == nullptr) {
-        return std::nullopt;
+int selected_table_row(QTableWidget* table) {
+    if (table == nullptr || table->selectionModel() == nullptr) {
+        return -1;
     }
     const auto rows = table->selectionModel()->selectedRows();
-    if (rows.isEmpty()) {
+    if (!rows.isEmpty()) {
+        return rows.front().row();
+    }
+    const auto indexes = table->selectionModel()->selectedIndexes();
+    if (!indexes.isEmpty()) {
+        return indexes.front().row();
+    }
+    return -1;
+}
+
+std::optional<std::string> selected_play_modes_game_id(QTableWidget* table) {
+    const int row = selected_table_row(table);
+    if (row < 0) {
         return std::nullopt;
     }
-    const int row = rows.front().row();
+    // game_id is the last column (system, display_name, version lead the row).
+    const auto* item = table->item(row, table->columnCount() - 1);
+    if (item == nullptr || item->text().isEmpty()) {
+        return std::nullopt;
+    }
+    return item->text().toStdString();
+}
+
+bool same_editable_identity(const GameMetaRecord& left, const GameMetaRecord& right) {
+    return left.system_key == right.system_key && left.system_name == right.system_name
+        && left.display_name == right.display_name && left.canonical_name == right.canonical_name
+        && left.core_name == right.core_name && left.version == right.version
+        && left.language == right.language && left.region == right.region
+        && left.source == right.source;
+}
+
+bool same_play_modes(const GamePlayModesRecord& left, const GamePlayModesRecord& right) {
+    return left.supports_singleplayer == right.supports_singleplayer
+        && left.supports_multiplayer == right.supports_multiplayer
+        && left.min_players == right.min_players && left.max_players == right.max_players
+        && left.source == right.source;
+}
+
+std::optional<GameMetaRecord> selected_meta_row(QTableWidget* table) {
+    const int row = selected_table_row(table);
+    if (row < 0) {
+        return std::nullopt;
+    }
     auto text = [&](int col) {
         const auto* item = table->item(row, col);
         return item != nullptr ? item->text().toStdString() : std::string{};
@@ -198,10 +244,14 @@ std::optional<GameMetaRecord> selected_meta_row(QTableWidget* table) {
     return rec;
 }
 
-bool edit_game_meta_dialog(QWidget* parent, GameMetaRecord& row, bool* apply_fs) {
+bool edit_game_meta_dialog(
+    QWidget* parent,
+    GameMetaRecord& row,
+    GamePlayModesRecord& modes,
+    bool* apply_fs) {
     QDialog dialog(parent);
     dialog.setWindowTitle("Edit game_meta");
-    dialog.resize(560, 480);
+    dialog.resize(560, 720);
     auto* form = new QFormLayout(&dialog);
 
     auto* system_key = new QLineEdit(qstr(row.system_key), &dialog);
@@ -267,8 +317,25 @@ bool edit_game_meta_dialog(QWidget* parent, GameMetaRecord& row, bool* apply_fs)
     form->addRow("version", version);
     form->addRow("language", language);
     form->addRow("region", region);
+    auto* single = new QCheckBox("supports singleplayer", &dialog);
+    single->setChecked(modes.supports_singleplayer);
+    auto* multi = new QCheckBox("supports multiplayer", &dialog);
+    multi->setChecked(modes.supports_multiplayer);
+    auto* min_players = new QSpinBox(&dialog);
+    auto* max_players = new QSpinBox(&dialog);
+    min_players->setRange(0, 255);
+    max_players->setRange(0, 255);
+    min_players->setValue(modes.min_players);
+    max_players->setValue(modes.max_players);
+    auto* modes_source = new QLineEdit(qstr(modes.source), &dialog);
+
     form->addRow("content_stem (derived)", content_stem);
     form->addRow("source", source);
+    form->addRow("single", single);
+    form->addRow("multi", multi);
+    form->addRow("min_players", min_players);
+    form->addRow("max_players", max_players);
+    form->addRow("play_modes source", modes_source);
     form->addRow("Preview", preview);
 
     auto* fs_check = new QCheckBox(
@@ -289,7 +356,14 @@ bool edit_game_meta_dialog(QWidget* parent, GameMetaRecord& row, bool* apply_fs)
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     form->addRow(buttons);
-    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+        if (max_players->value() < min_players->value()) {
+            QMessageBox::warning(
+                &dialog, "Edit game", "max_players must be at least min_players.");
+            return;
+        }
+        dialog.accept();
+    });
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     refresh_preview();
 
@@ -305,6 +379,11 @@ bool edit_game_meta_dialog(QWidget* parent, GameMetaRecord& row, bool* apply_fs)
     row.language = language->text().toStdString();
     row.region = region->text().toStdString();
     row.source = source->text().toStdString();
+    modes.supports_singleplayer = single->isChecked();
+    modes.supports_multiplayer = multi->isChecked();
+    modes.min_players = static_cast<std::uint8_t>(min_players->value());
+    modes.max_players = static_cast<std::uint8_t>(max_players->value());
+    modes.source = modes_source->text().toStdString();
     // content_stem is derived in apply_game_meta_edit / recompute_game_meta_identity.
     if (apply_fs != nullptr) {
         *apply_fs = fs_check->isChecked();
@@ -386,6 +465,109 @@ QWidget* MainWindow::build_catalog_tab() {
         "game_id",
     });
     setup_flat_table(catalog_meta_table_);
+    catalog_meta_table_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(
+        catalog_meta_table_,
+        &QTableWidget::customContextMenuRequested,
+        this,
+        [this](const QPoint& pos) {
+            const auto index = catalog_meta_table_->indexAt(pos);
+            if (!index.isValid()) {
+                return;
+            }
+            catalog_meta_table_->selectRow(index.row());
+            const auto selected = selected_meta_row(catalog_meta_table_);
+            if (!selected || selected->game_id.empty()) {
+                return;
+            }
+
+            std::optional<std::vector<std::pair<std::string, bool>>> users;
+            try {
+                GameMetaStore meta;
+                if (!meta.ready()) {
+                    users = std::nullopt;
+                } else {
+                    std::unordered_set<std::string> blocked;
+                    for (const auto& row : meta.list_user_game_blocks()) {
+                        if (row.game_id == selected->game_id) {
+                            blocked.insert(row.username);
+                        }
+                    }
+                    users.emplace();
+                    for (const auto& username : list_save_users(save_root_path())) {
+                        users->emplace_back(username, blocked.contains(username));
+                    }
+                }
+            } catch (...) {
+                users = std::nullopt;
+            }
+
+            QMenu menu(catalog_meta_table_);
+            auto* heading = menu.addAction(QStringLiteral("Block for user"));
+            heading->setEnabled(false);
+            menu.addSeparator();
+            if (!users.has_value()) {
+                auto* missing = menu.addAction(QStringLiteral("Game database is not available"));
+                missing->setEnabled(false);
+            } else if (users->empty()) {
+                auto* none = menu.addAction(QStringLiteral("No users"));
+                none->setEnabled(false);
+            } else {
+                const auto game_id = selected->game_id;
+                const auto system_key = selected->system_key;
+                const auto label = QString::fromStdString(
+                    selected->display_name.empty() ? selected->game_id : selected->display_name);
+                for (const auto& [username, blocked] : *users) {
+                    auto* box = new QCheckBox(QString::fromStdString(username), &menu);
+                    box->setChecked(blocked);
+                    box->setToolTip(QStringLiteral(
+                        "Checked users do not see this game after they connect."));
+                    box->setStyleSheet(QStringLiteral("QCheckBox { padding: 4px 16px 4px 8px; }"));
+                    auto* action = new QWidgetAction(&menu);
+                    action->setDefaultWidget(box);
+                    menu.addAction(action);
+                    connect(box, &QCheckBox::toggled, &menu, [this, game_id, system_key, label, username, box](bool checked) {
+                        bool ok = false;
+                        try {
+                            GameMetaStore meta;
+                            if (meta.ready()) {
+                                ok = checked
+                                    ? meta.block_user_game(username, game_id, system_key)
+                                    : meta.unblock_user_game(username, game_id);
+                            }
+                        } catch (...) {
+                            ok = false;
+                        }
+                        if (!ok) {
+                            const QSignalBlocker block(box);
+                            box->setChecked(!checked);
+                            QMessageBox::warning(
+                                this,
+                                QStringLiteral("Block for user"),
+                                QStringLiteral("Could not update the block for %1.")
+                                    .arg(QString::fromStdString(username)));
+                            return;
+                        }
+                        append_log(
+                            host_log_,
+                            QStringLiteral("[users] %1 game %2 for %3")
+                                .arg(checked ? QStringLiteral("block") : QStringLiteral("unblock"),
+                                     QString::fromStdString(game_id),
+                                     QString::fromStdString(username)));
+                        if (saves_status_ != nullptr) {
+                            saves_status_->setText(
+                                checked
+                                    ? QStringLiteral("Blocked “%1” for %2 (hidden from their catalog).")
+                                          .arg(label, QString::fromStdString(username))
+                                    : QStringLiteral("Unblocked “%1” for %2.")
+                                          .arg(label, QString::fromStdString(username)));
+                        }
+                        refresh_saves_blocked_list();
+                    });
+                }
+            }
+            menu.exec(catalog_meta_table_->viewport()->mapToGlobal(pos));
+        });
     tables->addTab(catalog_meta_table_, "game_meta");
 
     catalog_aliases_table_ = new QTableWidget(page);
@@ -426,15 +608,18 @@ QWidget* MainWindow::build_catalog_tab() {
     tables->addTab(catalog_edits_table_, "edits");
 
     catalog_play_modes_table_ = new QTableWidget(page);
-    catalog_play_modes_table_->setColumnCount(7);
+    catalog_play_modes_table_->setColumnCount(10);
     catalog_play_modes_table_->setHorizontalHeaderLabels({
-        "game_id",
+        "system",
+        "display_name",
+        "version",
         "single",
         "multi",
         "min_players",
         "max_players",
         "updated_at",
         "source",
+        "game_id",
     });
     setup_flat_table(catalog_play_modes_table_);
     tables->addTab(catalog_play_modes_table_, "play_modes");
@@ -445,19 +630,75 @@ QWidget* MainWindow::build_catalog_tab() {
     connect(catalog_filter_, &QLineEdit::textChanged, this, [this] { refresh_catalog_browser(); });
 
     connect(edit_btn, &QPushButton::clicked, this, [this] {
-        auto selected = selected_meta_row(catalog_meta_table_);
-        if (!selected) {
-            QMessageBox::information(this, "Edit game", "Select a row in game_meta first.");
-            return;
-        }
-        const auto old_id = selected->game_id;
-        bool apply_fs = true;
-        if (!edit_game_meta_dialog(this, *selected, &apply_fs)) {
-            return;
-        }
         GameMetaStore store;
-        const auto result = apply_game_meta_edit(
-            store, old_id, *selected, catalog_fs_from_window(this, apply_fs));
+        std::optional<GameMetaRecord> selected;
+        if (catalog_play_modes_table_ != nullptr && catalog_play_modes_table_->isVisible()) {
+            const auto game_id = selected_play_modes_game_id(catalog_play_modes_table_);
+            if (!game_id) {
+                QMessageBox::information(this, "Edit game", "Select a row in play_modes first.");
+                return;
+            }
+            selected = store.find_by_id(*game_id);
+            if (!selected) {
+                QMessageBox::warning(
+                    this,
+                    "Edit game",
+                    QStringLiteral("No game_meta row for %1.").arg(qstr(*game_id)));
+                return;
+            }
+        } else {
+            selected = selected_meta_row(catalog_meta_table_);
+            if (!selected) {
+                QMessageBox::information(this, "Edit game", "Select a row in game_meta first.");
+                return;
+            }
+        }
+        const GameMetaRecord original = *selected;
+        auto modes = store.find_play_modes(original.game_id).value_or(GamePlayModesRecord{});
+        if (modes.game_id.empty()) {
+            modes.game_id = original.game_id;
+            modes.source = original.source;
+        }
+        const GamePlayModesRecord original_modes = modes;
+        const auto old_id = original.game_id;
+        bool apply_fs = true;
+        if (!edit_game_meta_dialog(this, *selected, modes, &apply_fs)) {
+            return;
+        }
+        const bool identity_changed = !same_editable_identity(original, *selected);
+        const bool modes_changed = !same_play_modes(original_modes, modes);
+        if (!identity_changed && !modes_changed) {
+            return;
+        }
+        bool modes_saved = false;
+        if (modes_changed) {
+            modes.game_id = old_id;
+            modes.updated_at = QDateTime::currentSecsSinceEpoch();
+            modes_saved = store.upsert_play_modes(modes);
+            if (!modes_saved) {
+                QMessageBox::warning(this, "Edit game", "Could not update play modes.");
+                if (!identity_changed) {
+                    return;
+                }
+            }
+        }
+        CatalogOpResult result;
+        if (identity_changed) {
+            result = apply_game_meta_edit(
+                store, old_id, *selected, catalog_fs_from_window(this, apply_fs));
+            if (modes_saved && result.ok) {
+                result.effects.push_back("updated play modes");
+            }
+        } else {
+            result.ok = true;
+            result.old_game_id = old_id;
+            result.new_game_id = old_id;
+            result.message = "updated play modes";
+            result.effects.push_back("updated play modes");
+            if (store.write_meta_sidecar(original)) {
+                result.effects.push_back("wrote Meta sidecar for " + original.display_name);
+            }
+        }
         show_op_result(this, result);
         refresh_catalog_browser();
     });
@@ -872,17 +1113,33 @@ void MainWindow::refresh_catalog_browser() {
 
     int modes_shown = 0;
     if (catalog_play_modes_table_ != nullptr) {
+        std::unordered_map<std::string, const GameMetaRecord*> game_by_id;
+        game_by_id.reserve(games.size());
+        for (const auto& game : games) {
+            game_by_id.emplace(game.game_id, &game);
+        }
+
         catalog_play_modes_table_->setSortingEnabled(false);
         catalog_play_modes_table_->setRowCount(0);
         for (const auto& modes : play_modes) {
+            const auto game_it = game_by_id.find(modes.game_id);
+            const QString system =
+                game_it == game_by_id.end() ? QString() : qstr(game_it->second->system_key);
+            const QString display_name =
+                game_it == game_by_id.end() ? QString() : qstr(game_it->second->display_name);
+            const QString version =
+                game_it == game_by_id.end() ? QString() : qstr(game_it->second->version);
             const QStringList cells = {
-                qstr(modes.game_id),
+                system,
+                display_name,
+                version,
                 modes.supports_singleplayer ? QStringLiteral("true") : QStringLiteral("false"),
                 modes.supports_multiplayer ? QStringLiteral("true") : QStringLiteral("false"),
                 QString::number(modes.min_players),
                 QString::number(modes.max_players),
                 format_epoch_local(modes.updated_at),
                 qstr(modes.source),
+                qstr(modes.game_id),
             };
             if (!row_matches_filter(cells, filter)) {
                 continue;
@@ -890,7 +1147,7 @@ void MainWindow::refresh_catalog_browser() {
             const int row = catalog_play_modes_table_->rowCount();
             catalog_play_modes_table_->insertRow(row);
             for (int col = 0; col < cells.size(); ++col) {
-                auto* item = (col == 5) ? epoch_cell(modes.updated_at) : cell(cells[col]);
+                auto* item = (col == 7) ? epoch_cell(modes.updated_at) : cell(cells[col]);
                 catalog_play_modes_table_->setItem(row, col, item);
             }
             ++modes_shown;

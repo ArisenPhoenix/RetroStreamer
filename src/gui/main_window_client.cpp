@@ -1219,7 +1219,8 @@ void MainWindow::start_client() {
                 callbacks);
         } catch (const std::exception& error) {
             const auto message = QString::fromLocal8Bit(error.what());
-            append_log(client_log_, QString("Client error: %1").arg(message), GuiLogLevel::Quiet);
+            append_log(client_log_, message == QLatin1String("client stopped")
+                ? QStringLiteral("Client stopped.") : QString("Client error: %1").arg(message), GuiLogLevel::Quiet);
             if (message.contains("selected different games") || message.contains("selected different session modes")) {
                 append_log(client_log_, "Host already locked game/mode. Match the Host tab selection and try again.");
             }

@@ -14,8 +14,8 @@
 
 namespace archstreamer {
 
-PacketPayload receive_client_control_payload(TcpStream& stream) {
-    const auto packet = stream.receive_packet();
+PacketPayload receive_client_control_payload(TcpStream& stream, const std::function<bool()>& should_stop) {
+    const auto packet = stream.receive_packet(should_stop);
     if (!packet.has_value()) {
         throw std::runtime_error("host disconnected");
     }
@@ -129,7 +129,7 @@ ClientSessionService::ClientSessionService(
     : host_(std::move(host)), control_port_(control_port), catalog_cache_path_(std::move(catalog_cache_path)) {
 }
 
-PendingSession ClientSessionService::begin() const {
+PendingSession ClientSessionService::begin(const std::function<bool()>& should_stop) const {
     client_debug_log_conn(
         "TCP connect begin " + host_ + ":" + std::to_string(control_port_));
     auto stream = TcpStream::connect_to(host_, control_port_);
@@ -139,7 +139,7 @@ PendingSession ClientSessionService::begin() const {
     auto cached_game_list = load_catalog_cache(catalog_cache_path_);
     stream.send_packet(serialize_packet(session.make_game_list_request(cached_game_list.catalog_revision)));
 
-    const auto payload = receive_client_control_payload(stream);
+    const auto payload = receive_client_control_payload(stream, should_stop);
     const auto* game_list = std::get_if<GameList>(&payload);
     if (game_list == nullptr) {
         throw std::runtime_error("expected GameList from host");
@@ -232,7 +232,8 @@ JoinedSession ClientSessionService::finish_join(
     PendingSession pending,
     ClientHello hello,
     const std::function<std::string(const std::string& current_password)>&
-        on_password_change_required) const {
+        on_password_change_required,
+    const std::function<bool()>& should_stop) const {
     const auto blocks_path = default_catalog_blocks_cache_path();
     auto blocks_cache = load_catalog_blocks_cache(
         blocks_path, host_, control_port_, hello.username);
@@ -245,7 +246,7 @@ JoinedSession ClientSessionService::finish_join(
     }
     pending.stream.send_packet(serialize_packet(hello));
 
-    auto welcome_payload = receive_client_control_payload(pending.stream);
+    auto welcome_payload = receive_client_control_payload(pending.stream, should_stop);
     while (true) {
         if (const auto* error = std::get_if<ErrorPacket>(&welcome_payload); error != nullptr) {
             throw std::runtime_error("host rejected session: " + error->message);
@@ -261,13 +262,13 @@ JoinedSession ClientSessionService::finish_join(
             pending.blocks_revision = blocks_cache.blocks_revision;
             pending.blocked_game_ids = blocks_cache.blocked_game_ids;
             apply_blocks_to_pending(pending.game_list, pending.blocked_game_ids);
-            welcome_payload = receive_client_control_payload(pending.stream);
+            welcome_payload = receive_client_control_payload(pending.stream, should_stop);
             continue;
         }
         if (const auto* catalog = std::get_if<GameList>(&welcome_payload); catalog != nullptr) {
             // Legacy: host resent a user-filtered catalog after auth.
             pending.game_list = *catalog;
-            welcome_payload = receive_client_control_payload(pending.stream);
+            welcome_payload = receive_client_control_payload(pending.stream, should_stop);
             continue;
         }
         if (std::holds_alternative<PasswordChangeRequired>(welcome_payload)) {
@@ -285,7 +286,7 @@ JoinedSession ClientSessionService::finish_join(
             pending.stream.send_packet(serialize_packet(change));
             hello.password = new_password;
 
-            welcome_payload = receive_client_control_payload(pending.stream);
+            welcome_payload = receive_client_control_payload(pending.stream, should_stop);
             continue;
         }
         break;
@@ -296,14 +297,14 @@ JoinedSession ClientSessionService::finish_join(
     }
     pending.session.apply_welcome(*welcome);
 
-    const auto seats_payload = receive_client_control_payload(pending.stream);
+    const auto seats_payload = receive_client_control_payload(pending.stream, should_stop);
     const auto* seats = std::get_if<SeatAssignment>(&seats_payload);
     if (seats == nullptr) {
         throw std::runtime_error("expected SeatAssignment from host");
     }
     pending.session.apply_seats(*seats);
 
-    const auto ready_payload = receive_client_control_payload(pending.stream);
+    const auto ready_payload = receive_client_control_payload(pending.stream, should_stop);
     const auto* ready = std::get_if<SessionReady>(&ready_payload);
     if (ready == nullptr) {
         throw std::runtime_error("expected SessionReady from host");
@@ -317,10 +318,10 @@ JoinedSession ClientSessionService::finish_join(
     };
 }
 
-SessionStart ClientSessionService::wait_for_starting(TcpStream& stream) const {
+SessionStart ClientSessionService::wait_for_starting(TcpStream& stream, const std::function<bool()>& should_stop) const {
     auto media_endpoint = std::optional<MediaEndpoint>{};
     while (true) {
-        const auto payload = receive_client_control_payload(stream);
+        const auto payload = receive_client_control_payload(stream, should_stop);
         if (const auto* error = std::get_if<ErrorPacket>(&payload); error != nullptr) {
             throw std::runtime_error("host rejected session: " + error->message);
         }

@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -25,7 +26,7 @@ public:
     static PosixTcpStream connect_to(const std::string& host, std::uint16_t port);
 
     void send_packet(const ByteBuffer& packet);
-    std::optional<ByteBuffer> receive_packet();
+    std::optional<ByteBuffer> receive_packet(const std::function<bool()>& should_stop = {});
     bool open() const;
     const std::string& peer_address() const;
     bool peer_closed() const;
@@ -33,7 +34,7 @@ public:
 
 private:
     void write_all(const std::uint8_t* data, std::size_t size);
-    bool read_all(std::uint8_t* data, std::size_t size);
+    bool read_all(std::uint8_t* data, std::size_t size, const std::function<bool()>& should_stop);
     void close_if_open();
 
     int fd_ = -1;

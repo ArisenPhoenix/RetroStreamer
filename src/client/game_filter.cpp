@@ -35,7 +35,7 @@ bool game_matches_filter(const GameInfo& game, const GameFilter& filter) {
         return false;
     }
     if (filter.mode == GameFilterMode::Multiplayer) {
-        if (!game.supports_multiplayer) {
+        if (!game.supports_multiplayer || game.max_players < 2) {
             return false;
         }
         if (filter.requested_players > game.max_players) {

@@ -253,12 +253,13 @@ ClientCatalogView ClientApp::fetch_catalog(
 
 ClientSessionDraft ClientApp::begin_session(
     const ClientAppConfig& config,
-    const ClientAppCallbacks& callbacks) const {
+    const ClientAppCallbacks& callbacks,
+    const std::function<bool()>& should_stop) const {
     ClientSessionService session_service(config.host, config.control_port);
     // Join socket: GameList then ClientHello only. LobbyPresence on this socket would
     // park the connection in the host presence list and discard the Hello. Art was
     // already fetched on Connect via separate sockets.
-    auto pending_session = session_service.begin();
+    auto pending_session = session_service.begin(should_stop);
     auto filtered_catalog = filter_games(pending_session.game_list, config.filter);
     if (callbacks.on_catalog) {
         callbacks.on_catalog(pending_session.game_list, filtered_catalog);
@@ -331,7 +332,8 @@ ClientRunResult ClientApp::join_session(
     auto joined_session = session_service.finish_join(
         std::move(draft.pending_session),
         hello,
-        callbacks.on_password_change_required);
+        callbacks.on_password_change_required,
+        should_stop);
     auto& session = joined_session.session;
 
     result.client_id = session.client_id();
@@ -353,7 +355,7 @@ ClientRunResult ClientApp::join_session(
         callbacks.on_session_ready(result.ready);
     }
 
-    const auto start = session_service.wait_for_starting(joined_session.stream);
+    const auto start = session_service.wait_for_starting(joined_session.stream, should_stop);
     result.starting = start.starting;
     result.media_endpoint = start.media_endpoint;
 
@@ -1087,7 +1089,7 @@ ClientRunResult ClientApp::run_session(
     const ClientAppConfig& config,
     const std::function<bool()>& should_stop,
     const ClientAppCallbacks& callbacks) const {
-    auto draft = begin_session(config, callbacks);
+    auto draft = begin_session(config, callbacks, should_stop);
     return join_session(std::move(draft), config, should_stop, callbacks);
 }
 

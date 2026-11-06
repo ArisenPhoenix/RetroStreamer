@@ -516,7 +516,8 @@ public:
         const ClientAppCallbacks& callbacks = {}) const;
     ClientSessionDraft begin_session(
         const ClientAppConfig& config,
-        const ClientAppCallbacks& callbacks = {}) const;
+        const ClientAppCallbacks& callbacks = {},
+        const std::function<bool()>& should_stop = {}) const;
     ClientRunResult join_session(
         ClientSessionDraft draft,
         const ClientAppConfig& config,

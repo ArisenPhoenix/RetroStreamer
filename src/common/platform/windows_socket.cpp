@@ -6,6 +6,7 @@
 #include <cstring>
 #include <mutex>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -81,11 +82,11 @@ void WindowsTcpStream::send_packet(const ByteBuffer& packet) {
     write_all(packet.data(), packet.size());
 }
 
-std::optional<ByteBuffer> WindowsTcpStream::receive_packet() {
+std::optional<ByteBuffer> WindowsTcpStream::receive_packet(const std::function<bool()>& should_stop) {
     constexpr std::size_t header_size =
         sizeof(std::uint32_t) + sizeof(std::uint16_t) + sizeof(PacketType) + sizeof(std::uint32_t);
     std::array<std::uint8_t, header_size> header{};
-    if (!read_all(header.data(), header.size())) {
+    if (!read_all(header.data(), header.size(), should_stop)) {
         return std::nullopt;
     }
 
@@ -103,7 +104,7 @@ std::optional<ByteBuffer> WindowsTcpStream::receive_packet() {
 
     ByteBuffer packet(header.begin(), header.end());
     packet.resize(header_size + payload_size);
-    if (payload_size > 0 && !read_all(packet.data() + header_size, payload_size)) {
+    if (payload_size > 0 && !read_all(packet.data() + header_size, payload_size, should_stop)) {
         throw std::runtime_error("TCP stream ended mid-packet");
     }
 
@@ -169,9 +170,16 @@ void WindowsTcpStream::write_all(const std::uint8_t* data, std::size_t size) {
     }
 }
 
-bool WindowsTcpStream::read_all(std::uint8_t* data, std::size_t size) {
+bool WindowsTcpStream::read_all(std::uint8_t* data, std::size_t size, const std::function<bool()>& should_stop) {
     std::size_t read_count = 0;
     while (read_count < size) {
+        if (should_stop) {
+            if (should_stop()) throw std::runtime_error("client stopped");
+            if (!readable()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(25));
+                continue;
+            }
+        }
         const int result = recv(socket_, reinterpret_cast<char*>(data + read_count), static_cast<int>(size - read_count), 0);
         if (result == SOCKET_ERROR) {
             throw_winsock("failed to read TCP stream");

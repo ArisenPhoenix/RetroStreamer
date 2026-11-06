@@ -192,6 +192,9 @@ bool launch_requirements_satisfied(const SessionPlan& plan, const GameInfo& game
     if (plan.game.session_mode == GameSessionMode::Multiplayer && !game.supports_multiplayer) {
         throw std::runtime_error("selected game does not support multiplayer");
     }
+    if (plan.game.session_mode == GameSessionMode::Multiplayer && game.max_players < 2) {
+        throw std::runtime_error("selected game supports fewer than two players");
+    }
 
     const auto players = requested_player_count(plan);
     if (players > game.max_players) {
@@ -640,8 +643,17 @@ SessionPlan gather_session_clients(
         publish_lobby_client(plan.clients.back());
         plan.game.selected_game_id = selected_game.value_or(GameId{});
         plan.game.session_mode = selected_mode.value_or(GameSessionMode::Multiplayer);
-        if (selected_game_info.has_value() &&
-            launch_requirements_satisfied(plan, *selected_game_info)) {
+        bool ready = false;
+        try {
+            if (!selected_game_info.has_value()) {
+                throw std::runtime_error("session client selected an unknown game");
+            }
+            ready = launch_requirements_satisfied(plan, *selected_game_info);
+        } catch (const std::exception& error) {
+            send_error_to_session_clients(plan, error.what());
+            throw;
+        }
+        if (ready) {
             assign_seats_welcome_and_save_username(plan);
             enforce_user_save_stem_for_plan(plan, save_root);
             return plan;
@@ -688,6 +700,13 @@ SessionPlan gather_session_clients(
         // Users-tab Kick of lobby waiters.
         for (std::size_t i = 0; i < plan.clients.size();) {
             auto& client = plan.clients[i];
+            if (client.lifecycle.stream.peer_closed()) {
+                std::cout << "Lobby client " << static_cast<int>(client.info.client_id)
+                          << " (" << client.info.username << ") disconnected while waiting.\n";
+                clear_connected_client(save_root, client.info.client_id, -1);
+                plan.clients.erase(plan.clients.begin() + static_cast<std::ptrdiff_t>(i));
+                continue;
+            }
             if (auto reason = take_connected_client_disconnect_request(
                     save_root, client.info.client_id, -1);
                 reason.has_value()) {
@@ -703,6 +722,9 @@ SessionPlan gather_session_clients(
                 continue;
             }
             ++i;
+        }
+        if (plan.clients.empty() && !plan.host_hello.has_value() && first_client.has_value()) {
+            throw std::runtime_error("all waiting session clients disconnected");
         }
 
         const auto now = std::chrono::steady_clock::now();

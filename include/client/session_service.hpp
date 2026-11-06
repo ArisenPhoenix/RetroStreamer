@@ -10,7 +10,7 @@
 
 namespace archstreamer {
 
-PacketPayload receive_client_control_payload(TcpStream& stream);
+PacketPayload receive_client_control_payload(TcpStream& stream, const std::function<bool()>& should_stop = {});
 
 struct JoinedSession {
     SessionClient session;
@@ -40,7 +40,7 @@ public:
     ClientSessionService(std::string host, std::uint16_t control_port, std::filesystem::path catalog_cache_path);
 
     /** Open control TCP, exchange GameList only (no art, no presence). */
-    PendingSession begin() const;
+    PendingSession begin(const std::function<bool()>& should_stop = {}) const;
     /**
      * Prefetch box/grid/etc. art on short-lived sockets (ArtAssetRequest first).
      * Call only after the GameList handshake socket has moved on (LobbyPresence,
@@ -69,8 +69,9 @@ public:
         PendingSession pending,
         ClientHello hello,
         const std::function<std::string(const std::string& current_password)>&
-            on_password_change_required = {}) const;
-    SessionStart wait_for_starting(TcpStream& stream) const;
+            on_password_change_required = {},
+        const std::function<bool()>& should_stop = {}) const;
+    SessionStart wait_for_starting(TcpStream& stream, const std::function<bool()>& should_stop = {}) const;
 
 private:
     std::string host_;

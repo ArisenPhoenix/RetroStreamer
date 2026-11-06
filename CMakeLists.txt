@@ -31,6 +31,7 @@ if(MSVC)
 endif()
 option(ARCHSTREAMER_REQUIRE_GUI "Fail configure if Qt6 Widgets is missing" OFF)
 option(ARCHSTREAMER_BUILD_CONTROLLER_PROBE "Build controller probe tool" ON)
+option(ARCHSTREAMER_BUILD_TESTS "Build focused regression tests" OFF)
 # Experimental DoubleCherryGB dual-machine cable (no GB/GBC saves to test with yet).
 option(ARCHSTREAMER_DEBUG_GB_LINK "Enable experimental GB/GBC dual-GB link backend" OFF)
 
@@ -447,6 +448,14 @@ if(ARCHSTREAMER_BUILD_HOST)
             archstreamer_controller
             ${ARCHSTREAMER_SQLITE_TARGET}
     )
+
+    if(ARCHSTREAMER_BUILD_TESTS)
+        enable_testing()
+        add_executable(lobby_rejection_test tests/lobby_rejection_test.cpp)
+        target_link_libraries(lobby_rejection_test PRIVATE archstreamer_host archstreamer_client)
+        add_test(NAME lobby_rejection COMMAND lobby_rejection_test)
+        set_tests_properties(lobby_rejection PROPERTIES TIMEOUT 15)
+    endif()
     if(NOT WIN32)
         find_package(X11 REQUIRED)
         if(ARCHSTREAMER_HAS_GST_LIBS)

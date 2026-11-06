@@ -803,6 +803,7 @@ SessionPlan gather_session_clients(
                 presence != nullptr) {
                 if (!valid_username(presence->username)) {
                     std::cerr << "Ignored lobby presence during player wait (invalid username).\n";
+                    stream->send_packet(serialize_packet(ErrorPacket{"invalid username"}));
                     continue;
                 }
                 const auto auth = verify_or_create_on_hello(
@@ -812,6 +813,10 @@ SessionPlan gather_session_clients(
                     allow_new_users);
                 if (auth != UserAuthResult::Ok && auth != UserAuthResult::MustChange) {
                     std::cerr << "Ignored lobby presence during player wait (auth failed).\n";
+                    stream->send_packet(serialize_packet(ErrorPacket{
+                        auth == UserAuthResult::RejectedNewUser
+                            ? "new users are not allowed on this host"
+                            : "incorrect password or invalid credentials"}));
                     continue;
                 }
                 CatalogUserBlocks blocks;
@@ -866,14 +871,15 @@ SessionPlan gather_session_clients(
             }
 
             if (!selected_game.has_value()) {
-                selected_game = authenticated_hello.selected_game_id;
-                selected_game_info = game_info_for(game_list, *selected_game);
-                if (!selected_game_info.has_value()) {
+                auto candidate_game_info = game_info_for(game_list, *authenticated_hello.selected_game_id);
+                if (!candidate_game_info.has_value()) {
                     throw std::runtime_error("session client selected an unknown game");
                 }
-                if (!valid_game_player_limits(selected_game_info->min_players, selected_game_info->max_players)) {
+                if (!valid_game_player_limits(candidate_game_info->min_players, candidate_game_info->max_players)) {
                     throw std::runtime_error("selected game has invalid player metadata");
                 }
+                selected_game = authenticated_hello.selected_game_id;
+                selected_game_info = std::move(candidate_game_info);
             } else if (*selected_game != *authenticated_hello.selected_game_id) {
                 throw std::runtime_error("session clients selected different games");
             }
@@ -905,6 +911,11 @@ SessionPlan gather_session_clients(
                 throw;
             }
             std::cerr << "Rejected session client candidate: " << error.what() << '\n';
+            try {
+                stream->send_packet(serialize_packet(ErrorPacket{error.what()}));
+            } catch (const std::exception&) {
+                // The candidate may already have disconnected.
+            }
         }
     }
 

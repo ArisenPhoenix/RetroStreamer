@@ -229,8 +229,11 @@ ClientCatalogView ClientApp::fetch_catalog(
         try {
             session_service.apply_authenticated_catalog_filter(
                 pending_session, config.username, config.password);
-        } catch (const std::exception&) {
+        } catch (const std::exception& error) {
             pending_session.stream = TcpStream{};
+            if (callbacks.on_status) {
+                callbacks.on_status(std::string("Catalog authentication could not be confirmed: ") + error.what());
+            }
         }
     } else {
         pending_session.stream = TcpStream{};
@@ -322,6 +325,9 @@ ClientRunResult ClientApp::join_session(
     auto hello = hello_base;
     hello.display_layout = config.display_layout;
     ClientSessionService session_service(config.host, config.control_port);
+    if (callbacks.on_status) {
+        callbacks.on_status("Waiting for the host to accept the join and start the session; multiplayer may require more players.");
+    }
     auto joined_session = session_service.finish_join(
         std::move(draft.pending_session),
         hello,

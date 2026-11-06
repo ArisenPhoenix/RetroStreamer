@@ -863,7 +863,13 @@ void MainWindow::connect_client() {
                         Qt::QueuedConnection);
                 }
                 try {
-                    catalog = client_app_.fetch_catalog(config);
+                    archstreamer::ClientAppCallbacks callbacks;
+                    callbacks.on_status = [this](const std::string& status) {
+                        QMetaObject::invokeMethod(this, [this, status] {
+                            append_log(client_log_, QString::fromStdString(status), GuiLogLevel::Quiet);
+                        }, Qt::QueuedConnection);
+                    };
+                    catalog = client_app_.fetch_catalog(config, callbacks);
                     used_host = config.host;
                     connected = true;
                     break;
@@ -928,8 +934,7 @@ void MainWindow::connect_client() {
                 [this, message] {
                     append_log(client_log_, QString("Connect failed: %1").arg(message), GuiLogLevel::Quiet);
                     if (message.contains("failed to connect TCP socket")) {
-                        append_log(client_log_, "No host is listening on that address/port.");
-                        append_log(client_log_, "Start Host first and wait until the Host tab says it is running.");
+                        append_log(client_log_, "Check the host address, port, network connection, and that the host is running.");
                     }
                     client_catalog_status_->setText("Connect failed");
                 },

@@ -69,8 +69,9 @@ WindowsTcpStream WindowsTcpStream::connect_to(const std::string& host, std::uint
     }
 
     if (::connect(fd, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0) {
+        const int error = WSAGetLastError();
         closesocket(fd);
-        throw_winsock("failed to connect TCP socket");
+        throw std::runtime_error("failed to connect TCP socket (WSA " + std::to_string(error) + ")");
     }
 
     return WindowsTcpStream(fd, host);
